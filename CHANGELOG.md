@@ -26,6 +26,28 @@ Semantic Versioning where the repository publishes a release.
   mention-dispatch workflow ever sets — so the ordinary multi-PR queue sweep
   (schedule/push/pull_request_target/pull_request_review/workflow_run) keeps
   skipping drafts exactly as before.
+  Two follow-up fixes from adversarial review before this shipped:
+  - `dispatch_draft_review_only()` treated `opencode_progress_state(pr) == "complete"`
+    (a matching check/status reached a terminal state) as proof a verdict
+    exists. That state does not distinguish a posted review from the
+    required-workflow gate's own terminal failure when no verdict was ever
+    dispatched, so a failed dispatch attempt would permanently block every
+    later explicit retry. Now gated on an actual current-head formal review
+    (`has_current_head_approval`/`has_current_head_changes_requested`),
+    matching the non-draft path's own review-state checks.
+  - When Strix evidence is missing, the initial mention dispatches Strix and
+    ends that scheduler run; the Strix-completion `workflow_run` that follows
+    carries no `repository_dispatch` `client_payload` of its own, so
+    `ALLOW_DRAFT_REVIEW_DISPATCH` would be unset on that later pass and the
+    draft would fall back to being skipped before ever reaching OpenCode.
+    `agent-mention-opencode-dispatch.yml` now also claims a short-lived
+    (`retention-days: 1`), exact-head-named Actions artifact
+    (`cwl-draft-review-request-<repo>-<pr>-<head-sha>`) alongside its existing
+    invocation ledger; `inspect_pr()`'s draft branch checks for this durable
+    marker (`active_draft_review_request()`) whenever the CLI flag isn't set,
+    so a later pass over the same exact head — reached via the ordinary
+    `workflow_run` trigger, single-PR or the bulk sweep — still recognizes
+    and continues the same explicit request through to OpenCode dispatch.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

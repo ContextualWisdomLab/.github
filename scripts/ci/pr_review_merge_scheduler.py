@@ -2377,6 +2377,72 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+def draft_review_request_artifact_name(repo: str, pr_number: int, head_sha: str) -> str:
+    """Return one draft review-only request marker's exact artifact name."""
+    return f"cwl-draft-review-request-{repo.replace('/', '-')}-{pr_number}-{head_sha}"
+
+
+def _draft_review_request_records(value: Any, *, expected_name: str) -> tuple[dict[str, Any], ...]:
+    """Validate one exact-name repository artifact response and return live records.
+
+    The server-side ``name`` filter makes this response directly addressable by
+    PR and exact head. Any malformed, mismatched, truncated, or ambiguous
+    response fails closed rather than being interpreted as an active request.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("artifact response must be an object")
+    total_count = value.get("total_count")
+    artifacts = value.get("artifacts")
+    if type(total_count) is not int or total_count < 0:
+        raise ValueError("artifact response has an invalid total_count")
+    if not isinstance(artifacts, list):
+        raise ValueError("artifact response has an invalid artifacts collection")
+    if total_count != len(artifacts):
+        raise ValueError("artifact response is truncated or internally inconsistent")
+    live: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("artifact response contains a non-object record")
+        artifact_id = artifact.get("id")
+        name = artifact.get("name")
+        expired = artifact.get("expired")
+        if type(artifact_id) is not int or artifact_id < 1:
+            raise ValueError("artifact response contains an invalid artifact id")
+        if not isinstance(name, str) or name != expected_name:
+            raise ValueError("artifact response contains a mismatched artifact name")
+        if type(expired) is not bool:
+            raise ValueError("artifact response contains an invalid expired flag")
+        if not expired:
+            live.append(artifact)
+    return tuple(live)
+
+
+def active_draft_review_request(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether an explicit draft review-only request is active for this head.
+
+    ``agent-mention-opencode-dispatch.yml`` uploads one short-lived artifact per
+    mention invocation in the central automation repository (the same
+    repository ``repository_dispatch`` review dispatch always targets, per
+    :func:`repository_dispatch_target`). The initial mention's own scheduler
+    pass reaches :func:`dispatch_draft_review_only` through the CLI's
+    ``--allow-draft-review-dispatch`` flag; a later pass over the same draft
+    PR -- most commonly the Strix-completion ``workflow_run`` that follows an
+    initial ``security_dispatch``, which carries no ``repository_dispatch``
+    ``client_payload`` of its own -- has no such flag, so it checks here
+    instead to recognize the same explicit request is still in flight for
+    this exact head.
+    """
+    head_sha = pr.get("headRefOid")
+    if not isinstance(head_sha, str) or not head_sha:
+        return False
+    dispatch_repo = repository_dispatch_target(validate_github_repository(repo))
+    artifact_name = draft_review_request_artifact_name(repo, pr["number"], head_sha)
+    response = gh_api_json(
+        f"repos/{dispatch_repo}/actions/artifacts?name={artifact_name}&per_page=100"
+    )
+    return bool(_draft_review_request_records(response, expected_name=artifact_name))
+
+
 def dispatch_draft_review_only(
     repo: str,
     pr: dict[str, Any],
@@ -2401,7 +2467,14 @@ def dispatch_draft_review_only(
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
         return Decision(number, "wait", "draft PR review-only dispatch; OpenCode review already running")
-    if opencode_state == "complete":
+    # opencode_state == "complete" means a matching check/status reached a
+    # terminal state -- it does not mean opencode-agent posted a review. The
+    # required-workflow gate itself fails closed (a terminal, non-running
+    # check) whenever no verdict was ever dispatched, so treating "complete"
+    # alone as a verdict would make a failed dispatch attempt permanently
+    # block every later explicit retry. Only an actual current-head formal
+    # review is a verdict.
+    if has_current_head_approval(pr) or has_current_head_changes_requested(pr):
         return Decision(
             number,
             "skip",
@@ -2494,7 +2567,9 @@ def inspect_pr(
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
-        if allow_draft_review_dispatch and trigger_reviews:
+        if trigger_reviews and (
+            allow_draft_review_dispatch or active_draft_review_request(repo, pr)
+        ):
             return dispatch_draft_review_only(
                 repo,
                 pr,

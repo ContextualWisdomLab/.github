@@ -3218,6 +3218,7 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
 
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
+    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
     assert inspect(make_pr(isDraft=True)).action == "skip"
     stacked = inspect(make_pr(baseRefName="develop"))
     assert stacked.action == "review_dispatch"
@@ -3732,9 +3733,11 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert called == [("owner/repo", 1, True)]
 
 
-def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews():
-    """The ordinary multi-PR queue sweep never sets allow_draft_review_dispatch,
-    so a draft PR keeps being skipped exactly as before this feature existed."""
+def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews(monkeypatch):
+    """The ordinary multi-PR queue sweep never sets allow_draft_review_dispatch
+    and has no active request marker, so a draft PR keeps being skipped
+    exactly as before this feature existed."""
+    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
     assert inspect(make_pr(isDraft=True)).action == "skip"
     assert inspect(make_pr(isDraft=True)).reason == "draft PR"
     allowed_without_trigger = inspect(
@@ -3742,6 +3745,120 @@ def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews():
     )
     assert allowed_without_trigger.action == "skip"
     assert allowed_without_trigger.reason == "draft PR"
+
+
+def test_draft_pr_review_request_marker_continues_dispatch_without_the_cli_flag(monkeypatch):
+    """A later scheduler pass with no repository_dispatch client_payload of its
+    own (the Strix-completion workflow_run that follows an initial
+    security_dispatch) still continues the same explicit request when a live
+    marker exists for this exact head, without --allow-draft-review-dispatch."""
+    seen = []
+    monkeypatch.setattr(
+        sched,
+        "active_draft_review_request",
+        lambda repo, pr: seen.append((repo, pr["number"])) or True,
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft)
+    assert decision.action == "review_dispatch"
+    assert seen == [("owner/repo", 1)]
+
+
+def test_draft_pr_review_request_marker_not_checked_when_flag_already_allows(monkeypatch):
+    """The CLI flag short-circuits the marker lookup entirely -- no live call
+    is needed when the caller already explicitly allowed draft dispatch."""
+    monkeypatch.setattr(
+        sched,
+        "active_draft_review_request",
+        lambda repo, pr: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+
+
+def test_draft_review_request_artifact_name_is_exact_and_stable():
+    assert sched.draft_review_request_artifact_name("owner/repo", 42, "a" * 40) == (
+        f"cwl-draft-review-request-owner-repo-42-{'a' * 40}"
+    )
+
+
+def test_active_draft_review_request_queries_the_central_dispatch_repository(monkeypatch):
+    calls = []
+
+    def fake_gh_api_json(path):
+        calls.append(path)
+        return {"total_count": 0, "artifacts": []}
+
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+    assert len(calls) == 1
+    assert calls[0].startswith("repos/ContextualWisdomLab/.github/actions/artifacts?name=")
+    expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+    assert expected_name in calls[0]
+
+
+def test_active_draft_review_request_true_when_a_live_artifact_matches(monkeypatch):
+    def fake_gh_api_json(path):
+        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+        return {
+            "total_count": 1,
+            "artifacts": [{"id": 7, "name": expected_name, "expired": False}],
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is True
+
+
+def test_active_draft_review_request_false_when_the_artifact_expired(monkeypatch):
+    def fake_gh_api_json(path):
+        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+        return {
+            "total_count": 1,
+            "artifacts": [{"id": 7, "name": expected_name, "expired": True}],
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_gh_api_json)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
+def test_active_draft_review_request_false_without_a_head_sha():
+    assert sched.active_draft_review_request("owner/repo", make_pr(headRefOid=None)) is False
+
+
+def test_draft_review_request_records_fail_closed_on_malformed_responses():
+    name = "cwl-draft-review-request-owner-repo-1-" + "a" * 40
+    with pytest.raises(ValueError, match="must be an object"):
+        sched._draft_review_request_records([], expected_name=name)
+    with pytest.raises(ValueError, match="invalid total_count"):
+        sched._draft_review_request_records({"total_count": -1, "artifacts": []}, expected_name=name)
+    with pytest.raises(ValueError, match="invalid artifacts collection"):
+        sched._draft_review_request_records({"total_count": 0, "artifacts": None}, expected_name=name)
+    with pytest.raises(ValueError, match="truncated or internally inconsistent"):
+        sched._draft_review_request_records({"total_count": 1, "artifacts": []}, expected_name=name)
+    with pytest.raises(ValueError, match="non-object record"):
+        sched._draft_review_request_records({"total_count": 1, "artifacts": [None]}, expected_name=name)
+    with pytest.raises(ValueError, match="invalid artifact id"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 0, "name": name, "expired": False}]},
+            expected_name=name,
+        )
+    with pytest.raises(ValueError, match="mismatched artifact name"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 1, "name": "other", "expired": False}]},
+            expected_name=name,
+        )
+    with pytest.raises(ValueError, match="invalid expired flag"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 1, "name": name, "expired": "no"}]},
+            expected_name=name,
+        )
 
 
 def test_draft_pr_review_only_dispatch_never_reaches_merge_or_branch_logic(monkeypatch):
@@ -3763,7 +3880,18 @@ def test_draft_pr_review_only_dispatch_never_reaches_merge_or_branch_logic(monke
         reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
     decision = inspect(draft_pr, allow_draft_review_dispatch=True)
-    assert decision.action == "security_dispatch"
+    assert decision.action == "skip"
+    assert mutating_calls == []
+
+    unreviewed_draft_pr = make_pr(
+        isDraft=True,
+        mergeStateStatus="CLEAN",
+        restMergeableState="CLEAN",
+        reviewDecision="APPROVED",
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    unreviewed_decision = inspect(unreviewed_draft_pr, allow_draft_review_dispatch=True)
+    assert unreviewed_decision.action == "security_dispatch"
     assert mutating_calls == []
 
 
@@ -3892,16 +4020,40 @@ def test_draft_pr_review_only_dispatch_opencode_already_running_skips():
     assert decision.reason == "draft PR review-only dispatch; OpenCode review already running"
 
 
-def test_draft_pr_review_only_dispatch_skips_when_verdict_already_exists():
-    complete_opencode_draft = make_pr(
+def test_draft_pr_review_only_dispatch_skips_when_a_current_head_verdict_exists():
+    approved_draft = make_pr(
         isDraft=True,
         statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
     )
-    decision = inspect(complete_opencode_draft, allow_draft_review_dispatch=True)
+    decision = inspect(approved_draft, allow_draft_review_dispatch=True)
     assert decision.action == "skip"
     assert decision.reason == (
         "draft PR review-only dispatch; current-head OpenCode verdict already exists"
     )
+
+    changes_requested_draft = make_pr(
+        isDraft=True,
+        reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+    )
+    changes_requested_decision = inspect(changes_requested_draft, allow_draft_review_dispatch=True)
+    assert changes_requested_decision.action == "skip"
+    assert changes_requested_decision.reason == (
+        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+
+def test_draft_pr_review_only_dispatch_retries_a_failed_required_check_with_no_verdict():
+    """A completed-but-failed required-workflow check is not a posted review:
+    the explicit request must still be able to redispatch (the exact defect
+    this feature exists to fix -- a required-check-only failure must never
+    look like a satisfied verdict)."""
+    failed_gate_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
+    )
+    decision = inspect(failed_gate_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
 
 
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
