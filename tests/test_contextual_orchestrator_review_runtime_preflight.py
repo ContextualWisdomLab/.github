@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import io
 import json
+import re
 import runpy
 from pathlib import Path
 import sys
@@ -288,6 +289,77 @@ def test_log_preflight_rejections_ignores_malformed_report(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -> None:
+    """The bash script's end-to-end gateway check must not retest a route the
+    Python routing probe already proved ready with a stricter token budget.
+
+    Regression for the 2026-08-30 sidecar-preflight-max-tokens incident: the
+    routing probe (`_preflight_review_agents`, tested above) already uses
+    `REVIEW_MAX_OUTPUT_TOKENS` and correctly marked a reasoning-capable
+    nvidia_nim route "ready". The separate end-to-end gateway check in
+    ``contextual_orchestrator_review_sidecar.sh`` used to hardcode
+    ``"max_tokens":16`` for that same virtual-model request -- far too small
+    for a reasoning model to emit any answer content after its internal
+    reasoning tokens, so the gateway rejected a route its own routing probe
+    had just proven healthy. This asserts the two budgets stay numerically
+    identical so that mismatch cannot silently return; it fails on the
+    pre-fix literal (16) and passes once the gateway request is synchronized
+    with the routing probe's budget.
+    """
+    namespace = _load_launcher()
+    review_max_output_tokens = namespace["REVIEW_MAX_OUTPUT_TOKENS"]
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    match = re.search(
+        r'gateway_virtual_model.*?"max_tokens":(\d+)', sidecar, re.DOTALL
+    )
+    assert match, "sidecar must send one JSON gateway preflight request with an explicit max_tokens"
+    gateway_preflight_max_tokens = int(match.group(1))
+
+    assert gateway_preflight_max_tokens == review_max_output_tokens, (
+        "gateway preflight max_tokens "
+        f"({gateway_preflight_max_tokens}) must equal the routing probe's "
+        f"REVIEW_MAX_OUTPUT_TOKENS ({review_max_output_tokens}); a smaller "
+        "budget here can reject a route the routing probe already proved "
+        "ready"
+    )
+
+
+def test_reasoning_without_content_remains_rejected_even_with_the_full_budget() -> None:
+    """A genuinely broken model must still fail closed at the full 4096-token
+    budget -- proving the sidecar-preflight-max-tokens fix widens the budget
+    without weakening the routing probe's fail-closed content check.
+
+    Negative control for the same incident: raising the budget must never be
+    mistaken for making every response acceptable. A route whose reply is
+    reasoning-only (present ``reasoning``, empty ``content``) -- the exact
+    shape ``contextual_orchestrator.orchestrator._response_content`` raises
+    ``ProviderResponseError`` for -- is simulated at the routing-probe layer
+    and must still be classified "rejected", never reclassified as a
+    healthy "ready" route just because the token budget grew.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    reasoning_only = SimpleNamespace(
+        id="nvidia_nim_reasoning_only", provider_name="nvidia_nim", model="reasoning/free"
+    )
+    client = _ProbeClient(
+        {
+            reasoning_only.id: {
+                "choices": [
+                    {"message": {"content": "", "reasoning": "internal reasoning tokens only"}}
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed"):
+        preflight([reasoning_only], client=client)
+
+    assert client.calls[0][2]["max_tokens"] == namespace["REVIEW_MAX_OUTPUT_TOKENS"]
 
 
 def test_preflight_fails_closed_when_every_route_rejects() -> None:
