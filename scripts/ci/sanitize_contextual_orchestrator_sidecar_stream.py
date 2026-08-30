@@ -15,6 +15,11 @@ _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
 )
+_PREFLIGHT_ROUTE_REJECTED = re.compile(
+    r"preflight_route_rejected provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"error_type=(?P<error_type>[A-Za-z_][A-Za-z0-9_]{0,63})"
+    r"(?: http_status=(?P<http_status>[1-5][0-9]{2}))?"
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
@@ -53,6 +58,16 @@ def sanitize_line(line: str) -> str | None:
             f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
             f"code={provider_discovery_failed.group('code')}"
         )
+    preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
+    if preflight_route_rejected is not None:
+        summary = (
+            f"preflight_route_rejected provider={preflight_route_rejected.group('provider')} "
+            f"error_type={preflight_route_rejected.group('error_type')}"
+        )
+        http_status = preflight_route_rejected.group("http_status")
+        if http_status is not None:
+            summary += f" http_status={http_status}"
+        return summary
     if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
     for prefix, summary in _PREFIX_SUMMARIES:
