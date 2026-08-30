@@ -30,7 +30,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
-DOCUMENT_ASSET_SUFFIXES = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
+DOCUMENT_ASSET_SUFFIXES = frozenset({".png"})
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -175,21 +175,13 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
     """Accept only bounded bytes with the expected raster format envelope."""
 
     suffix = PurePosixPath(path).suffix.lower()
-    if suffix in {".jpeg", ".jpg"}:
-        return len(raw) >= 4 and raw.startswith(b"\xff\xd8\xff") and raw.endswith(b"\xff\xd9")
-    if suffix == ".gif":
-        return len(raw) >= 14 and raw[:6] in {b"GIF87a", b"GIF89a"} and raw[-1:] == b"\x3b"
-    if suffix == ".webp":
-        return (
-            len(raw) >= 20
-            and raw[:4] == b"RIFF"
-            and raw[8:12] == b"WEBP"
-            and int.from_bytes(raw[4:8], "little") == len(raw) - 8
-        )
     if suffix != ".png" or len(raw) < 33 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         return False
     offset = 8
+    width = height = bit_depth = color_type = None
+    idat_parts: list[bytes] = []
     saw_idat = False
+    finished_idat = False
     while offset + 12 <= len(raw):
         length = int.from_bytes(raw[offset : offset + 4], "big")
         end = offset + 12 + length
@@ -202,14 +194,54 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             return False
         if offset == 8 and (chunk_type != b"IHDR" or length != 13):
             return False
-        if chunk_type == b"IHDR" and (
-            int.from_bytes(chunk_data[:4], "big") == 0
-            or int.from_bytes(chunk_data[4:8], "big") == 0
-        ):
-            return False
-        saw_idat |= chunk_type == b"IDAT"
+        if chunk_type == b"IHDR":
+            if offset != 8 or width is not None:
+                return False
+            width = int.from_bytes(chunk_data[:4], "big")
+            height = int.from_bytes(chunk_data[4:8], "big")
+            bit_depth, color_type, compression, filtering, interlace = chunk_data[8:13]
+            if (
+                width == 0
+                or height == 0
+                or compression != 0
+                or filtering != 0
+                or interlace != 0
+                or (color_type, bit_depth)
+                not in {
+                    (0, 1), (0, 2), (0, 4), (0, 8), (0, 16),
+                    (2, 8), (2, 16),
+                    (3, 1), (3, 2), (3, 4), (3, 8),
+                    (4, 8), (4, 16),
+                    (6, 8), (6, 16),
+                }
+            ):
+                return False
+        elif chunk_type == b"IDAT":
+            if finished_idat:
+                return False
+            saw_idat = True
+            idat_parts.append(chunk_data)
+        elif saw_idat:
+            finished_idat = True
         if chunk_type == b"IEND":
-            return length == 0 and saw_idat and end == len(raw)
+            if length != 0 or not saw_idat or end != len(raw) or width is None or height is None:
+                return False
+            channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+            row_bytes = (width * channels * bit_depth + 7) // 8
+            expected_size = height * (row_bytes + 1)
+            try:
+                decoder = zlib.decompressobj()
+                pixels = decoder.decompress(b"".join(idat_parts), expected_size + 1)
+                pixels += decoder.flush()
+            except zlib.error:
+                return False
+            return (
+                decoder.eof
+                and not decoder.unused_data
+                and not decoder.unconsumed_tail
+                and len(pixels) == expected_size
+                and all(pixels[row * (row_bytes + 1)] <= 4 for row in range(height))
+            )
         offset = end
     return False
 

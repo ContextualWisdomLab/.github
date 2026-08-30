@@ -133,10 +133,10 @@ def test_documentation_image_suffix_cannot_hide_runtime_content() -> None:
     ("path", "raw", "recognized"),
     [
         ("docs/acceptance.png", PNG_BYTES, True),
-        ("docs/acceptance.gif", b"GIF89a" + b"\x01\x00\x01\x00\x00\x00\x00" + b"\x3b", True),
-        ("docs/acceptance.jpg", b"\xff\xd8\xff\x00\xff\xd9", True),
-        ("docs/acceptance.jpeg", b"\xff\xd8\xff\x00\xff\xd9", True),
-        ("docs/acceptance.webp", b"RIFF" + (12).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00\x00\x00\x00", True),
+        ("docs/acceptance.gif", b"GIF89a" + b"\x01\x00\x01\x00\x00\x00\x00" + b"\x3b", False),
+        ("docs/acceptance.jpg", b"\xff\xd8\xff\x00\xff\xd9", False),
+        ("docs/acceptance.jpeg", b"\xff\xd8\xff\x00\xff\xd9", False),
+        ("docs/acceptance.webp", b"RIFF" + (12).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00\x00\x00\x00", False),
         ("docs/acceptance.png", PNG_BYTES[:-12], False),
         ("docs/acceptance.png", b"#!/bin/sh\nnginx\n", False),
         ("docs/acceptance.svg", b"<svg />", False),
@@ -170,6 +170,13 @@ def test_documentation_png_validation_rejects_truncated_corrupt_and_invalid_chun
     zero_dimension[16:20] = b"\x00\x00\x00\x00"
     zero_dimension[29:33] = policy.zlib.crc32(zero_dimension[12:29]).to_bytes(4, "big")
     assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(zero_dimension))
+
+    empty_idat = bytearray(PNG_BYTES)
+    empty_idat[41:45] = b"x\x9c\x03\x00"
+    empty_idat[37:41] = (4).to_bytes(4, "big")
+    del empty_idat[45:48]
+    empty_idat[45:49] = policy.zlib.crc32(empty_idat[41:45]).to_bytes(4, "big")
+    assert not policy._is_recognized_documentation_image("docs/acceptance.png", bytes(empty_idat))
 
 
 def test_evaluate_pull_request_accepts_recognized_documentation_image() -> None:

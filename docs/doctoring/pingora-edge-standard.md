@@ -21,8 +21,8 @@ dependencies. The initial CWL implementation avoids experimental cache APIs.
 - Required-workflow code is bound to its immutable central SHA and never executes
   pull-request content.
 - Runtime evidence is bounded to one-megabyte regular-file bytes, with UTF-8
-  decoding for runtime candidates and supported raster-format validation for
-  documentation images; the maximum is 3,000 changed files and missing or
+  decoding for runtime candidates and complete PNG chunk/CRC/zlib/scanline
+  validation for documentation images; the maximum is 3,000 changed files and missing or
   malformed evidence fails closed.
 - Exact-head product tests cover host/path routing, SPA fallback, security headers,
   WebSocket/streaming, body limits, health, metrics, TLS, and graceful shutdown as

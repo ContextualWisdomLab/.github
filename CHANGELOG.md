@@ -5,8 +5,8 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Validate the final bytes of documentation raster evidence against its image
-  format before allowing it to name prohibited Nginx runtime forms; an image
+- Validate the final bytes of documentation PNG evidence through chunk, CRC,
+  zlib-stream, dimension, and scanline checks before allowing it to name prohibited Nginx runtime forms; an image
   filename alone no longer bypasses the Pingora policy scanner.
 - Skip trusted base Python lock materialization for exact-head reviews with no
   Python source or dependency-manifest changes, while preserving the

@@ -28,7 +28,7 @@ so a governed shared implementation is required.
 4. The organization required workflow rejects active Nginx runtime artifacts in
    changed final files without executing pull-request code.
 5. Documentation prose, license text, dedicated source fixtures, the policy
-   scanner, and recognized raster image evidence beneath documentation directories
+   scanner, and structurally validated PNG evidence beneath documentation directories
    may contain denied Nginx samples. Image extensions alone do not establish the
    exception; executable integration and end-to-end test helpers remain candidates
    for enforcement.
