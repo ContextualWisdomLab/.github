@@ -326,8 +326,15 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
         "review sidecar discovery failed: https://provider.invalid/?key=sk-secret"
     ) == "review sidecar discovery failed"
     assert sanitize_line(
-        "review sidecar discovered no zero-cost models; orchestrator/free would fail closed"
-    ) == "review sidecar discovered no zero-cost models"
+        "review sidecar discovered no eligible models; orchestrator/free would fail closed"
+    ) == "review sidecar discovered no eligible models"
+    assert sanitize_line(
+        "review sidecar requires an explicit --auth-token or the KV credential "
+        "'CONTEXTUAL_ORCHESTRATOR_TOKEN'"
+    ) == "review sidecar auth token unavailable"
+    assert sanitize_line(
+        "review sidecar requires at least one provider credential in the KV"
+    ) == "review sidecar requires at least one provider credential in the KV"
     assert sanitize_line("provider response sk-secret") is None
 
 
