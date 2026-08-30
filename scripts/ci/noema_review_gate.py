@@ -44,9 +44,9 @@ MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 MAX_LLM_RESPONSE_BYTES = 1024 * 1024
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
-TRUSTED_LOOPBACK_ADDRESSES = frozenset(
-    {ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")}
-)
+
+ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -552,7 +552,15 @@ def resolve_endpoint_addresses(
 def validate_endpoint(
     api_url: str,
 ) -> tuple[str, int, frozenset[IpAddress]]:
-    """Validate transport and pre-request DNS evidence for a model endpoint."""
+    """Validate transport and pre-request DNS evidence for a model endpoint.
+
+    The narrow same-job loopback exception is the exact-origin
+    ``is_allowed_orchestrator_sidecar_url`` allowlist: a bare ``127.0.0.1`` or
+    ``::1`` literal is not enough on its own, it must also match the
+    configured ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin exactly. Every
+    other target — including any other loopback literal or port — must use
+    HTTPS and resolve only to globally routable unicast DNS evidence.
+    """
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
             "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
@@ -570,20 +578,17 @@ def validate_endpoint(
         raise ValueError("URL must have a valid hostname")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("Noema endpoint URL cannot contain user information")
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
-        raise ValueError("URL cannot target localhost")
+
+    trusted_sidecar = is_allowed_orchestrator_sidecar_url(api_url)
+    if not trusted_sidecar:
+        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+            raise ValueError("URL cannot target localhost")
+        if scheme != "https":
+            raise ValueError("Noema non-loopback endpoints must use HTTPS")
 
     port = parsed.port or (443 if scheme == "https" else 80)
-    try:
-        literal_address = ipaddress.ip_address(hostname)
-    except ValueError:
-        literal_address = None
-    trusted_loopback = literal_address in TRUSTED_LOOPBACK_ADDRESSES
-    if not trusted_loopback and scheme != "https":
-        raise ValueError("Noema non-loopback endpoints must use HTTPS")
-
     addresses = resolve_endpoint_addresses(hostname, port)
-    if trusted_loopback:
+    if trusted_sidecar:
         if any(not address.is_loopback for address in addresses):
             raise ValueError("Noema loopback endpoint DNS resolution left loopback")
     elif any(
@@ -605,6 +610,93 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if start < 0 or end < start:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
     return json.loads(stripped[start : end + 1])
+
+
+def _truthy_env(name: str) -> bool:
+    """Return whether a process environment flag is an explicit truthy value."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_literal_host(hostname: str) -> bool:
+    """Return whether hostname is the sidecar loopback literal 127.0.0.1 or ::1."""
+    return hostname in ORCHESTRATOR_LOOPBACK_HOSTS
+
+
+def _http_origin(parsed: urllib.parse.ParseResult) -> tuple[str, str, int] | None:
+    """Return scheme, hostname, and port for a credential-free http(s) URL."""
+    scheme = (parsed.scheme or "").lower()
+    hostname = (parsed.hostname or "").lower()
+    if scheme not in {"http", "https"} or not hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return (scheme, hostname, port)
+
+
+def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
+    """Return True only for the process-local orchestrator sidecar loopback origin.
+
+    ``localhost`` and other private hosts stay rejected. A loopback literal
+    (``127.0.0.1`` / ``::1``) is allowed only when it matches the exact
+    ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin. The via-orchestrator marker is
+    metadata only and never widens this allowlist.
+    """
+    origin = _http_origin(urllib.parse.urlparse(api_url))
+    if origin is None:
+        return False
+    scheme, hostname, port = origin
+    if not _is_loopback_literal_host(hostname):
+        return False
+    sidecar = os.environ.get(ORCHESTRATOR_BASE_ENV, "").strip()
+    if not sidecar:
+        return False
+    sidecar_origin = _http_origin(urllib.parse.urlparse(sidecar))
+    if sidecar_origin is None:
+        return False
+    sidecar_scheme, sidecar_host, sidecar_port = sidecar_origin
+    if not _is_loopback_literal_host(sidecar_host):
+        return False
+    return (scheme, hostname, port) == (sidecar_scheme, sidecar_host, sidecar_port)
+
+
+def reject_private_llm_url(api_url: str) -> None:
+    """Reject non-sidecar localhost, private, and non-http(s) LLM targets."""
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https:// to prevent SSRF vulnerabilities"
+        )
+    parsed = urllib.parse.urlparse(api_url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https://"
+        )
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if is_allowed_orchestrator_sidecar_url(api_url):
+        return
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+        raise ValueError("URL cannot target localhost")
+    try:
+        addrinfo = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return
+    for result in addrinfo:
+        ip_str = result[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise ValueError("URL cannot target internal IP addresses")
 
 
 def call_llm(

@@ -387,8 +387,14 @@ def test_trusted_loopback_sidecar_keeps_the_narrow_http_exception(
     url: str,
     address: str,
 ) -> None:
-    """Allow the existing same-job orchestrator address without opening remote HTTP."""
+    """Allow the existing same-job orchestrator address without opening remote HTTP.
+
+    The exception is scoped by ``is_allowed_orchestrator_sidecar_url`` to the
+    exact configured ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin, not every
+    loopback literal.
+    """
     _configure(monkeypatch, url)
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", url.rsplit("/v1/", 1)[0])
     monkeypatch.setattr(
         socket,
         "getaddrinfo",
@@ -411,6 +417,7 @@ def test_loopback_exception_requires_literal_and_loopback_only_dns(
 ) -> None:
     """Reject a loopback literal if resolver evidence escapes loopback."""
     _configure(monkeypatch, "http://127.0.0.1:43123/v1/chat/completions")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:43123")
     monkeypatch.setattr(
         socket,
         "getaddrinfo",
@@ -418,6 +425,17 @@ def test_loopback_exception_requires_literal_and_loopback_only_dns(
     )
 
     with pytest.raises(ValueError, match="left loopback"):
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+
+
+def test_non_sidecar_loopback_port_requires_https_even_with_sidecar_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loopback literal on a non-matching port is not the sidecar and needs HTTPS."""
+    _configure(monkeypatch, "http://127.0.0.1:9/evil")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:43123")
+
+    with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
         noema.call_llm("owner/repo", 1, _pr(), "diff", False)
 
 
