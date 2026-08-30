@@ -2,6 +2,7 @@ import json
 import os
 import re
 import runpy
+import shutil
 import socket
 import subprocess
 import sys
@@ -620,6 +621,46 @@ def test_main_reports_rejected_isolated_command(monkeypatch, tmp_path, capsys):
     assert payload["isolation_backend"] == "/usr/bin/bwrap"
 
 
+def test_main_reports_coded_failure_for_whitespace_only_command(monkeypatch, tmp_path, capsys):
+    """A whitespace-only command fails closed with coded 126, not an uncaught traceback.
+
+    ``isolated_command`` raises ``ValueError`` (not ``RuntimeError``) for a
+    command that is empty once split, so the previous except clause around
+    these calls let it propagate out of ``main`` uncaught -- printing a
+    Python traceback and skipping the documented isolation-rejection exit
+    code entirely.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    exit_code = sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--backend-cmd",
+            "   ",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 126
+    assert not started
+    assert "isolation rejected command" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 126
+
+
 def test_main_reports_unavailable_required_isolation(monkeypatch, tmp_path, capsys):
     """Required isolation errors exit before starting services with code 126."""
     repo = tmp_path / "repo"
@@ -1104,6 +1145,48 @@ def test_probe_isolation_capability_exercises_the_same_operations_as_real_comman
     assert "--chdir" in command
 
 
+def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp_path):
+    """A PATH entry that shadows sh with an inaccessible binary must not be used.
+
+    Resolving the probe shell from the caller's ``PATH`` (as the old
+    implementation did via ``shutil.which("sh")``) can return a binary
+    outside every root bubblewrap actually bind-mounts, for example a
+    home-directory ``sh`` earlier on ``PATH`` than the real system shell.
+    That shadowed shell is invisible inside the sandbox, so a real, working
+    bubblewrap install would fail the probe. The probe must keep choosing a
+    shell from the fixed, known-mounted ``PROBE_SHELL_PATHS`` regardless of
+    what ``PATH`` (or ``shutil.which``) would otherwise resolve.
+    """
+    shadow_dir = tmp_path / "home-bin"
+    shadow_dir.mkdir()
+    shadow_sh = shadow_dir / "sh"
+    shadow_sh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    shadow_sh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shadow_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    assert shutil.which("sh") == str(shadow_sh)
+
+    captured: dict[str, object] = {}
+
+    def _fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
+    sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
+
+    command = captured["command"]
+    probe_executable = command[-3]
+    assert probe_executable in sandboxed_web_e2e.PROBE_SHELL_PATHS
+    assert probe_executable != str(shadow_sh)
+
+
+def test_probe_shell_fails_clearly_when_no_mounted_shell_exists(monkeypatch, tmp_path):
+    """No usable mounted shell is a clear, documented failure, not a silent fallback."""
+    monkeypatch.setattr(sandboxed_web_e2e, "PROBE_SHELL_PATHS", (str(tmp_path / "no-such-sh"),))
+    with pytest.raises(RuntimeError, match="needs a system shell"):
+        sandboxed_web_e2e._probe_shell()
+
+
 def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
     """A probe that hangs past its bounded timeout is classified as unavailable."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: None)
@@ -1209,6 +1292,94 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
     with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
         sandboxed_web_e2e.isolated_command(
             "tool",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(monkeypatch, tmp_path):
+    """A ./gradlew-style repository launcher resolves against the sandboxed cwd.
+
+    ``shutil.which`` resolves any command string containing a path separator
+    against the *calling process's* own current working directory, never an
+    explicit ``cwd`` argument -- so it can never find a launcher relative to
+    the copied repository. Forcing it to return ``None`` here proves
+    resolution instead goes through the sandboxed-``cwd``-relative path this
+    fix adds, not a PATH search.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "gradlew"
+    launcher.write_text("#!/bin/sh\necho gradlew\n", encoding="utf-8")
+    launcher.chmod(0o755)
+
+    command = sandboxed_web_e2e.isolated_command(
+        "./gradlew build",
+        backend="/usr/bin/bwrap",
+        cwd=repo,
+        sandbox_root=sandbox,
+        env={"PATH": "/usr/bin"},
+    )
+
+    assert command.startswith("/usr/bin/bwrap")
+    assert "--chdir /workspace/repo" in command
+    assert command.endswith("./gradlew build")
+
+
+def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
+    """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside-tool"
+    outside.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
+    outside.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
+        sandboxed_web_e2e.isolated_command(
+            "../../outside-tool",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
+    """An explicit absolute path outside the workspace and bind roots is still rejected."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    outside = tmp_path / "outside-tool"
+    outside.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
+    outside.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
+        sandboxed_web_e2e.isolated_command(
+            str(outside),
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "/usr/bin"},
+        )
+
+
+def test_isolated_command_rejects_missing_repo_local_launcher(monkeypatch, tmp_path):
+    """A repo-local launcher path that does not exist in the copy is rejected as unresolved."""
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="could not be resolved"):
+        sandboxed_web_e2e.isolated_command(
+            "./missing-tool",
             backend="/usr/bin/bwrap",
             cwd=repo,
             sandbox_root=sandbox,

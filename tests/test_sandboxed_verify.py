@@ -104,6 +104,36 @@ def test_copy_workspace_excludes_credential_bearing_paths(tmp_path):
         assert not (copied / excluded).exists(), excluded
 
 
+def test_copy_workspace_preserves_env_templates_but_excludes_env_secrets(tmp_path):
+    """Committed dotenv templates survive the copy while real dotenv secrets are excluded.
+
+    ``.env.*`` in ``DEFAULT_IGNORE`` exists to exclude credential-bearing
+    dotenv variants such as ``.env.local`` or ``.env.production``, but the
+    same glob also matches committed, secret-free templates like
+    ``.env.example`` that verification commands may rely on for local
+    defaults. Those specific template names must remain in the copy even
+    though they match the exclusion glob.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env.example").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env.sample").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env.template").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.local").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.production").write_text("SECRET=leaked\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    for preserved in (".env.example", ".env.sample", ".env.template"):
+        assert (copied / preserved).exists(), preserved
+        assert (copied / preserved).read_text(encoding="utf-8") == "SECRET=set-me\n"
+    for excluded in (".env", ".env.local", ".env.production"):
+        assert not (copied / excluded).exists(), excluded
+
+
 def test_copy_workspace_rejects_missing_repo_root(tmp_path):
     """Workspace copy fails clearly when the source root is invalid."""
     with pytest.raises(ValueError, match="repo root is not a directory"):

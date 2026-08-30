@@ -120,6 +120,39 @@ def _bind_roots() -> list[Path]:
     return [Path(path) for path in BIND_ROOTS if Path(path).exists()]
 
 
+# Common system shell locations that live under BIND_ROOTS -- the only host
+# paths isolated_command actually bind-mounts read-only into the sandbox.
+# Covers both a traditional split /bin and /usr/bin and a merged-/usr layout
+# where /bin is itself a symlink into /usr/bin.
+PROBE_SHELL_PATHS = ("/bin/sh", "/usr/bin/sh")
+
+
+def _probe_shell() -> str:
+    """Pick a probe shell that is guaranteed to be visible inside the sandbox.
+
+    ``isolated_command`` only ever bind-mounts ``BIND_ROOTS`` (plus a small
+    fixed set of ``/etc`` files) read-only into the sandbox. Resolving the
+    probe shell from the caller's own ``PATH`` -- as opposed to this fixed,
+    known-mounted set -- can return a binary that lives outside every mounted
+    root, for example when a ``PATH`` entry earlier than the system one
+    shadows ``sh`` with a home-directory executable. Such a shell is invisible
+    inside the sandbox, so the probe fails even though a real invocation
+    using an actually-mounted shell would succeed, misclassifying a working
+    host as one with isolation unavailable. Restricting the choice to
+    ``PROBE_SHELL_PATHS`` keeps the probe representative of what a real
+    isolated command can execute. Failure to find any of them is reported
+    clearly instead of silently substituting an unvalidated fallback.
+    """
+    for candidate in PROBE_SHELL_PATHS:
+        path = Path(candidate)
+        if path.is_file() and os.access(path, os.X_OK):
+            return candidate
+    raise RuntimeError(
+        "bubblewrap capability probe needs a system shell at one of: "
+        f"{', '.join(PROBE_SHELL_PATHS)}"
+    )
+
+
 def _probe_isolation_capability(backend: str) -> None:
     """Prove bubblewrap can create the sandbox namespaces before any service starts.
 
@@ -138,7 +171,7 @@ def _probe_isolation_capability(backend: str) -> None:
     unavailable isolation (exit code 126) up front, instead of surfacing
     later as a confusing service-readiness or test failure.
     """
-    probe_executable = shutil.which("sh") or "/bin/sh"
+    probe_executable = _probe_shell()
     bind_args: list[str] = []
     for root in _bind_roots():
         bind_args.extend(("--ro-bind", str(root), str(root)))
@@ -206,6 +239,32 @@ def _sandbox_environment(env: dict[str, str], sandbox_root: Path) -> dict[str, s
     return mapped
 
 
+def _resolve_isolated_executable(argv0: str, *, cwd: Path, path: str | None) -> Path | None:
+    """Resolve ``argv0`` the way it will actually run inside the sandbox.
+
+    ``shutil.which`` resolves any command string that contains a path
+    separator (for example a repository launcher like ``./gradlew``)
+    against the *calling process's* current working directory -- it never
+    looks at an explicit ``cwd`` argument. That is correct for a bare
+    command name looked up on ``PATH``, but wrong for a repository-local
+    launcher: the wrapper process's own cwd is not the copied repository
+    that will be mounted into the sandbox, so a perfectly valid
+    ``./gradlew`` is resolved (or silently missed) against the wrong
+    directory. When ``argv0`` names an explicit path -- it contains a
+    directory component, whether relative or absolute -- it is resolved
+    against ``cwd`` instead, matching where the command will actually be
+    launched from once isolated. A bare name with no directory component
+    keeps the original ``PATH``-search behavior.
+    """
+    if os.path.dirname(argv0):
+        candidate = Path(os.path.normpath(cwd / argv0))
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+        return None
+    found = shutil.which(argv0, path=path)
+    return Path(found) if found is not None else None
+
+
 def isolated_command(
     command: str,
     *,
@@ -216,23 +275,26 @@ def isolated_command(
 ) -> str:
     """Wrap one command in a read-only-root bubblewrap workspace.
 
-    The command's executable must resolve on ``PATH`` (or as a literal path)
-    and land inside the read-only bind roots. An executable ``shutil.which``
-    cannot find is rejected rather than passed through unvalidated, so a
-    lookup failure can never silently bypass the read-only-root check it was
-    supposed to receive.
+    The command's executable must resolve on ``PATH``, as a repository-local
+    path resolved against ``cwd``, or as a literal host path, and land
+    inside the sandboxed workspace or the read-only bind roots. An
+    executable that cannot be resolved is rejected rather than passed
+    through unvalidated, so a lookup failure can never silently bypass the
+    workspace/read-only-root check it was supposed to receive.
     """
     argv = shlex.split(command)
     if not argv:
         raise ValueError("command must not be empty")
     bind_roots = _bind_roots()
-    executable = shutil.which(argv[0], path=env.get("PATH"))
-    if executable is None:
+    executable_path = _resolve_isolated_executable(argv[0], cwd=cwd, path=env.get("PATH"))
+    if executable_path is None:
         raise RuntimeError(f"executable could not be resolved for isolation validation: {argv[0]}")
-    executable_path = Path(executable)
     if executable_path.is_relative_to(Path.home()):
         raise RuntimeError("commands from the host home directory are not allowed in isolation")
-    if not any(executable_path.is_relative_to(root) for root in bind_roots):
+    if not (
+        executable_path.is_relative_to(sandbox_root)
+        or any(executable_path.is_relative_to(root) for root in bind_roots)
+    ):
         raise RuntimeError(
             f"executable is outside the isolated bind roots: {executable_path}"
         )
@@ -495,7 +557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if backend
                 else args.e2e_cmd
             )
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
             exit_code = 126
             return exit_code
