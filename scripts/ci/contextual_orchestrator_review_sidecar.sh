@@ -426,6 +426,13 @@ report["gateway"] = {
 temporary = report_path.with_suffix(".tmp")
 temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 temporary.replace(report_path)
+# error_code is already regex-validated above ([A-Za-z0-9_.-]{1,64}) and status
+# is a plain int, so this is safe to print directly to the job's own log --
+# unlike the sidecar server subprocess's stdout/stderr, this synchronous
+# one-shot snippet's output is not routed through the sanitizer, and was
+# previously visible only in the CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE
+# artifact file, not the job log a CI operator actually reads first.
+print(f"[contextual-orchestrator-sidecar] gateway preflight rejected: error_code={code} http_status={status}")
 PY
   fail "gateway preflight returned HTTP ${gateway_http_status}"
 fi

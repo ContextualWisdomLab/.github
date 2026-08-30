@@ -358,6 +358,30 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
 
 
+def test_gateway_preflight_rejection_prints_bounded_evidence_to_the_job_log() -> None:
+    """A rejected gateway preflight must surface error_code/http_status directly.
+
+    Before this, the bounded ``error_code``/``http_status`` pair was written
+    only into the ``CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE`` artifact
+    file, invisible in the job log a CI operator reads first -- exactly the
+    gap that made a real "every free route rejected" failure look identical
+    to an opaque "gateway preflight returned HTTP 502" in normal CI output.
+    """
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    assert (
+        'print(f"[contextual-orchestrator-sidecar] gateway preflight rejected: '
+        'error_code={code} http_status={status}")'
+    ) in sidecar
+    # This print is not routed through the sanitizer, so its inputs must stay
+    # bounded: code is regex-validated and status is a plain int, never raw
+    # provider response text.
+    assert (
+        'if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):'
+        in sidecar
+    )
+
+
 def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     """Provider bodies, exception messages, URLs, and secrets never reach artifacts."""
     namespace = _load_sanitizer()
