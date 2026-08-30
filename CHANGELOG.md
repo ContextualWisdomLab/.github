@@ -8,6 +8,164 @@ Semantic Versioning where the repository publishes a release.
 - Validate final documentation PNG bytes through chunk, CRC, zlib-stream,
   palette, dimension, and scanline contracts before granting the narrow
   Pingora-policy documentation exception.
+- Fix one more Devin Review finding on PR #1452, a genuine gap in the round-4
+  malformed-gateway-reply fix (`scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`):
+  `json.loads()` legally parses a top-level JSON array, `null`, a bare
+  string, or a number, not just an object -- the immediately following
+  `response.get("choices")` assumes a dict and raises `AttributeError` for
+  any of those, which was not in the round-4 fix's caught exception tuple,
+  so a valid-JSON-but-wrong-shaped HTTP 200 body still lost evidence exactly
+  like the original bug (the script still failed closed overall, since an
+  uncaught exception exits non-zero, but wrote nothing to the gateway
+  evidence report). Fixed with an explicit `isinstance(response, dict)`
+  check that raises the already-caught `TypeError` rather than widening the
+  tuple to `AttributeError` broadly. Added parametrized regression tests
+  (`[]`, `null`, a bare string, and a bare number) confirmed to fail against
+  the pre-fix script before the fix, and pass after. 1930 tests pass; 100%
+  coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 3 more Devin Review findings from a fourth review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), plus two
+  doc/test-staleness cleanups: an escalated attempt's EXCEPTION handler
+  (`_record_provider_exception`) left the base attempt's stale
+  `finish_reason`/`reasoning_without_content` on the row -- the same
+  mixed-attempt-telemetry bug class already fixed for the escalated-empty
+  and escalated-success outcomes, now closed for the escalated-exception
+  outcome too (both fields are cleared, not backfilled, since there is no
+  response object to describe). `_response_has_reasoning_without_content`
+  checked only whether `message.reasoning` was truthy, never whether
+  `message.content` was actually empty/absent -- so a normal, complete
+  answer that also discloses a reasoning trace alongside real content would
+  be wrongly flagged as "starved" (this had gone latent-but-harmless while
+  the predicate was only ever called on already-known-empty responses; the
+  round-3 fix that started calling it on the SUCCESS path exposed the
+  actual bug for the first time). Fixed to require content be genuinely
+  absent, reusing `_chat_response_has_text`'s own definition so the two
+  predicates are provably consistent; same predicate fixed in the sidecar
+  script's mirrored Layer 2 logic. A malformed/unparseable HTTP-200 gateway
+  response body (or a missing response file) hit the bare
+  `except (...): pass` fallback and wrote nothing to the gateway evidence
+  report -- the same evidence-loss pattern as the earlier transport-
+  exhaustion fix, a different trigger -- now records a bounded
+  `gateway_invalid_response` classification via the same atomic-write
+  pattern. Extended the fake-curl harness with `NOFILE:<status>` and
+  malformed-JSON-body plan entries to cover both. Also corrected a stale
+  test docstring (still described the routing probe as proving every route
+  at the real 4096-token budget, no longer true since most routes now prove
+  readiness at the cheaper 16-token base probe) and updated ADR-0005's
+  status from `proposed` to `accepted` with its Consequences section
+  reframed to present tense, now that this PR implements it. 1926 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 2 more Devin Review findings from a third review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `docs/adr/0005-sidecar-preflight-token-budget.md`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`): an
+  escalated-attempt HTTP rejection (401 auth, 429 throttle, 5xx server error)
+  was unconditionally labeled `escalated_probe_rejected`, wrongly implying
+  every one of those was evidence the token budget specifically was too large
+  -- no status code alone is that evidence, and this codebase deliberately
+  never captures raw provider error text that could validate the distinction.
+  Extracted a shared `_record_provider_exception` helper so the escalated
+  attempt now gets the exact same sanitized exception-type/HTTP-status
+  classification the base probe already used, with parametrized 401/429/5xx
+  test coverage; the ADR's own text (which originally claimed this
+  attribution) is corrected in place. Separately, `finish_reason`/
+  `reasoning_without_content` were only ever populated on failure/escalation
+  outcomes, never on an ordinary successful probe (the most common case) --
+  now populated on every outcome, in both the launcher and the sidecar
+  script's successful-gateway-evidence writer, so future tuning has a real
+  "normal" baseline to compare against. 1920 tests pass; 100% coverage and
+  100% docstring coverage on `scripts/ci/`.
+- Fix 3 more Devin Review findings from a second review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), triggered
+  by the push that resolved the first 7: a successful escalated attempt still
+  carried the base attempt's stale `finish_reason`/`reasoning_without_content`
+  (the same class of bug as the mixed-attempt fix above, on the opposite
+  branch) -- now both fields are refreshed from the escalated response on
+  success too. `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`'s new `case` guard
+  rejected non-numeric values but not oversized all-digit ones, which hit the
+  identical `[ -ge ]` integer-overflow failure mode the guard exists to
+  prevent (reproduced directly: a 55-digit value fails the same way a
+  non-numeric one did) -- the guard now also caps digit count (at most 4
+  digits, 9999). Added mixed-outcome fake-curl tests (transport failure then
+  HTTP rejection, and the reverse) proving exhaustion evidence reflects
+  whichever attempt actually happened last. Two further findings from the same
+  pass -- (1) a base-probe success never confirms the candidate at the real
+  serving token budget (only escalation-on-failure does), and (2)
+  `discover_all_models()`'s own up-to-~105s sequential network time (verified
+  against the vendored `contextual_orchestrator.model_discovery` source: ~7
+  sequential HTTP calls at up to 15s each) is not counted against the same
+  180s watchdog Layer 1's 160s probing bound assumes it has entirely to
+  itself -- are real, verified, and architecturally significant enough to need
+  their own design pass rather than a guessed patch; documented in place with
+  cross-references and tracked as `ContextualWisdomLab/.github#1454` and
+  `#1455` respectively, left open (not resolved) on the PR. 1917 tests pass;
+  100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 7 Devin Review findings on PR #1452, ADR-0005's implementation
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`). Two were
+  blocking: (1) `_preflight_review_agents` reset its escalation counter fresh
+  on every call, so `_preflight_with_fallback` calling it twice (primary,
+  then fallback) could spend the full `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget in each stage -- up to 200s, past Layer 1's 180s
+  healthz-readiness watchdog and contradicting the ADR's own claimed 160s
+  worst case. Fixed by threading the primary stage's ending
+  `escalations_used` into the fallback stage as its starting point, so one
+  shared budget covers the whole run; both stages' counts remain visible in
+  the returned evidence. (2) A non-numeric, empty, zero, or negative
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` made the shell script's integer
+  comparison silently fail on every iteration, removing the retry bound
+  entirely instead of failing closed. Fixed with an explicit `case` guard
+  before the retry loop starts. The remaining five: an escalated-attempt
+  transport failure (no HTTP status at all) was mislabeled
+  `EscalatedProbeRejected`, falsely attributing a connectivity failure to
+  the token budget -- now distinguishes on HTTP-status presence, falling
+  back to the sanitized exception type otherwise; total transport-attempt
+  exhaustion at Layer 2 used to `fail` without ever writing gateway evidence
+  -- now records a bounded `gateway_transport_exhausted` classification
+  first, via the same sanitize-and-atomic-replace pattern the non-2xx and
+  invalid-content paths already use; Layer 1's error-type strings were
+  CamelCase (`EscalatedProbeRejected`, `InvalidChatResponse`,
+  `EscalationBudgetExhausted`) while the ADR and Layer 2 already used
+  snake_case -- Layer 1 (and Layer 2's one remaining outlier) now match:
+  `escalated_probe_rejected`, `invalid_chat_response`,
+  `escalation_budget_exhausted`, `gateway_transport_exhausted`; the Layer 2
+  gateway retry-loop test only asserted source literals rather than
+  executing the loop -- added a fake-curl harness (extracting the tracked
+  script's real retry-loop source and running it under `bash` against a
+  scripted, no-network `curl` stand-in) covering first-attempt success,
+  transport-failure recovery, non-2xx exhaustion, transport exhaustion, and
+  the malformed-attempt-limit guard; and a mixed-attempt telemetry bug where
+  `finish_reason` reflected the escalated attempt while
+  `reasoning_without_content` was left describing the base attempt -- both
+  fields now always describe the same (most recent) attempt. 1913 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Implement ADR-0005's diagnostic, bounded-retry sidecar preflight
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`). A 5th Devin
+  Review pass on the ADR found the escalation predicate
+  (`finish_reason == "length"` alone) missed the vendored
+  `ModelClient._response_content`'s own broader "reasoning without
+  content" signature -- the exact original PR #1436 failure mode --
+  verified directly against current orchestrator.py before fixing.
+  Layer 1's per-candidate probe now starts at a new
+  `REVIEW_PREFLIGHT_BASE_TOKENS = 16` and escalates the same candidate
+  once to the existing `REVIEW_MAX_OUTPUT_TOKENS` (4096) only when the
+  response is empty and either `finish_reason == "length"` or a
+  populated `reasoning` field is present, bounded by a shared
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` across the whole run. Layer 2
+  keeps its existing 4096/120s budget unchanged and retries only on
+  transport failure/non-2xx, up to
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`, labeling a
+  retry-specific rejection `gateway_retry_rejected` rather than
+  implying candidate-ceiling attribution it cannot support. 1901 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
 - Add `docs/adr/0005-sidecar-preflight-token-budget.md`, an evidence-based
   design decision responding to the owner's direct critique that a single
   hardcoded `max_tokens` cannot fit a heterogeneous `orchestrator/free` pool.
