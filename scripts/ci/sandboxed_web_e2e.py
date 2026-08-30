@@ -239,7 +239,48 @@ def _sandbox_environment(env: dict[str, str], sandbox_root: Path) -> dict[str, s
     return mapped
 
 
-def _resolve_isolated_executable(argv0: str, *, cwd: Path, path: str | None) -> Path | None:
+def _which_relative_to_cwd(argv0: str, *, cwd: Path, sandbox_root: Path, path: str | None) -> Path | None:
+    """Search ``PATH`` for ``argv0`` like ``shutil.which``, anchoring relative entries at ``cwd``.
+
+    ``shutil.which`` joins every ``PATH`` entry -- relative or absolute --
+    with the plain command name and, for a relative entry, only ever checks
+    the result against the *calling process's* own current working
+    directory; there is no parameter to override that. Some build tooling
+    sets up a ``PATH`` with a relative entry (for example
+    ``PATH=bin:/usr/bin``) meant to be read relative to the project being
+    built, which can never be found this way for a command about to run
+    from a different directory (``cwd``, the sandboxed copy of the
+    repository) than the wrapper process's own cwd. This mirrors
+    ``shutil.which``'s ``PATH``-splitting and executable-bit checks by hand,
+    joining a relative entry with ``cwd`` instead of leaving it to resolve
+    against ``os.getcwd()``; an absolute entry is used exactly as
+    ``shutil.which`` would use it. A relative entry that, once joined with
+    ``cwd``, would resolve outside ``sandbox_root`` is skipped without ever
+    being checked against the real filesystem, so a ``PATH`` entry such as
+    ``../../..`` cannot be used to probe for -- or resolve to -- executables
+    on the host outside the sandboxed copy; it fails closed the same way an
+    unresolvable command already does. ``PATH`` falls back to
+    ``os.environ["PATH"]`` and then ``os.defpath``, matching
+    ``shutil.which``'s own fallback for a caller that passes no ``PATH``.
+    """
+    search_path = path if path is not None else os.environ.get("PATH", os.defpath)
+    if not search_path:
+        return None
+    for entry in search_path.split(os.pathsep):
+        directory = Path(entry) if entry else cwd
+        if not directory.is_absolute():
+            directory = Path(os.path.normpath(cwd / directory))
+            if not directory.is_relative_to(sandbox_root):
+                continue
+        candidate = directory / argv0
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _resolve_isolated_executable(
+    argv0: str, *, cwd: Path, sandbox_root: Path, path: str | None
+) -> Path | None:
     """Resolve ``argv0`` the way it will actually run inside the sandbox.
 
     ``shutil.which`` resolves any command string that contains a path
@@ -254,7 +295,13 @@ def _resolve_isolated_executable(argv0: str, *, cwd: Path, path: str | None) -> 
     directory component, whether relative or absolute -- it is resolved
     against ``cwd`` instead, matching where the command will actually be
     launched from once isolated. A bare name with no directory component
-    keeps the original ``PATH``-search behavior.
+    keeps the original ``PATH``-search behavior via ``shutil.which`` first;
+    ``shutil.which`` itself resolves a *relative* ``PATH`` entry only
+    against the wrapper's own process cwd, so when it comes back empty this
+    falls through to ``_which_relative_to_cwd``, which retries the search
+    with relative ``PATH`` entries anchored at ``cwd`` instead -- covering
+    build tooling that sets up a ``PATH`` meant to be read relative to the
+    repository under test.
     """
     if os.path.dirname(argv0):
         candidate = Path(os.path.normpath(cwd / argv0))
@@ -262,7 +309,9 @@ def _resolve_isolated_executable(argv0: str, *, cwd: Path, path: str | None) -> 
             return candidate
         return None
     found = shutil.which(argv0, path=path)
-    return Path(found) if found is not None else None
+    if found is not None:
+        return Path(found)
+    return _which_relative_to_cwd(argv0, cwd=cwd, sandbox_root=sandbox_root, path=path)
 
 
 def isolated_command(
@@ -286,7 +335,9 @@ def isolated_command(
     if not argv:
         raise ValueError("command must not be empty")
     bind_roots = _bind_roots()
-    executable_path = _resolve_isolated_executable(argv[0], cwd=cwd, path=env.get("PATH"))
+    executable_path = _resolve_isolated_executable(
+        argv[0], cwd=cwd, sandbox_root=sandbox_root, path=env.get("PATH")
+    )
     if executable_path is None:
         raise RuntimeError(f"executable could not be resolved for isolation validation: {argv[0]}")
     if executable_path.is_relative_to(Path.home()):

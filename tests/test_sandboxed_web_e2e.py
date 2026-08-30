@@ -1330,6 +1330,75 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(mon
     assert command.endswith("./gradlew build")
 
 
+def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypatch, tmp_path):
+    """A bare command resolves when PATH itself has a relative entry.
+
+    ``shutil.which`` joins a relative ``PATH`` entry with the *calling
+    process's* own cwd, with no way to override that -- so build tooling
+    that sets up a ``PATH`` like ``bin:/usr/bin`` meant to be read relative
+    to the project being built can never be resolved this way for a command
+    about to run from a different directory (the sandboxed copy). Mocking
+    ``shutil.which`` to ``None`` here proves resolution instead falls
+    through to the cwd-anchored ``PATH`` search this fix adds.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    bin_dir = repo / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = bin_dir / "tool"
+    tool.write_text("#!/bin/sh\necho tool\n", encoding="utf-8")
+    tool.chmod(0o755)
+
+    command = sandboxed_web_e2e.isolated_command(
+        "tool",
+        backend="/usr/bin/bwrap",
+        cwd=repo,
+        sandbox_root=sandbox,
+        env={"PATH": "bin"},
+    )
+
+    assert command.startswith("/usr/bin/bwrap")
+    assert "--chdir /workspace/repo" in command
+    assert command.endswith("tool")
+
+
+def test_which_relative_to_cwd_returns_none_for_empty_path(tmp_path):
+    """An empty PATH string yields no matches without touching the filesystem."""
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+
+    result = sandboxed_web_e2e._which_relative_to_cwd(
+        "tool", cwd=repo, sandbox_root=sandbox, path=""
+    )
+
+    assert result is None
+
+
+def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypatch, tmp_path):
+    """A relative PATH entry cannot be used to search the real host filesystem outside the copy.
+
+    ``PATH=../../..`` resolved against ``cwd`` would otherwise land on a
+    real host directory outside the sandboxed copy. That must fail closed
+    the same way an unresolved command already does, without the lookup
+    itself probing the host filesystem outside the sandbox root.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="could not be resolved"):
+        sandboxed_web_e2e.isolated_command(
+            "tool",
+            backend="/usr/bin/bwrap",
+            cwd=repo,
+            sandbox_root=sandbox,
+            env={"PATH": "../../.."},
+        )
+
+
 def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
     """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
     monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)

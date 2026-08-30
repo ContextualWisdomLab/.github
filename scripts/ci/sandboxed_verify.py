@@ -268,24 +268,41 @@ def _resolve_symlink_components(
     return resolved
 
 
-def _ignore_with_env_template_allowlist(patterns: Sequence[str]) -> Callable[[str, list[str]], set[str]]:
+def _ignore_with_env_template_allowlist(
+    default_patterns: Sequence[str], extra_patterns: Sequence[str]
+) -> Callable[[str, list[str]], set[str]]:
     """Build a ``copytree`` ignore function that spares committed env templates.
 
     ``shutil.ignore_patterns`` has no way to match a glob like ``.env.*``
     while excepting specific names from it, so a committed, secret-free
     template such as ``.env.example`` matches the same pattern used to
     exclude real credential-bearing dotenv files and would otherwise vanish
-    from the sandboxed copy right along with them. This wraps the
-    pattern-based ignore function and un-ignores any name found in
-    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` after the underlying patterns have
-    been applied.
+    from the sandboxed copy right along with them. This builds two
+    *separate* pattern-based ignore functions -- one from ``default_patterns``
+    (``DEFAULT_IGNORE``, whose broad ``.env.*`` glob the allowlist exists to
+    carve an exception out of) and one from ``extra_patterns`` (a caller's
+    explicit ``--ignore``/``extra_ignores``) -- and un-ignores a name found in
+    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` only when it was matched *solely* by
+    the default patterns. A name the caller explicitly asked to exclude via
+    ``extra_patterns`` -- for example because in their repository a file
+    named ``.env.example`` happens to carry something sensitive despite the
+    generic name -- stays excluded even though it is also one of the generic
+    template names: the allowlist must never override an explicit caller
+    exclusion, only the built-in broad glob.
     """
-    base_ignore = shutil.ignore_patterns(*patterns)
+    default_ignore = shutil.ignore_patterns(*default_patterns)
+    extra_ignore = shutil.ignore_patterns(*extra_patterns)
 
     def _ignore(directory: str, names: list[str]) -> set[str]:
-        """Apply the pattern-based ignore rules, then spare env template names."""
-        ignored = base_ignore(directory, names)
-        return {name for name in ignored if name not in DEFAULT_ENV_TEMPLATE_ALLOWLIST}
+        """Apply both pattern sets, sparing env template names not explicitly excluded."""
+        default_ignored = default_ignore(directory, names)
+        extra_ignored = extra_ignore(directory, names)
+        protected = {
+            name
+            for name in default_ignored
+            if name in DEFAULT_ENV_TEMPLATE_ALLOWLIST and name not in extra_ignored
+        }
+        return (default_ignored | extra_ignored) - protected
 
     return _ignore
 
@@ -296,7 +313,7 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     if not source.is_dir():
         raise ValueError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
-    ignore = _ignore_with_env_template_allowlist(DEFAULT_IGNORE + tuple(extra_ignores))
+    ignore = _ignore_with_env_template_allowlist(DEFAULT_IGNORE, tuple(extra_ignores))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
     _reject_escaping_symlinks(destination)
     return destination

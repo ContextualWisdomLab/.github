@@ -134,6 +134,34 @@ def test_copy_workspace_preserves_env_templates_but_excludes_env_secrets(tmp_pat
         assert not (copied / excluded).exists(), excluded
 
 
+def test_copy_workspace_extra_ignore_overrides_env_template_allowlist(tmp_path):
+    """An explicit caller exclusion for a template name is not restored by the allowlist.
+
+    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` exists to carve committed, secret-free
+    templates back out of the broad ``.env.*`` glob in ``DEFAULT_IGNORE``. It
+    must never also override a caller's own explicit ``extra_ignores`` (the
+    ``--ignore`` CLI flag) -- for example because in a particular repository
+    ``.env.example`` happens to carry something sensitive despite the
+    generic name. If the allowlist restored a name regardless of *why* it
+    was ignored, that explicit exclusion would be silently defeated and the
+    file would ride into the writable, command-readable sandbox anyway.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env.example").write_text("SECRET=actually-sensitive\n", encoding="utf-8")
+    (repo / ".env.sample").write_text("SECRET=set-me\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [".env.example"])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    assert not (copied / ".env.example").exists()
+    # A template the caller did NOT explicitly exclude is still preserved --
+    # the allowlist keeps working for everything except the explicit ask.
+    assert (copied / ".env.sample").exists()
+    assert (copied / ".env.sample").read_text(encoding="utf-8") == "SECRET=set-me\n"
+
+
 def test_copy_workspace_rejects_missing_repo_root(tmp_path):
     """Workspace copy fails clearly when the source root is invalid."""
     with pytest.raises(ValueError, match="repo root is not a directory"):
