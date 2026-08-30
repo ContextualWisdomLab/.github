@@ -5,6 +5,21 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Add `docs/adr/0005-sidecar-preflight-token-budget.md`, an evidence-based
+  design decision responding to the owner's direct critique that a single
+  hardcoded `max_tokens` cannot fit a heterogeneous `orchestrator/free` pool
+  (varying reasoning-token overhead per model, and a genuinely different real
+  ceiling per model). Checked directly against `contextual-orchestrator`
+  source: no caller-facing way exists to separate a reasoning budget from a
+  content budget on the endpoints this preflight/Strix use;
+  `ModelClient.probe()`/`provider_readiness_report()` is a better-shaped,
+  already-built per-candidate liveness mechanism but is `admin`-scoped while
+  the sidecar's token is `inference`-scoped; no per-model token-ceiling data
+  is captured anywhere in discovery today. Decision: stop tuning one global
+  constant and move the sidecar's preflight to a bounded per-candidate probe
+  with an N-of-M "at least one route works" threshold, with two narrower
+  upstream asks tracked as follow-ups rather than closed here. No code
+  change in this PR; the sidecar migration is tracked separately.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage

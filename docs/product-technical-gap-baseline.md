@@ -1292,6 +1292,38 @@ conflicting** PRs address pieces of this:
   currently blocked by the sidecar-preflight outage above, so neither could
   be re-reviewed to a genuine pass yet regardless of which approach wins.
 
+## 2026-08-30 sidecar preflight `max_tokens`: explicit owner critique, ADR-0005
+
+Direct owner feedback after #1436's `max_tokens` 16→4096 raise moved the sidecar's gateway preflight
+failure from "empty content" to "120s timeout, zero bytes": *"max_tokens 이걸 고정하는 게 말이 안
+되는데"* (hardcoding this doesn't make sense) — *"모델마다 max_tokens 허용치가 다 다른데"* (each model's
+real ceiling differs too). Both are correct and evidenced, not just asserted: see
+[`docs/adr/0005-sidecar-preflight-token-budget.md`](adr/0005-sidecar-preflight-token-budget.md) for the
+full research trail, checked directly against `contextual-orchestrator` source rather than assumed.
+
+Summary of what that ADR found and decided:
+
+- **No caller-facing lever separates a reasoning budget from a content budget on this gateway.**
+  `ReasoningEffortProfile` is real but additive (still always sets `max_tokens`), opt-in server-side
+  only, and — critically — the public `/v1/chat/completions` / `/v1/responses` endpoints this preflight
+  and Strix both use treat a caller-supplied `reasoning_effort`/`reasoning` field as a **documented
+  no-op**, confirmed directly from `server.py`'s own docstrings.
+- **A better-shaped liveness mechanism already exists upstream** (`ModelClient.probe()` /
+  `provider_readiness_report()`, per-candidate, isolated-failure, exposed as
+  `GET /api/v1/provider_readiness/latest`), but it is gated at **`admin` scope** while the sidecar's
+  bearer token is `inference`-scoped — adopting it as-is would be a real privilege widening, not
+  recommended.
+- **No per-model `max_tokens`/context-window ceiling is captured anywhere today.** Confirmed by direct
+  read: neither `DiscoveredModel` (`model_discovery.py`) nor `ModelAgent` (`orchestrator.py`) carries
+  any such field, even though several already-queried provider list endpoints publish one. Real,
+  closeable gap; not same-day sidecar work.
+- **Decision**: stop tuning one global constant. Replace the sidecar's single-shot preflight with a
+  bounded per-candidate probe over the catalog it already builds, requiring only one of several
+  candidates to succeed (N-of-M), so no single `max_tokens` value has to be simultaneously right for
+  every model in a heterogeneous pool. Two upstream `contextual-orchestrator` asks (an
+  inference-scoped readiness probe; a real per-model token-ceiling field in discovery) are tracked as
+  follow-ups, not closed by this ADR.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
