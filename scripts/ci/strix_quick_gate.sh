@@ -2569,7 +2569,11 @@ child_model_for_api_base() {
 	# name) keeps this in sync with whichever pool CONTEXTUAL_ORCHESTRATOR_POOL
 	# actually selected -- see contextual_orchestrator/orchestrator.py's
 	# TaskOrchestrator.AUTO_MODEL / FREE_MODEL sentinels, which the gateway
-	# itself distinguishes by this exact string.
+	# itself distinguishes by this exact string. is_contextual_orchestrator_model
+	# also accepts the contextual-orchestrator/-prefixed spellings, so strip that
+	# prefix before qualifying -- otherwise the gateway receives
+	# openai/contextual-orchestrator/orchestrator/<pool>, which doesn't match
+	# either sentinel.
 	if is_contextual_orchestrator_model "$model" &&
 		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
 		printf 'openai/%s\n' "${model#contextual-orchestrator/}"
