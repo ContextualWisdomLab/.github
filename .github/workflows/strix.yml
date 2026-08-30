@@ -549,14 +549,14 @@ jobs:
       - name: Gate Strix secrets
         id: gate
         env:
-          STRIX_MODEL: contextual-orchestrator/orchestrator/auto
+          STRIX_MODEL: contextual-orchestrator/orchestrator/free
           STRIX_MODEL_REQUESTED: ${{ github.event.client_payload.strix_llm || '' }}
         run: |
           requested_model="$(printf '%s' "$STRIX_MODEL_REQUESTED" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$requested_model" in
-            ""|orchestrator/auto|contextual-orchestrator/orchestrator/auto) ;;
+            ""|orchestrator/free|contextual-orchestrator/orchestrator/free) ;;
             *)
-              echo '::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/auto.'
+              echo '::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/free.'
               exit 1
               ;;
           esac
@@ -574,7 +574,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.is_private }}
-          CONTEXTUAL_ORCHESTRATOR_POOL: auto
+          CONTEXTUAL_ORCHESTRATOR_POOL: free
         run: |
           set -euo pipefail
           bash "$TRUSTED_STRIX_SOURCE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -713,11 +713,11 @@ jobs:
           strix_llm_file="$RUNNER_TEMP/strix_llm.txt"
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           case "$strix_model" in
-            orchestrator/auto | contextual-orchestrator/orchestrator/auto)
-              printf '%s' 'orchestrator/auto' > "$strix_llm_file"
+            orchestrator/free | contextual-orchestrator/orchestrator/free)
+              printf '%s' 'orchestrator/free' > "$strix_llm_file"
               ;;
             *)
-              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/auto.'
+              echo '::error::STRIX_LLM must select contextual-orchestrator/orchestrator/free.'
               exit 1
               ;;
           esac
