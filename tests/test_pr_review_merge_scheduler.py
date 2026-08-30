@@ -105,6 +105,18 @@ def merge_approved_reviews(commit="head"):
     }
 
 
+def review_node(state="APPROVED", login="reviewer", commit="head", submitted_at="2026-06-25T07:00:00Z"):
+    """Return a minimal GraphQL-shaped review node for pagination tests."""
+    return {
+        "databaseId": None,
+        "state": state,
+        "body": None,
+        "submittedAt": submitted_at,
+        "author": {"login": login},
+        "commit": {"oid": commit},
+    }
+
+
 def strix_check(status="COMPLETED", conclusion="SUCCESS", workflow="Strix Security Scan", details_url=None):
     value = {
         "__typename": "CheckRun",
@@ -351,6 +363,420 @@ def test_fetch_pr_uses_exact_pull_request_number(monkeypatch):
     assert seen == [{"owner": "owner", "name": "repo", "number": 42}]
 
 
+def test_complete_paginated_pr_reviews_merges_pages_oldest_first(monkeypatch):
+    """Backward pagination must prepend older pages so nodes stay oldest-first."""
+    calls = []
+
+    def fake_graphql(query, **fields):
+        calls.append(fields)
+        assert fields == {"owner": "owner", "name": "repo", "number": 7, "cursor": "cursor-1"}
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviews": {
+                            "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
+                            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+
+    newer_page = {
+        "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
+        "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+    }
+
+    merged = sched.complete_paginated_pr_reviews("owner", "repo", 7, newer_page)
+
+    assert [node["author"]["login"] for node in merged["nodes"]] == [
+        "independent-reviewer",
+        "bot[bot]",
+    ]
+    assert len(calls) == 1
+
+
+def test_complete_paginated_pr_reviews_walks_multiple_pages(monkeypatch):
+    """More than one prior page must all be folded in, oldest page first."""
+    pages_by_cursor = {
+        "cursor-2": {
+            "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
+            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+        },
+        "cursor-1": {
+            "nodes": [review_node(state="COMMENTED", login="bot-a[bot]", submitted_at="t1")],
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-2"},
+        },
+    }
+
+    def fake_graphql(query, **fields):
+        return {
+            "data": {
+                "repository": {"pullRequest": {"reviews": pages_by_cursor[fields["cursor"]]}}
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+
+    newest_page = {
+        "nodes": [review_node(state="COMMENTED", login="bot-b[bot]", submitted_at="t2")],
+        "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+    }
+
+    merged = sched.complete_paginated_pr_reviews("owner", "repo", 7, newest_page)
+
+    assert [node["author"]["login"] for node in merged["nodes"]] == [
+        "independent-reviewer",
+        "bot-a[bot]",
+        "bot-b[bot]",
+    ]
+
+
+def test_complete_paginated_pr_reviews_raises_without_start_cursor():
+    """A truthful hasPreviousPage without a cursor cannot be paginated further."""
+    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": None}}
+
+    with pytest.raises(RuntimeError, match="startCursor"):
+        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
+
+
+def test_complete_paginated_pr_reviews_propagates_page_fetch_failure(monkeypatch):
+    """A page-fetch failure must fail closed, never fall back to a partial history."""
+
+    def fail_graphql(*args, **kwargs):
+        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
+
+    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
+    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"}}
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
+
+
+def test_complete_paginated_pr_reviews_bounds_pathological_loop(monkeypatch):
+    """A pageInfo that never resolves hasPreviousPage=false must not loop forever."""
+
+    def always_more(query, **fields):
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviews": {
+                            "nodes": [],
+                            "pageInfo": {
+                                "hasPreviousPage": True,
+                                "startCursor": fields["cursor"] + "x",
+                            },
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", always_more)
+    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 3)
+    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"}}
+
+    with pytest.raises(RuntimeError, match="exceeded 3 pages"):
+        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
+
+
+def test_complete_all_pr_reviews_skips_prs_that_do_not_need_pagination(monkeypatch):
+    """PRs with no reviews key or a complete first page must not trigger a fetch."""
+    calls = []
+    monkeypatch.setattr(sched, "gh_graphql", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    no_reviews_key = {"number": 1}
+    already_complete = {
+        "number": 2,
+        "reviews": {"nodes": [], "pageInfo": {"hasPreviousPage": False, "startCursor": None}},
+    }
+    prs = [no_reviews_key, already_complete]
+
+    sched.complete_all_pr_reviews("owner", "repo", prs)
+
+    assert calls == []
+    assert prs == [no_reviews_key, already_complete]
+
+
+def test_complete_all_pr_reviews_backfills_only_truncated_prs(monkeypatch):
+    """Only the PR flagged hasPreviousPage gets its reviews replaced."""
+
+    def fake_graphql(query, **fields):
+        assert fields["number"] == 5
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviews": {
+                            "nodes": [review_node(login="independent-reviewer")],
+                            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+
+    complete_pr = {
+        "number": 4,
+        "reviews": {"nodes": [review_node(login="already-here")], "pageInfo": {"hasPreviousPage": False}},
+    }
+    truncated_pr = {
+        "number": 5,
+        "reviews": {
+            "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+        },
+    }
+    prs = [complete_pr, truncated_pr]
+
+    sched.complete_all_pr_reviews("owner", "repo", prs)
+
+    assert [n["author"]["login"] for n in complete_pr["reviews"]["nodes"]] == ["already-here"]
+    assert [n["author"]["login"] for n in truncated_pr["reviews"]["nodes"]] == [
+        "independent-reviewer",
+        "bot[bot]",
+    ]
+
+
+def test_fetch_pr_backfills_reviews_past_graphql_window(monkeypatch):
+    """fetch_pr (the single-PR path used right before a merge decision) must
+    paginate past the reviews(last: 100) window before returning."""
+
+    def fake_graphql(query, **fields):
+        if "before: $cursor" in query:
+            assert fields["cursor"] == "cursor-1"
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviews": {
+                                "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
+                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": fields["number"],
+                        "reviews": {
+                            "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
+                            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+                        },
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
+
+    prs = sched.fetch_pr("owner/repo", 7)
+
+    assert [n["author"]["login"] for n in prs[0]["reviews"]["nodes"]] == [
+        "independent-reviewer",
+        "bot[bot]",
+    ]
+
+
+def test_fetch_open_prs_backfills_reviews_past_graphql_window(monkeypatch):
+    """fetch_open_prs (the bulk queue-scan path) also feeds merge decisions
+    directly -- see inspect_pr's callers in main() -- so it must paginate past
+    the reviews(last: 100) window too, not just the single-PR fetch path."""
+
+    def fake_graphql(query, **fields):
+        if "before: $cursor" in query:
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviews": {
+                                "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
+                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+        return {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [
+                            {
+                                "number": 7,
+                                "reviews": {
+                                    "nodes": [
+                                        review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")
+                                    ],
+                                    "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+                                },
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
+
+    prs = sched.fetch_open_prs("owner/repo", 5)
+
+    assert [n["author"]["login"] for n in prs[0]["reviews"]["nodes"]] == [
+        "independent-reviewer",
+        "bot[bot]",
+    ]
+
+
+def test_fetch_all_pr_reviews_rest_paginates_past_100(monkeypatch):
+    """The REST fallback must walk page=1,2,... until a short page ends it."""
+    page1 = [{"id": i} for i in range(100)]
+    page2 = [{"id": 100}, {"id": 101}]
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        if path.endswith("page=1"):
+            return page1
+        if path.endswith("page=2"):
+            return page2
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    reviews = sched.fetch_all_pr_reviews_rest("owner/repo", 7)
+
+    assert [r["id"] for r in reviews] == list(range(102))
+    assert calls == [
+        "repos/owner/repo/pulls/7/reviews?per_page=100&page=1",
+        "repos/owner/repo/pulls/7/reviews?per_page=100&page=2",
+    ]
+
+
+def test_fetch_all_pr_reviews_rest_stops_at_first_short_page(monkeypatch):
+    """A first page shorter than per_page must not trigger a second request."""
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        return [{"id": 1}]
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    assert sched.fetch_all_pr_reviews_rest("owner/repo", 7) == [{"id": 1}]
+    assert calls == ["repos/owner/repo/pulls/7/reviews?per_page=100&page=1"]
+
+
+def test_fetch_all_pr_reviews_rest_stops_on_empty_page_after_full_page(monkeypatch):
+    """A full 100-row page followed by an empty page must terminate cleanly."""
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        if path.endswith("page=1"):
+            return [{"id": i} for i in range(100)]
+        return []
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    reviews = sched.fetch_all_pr_reviews_rest("owner/repo", 7)
+
+    assert len(reviews) == 100
+    assert calls == [
+        "repos/owner/repo/pulls/7/reviews?per_page=100&page=1",
+        "repos/owner/repo/pulls/7/reviews?per_page=100&page=2",
+    ]
+
+
+def test_fetch_all_pr_reviews_rest_propagates_page_fetch_failure(monkeypatch):
+    """A later-page REST failure must fail closed rather than return a partial history."""
+
+    def fake_api(path):
+        if path.endswith("page=1"):
+            return [{"id": i} for i in range(100)]
+        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        sched.fetch_all_pr_reviews_rest("owner/repo", 7)
+
+
+def test_fetch_pr_pagination_recovers_independent_approval_past_100_reviews(monkeypatch):
+    """End-to-end regression for the reported bug: a genuine independent
+    APPROVED review made early in a PR's life must still satisfy
+    has_independent_current_head_approval once the PR has accumulated more
+    than 100 total review events and fetch_pr completes GraphQL's pagination.
+    """
+    genuine_approval = review_node(
+        state="APPROVED", login="independent-reviewer", submitted_at="t000", commit="head"
+    )
+    noise = [
+        review_node(
+            state="COMMENTED",
+            login=f"noise-bot-{i}[bot]",
+            submitted_at=f"t{i + 1:03d}",
+            commit="head",
+        )
+        for i in range(105)
+    ]
+    full_history = [genuine_approval] + noise  # oldest-first, 106 reviews total
+    first_page = full_history[-100:]  # reviews(last: 100) -- drops the genuine approval
+    second_page = full_history[:6]  # the remaining 6, including the genuine approval
+    assert genuine_approval not in first_page
+    assert genuine_approval in second_page
+
+    def fake_graphql(query, **fields):
+        if "before: $cursor" in query:
+            assert fields["cursor"] == "cursor-1"
+            return {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviews": {
+                                "nodes": second_page,
+                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": 7,
+                        "author": {"login": "pull-request-author"},
+                        "headRefOid": "head",
+                        "reviews": {
+                            "nodes": first_page,
+                            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
+                        },
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
+    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
+
+    pr = sched.fetch_pr("owner/repo", 7)[0]
+
+    assert len(pr["reviews"]["nodes"]) == 106
+    assert sched.has_independent_current_head_approval(pr)
+
+
 def test_gh_graphql_retries_transient_gateway_errors(monkeypatch):
     calls = []
     sleeps = []
@@ -552,7 +978,7 @@ def test_rest_mergeable_state_helpers(monkeypatch):
 def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     calls = []
     payloads = {
-        "repos/owner/repo/pulls/42/reviews?per_page=100": [
+        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1": [
             {
                 "state": "APPROVED",
                 "body": "Head SHA: `abc123`",
@@ -602,7 +1028,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     )
 
     assert calls == [
-        "repos/owner/repo/pulls/42/reviews?per_page=100",
+        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]

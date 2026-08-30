@@ -54,6 +54,7 @@ fragment SchedulerPullRequestFields on PullRequest {
     nodes { path }
   }
   reviews(last: 100) {
+    pageInfo { hasPreviousPage startCursor }
     nodes {
       databaseId
       state
@@ -112,7 +113,37 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
+# Follow-up query for one pull request's reviews, walking backward past the
+# ``reviews(last: 100)`` window in SchedulerPullRequestFields. GraphQL
+# connections keep chronological (oldest-first) node order regardless of
+# pagination direction, so ``last: 100, before: $cursor`` returns the up-to-100
+# reviews immediately preceding the cursor, still oldest-first.
+PR_REVIEWS_PAGE_QUERY = """\
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(last: 100, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
+        nodes {
+          databaseId
+          state
+          body
+          submittedAt
+          author { login }
+          commit { oid }
+        }
+      }
+    }
+  }
+}
+"""
+
 OPEN_PRS_PAGE_SIZE = 25
+# Defends against a pathological GraphQL pageInfo loop when backfilling a PR's
+# full review history; 500 pages * 100 reviews/page is far beyond any
+# realistic PR review count, so hitting it indicates a bug upstream rather
+# than a PR that legitimately needs more pagination.
+MAX_REVIEW_PAGINATION_PAGES = 500
 # Must exceed the 45-minute OpenCode job cap plus typical runner-queue wait.
 # QUEUED counts as running and the age clock starts at check creation, so this
 # remains deliberately larger than the job cap while recovering genuine zombie
@@ -760,6 +791,69 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
             time.sleep(delay)
 
 
+def complete_paginated_pr_reviews(
+    owner: str, name: str, number: int, reviews: dict[str, Any]
+) -> dict[str, Any]:
+    """Backfill one pull request's review history past the GraphQL 100-node window.
+
+    ``reviews(last: 100)`` in SchedulerPullRequestFields only returns the
+    newest 100 reviews on a pull request. Once a PR accumulates more than 100
+    review events (bot reviewers post multiple reviews per push in this org),
+    ``pageInfo.hasPreviousPage`` comes back true and earlier reviews --
+    including a genuine independent APPROVED review made early in the PR's
+    life -- are silently missing from ``nodes``. This walks backward with
+    ``before`` cursors via PR_REVIEWS_PAGE_QUERY, merging each page in front of
+    the ones already collected so the result stays oldest-first (the order
+    every ``reversed(...)`` consumer in this module expects), until GitHub
+    reports no earlier page. A page-fetch failure propagates (fail closed)
+    rather than returning a partial history.
+    """
+    page_info = reviews.get("pageInfo") or {}
+    nodes = list(reviews.get("nodes") or [])
+    pages_fetched = 0
+    while page_info.get("hasPreviousPage"):
+        pages_fetched += 1
+        if pages_fetched > MAX_REVIEW_PAGINATION_PAGES:
+            raise RuntimeError(
+                f"Pull request {owner}/{name}#{number} review pagination exceeded "
+                f"{MAX_REVIEW_PAGINATION_PAGES} pages without exhausting hasPreviousPage; "
+                "refusing to loop indefinitely."
+            )
+        cursor = page_info.get("startCursor")
+        if not cursor:
+            raise RuntimeError(
+                f"Pull request {owner}/{name}#{number} reported hasPreviousPage=true "
+                "without a startCursor; cannot continue review pagination."
+            )
+        payload = gh_graphql(
+            PR_REVIEWS_PAGE_QUERY, owner=owner, name=name, number=number, cursor=cursor
+        )
+        pull_request = ((payload.get("data") or {}).get("repository") or {}).get(
+            "pullRequest"
+        ) or {}
+        page = pull_request.get("reviews") or {}
+        nodes = list(page.get("nodes") or []) + nodes
+        page_info = page.get("pageInfo") or {}
+    return {"nodes": nodes}
+
+
+def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) -> None:
+    """Backfill full review history in place for every fetched PR node that needs it.
+
+    Only PRs whose initial ``reviews(last: 100)`` window reported
+    ``hasPreviousPage`` pay the extra round trip; PRs with 100 or fewer
+    reviews (the overwhelming majority) are untouched.
+    """
+    for pr in prs:
+        reviews = pr.get("reviews")
+        if not reviews:
+            continue
+        if (reviews.get("pageInfo") or {}).get("hasPreviousPage"):
+            pr["reviews"] = complete_paginated_pr_reviews(
+                owner, name, pr.get("number"), reviews
+            )
+
+
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
     """Return whether GitHub denied an API read for the current integration token."""
 
@@ -786,6 +880,29 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
+    """Fetch every REST review for a pull request, paginating past 100.
+
+    A single ``per_page=100`` page silently drops earlier reviews once a PR
+    accumulates more than 100 review events, the same truncation the GraphQL
+    ``reviews(last: 100)`` window hits. This walks ``page=1,2,3,...`` --
+    mirroring ``fetch_open_prs_rest``'s pagination style -- until a page
+    shorter than 100 rows confirms the end of the history. A page-fetch
+    failure propagates (fail closed) rather than returning a partial history.
+    """
+    reviews: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        batch = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100&page={page}")
+        if not batch:
+            break
+        reviews.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return reviews
+
+
 def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST check-run payload into the GraphQL status rollup shape."""
 
@@ -807,7 +924,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
-    reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+    reviews = fetch_all_pr_reviews_rest(repo, number)
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
@@ -908,6 +1025,11 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
 
+    # Bulk-scan results feed merge decisions directly (the scheduler's push-
+    # triggered and org-queue-sweep runs never re-fetch a single PR before
+    # calling inspect_pr), so this path needs the same full review history as
+    # fetch_pr, not just the first/last 100-review window.
+    complete_all_pr_reviews(owner, name, prs)
     enrich_rest_mergeable_states(repo, prs)
     return prs
 
@@ -923,6 +1045,7 @@ def fetch_pr(repo: str, number: int) -> list[dict[str, Any]]:
         raise
     pr = payload["data"]["repository"].get("pullRequest")
     prs = [pr] if pr else []
+    complete_all_pr_reviews(owner, name, prs)
     enrich_rest_mergeable_states(repo, prs)
     return prs
 
