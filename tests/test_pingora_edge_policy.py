@@ -219,6 +219,22 @@ def test_documentation_png_rejects_disguised_text_and_invalid_structure() -> Non
     assert policy._is_recognized_documentation_image(
         "docs/acceptance.png", insert_png_chunk(grayscale, b"tRNS", b"\x00\x00")
     )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", insert_png_chunk(grayscale, b"tRNS", b"\x01\x00")
+    )
+    truecolor = build_png(color_type=2, bit_depth=8)
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png",
+        insert_png_chunk(truecolor, b"tRNS", b"\x00\x00\x00\x00\x01\x00"),
+    )
+    truecolor_with_palette_after_transparency = insert_png_chunk(
+        insert_png_chunk(truecolor, b"tRNS", b"\x00" * 6),
+        b"PLTE",
+        b"\x00\x00\x00",
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", truecolor_with_palette_after_transparency
+    )
 
 
 @pytest.mark.parametrize("filter_type", [0, 1, 2, 3, 4])

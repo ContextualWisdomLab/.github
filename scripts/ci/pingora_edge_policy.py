@@ -356,6 +356,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             if (
                 width is None
                 or saw_plte
+                or saw_trns
                 or saw_idat
                 or color_type in {0, 4}
                 or length == 0
@@ -367,9 +368,14 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             saw_plte = True
             palette_entries = length // 3
         elif chunk_type == b"tRNS":
+            sample_limit = (1 << bit_depth) - 1 if bit_depth is not None else -1
             valid_length = {
-                0: length == 2,
-                2: length == 6,
+                0: length == 2 and int.from_bytes(chunk_data, "big") <= sample_limit,
+                2: length == 6
+                and all(
+                    int.from_bytes(chunk_data[index : index + 2], "big") <= sample_limit
+                    for index in (0, 2, 4)
+                ),
                 3: saw_plte and 0 < length <= (palette_entries or 0),
             }.get(color_type, False)
             if width is None or saw_trns or saw_idat or not valid_length:
