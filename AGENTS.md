@@ -21,11 +21,14 @@ sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
-OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`.
-Authoritative Strix analysis uses the correctness-first `orchestrator/auto`
-provider-diverse pool. Non-free Strix routes
-are admitted only with complete published prompt/completion price and currency
-evidence, and private targets still require ZDR-compliant routes under
+OpenCode, Noema, and authoritative Strix analysis all use the fail-closed
+zero-cost pool `orchestrator/free`. The `orchestrator/auto` provider-diverse,
+priced-fallback pool remains supported by the gateway policy for any future
+consumer that needs it, admitting non-free routes only with complete
+published prompt/completion price and currency evidence; private targets
+still require ZDR-compliant routes under
 [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
-See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md).
+See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
+and [`docs/adr/0020-strix-orchestrator-free-pool.md`](docs/adr/0020-strix-orchestrator-free-pool.md)
+(Strix's move off the separate `orchestrator/auto` pool onto `orchestrator/free`).
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).

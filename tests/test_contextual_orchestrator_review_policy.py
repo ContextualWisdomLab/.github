@@ -206,7 +206,7 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
 
 
 def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
-    """The Strix auto pool can use priced routes without weakening the free pool."""
+    """The auto pool can use priced routes without weakening the free pool."""
     parsed = policy.parse_discovery_report(_report())
     result = policy.build_zdr_prioritized_catalog(
         parsed,
@@ -258,7 +258,7 @@ def test_priced_routes_require_complete_published_price_evidence(
 
 
 def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
-    """Private Strix auto routing still excludes every unattested route."""
+    """Private auto-pool routing still excludes every unattested route."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,

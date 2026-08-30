@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Route required Strix scans through `orchestrator/free` instead of the
+  separate `orchestrator/auto` pool, so all three CI consumers (OpenCode,
+  Noema, Strix) share one fail-closed zero-cost pool. Verified first that
+  `scripts/ci/contextual_orchestrator_review_policy.py`'s provider-family cap
+  already applied identically to both pools (no policy/sidecar code change
+  needed). See `docs/adr/0020-strix-orchestrator-free-pool.md`, which
+  supersedes `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+  Strix-specific wiring bullet only, for the decision and its documented
+  residual risk.
+- Remove `scripts/ci/select_nvidia_nim_model.py`: an orphaned helper that
+  called `integrate.api.nvidia.com` directly to resolve a live NVIDIA NIM
+  model id, wired into nothing since the ADR-0003 gateway migration. Removed
+  with its dedicated test. Correct stale pre-ADR-0003 "single NVIDIA NIM
+  credential" descriptions in `docs/doctoring/hourly-nvidia-nim-autofix.md`,
+  `docs/doctoring/originweave-hourly-review-caller.md`,
+  `docs/doctoring/nonnest2-hourly-review-caller.md`, and
+  `docs/automation/hourly-review-repair.md` to describe the current
+  five-secret `contextual-orchestrator`/`orchestrator/free` gateway routing.
 - Bump the vendored `contextual-orchestrator` review-sidecar pin from
   `5f2753a` (the #1422 pin) to current `main` `30c6d716`, picking up
   `ContextualWisdomLab/contextual-orchestrator#919`: generalizes the

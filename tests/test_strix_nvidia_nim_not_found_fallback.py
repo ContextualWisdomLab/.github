@@ -1,9 +1,18 @@
-"""Regression contract for NVIDIA NIM model retirement and hosted 404 fallback.
+"""Regression contract for NVIDIA NIM model-catalog 404 classification.
 
-The central Strix workflow must not turn a provider-side model-catalog 404 into a
-security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate before using the existing GitHub Models
-fallbacks, while ordinary application 404 output remains non-retryable.
+The central Strix workflow (`strix.yml`) talks exclusively to the local
+contextual-orchestrator gateway sidecar via `orchestrator/free` — it has no
+direct-provider model or fallback of its own (`STRIX_FALLBACK_MODELS: ""`,
+enforced by `test_workflow_routes_all_scans_through_contextual_orchestrator`
+and `test_workflow_rejects_non_gateway_model_overrides` below). The
+`is_nvidia_nim_not_found_error`/`is_model_retryable_error`/
+`is_transient_same_model_retry_error` classifiers exercised here remain
+necessary anyway: the gateway itself calls NVIDIA NIM as one of its five
+auto-discovered backends, and a retired-model 404 from that backend can
+surface through the gateway's OpenAI-compatible response (litellm's
+`Nvidia_nimException ... Error code: 404`) even though Strix never talks to
+NIM directly. This file pins that classification behavior, not a live
+multi-provider fallback chain in the required workflow.
 """
 
 from __future__ import annotations
@@ -190,7 +199,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/auto", workflow)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", workflow)
         self.assertIn("provider_mode=contextual_orchestrator", workflow)
         self.assertIn("STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator", workflow)
         self.assertNotIn("Resolve live NVIDIA NIM Strix models", workflow)
@@ -201,7 +210,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("STRIX_MODEL_REQUESTED", workflow)
-        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/auto.", workflow)
+        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/free.", workflow)
         self.assertIn("STRIX_FALLBACK_MODELS: \"\"", workflow)
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:

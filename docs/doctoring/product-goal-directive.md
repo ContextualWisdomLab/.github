@@ -78,6 +78,23 @@ fixed:
    `orchestrator/auto`; private/internal targets require an attested
    ZDR-only catalog.
 
+## Follow-up: Strix migrated to `orchestrator/free` (2026-08-30)
+
+Finding 4 above recorded the CodeRabbit-flagged reconciliation note as of
+PR #1429: `Strix` was, at that time, the one CI consumer still on the
+provider-diverse `orchestrator/auto` pool. That split is now superseded by an
+explicit product decision, not a further reinterpretation of section 8:
+`Strix` also routes through `orchestrator/free`. See
+[`docs/adr/0020-strix-orchestrator-free-pool.md`](../adr/0020-strix-orchestrator-free-pool.md)
+for the decision and its verification that the provider-family-diversity cap
+in `scripts/ci/contextual_orchestrator_review_policy.py` already applied
+identically to both pools (no code change was needed there), and for the
+residual risk this migration documents rather than hides. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+keeps its original Strix-specific decision text as history, with a new
+Amendment section pointing to ADR-0020; `docs/product-goal-directive.md`'s
+own note (added for finding 4) got a matching dated follow-up paragraph
+rather than being rewritten in place.
+
 ## Audit trail
 
 - `docs/product-goal-directive.md` — the directive itself and the
@@ -86,3 +103,5 @@ fixed:
   conventions this record reconciles against.
 - ContextualWisdomLab/.github#1429 — the PR carrying this change and Devin
   Review's findings.
+- `docs/adr/0020-strix-orchestrator-free-pool.md` — the 2026-08-30 decision
+  that superseded finding 4's Strix/`orchestrator/auto` reconciliation note.
