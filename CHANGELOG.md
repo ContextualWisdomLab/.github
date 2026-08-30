@@ -5,6 +5,111 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Add `docs/adr/0005-sidecar-preflight-token-budget.md`, an evidence-based
+  design decision responding to the owner's direct critique that a single
+  hardcoded `max_tokens` cannot fit a heterogeneous `orchestrator/free` pool.
+  Revised after six verified Devin Review findings on its PR (#1449),
+  including two real design flaws in the first draft: reusing a fixed tiny
+  `max_tokens` for a per-candidate probe reproduces the same
+  reasoning-budget-starvation bug one layer down, and dropping the sidecar's
+  separate virtual-pool smoke request in favor of per-candidate checks alone
+  cannot catch a virtual-pool dispatch bug (already documented live on
+  PR #1433). The current decision keeps both existing preflight layers
+  (`_preflight_review_agents`/`_preflight_with_fallback` in the launcher; the
+  shell script's virtual-pool request). A second Devin Review pass then found
+  the first revision's single retry predicate could not fire for the exact
+  live evidence cited (a `curl` timeout with zero bytes has no `finish_reason`
+  to inspect), plus an unbounded-looking worst case and other gaps. Revised
+  again to model two distinct, explicitly-bounded retry triggers: no-response
+  (timeout/connection failure) retries at the same budget; a response with
+  `finish_reason == "length"` escalates the budget. Layer 2's existing,
+  already-evidenced 120s per-attempt timeout is kept unchanged (shortening it
+  would regress this file's own prior 30s→120s fix) and gets up to 3 bounded
+  attempts instead of one with no recovery path; Layer 1 stays within its
+  existing 180s ceiling via a computed, capped escalation budget. Adds two
+  real tracked upstream issues (`ContextualWisdomLab/contextual-orchestrator#926`,
+  `#927`) and SHA-pinned permalink citations (`8b3235d2...`) in place of both
+  prose-only follow-ups and line numbers that would otherwise rot. A third
+  Devin Review pass found the revised text still self-contradicted which
+  layer retries on which trigger, plus an attribution problem: Layer 2's
+  escalation retried the virtual pool, not a pinned candidate, so a
+  rejection there could not be honestly blamed on one candidate's ceiling.
+  A fourth pass found a sharper version of the same question -- a
+  `finish_reason == "length"` response is still HTTP 200, so the gateway's
+  routing already recorded that attempt as successful, making a same-budget
+  retry more likely to repeat the same candidate than diversify away from
+  it. Per this org's convergence rule, and after directly checking
+  `contextual_orchestrator/server.py` for a candidate-exclusion parameter
+  and finding none: Layer 2 no longer retries on `finish_reason == "length"`
+  at all, only on transport failure/hang, and its route diversity is stated
+  as an unverified best effort rather than a guarantee. Layer 1 (which pins
+  one specific candidate per attempt) is unaffected. Consequences corrected
+  from present tense to prospective, matching the ADR's `proposed` status.
+  A fifth Devin Review pass found Trigger B's definition itself was too
+  narrow: `finish_reason == "length"` alone misses the vendored
+  `ModelClient._response_content`'s own broader "reasoning, no content"
+  signature (a populated `message.reasoning` field with no string
+  `content`, already anticipated in the codebase's own error message) --
+  exactly the original PR #1436 failure mode, since a reasoning model can
+  exhaust its budget under a different or absent `finish_reason`, and
+  provider `finish_reason` semantics for this case aren't verified as
+  uniform across a pool this heterogeneous. Trigger B is now defined as
+  `finish_reason == "length"` OR that reasoning-without-content signature,
+  consistently through Decision §1 and §3 and the "every other outcome"
+  fallback case; Layer 2's "no retry on Trigger B" applies to both halves
+  of the signature, not just the finish_reason one. A sixth Devin Review
+  pass (two findings, verified against the vendored source directly) found
+  two more precision/scope gaps. First: `_response_content` checks
+  `isinstance(content, str)` before ever inspecting `reasoning`, so a
+  genuinely empty string `""` (not missing/`null`) is treated as a valid,
+  non-erroring return and never reaches the reasoning-without-content
+  check -- the already-implemented preflight predicate in `ContextualWisdomLab/.github#1452`
+  was independently verified to already handle this correctly (it treats
+  `content == ""` the same as missing content, deliberately broader than
+  `_response_content`'s own narrower technical condition), so this was a
+  documentation-precision gap, not a code bug; the ADR's Trigger B
+  definition and a new precision note now state explicitly that this
+  preflight's "no usable content" is broader than any one downstream
+  library call's exact return-value convention. Second: a
+  reasoning-without-content failure at Layer 2 can itself surface as a
+  generic `HTTP 502` (`server.py`'s blanket `except ProviderResponseError:`
+  handler collapses both `ProviderResponseError` causes into an identical
+  body with no distinguishing field), so it is misclassified as Trigger A
+  and retried up to 3 times instead of failing fast as Trigger B --
+  verified as requiring an out-of-scope `contextual-orchestrator` change to
+  fix properly (no in-repo workaround exists that avoids fragile
+  message-text matching), so documented as a known, accepted, tracked
+  Layer 2 limitation (`ContextualWisdomLab/contextual-orchestrator#932`,
+  following the `#926`/`#927` pattern) rather than worked around. No code
+  change in this PR; the sidecar migration is tracked separately. A seventh
+  Devin Review pass found four more items, judged against this org's
+  convergence rule after 26+ review threads across seven rounds on this
+  docs-only PR. Trivial: the Evidence trail's upstream-issue citation still
+  named only `#926`/`#927`, missing `#932` -- added. Cross-reference gap,
+  not a new architectural question: Layer 1's `160s` worst case (Decision
+  §3) still didn't reference `ContextualWisdomLab/.github#1455` (the
+  discovery-timing gap filed and fully reasoned during the implementation
+  pass) anywhere in this ADR's own text -- added the cross-reference at the
+  point of definition and in Consequences, without reopening the
+  underlying question #1455 already tracks. Genuinely new, verified real:
+  the shared, catalog-order-consumed `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget can deny a later-sorting, healthy candidate its own escalation
+  attempt once 4 earlier candidates have claimed the budget -- catalog
+  order is deterministic, not random, but not purely alphabetical either:
+  `build_zdr_prioritized_catalog` sorts by `(cost_evidence_rank,
+  zdr_attested_rank, provider, model)`, so alphabetical `(provider, model)`
+  is only the tie-breaker within each same-cost/same-ZDR-status group.
+  Considered reordering (round-robin, random shuffling) as a cheap fix and
+  rejected it: no selection policy for a fixed-size shared budget removes
+  the underlying trade-off, only changes which arbitrary policy governs
+  it, and picking one without real evidence would itself be the kind of
+  unjustified heuristic this ADR already rejects elsewhere. Documented as
+  a known, accepted, tracked limitation (`ContextualWisdomLab/.github#1458`,
+  matching the `#1454`/`#1455`/`#932` pattern) rather than redesigned.
+  Informational, no change: the gap-baseline's repeated review-round
+  narrative is this repo's own documented, intentional convention
+  (ADR-0002: the baseline is "an operational snapshot," not a duplicate of
+  the ADR's design record), not accidental redundancy.
 - Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
