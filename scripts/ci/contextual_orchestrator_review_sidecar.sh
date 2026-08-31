@@ -62,6 +62,40 @@ if [ "$provider_secret_count" -lt 1 ]; then
 fi
 log "provider secrets present: $provider_secret_count of 5"
 
+# Temporary PR-only diagnostic: emit status codes, never response bodies or
+# credential metadata, to isolate Bytez's persistent authenticated HTTP 500.
+if [ -n "${BYTEZ_API_KEY:-}" ]; then
+  python3 - <<'PY'
+import os
+import urllib.error
+import urllib.request
+
+key = os.environ["BYTEZ_API_KEY"]
+cases = (
+    ("raw_task", key, "https://api.bytez.com/models/v2/list/models?task=chat"),
+    ("raw_all", key, "https://api.bytez.com/models/v2/list/models"),
+    ("bearer_task", f"Bearer {key}", "https://api.bytez.com/models/v2/list/models?task=chat"),
+    ("key_task", f"Key {key}", "https://api.bytez.com/models/v2/list/models?task=chat"),
+)
+for name, authorization, url in cases:
+    request = urllib.request.Request(
+        url,
+        headers={"authorization": authorization, "user-agent": "contextual-orchestrator/bytez-diagnostic"},
+    )
+    try:
+        response = urllib.request.urlopen(request, timeout=30)
+    except urllib.error.HTTPError as exc:
+        code = exc.code
+        exc.close()
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        code = type(exc).__name__
+    else:
+        code = response.status
+        response.close()
+    print(f"[contextual-orchestrator-sidecar] bytez diagnostic {name}={code}")
+PY
+fi
+
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in
   *$'\r'*|*$'\n'*) fail "ORCHESTRATOR_TOKEN must not contain CR or LF" ;;
