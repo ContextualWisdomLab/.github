@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -32,7 +33,6 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
-MAX_LLM_RESPONSE_LOG_CHARS = 2000
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -499,6 +499,17 @@ def extract_json_object(text: str) -> dict[str, Any]:
     unhandled exception and crash the review job. The candidate substring
     always starts at a ``{``, so a successful parse is always a JSON object
     (``dict``); only the decode failure itself needs converting.
+
+    The raised diagnostic never embeds the raw (or scrubbed) model response.
+    This is a ``pull_request_target`` workflow whose Actions logs are public
+    on this org's public repos, and ``scrub_sensitive_data`` is a finite,
+    pattern-based scrubber: an LLM can echo back or hallucinate a credential
+    in a shape none of its patterns recognize (mid-sentence, base64-wrapped,
+    or simply a shape nobody anticipated). A regex allowlist of known secret
+    *shapes* cannot be a complete defense, so instead of trying to perfect
+    it, the raw content is never logged at all. Only a length and a SHA-256
+    content fingerprint are logged — enough to correlate repeat failures for
+    the same underlying (unlogged) response without exposing its bytes.
     """
     stripped = text.strip()
     if stripped.startswith("{"):
@@ -512,11 +523,72 @@ def extract_json_object(text: str) -> dict[str, Any]:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as exc:
-        bounded = truncate_text(scrub_sensitive_data(stripped) or "", MAX_LLM_RESPONSE_LOG_CHARS)
+        fingerprint = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
         raise RuntimeError(
-            f"Noema LLM response was not valid JSON ({exc}); "
-            f"raw response (truncated): {bounded!r}"
+            f"Noema LLM response was not valid JSON ({exc}). Raw model output "
+            "is not logged here (this pull_request_target workflow's logs "
+            "are public and a finite secret-scrub pattern list cannot "
+            "guarantee an LLM-echoed or hallucinated credential in an "
+            f"unrecognized shape is caught): response length={len(stripped)} "
+            f"chars, sha256={fingerprint}."
         ) from exc
+
+
+def extract_llm_message_content(raw: str) -> str:
+    """Parse and validate the OpenAI-compatible chat-completion HTTP envelope.
+
+    Fails closed with the same bounded ``RuntimeError`` ``call_llm`` already
+    uses for an unusable verdict, instead of letting a malformed gateway
+    reply crash the review job before it ever reaches the verdict-JSON
+    repair boundary handled by ``extract_json_object``. Covers a non-JSON
+    raw body, a non-object top-level JSON value, a wrong-shaped ``choices``
+    or ``message`` field, and non-string ``content`` — each rejected with an
+    explicit ``isinstance`` check rather than a broad ``except``, so a
+    genuine programming error elsewhere in this module still surfaces as
+    itself. A missing or empty ``choices``/``message``/``content`` is left
+    to fall through to an empty string, matching the original code's
+    leniency for an absent (not malformed) field; ``extract_json_object``
+    already fails closed on empty content.
+
+    None of the raised messages embed any part of the untrusted response
+    body — only JSON-value type names, which cannot carry a credential.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Noema LLM response body was not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
+        )
+    choices = data.get("choices")
+    if not choices:
+        choices = [{}]
+    elif not isinstance(choices, list):
+        raise RuntimeError(
+            f"Noema LLM response 'choices' was not a list (got {type(choices).__name__})"
+        )
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError(
+            "Noema LLM response choices[0] was not a JSON object "
+            f"(got {type(first_choice).__name__})"
+        )
+    message = first_choice.get("message")
+    if not message:
+        message = {}
+    elif not isinstance(message, dict):
+        raise RuntimeError(
+            f"Noema LLM response 'message' was not a JSON object (got {type(message).__name__})"
+        )
+    content = message.get("content")
+    if not content:
+        content = ""
+    elif not isinstance(content, str):
+        raise RuntimeError(
+            f"Noema LLM response 'content' was not a string (got {type(content).__name__})"
+        )
+    return content.strip()
 
 
 def _truthy_env(name: str) -> bool:
@@ -674,9 +746,8 @@ def call_llm(
     opener = urllib.request.build_opener(NoRedirectHandler())
     with opener.open(request, timeout=120) as response:  # nosec B310
         raw = response.read().decode("utf-8")
-    data = json.loads(raw)
-    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     try:
+        content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
         decision = str(verdict.get("decision") or "").strip().lower()
         if decision not in {"approve", "request_changes", "comment"}:
