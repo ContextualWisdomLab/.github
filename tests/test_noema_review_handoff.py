@@ -111,6 +111,11 @@ def test_noema_state_ignores_reviews_for_other_heads():
     assert handoff.noema_review_state([reviews[0]], HEAD) is None
 
 
+def test_noema_state_skips_newer_nonterminal_review():
+    pending = noema_review("PENDING", HEAD)
+    assert handoff.noema_review_state([noema_review("APPROVED", HEAD), pending], HEAD) == "APPROVED"
+
+
 def test_noema_state_ignores_forged_marker_from_other_actor():
     forged = noema_review()
     forged["user"] = {"login": "untrusted-reviewer"}
