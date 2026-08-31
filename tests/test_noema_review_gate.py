@@ -184,7 +184,9 @@ def test_extract_json_object_fails_closed_on_malformed_json():
     # recognize (no "token"/"key"/"bearer" marker, no known provider prefix
     # — just a bare UUID-shaped value mid-sentence) must still never reach
     # the raised message, because raw content is never embedded at all.
-    unrecognized_shape_secret = "3f29e1a7-8b44-4c1d-9e77-2a5f9c001234"
+    unrecognized_shape_secret = fake_secret(
+        "3f29e1a7-8b44-4c1d", "-9e77-2a5f9c001234"
+    )
     leaky = (
         '{"decision":"approve","summary":"use internal id '
         f"{unrecognized_shape_secret} to correlate, trailing garbage"
