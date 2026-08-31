@@ -3321,9 +3321,93 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
+# Backstop: this stub has dozens of independent "scan succeeded" exit points
+# scattered across the case branches below. Rather than hand-patch every one
+# of them to write a vulnerabilities/*.md report artifact, install a single
+# EXIT trap that fires no matter which branch (or bare fallthrough) produced
+# the zero exit status, and writes one default INFO-severity report only when
+# the run is about to succeed (rc==0) and no branch already wrote a report of
+# its own. The one deliberate exception is the "success-zero-report-artifacts"
+# scenario below, which exists specifically to prove the production
+# zero-evidence fail-closed guard: it must be allowed to exit 0 with no report
+# artifact at all.
+#
+# Some branches above intentionally `sleep` to simulate a hung Strix process
+# for the production timeout enforcement (they are killed with SIGTERM before
+# their own trailing "exit 0" is ever meant to run). When bash's foreground
+# `sleep` is interrupted by a signal, "$?" inside an EXIT trap reflects
+# whatever the shell's last *completed* command status was -- NOT 0 by virtue
+# of having reached an "exit 0" line -- so it can misleadingly read as 0 even
+# though the process never got there. Track real signal delivery explicitly
+# so the backstop is only written for a genuine zero exit status, never for a
+# sleep interrupted mid-flight.
+strix_fake_signaled=0
+trap 'strix_fake_signaled=1' TERM INT
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$strix_fake_signaled" -eq 1 ]; then
+		return
+	fi
+	if [ "$rc" -ne 0 ] || [ "${FAKE_STRIX_SCENARIO:-}" = "success-zero-report-artifacts" ]; then
+		return
+	fi
+	local run_dir vuln_file
+	for run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
+
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-success/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
 		echo "scan ok"
+		exit 0
+		;;
+	success-zero-report-artifacts)
+		# Deliberately mirrors the historical "hollow path" bug: Strix exits
+		# 0 (a clean process exit) but writes no vulnerabilities/*.md report
+		# artifact anywhere under STRIX_REPORTS_DIR. This is the regression
+		# case for has_any_strix_vulnerability_report_artifact()'s fail-closed
+		# guard in run_strix_once(); see the trap opt-out above.
+		echo "scan ok with zero report artifacts"
 		exit 0
 		;;
 	contextual-orchestrator-gateway-model-qualification)
@@ -6128,6 +6212,16 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	success-zero-report-artifacts)
+		run_gate_case "success-zero-report-artifacts" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
 	contextual-orchestrator-missing-api-base-fails-closed)
 		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
 			"orchestrator/free" \
@@ -6999,6 +7093,54 @@ run_pull_request_target_head_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -7271,6 +7413,54 @@ run_pull_request_target_bounded_head_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -7377,6 +7567,54 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 
 target_path=""
 while [ "$#" -gt 0 ]; do
@@ -7553,6 +7791,54 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 
 printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 
@@ -7812,6 +8098,54 @@ run_pull_request_target_frontend_email_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -8001,6 +8335,54 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "scan ok"
 exit 0
 EOF
@@ -8499,6 +8881,54 @@ run_full_head_scope_skips_gitlink_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -8781,6 +9211,54 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 if [ "${LLM_API_BASE+x}" = "x" ]; then
 	echo "Error: Vertex scan should not receive LLM_API_BASE" >&2
 	exit 64
@@ -9006,6 +9484,54 @@ run_vertex_without_llm_api_key_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9056,6 +9582,54 @@ run_vertex_with_llm_api_key_file_does_not_forward_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9346,6 +9920,54 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Backstop for the zero-evidence "hollow path" bug: writes a default
+# INFO-severity vulnerabilities/*.md report artifact when this stub is about
+# to exit 0 and no branch above already wrote one of its own. See
+# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+strix_fake_backstop_vuln_report_on_success() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		return
+	fi
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	local run_dir vuln_file
+	for run_dir in "$reports_dir"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ]; then
+				return
+			fi
+		done
+	done
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$reports_dir"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$reports_dir/fake-success-backstop"
+	fi
+	mkdir -p "$target_run_dir/vulnerabilities"
+	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+}
+trap strix_fake_backstop_vuln_report_on_success EXIT
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
@@ -9869,6 +10491,20 @@ run_gate_case "success" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"0" \
 	"scan ok" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Regression for the zero-evidence "hollow path" bug: Strix exits 0 but
+# writes no vulnerabilities/*.md report artifact anywhere. Before the fix in
+# run_strix_once() (has_any_strix_vulnerability_report_artifact()) this was
+# indistinguishable from a genuinely clean scan and the gate passed; it must
+# now fail closed with the dedicated log-only-success message.
+run_gate_case "success-zero-report-artifacts" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"

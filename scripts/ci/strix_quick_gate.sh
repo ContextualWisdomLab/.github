@@ -2950,6 +2950,10 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
+		if ! has_any_strix_vulnerability_report_artifact; then
+			echo "Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." >&2
+			return 1
+		fi
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
@@ -3462,11 +3466,46 @@ latest_strix_report_dir() {
 	echo "$latest"
 }
 
+# Return success (0) only when at least one Strix vulnerabilities/*.md report
+# artifact exists in the current run's reports directory, ignoring
+# pre-existing (stale, prior-run) report directories. A "successful" Strix
+# invocation that produced zero report artifacts is not evidence of a clean
+# scan -- it is indistinguishable from Strix silently failing to actually
+# scan anything -- so callers on both the primary success path
+# (run_strix_once) and the below-threshold fallback path
+# (has_only_below_threshold_vulnerabilities) must treat "no artifact" as
+# failing closed, not as an implicit pass.
+has_any_strix_vulnerability_report_artifact() {
+	local run_dir vulnerabilities_dir vuln_file
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			return 0
+		done
+	done
+
+	return 1
+}
+
 has_only_below_threshold_vulnerabilities() {
 	local threshold_rank
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
 
-	local found_any_vuln_file=0
 	local global_max_rank=-1
 	STRIX_MAX_SEVERITY_RANK=-1
 	local saw_any_severity=0
@@ -3496,6 +3535,11 @@ has_only_below_threshold_vulnerabilities() {
 		done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
 	}
 
+	if ! has_any_strix_vulnerability_report_artifact; then
+		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		return 1
+	fi
+
 	local run_dir
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
@@ -3518,15 +3562,9 @@ has_only_below_threshold_vulnerabilities() {
 				continue
 			fi
 
-			found_any_vuln_file=1
 			update_max_severity_from_stream "$vuln_file"
 		done
 	done
-
-	if [ "$found_any_vuln_file" -eq 0 ]; then
-		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
-		return 1
-	fi
 
 	if [ "$saw_any_severity" -eq 0 ]; then
 		return 1
