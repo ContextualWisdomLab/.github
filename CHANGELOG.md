@@ -8,6 +8,8 @@ Semantic Versioning where the repository publishes a release.
 - Convert JSON decoder recursion failures from deeply nested Noema responses
   into the existing bounded, fingerprinted fail-closed diagnostic instead of
   allowing an unhandled `RecursionError` to crash the required review.
+- Restrict wrapped Noema JSON recovery to top-level brace groups so a valid
+  nested object cannot escape a malformed outer object and become a verdict.
 - Keep Noema's native concurrency head-specific, then explicitly cancel the
   same PR's older-head runs only after a `pull_request_target` event proves its
   payload SHA is still live. New commits stop obsolete four-hour model calls,

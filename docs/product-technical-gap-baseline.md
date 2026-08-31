@@ -2279,6 +2279,11 @@ same ~15-line mechanism throughout the day.
 
 PR: ContextualWisdomLab/.github#1507 (Devin review on #1507; same PR, addressed before merge).
 
+The same exact-head review also identified that scanning every opening brace could recover a valid
+nested object after its malformed outer object failed to decode. Recovery now considers only top-level
+brace groups, preserving lightly wrapped and multiple-object responses while failing closed on nested
+escape. A regression test reproduces the former nested-object acceptance directly.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

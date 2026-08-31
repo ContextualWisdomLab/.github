@@ -497,9 +497,10 @@ def extract_json_object(text: str) -> dict[str, Any]:
     path ``call_llm`` already raises for an unsupported decision, a missing
     summary, or a malformed finding — instead of letting a malformed or
     truncated LLM response's ``json.JSONDecodeError`` propagate as an
-    unhandled exception and crash the review job. The candidate substring
-    always starts at a ``{``, so a successful parse is always a JSON object
-    (``dict``); only the decode failure itself needs converting.
+    unhandled exception and crash the review job. Only top-level brace groups
+    are candidates, so a valid nested object cannot escape a malformed outer
+    object. Every candidate starts at a ``{``, making each successful parse a
+    JSON object (``dict``); only the decode failure itself needs converting.
 
     The raised diagnostic never embeds the raw (or scrubbed) model response.
     This is a ``pull_request_target`` workflow whose Actions logs are public
@@ -515,9 +516,29 @@ def extract_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     decoder = json.JSONDecoder()
     decode_error: json.JSONDecodeError | None = None
-    for start, character in enumerate(stripped):
-        if character != "{":
+    candidate_starts: list[int] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(stripped):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
             continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            if depth == 0:
+                candidate_starts.append(index)
+            depth += 1
+        elif character == "}" and depth:
+            depth -= 1
+
+    for start in candidate_starts:
         try:
             candidate, _end = decoder.raw_decode(stripped, start)
         except RecursionError:

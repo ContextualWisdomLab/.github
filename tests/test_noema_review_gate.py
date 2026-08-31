@@ -638,6 +638,16 @@ def test_extract_json_object_balances_wrapped_and_multiple_objects():
     assert noema.extract_json_object(
         json.dumps(verdict) + "\n" + json.dumps({"decision": "comment"})
     ) == verdict
+    escaped = {"decision": "approve", "summary": 'escaped " { text }'}
+    assert noema.extract_json_object(json.dumps(escaped)) == escaped
+
+
+def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object():
+    """A valid nested object must not escape its malformed outer object."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            'prefix {"broken": {"decision":"approve","summary":"nested"} trailing'
+        )
 
 
 def test_extract_json_object_fails_closed_on_excessive_nesting(monkeypatch):
