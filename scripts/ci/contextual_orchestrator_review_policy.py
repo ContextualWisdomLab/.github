@@ -123,14 +123,33 @@ def _normalize_base_url(base_url: str) -> str:
 
     A string this cannot parse into a scheme, host, and numeric port --
     including an empty string (which would otherwise normalize to a value
-    indistinct from a real one-character path) and a non-numeric port
-    substring (``urlsplit(...).port`` raises ``ValueError`` for one) --
-    falls back to a simple lowercased, stripped copy of the whole string:
-    grouping only needs equal inputs to compare equal, not a validated URL,
-    and this function must never raise on evidence it merely groups.
+    indistinct from a real one-character path), a malformed IPv6 host (an
+    unmatched ``[``/``]`` bracket makes ``urlsplit()`` itself raise
+    ``ValueError``, before any scheme/host/port is even available to
+    inspect), and a non-numeric port substring (``urlsplit(...).port``
+    raises ``ValueError`` for one, once splitting succeeds) -- falls back to
+    a simple lowercased, stripped copy of the whole string: grouping only
+    needs equal inputs to compare equal, not a validated URL, and this
+    function must never raise on evidence it merely groups.
+
+    Known, deliberate residual gap: hostname canonicalization stops at
+    lowercasing. A trailing root-label dot (``host.``), an IDN written as
+    Unicode versus its ASCII/punycode form, or two differently-compressed
+    but equivalent literal IPv6 addresses (e.g. ``::1`` vs ``0:0:0:0:0:0:0:1``)
+    are not folded together, so such a pair could still read as two outage
+    domains. None of these shapes occur in any ``base_url`` this codebase
+    produces today (every value traces to a fixed set of hardcoded,
+    already-canonical HTTPS hostnames -- see ``_outage_domain``'s
+    docstring), so this is intentionally not chased further here; a future
+    provider whose entitled address genuinely takes one of these forms
+    should extend this function with evidence of the specific case, not
+    prophylactically.
     """
     text = base_url.strip()
-    parsed = urlsplit(text)
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return text.casefold()
     if not parsed.scheme or not parsed.hostname:
         return text.casefold()
     try:
@@ -142,6 +161,77 @@ def _normalize_base_url(base_url: str) -> str:
     netloc = host if port is None or port == _DEFAULT_PORTS.get(scheme) else f"{host}:{port}"
     path = parsed.path.rstrip("/")
     return urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
+
+
+def _fair_admission_order(
+    rows: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Reorder rows so one outage domain's cap fills fairly across accounts.
+
+    ``rows`` must already be in the caller's priority order (cost-tier, ZDR
+    preference, deterministic ``(provider, model)`` tie-break -- see
+    ``build_zdr_prioritized_catalog``'s own sort). Grouping the admission cap
+    by outage domain (:func:`_outage_domain`) fixed one starvation bug --
+    two same-endpoint credentials sharing one budget instead of each getting
+    their own -- but introduced a second, narrower one: the greedy admission
+    loop consumes rows in this exact sorted order, so whichever account's
+    rows happen to sort first (``"nvidia_nim"`` before ``"nvidia_nim_sub"``,
+    alphabetically, in every real fixture in this file) could exhaust the
+    *entire* shared cap before the domain's other account is considered at
+    all -- not "prevented from taking more than its share", but shut out
+    completely, even with rows of its own available and cap budget nominally
+    unused by it.
+
+    A domain contributed to by only one account is returned completely
+    untouched, in its original relative position -- this function changes
+    nothing for the common case (every provider except the shared
+    ``nvidia_nim``/``nvidia_nim_sub`` pair, as of this writing). Within a
+    domain shared by more than one account, rows are taken in round-robin
+    turns across those accounts -- one row from account A's own queue (which
+    keeps A's rows in their original relative priority order), then one from
+    B's, cycling only over accounts that still have an unconsumed row --
+    instead of admission naturally exhausting whichever account's rows sort
+    first. This guarantees every contending account gets at least one turn
+    before any account gets a second admission from that domain, so the
+    domain's cap is filled proportionally across its accounts rather than by
+    whichever one happens to rank first; an account that runs out of rows
+    before the cap is reached simply stops participating in further rounds,
+    letting the domain's remaining accounts absorb the leftover capacity.
+
+    Each domain's whole reordered block is emitted at the position of its
+    first row's original appearance, so which domain is considered before
+    another is unaffected by this function -- only the order *within* a
+    multi-account domain changes.
+    """
+    domain_order: list[str] = []
+    domain_rows: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        domain = _outage_domain(row)
+        if domain not in domain_rows:
+            domain_order.append(domain)
+            domain_rows[domain] = []
+        domain_rows[domain].append(row)
+
+    ordered: list[Mapping[str, Any]] = []
+    for domain in domain_order:
+        bucket = domain_rows[domain]
+        account_order: list[str] = []
+        queues: dict[str, list[Mapping[str, Any]]] = {}
+        for row in bucket:
+            account = provider_account(str(row["provider"]))
+            if account not in queues:
+                account_order.append(account)
+                queues[account] = []
+            queues[account].append(row)
+        if len(account_order) <= 1:
+            ordered.extend(bucket)
+            continue
+        while any(queues[account] for account in account_order):
+            for account in account_order:
+                queue = queues[account]
+                if queue:
+                    ordered.append(queue.pop(0))
+    return ordered
 
 
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
@@ -370,7 +460,7 @@ def build_zdr_prioritized_catalog(
 
     per_domain: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
-    for row in eligible_rows:
+    for row in _fair_admission_order(eligible_rows):
         domain = _outage_domain(row)
         if per_domain[domain] >= account_cap:
             continue

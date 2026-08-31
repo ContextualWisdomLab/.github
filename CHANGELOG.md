@@ -21,8 +21,15 @@ Semantic Versioning where the repository publishes a release.
   whether a single provider outage could empty the free catalog. Outage-
   domain grouping normalizes each row's `base_url` first (lowercasing
   scheme/host, dropping an explicit default port, stripping a trailing
-  slash), so a formatting difference alone cannot split one physical
-  endpoint into two domains.
+  slash, and never raising even on a malformed IPv6-bracket URL), so a
+  formatting difference alone cannot split one physical endpoint into two
+  domains. Within a shared domain, the admission cap's bounded slots are
+  now split round-robin across the domain's contending accounts instead of
+  being consumed entirely by whichever account's rows happen to sort first
+  -- fixing a narrower starvation bug the outage-domain grouping itself
+  introduced (one credential could otherwise get zero admissions from a
+  shared domain even with rows available and cap budget nominally unused
+  by it).
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer

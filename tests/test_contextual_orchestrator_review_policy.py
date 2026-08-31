@@ -140,11 +140,96 @@ def test_normalize_base_url_falls_back_on_unparseable_input() -> None:
     ) == policy._normalize_base_url("HTTPS://HOST:NOTAPORT/v1")
 
 
+def test_normalize_base_url_falls_back_on_malformed_ipv6_bracket() -> None:
+    """An unmatched IPv6 bracket cannot raise past this function.
+
+    Regression for a Devin Review finding: ``urlsplit()`` itself raises
+    ``ValueError`` for an unmatched ``[``/``]`` (e.g. ``https://[::1/v1``,
+    a missing closing bracket) -- before any scheme/host/port is even
+    available to inspect, so the earlier fallback (which only wrapped the
+    ``.port`` property access) did not cover it.
+    """
+    # Would raise ValueError: Invalid IPv6 URL if urlsplit() itself were not
+    # also wrapped.
+    assert policy._normalize_base_url("https://[::1/v1") == "https://[::1/v1"
+    assert policy._normalize_base_url("HTTPS://[::1/V1") == policy._normalize_base_url(
+        "https://[::1/v1"
+    )
+
+
 def test_outage_domain_uses_normalized_base_url() -> None:
     """Two rows spelling one endpoint differently share one outage domain."""
     assert policy._outage_domain(
         {"base_url": "https://integrate.api.nvidia.com/v1"}
     ) == policy._outage_domain({"base_url": "https://Integrate.API.Nvidia.com:443/v1/"})
+
+
+def _row(provider: str, model: str) -> dict[str, object]:
+    """Return a minimal normalized-shaped row for ``_fair_admission_order`` tests."""
+    return {
+        "provider": provider,
+        "model": model,
+        "base_url": policy.PROVIDER_BASE_URLS[provider],
+    }
+
+
+def test_fair_admission_order_untouched_for_single_account_domains() -> None:
+    """A domain with only one contributing account keeps its original order."""
+    rows = [_row("openrouter", "a"), _row("openai", "b"), _row("bytez", "c")]
+    assert policy._fair_admission_order(rows) == rows
+
+
+def test_fair_admission_order_round_robins_a_shared_domain() -> None:
+    """Two accounts sharing a domain alternate instead of one exhausting first.
+
+    Regression for the same Devin Review finding as
+    ``test_build_catalog_shared_domain_cap_does_not_starve_second_account``,
+    exercised directly against the reordering helper: unit-level coverage of
+    exactly which row is emitted in which position, not just the resulting
+    admission counts.
+    """
+    rows = [
+        _row("nvidia_nim", "m0"),
+        _row("nvidia_nim", "m1"),
+        _row("nvidia_nim", "m2"),
+        _row("nvidia_nim_sub", "s0"),
+        _row("nvidia_nim_sub", "s1"),
+    ]
+    ordered = policy._fair_admission_order(rows)
+    assert [(row["provider"], row["model"]) for row in ordered] == [
+        ("nvidia_nim", "m0"),
+        ("nvidia_nim_sub", "s0"),
+        ("nvidia_nim", "m1"),
+        ("nvidia_nim_sub", "s1"),
+        ("nvidia_nim", "m2"),
+    ]
+
+
+def test_fair_admission_order_preserves_domain_position_and_multiple_domains() -> None:
+    """Reordering stays local to each multi-account domain, in its original slot.
+
+    A single-account domain on either side of a multi-account domain stays
+    exactly where it was, untouched; the multi-account domain's block still
+    starts where its first row originally appeared, with only its internal
+    order changed (``nvidia_nim``'s two consecutive rows are pulled apart to
+    give ``nvidia_nim_sub`` a turn between them, rather than staying
+    adjacent).
+    """
+    rows = [
+        _row("bytez", "b0"),
+        _row("nvidia_nim", "m0"),
+        _row("nvidia_nim", "m1"),
+        _row("nvidia_nim_sub", "s0"),
+        _row("openrouter", "r0"),
+    ]
+    ordered = policy._fair_admission_order(rows)
+    assert [(row["provider"], row["model"]) for row in ordered] == [
+        ("bytez", "b0"),
+        ("nvidia_nim", "m0"),
+        ("nvidia_nim_sub", "s0"),
+        ("nvidia_nim", "m1"),
+        ("openrouter", "r0"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -474,7 +559,7 @@ def test_build_catalog_assigns_unique_priorities() -> None:
 
 
 def test_build_catalog_applies_account_cap() -> None:
-    """The admission cap is enforced per outage domain, not per credential.
+    """The admission cap is enforced per outage domain, split fairly within it.
 
     ``nvidia_nim`` and ``nvidia_nim_sub`` share one outage domain (both
     ``https://integrate.api.nvidia.com/v1``), so they share one ``2``-slot
@@ -482,10 +567,12 @@ def test_build_catalog_applies_account_cap() -> None:
     still named for the credential-account concept it started as, but its
     grouping fixed to outage domains (see ``test_build_catalog_prevents_
     shared_endpoint_from_crowding_out_independent_providers`` for the
-    concrete crowding-out scenario this exists to prevent). Sort order
-    (alphabetical among same-cost, same-ZDR rows) picks the two admitted
-    NVIDIA-domain rows from ``nvidia_nim`` specifically, since
-    ``"nvidia_nim" < "nvidia_nim_sub"``.
+    concrete crowding-out scenario this exists to prevent). The shared
+    budget is split round-robin across the domain's accounts (see
+    ``test_build_catalog_shared_domain_cap_does_not_starve_second_account``),
+    not consumed entirely by whichever one sorts first: one slot each for
+    ``nvidia_nim``/``nvidia_nim_sub`` here, not two for one and zero for the
+    other.
     """
     report = {
         "models": [
@@ -514,7 +601,7 @@ def test_build_catalog_applies_account_cap() -> None:
     for agent in result["agents"]:
         account = policy.provider_account(agent["provider_name"])
         account_counts[account] = account_counts.get(account, 0) + 1
-    assert account_counts == {"nvidia_nim": 2, "openai": 2}
+    assert account_counts == {"nvidia_nim": 1, "nvidia_nim_sub": 1, "openai": 2}
     assert len(result["agents"]) == 4
 
 
@@ -556,12 +643,46 @@ def test_build_catalog_prevents_shared_endpoint_from_crowding_out_independent_pr
     counts: dict[str, int] = {}
     for agent in result["agents"]:
         counts[agent["provider_name"]] = counts.get(agent["provider_name"], 0) + 1
-    # NVIDIA's shared domain admits at most 4 total (all from nvidia_nim,
-    # sorted first) -- not 4 from each credential -- leaving bytez and
-    # openrouter, each an independent domain, fully admitted.
-    assert counts == {"bytez": 2, "nvidia_nim": 4, "openrouter": 2}
+    # NVIDIA's shared domain admits at most 4 total, split fairly (2 from
+    # each credential, not 4 from whichever sorts first and 0 from the
+    # other) -- leaving bytez and openrouter, each an independent domain,
+    # fully admitted.
+    assert counts == {"bytez": 2, "nvidia_nim": 2, "nvidia_nim_sub": 2, "openrouter": 2}
     assert result["report"]["free_account_diversity"] == 4
     assert result["report"]["free_outage_domain_diversity"] == 3
+
+
+def test_build_catalog_shared_domain_cap_does_not_starve_second_account() -> None:
+    """A shared domain's cap admits from every contending account, not just one.
+
+    Regression for a Devin Review finding on this fix: the admission loop
+    walks rows in strict sorted (cost-tier, ZDR, provider, model) order, so
+    grouping the cap by outage domain alone was not enough -- whichever
+    account's rows happened to sort first (``nvidia_nim`` before
+    ``nvidia_nim_sub`` in every fixture here) could exhaust the *entire*
+    shared cap before the domain's other account was considered at all, a
+    narrower but just-as-real version of the crowding-out bug this file
+    already fixes across domains. With both credentials offering far more
+    rows than the shared cap, both must still contribute.
+    """
+    report = {
+        "models": [
+            {"provider": "nvidia_nim", "model": f"n{i}", "agent_id": f"nim_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(8)
+        ]
+        + [
+            {"provider": "nvidia_nim_sub", "model": f"n{i}", "agent_id": f"nimsub_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(8)
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=20, account_cap=4
+    )
+    counts: dict[str, int] = {}
+    for agent in result["agents"]:
+        counts[agent["provider_name"]] = counts.get(agent["provider_name"], 0) + 1
+    assert counts == {"nvidia_nim": 2, "nvidia_nim_sub": 2}
+    assert sum(counts.values()) == 4
 
 
 def test_build_catalog_respects_limit() -> None:

@@ -1812,6 +1812,53 @@ end-to-end test through `build_zdr_prioritized_catalog` itself with two differen
 same endpoint. Full suite green (2106 tests); 100% coverage (including the new fallback branch) and 100%
 docstring coverage on `scripts/ci/`.
 
+**Second follow-up (same PR, same day): the outage-domain cap itself could starve one credential
+entirely.** Two more Devin Review findings on this PR, one severe.
+
+- **Severe: shared-cap starvation within a domain.** Grouping the admission cap by outage domain (above)
+  fixed cross-domain crowding-out, but the admission loop still walks rows in one strict sorted
+  (cost-tier, ZDR, provider, model) order and admits greedily until a domain's cap is reached. Since
+  `"nvidia_nim" < "nvidia_nim_sub"` in every real fixture, `nvidia_nim`'s rows always sort first --
+  meaning `nvidia_nim` alone could consume the *entire* shared cap before a single `nvidia_nim_sub` row
+  was ever considered. Verified concretely before fixing: 6 free `nvidia_nim` rows + 6 free
+  `nvidia_nim_sub` rows, `account_cap=4` -> `nvidia_nim_sub` was admitted **zero** rows. Not "prevented
+  from taking more than its fair share" (the bug already fixed), but "the alphabetically-first credential
+  can take the *entire* shared budget, the other gets nothing" -- a narrower but just-as-real version of
+  the same crowding-out problem, now happening *within* one domain instead of across domains. Fixed with
+  a new `_fair_admission_order()` reordering step, applied before the existing (otherwise unchanged)
+  greedy admission loop: rows are partitioned by outage domain (preserving each domain's original
+  position relative to other domains), and within any domain contributed to by more than one account,
+  rows are taken in round-robin turns across those accounts -- one from each account's own
+  priority-ordered queue per round -- instead of exhausting whichever account sorts first. A domain with
+  only one contributing account (every provider except the shared NVIDIA pair, as of this writing) is
+  returned completely untouched. Re-verified the same scenario after the fix: `nvidia_nim: 2,
+  nvidia_nim_sub: 2` -- both credentials now contribute. Two existing tests whose assertions had encoded
+  the starvation behavior (`test_build_catalog_applies_account_cap`,
+  `test_build_catalog_prevents_shared_endpoint_from_crowding_out_independent_providers`) were corrected
+  to the fair-split expectation; a new end-to-end regression
+  (`test_build_catalog_shared_domain_cap_does_not_starve_second_account`) and two unit-level tests
+  directly against `_fair_admission_order()` (untouched-single-account case; visible round-robin
+  reordering, including that a multi-account domain's block still starts at its original position among
+  other domains) were added.
+- **Real: `urlsplit()` itself can raise, not only `.port`.** `_normalize_base_url`'s existing fallback
+  wrapped only the `.port` property access; `urlsplit()` itself raises `ValueError` for an unmatched
+  IPv6-literal bracket (e.g. `https://[::1/v1`, confirmed: `ValueError: Invalid IPv6 URL`), which happens
+  earlier, before any scheme/host is even available to inspect -- an uncaught exception past this
+  function's own "must never raise on evidence it merely groups" contract. Fixed by wrapping the
+  `urlsplit()` call itself in the same catch-and-fall-back-to-a-lowercased-copy pattern already used for
+  the `.port` case. One new regression test confirms both a malformed IPv6-bracket URL and its
+  differently-cased twin fall back to the same, non-raising, normalized value.
+- **Noted, not chased further (info-level, optional):** hostname canonicalization stops at lowercasing --
+  a trailing root-label dot, an IDN's Unicode vs. punycode form, and differently-compressed-but-equivalent
+  IPv6 literals are not folded together. None of these shapes occur in any `base_url` this codebase
+  produces today (every value traces to a fixed set of hardcoded, already-canonical HTTPS hostnames), so
+  this is documented as a deliberate residual gap in `_normalize_base_url`'s own docstring rather than
+  implemented prophylactically; a future provider whose entitled address genuinely takes one of these
+  forms should extend the function with evidence of that specific case.
+
+Full suite: 2111 passed, 1 skipped, 21 subtests passed. 100% coverage (including the new reordering
+function and both new fallback branches) and 100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
