@@ -7587,7 +7587,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 12); do
-            runs="$(gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100")"
+            runs="$(gh api "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100")"
             required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
               [
                 .[].workflow_runs[]

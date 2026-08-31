@@ -137,6 +137,8 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
     assert 'select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))' in dispatched
     assert "head_sha=${PR_HEAD_SHA}" not in dispatched
+    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100"' in dispatched
+    assert 'gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target' not in dispatched
     assert 'select(.event == "pull_request_target")' in dispatched
     assert 'select(.workflow_url | contains("/actions/required_workflows/"))' in dispatched
 

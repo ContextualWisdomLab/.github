@@ -2295,7 +2295,8 @@ it selects the latest exact-head `Required OpenCode Review` `pull_request_target
 workflow identity and the two-hour-plus model allowance while removing roughly eleven runner-hours of
 polling per PR. The wake selector uses the exact PR/head-bearing `display_title` plus required-workflow
 metadata: a `pull_request_target` run's REST `head_sha` points at the trusted base revision and cannot
-identify the reviewed PR head.
+identify the reviewed PR head. Each retry reads only the newest 100 matching-event runs rather than
+paginating the repository's full history.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
