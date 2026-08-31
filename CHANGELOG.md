@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Keep the Noema malformed-response UUID fixture covered by gitleaks without
+  weakening the secret gate: the historical ignore is limited to the exact
+  superseded commit, test path, rule, and line, with an executable contract.
 - Allow a Contextual Orchestrator-backed Noema review request to run for up to
   two hours instead of failing every long review at a hard-coded 120 seconds.
 - Stop logging raw (even regex-scrubbed) LLM response text in Noema's

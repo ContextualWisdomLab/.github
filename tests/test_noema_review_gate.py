@@ -2,10 +2,25 @@ import base64
 import hashlib
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
 from scripts.ci import noema_review_gate as noema
+
+
+def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
+    entries = {
+        line
+        for line in Path(".gitleaksignore").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    }
+    fingerprint = (
+        "6657eb76f0e2cf6dab9197cfa861a1f584653aba:"
+        "tests/test_noema_review_gate.py:generic-api-key:187"
+    )
+    assert fingerprint in entries
+    assert sum("tests/test_noema_review_gate.py" in entry for entry in entries) == 1
 
 
 def fake_secret(*parts: str) -> str:
