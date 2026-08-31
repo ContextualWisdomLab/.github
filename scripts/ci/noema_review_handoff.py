@@ -32,6 +32,8 @@ GH_COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_TRANSIENT_BACKOFF_MULTIPLIER = 4
 NOEMA_REVIEW_AUTHOR = "cwl-noema-review[bot]"
 NOEMA_REVIEW_MARKER = "<!-- noema-review-gate "
+NOEMA_MARKER_HEAD_RE = re.compile(r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->")
+NOEMA_BODY_HEAD_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 TERMINAL_NOEMA_STATES = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
 
 
@@ -102,6 +104,13 @@ def noema_review_state(reviews: list[dict[str, Any]], head_sha: str) -> str | No
         if author != NOEMA_REVIEW_AUTHOR:
             continue
         if NOEMA_REVIEW_MARKER not in str(review.get("body") or ""):
+            continue
+        body = str(review.get("body") or "")
+        marker_heads = NOEMA_MARKER_HEAD_RE.findall(body)
+        body_heads = NOEMA_BODY_HEAD_RE.findall(body)
+        if len(marker_heads) != 1 or len(body_heads) != 1:
+            continue
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
             continue
         state = str(review.get("state") or "").upper()
         if state in TERMINAL_NOEMA_STATES:
