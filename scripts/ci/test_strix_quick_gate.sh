@@ -525,9 +525,9 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	local bootstrap_conditions
 	bootstrap_conditions="$(awk '/^  required-workflow-bootstrap:$/ { in_bootstrap = 1; next } in_bootstrap && /^  [^ ]/ { exit } in_bootstrap' "$bootstrap_file" | grep '^[[:space:]]*if:' || true)"
 	assert_equals \
-		"        if: \${{ github.event_name == 'pull_request_target' }}" \
+		"" \
 		"$bootstrap_conditions" \
-		"opencode bootstrap permits only the explicit pull_request_target Pingora policy condition"
+		"opencode bootstrap carries no redundant event-name guard: the workflow's sole trigger is already pull_request_target"
 	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
 	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
