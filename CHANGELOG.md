@@ -5,6 +5,31 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Root-cause the hourly PR-review-fix scheduler's silent `autofix_dispatches: 0`
+  on nearly every run (surfaced while investigating why 40 of `.github`'s 81
+  open PRs were stuck reporting "This branch has conflicts that must be
+  resolved"): `github-hourly-review-repair.yml`'s most recent run inspected
+  50 PRs and dispatched zero autofixes, with every candidate PR's decision
+  reading `"error": "API rate limit exceeded for installation ID ..."`. Two
+  compounding causes in `scripts/ci/pr_review_fix_scheduler.py`: (1)
+  `issue_comments()` fetched a PR's *entire* issue-comment history with the
+  default 30-per-page pagination even though `recent_fix_marker_exists()`
+  only ever needs the most recent marker; (2) `process_queue()`'s concurrent
+  comment-prefetch (up to 10 simultaneous `gh api --paginate` calls against
+  the same shared, org-wide-contended OpenCode app installation) silently
+  swallowed a failed fetch and then had `inspect_pr()` immediately retry the
+  *same* doomed call sequentially with zero backoff, doubling the wasted
+  request volume for every already-failing PR. `issue_comments()` now
+  requests `per_page=100` (cutting page count for long comment threads by
+  up to 3x) and retries a detected rate-limit error with a short linear
+  backoff (up to 2 attempts) before propagating; `process_queue()` now
+  caps prefetch concurrency at 4 workers instead of 10, and a PR whose
+  comment fetch still fails after retries is deferred to the next scheduled
+  pass (`"wait"`) instead of silently prefetch-swallowed and then
+  redundantly re-fetched and reported as a scary `"error"`. This is a
+  single shared script, so the fix applies identically to every one of the
+  ~19 product-specific hourly review-repair callers, not just `.github`'s
+  own.
 - Fix a Devin Review finding on PR #1456: the REST fallback path
   (`rest_pr_node`, used when GraphQL is unavailable) only ever fetched a
   head commit's CheckRuns (`commits/{sha}/check-runs`), never its classic
@@ -443,8 +468,7 @@ Semantic Versioning where the repository publishes a release.
   Informational, no change: the gap-baseline's repeated review-round
   narrative is this repo's own documented, intentional convention
   (ADR-0002: the baseline is "an operational snapshot," not a duplicate of
-  the ADR's design record), not accidental redundancy.
-- Raise `contextual_orchestrator_review_sidecar.sh`'s
+  the ADR's design record), not accidental redundancy.- Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
   blocking `noema-review`/`opencode-review`/`strix` org-wide to
