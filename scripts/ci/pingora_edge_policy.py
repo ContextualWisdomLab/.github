@@ -457,13 +457,15 @@ def _binary_documentation_evidence_confirms(
 
 
 def _is_complete_png(raw: bytes) -> bool:
-    """Validate a complete PNG chunk stream with no appended payload."""
+    """Validate one bounded, non-interlaced PNG including its image stream."""
 
     if not raw.startswith(PNG_SIGNATURE):
         return False
     offset = len(PNG_SIGNATURE)
-    saw_header = False
-    saw_image_data = False
+    header: tuple[int, int, int, int] | None = None
+    palette_seen = False
+    image_data: list[bytes] = []
+    image_data_closed = False
     while offset + 12 <= len(raw):
         length = int.from_bytes(raw[offset : offset + 4], "big")
         chunk_end = offset + 12 + length
@@ -474,14 +476,61 @@ def _is_complete_png(raw: bytes) -> bool:
         expected_crc = int.from_bytes(raw[offset + 8 + length : chunk_end], "big")
         if zlib.crc32(chunk_type + chunk_data) != expected_crc:
             return False
-        if not saw_header:
-            if chunk_type != b"IHDR" or length != 13:
+        if header is None:
+            if chunk_type != b"IHDR" or length != 13 or offset != len(PNG_SIGNATURE):
                 return False
-            saw_header = True
+            width = int.from_bytes(chunk_data[0:4], "big")
+            height = int.from_bytes(chunk_data[4:8], "big")
+            bit_depth, color_type, compression, filtering, interlace = chunk_data[8:13]
+            allowed_depths = {
+                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
+                4: {8, 16}, 6: {8, 16},
+            }
+            if (
+                width == 0 or height == 0
+                or bit_depth not in allowed_depths.get(color_type, set())
+                or compression != 0 or filtering != 0 or interlace != 0
+            ):
+                return False
+            header = (width, height, bit_depth, color_type)
+        elif chunk_type == b"IHDR":
+            return False
+        elif chunk_type == b"PLTE":
+            if palette_seen or image_data or length == 0 or length > 768 or length % 3:
+                return False
+            palette_seen = True
         elif chunk_type == b"IDAT":
-            saw_image_data = True
+            if image_data_closed:
+                return False
+            image_data.append(chunk_data)
         elif chunk_type == b"IEND":
-            return length == 0 and saw_image_data and chunk_end == len(raw)
+            if length != 0 or not image_data or chunk_end != len(raw):
+                return False
+            width, height, bit_depth, color_type = header
+            if (color_type == 3 and not palette_seen) or (
+                color_type in {0, 4} and palette_seen
+            ):
+                return False
+            channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+            row_bytes = (width * channels * bit_depth + 7) // 8
+            expected_size = height * (row_bytes + 1)
+            if expected_size > MAX_RESPONSE_BYTES:
+                return False
+            decoder = zlib.decompressobj()
+            try:
+                decoded = decoder.decompress(b"".join(image_data), expected_size + 1)
+            except zlib.error:
+                return False
+            if (
+                len(decoded) != expected_size or not decoder.eof
+                or decoder.unused_data or decoder.unconsumed_tail
+            ):
+                return False
+            return all(decoded[row * (row_bytes + 1)] <= 4 for row in range(height))
+        elif chunk_type[0] & 0x20 == 0:
+            return False
+        elif image_data:
+            image_data_closed = True
         offset = chunk_end
     return False
 

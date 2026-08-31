@@ -56,7 +56,8 @@ not check out or execute pull-request content and receives only read permissions
 Malformed, truncated, symlinked, oversized, or unavailable runtime evidence fails
 closed. Documentation PNG screenshots and PDF papers without a text diff are
 excluded only after bounded format verification; PNG evidence must be a complete
-CRC-valid chunk stream ending at IEND. Other binary files remain
+CRC-valid chunk stream ending at IEND whose bounded decompressed scanlines match
+IHDR. Other binary files remain
 unavailable evidence and fail closed.
 
 ## Exception process

@@ -480,6 +480,47 @@ def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
     assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
 
 
+def test_png_semantic_validation_fails_closed() -> None:
+    """CRC-valid chunks still need a valid bounded PNG image stream."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    def png(header: bytes, *chunks: bytes) -> bytes:
+        return policy.PNG_SIGNATURE + chunk(b"IHDR", header) + b"".join(chunks)
+
+    rgba = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 0))
+    indexed = (1).to_bytes(4, "big") * 2 + bytes((8, 3, 0, 0, 0))
+    gray = (1).to_bytes(4, "big") * 2 + bytes((8, 0, 0, 0, 0))
+    image = chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0"))
+    end = chunk(b"IEND", b"")
+
+    invalid_headers = (
+        b"\0" * 13,
+        (1).to_bytes(4, "big") * 2 + bytes((4, 2, 0, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 1, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 1, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1)),
+    )
+    assert all(not policy._is_complete_png(png(header, image, end)) for header in invalid_headers)
+    assert not policy._is_complete_png(png(rgba, chunk(b"IHDR", rgba), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x" * 769), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"ABCD", b""), image, end))
+    assert policy._is_complete_png(png(rgba, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, image, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(indexed, image, end))
+    assert not policy._is_complete_png(png(gray, chunk(b"PLTE", b"\0\0\0"), chunk(b"IDAT", zlib.compress(b"\0\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", b"not-zlib"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0") + b"x"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
+    huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    assert not policy._is_complete_png(png(huge, image, end))
+
+
 def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     """A removed documentation PDF has no head content to fetch at all.
 
