@@ -21,7 +21,6 @@ def make_pr(**overrides):
         "headRefOid": "head",
         "reviews": {"nodes": []},
         "reviewThreads": {"nodes": []},
-        "statusCheckRollup": {"contexts": {"nodes": []}},
     }
     value.update(overrides)
     return value
@@ -451,7 +450,6 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     pr = make_pr(
         reviews={"nodes": [review("CHANGES_REQUESTED")]},
         reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}},
     )
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
@@ -463,6 +461,37 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
 
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
+
+
+def test_inspect_and_review_rechecks_for_a_concurrent_submission_before_posting(monkeypatch):
+    """A second trigger (e.g. workflow_run) that starts while this run is still
+    building context/calling the LLM must not publish a duplicate verdict once
+    the first run has already submitted one for the same head. noema-review.yml's
+    concurrency-group serialization is the primary defense; this re-check
+    narrows the remaining race window (cancel-in-progress is best-effort and
+    does not preempt a run mid-step) down to one GraphQL round trip
+    immediately before the POST."""
+    first_call_pr = make_pr()
+    already_reviewed_pr = make_pr(
+        reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}
+    )
+    fetch_pr_calls = []
+
+    def fake_fetch_pr(repo, number):
+        fetch_pr_calls.append(1)
+        return first_call_pr if len(fetch_pr_calls) == 1 else already_reviewed_pr
+
+    calls = []
+    monkeypatch.setattr(noema, "fetch_pr", fake_fetch_pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert calls == []
+    assert len(fetch_pr_calls) == 2
 
 
 def test_call_llm_rejects_empty_review_content(monkeypatch):

@@ -123,27 +123,6 @@ query($owner: String!, $name: String!, $number: Int!) {
           commit { oid }
         }
       }
-      statusCheckRollup {
-        contexts(first: 100) {
-          nodes {
-            __typename
-            ... on CheckRun {
-              name
-              status
-              conclusion
-              checkSuite {
-                workflowRun {
-                  workflow { name }
-                }
-              }
-            }
-            ... on StatusContext {
-              context
-              state
-            }
-          }
-        }
-      }
     }
   }
 }
@@ -595,6 +574,17 @@ def inspect_and_review(repo: str, number: int) -> int:
     diff, truncated = fetch_diff(repo, number)
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context)
+    # Re-check for a concurrent Noema submission immediately before posting.
+    # noema-review.yml's concurrency group (shared across pull_request_target,
+    # workflow_run, and repository_dispatch triggers) is the primary defense
+    # against two runs racing to review the same head, but GitHub's
+    # cancel-in-progress is best-effort and does not preempt a run mid-step;
+    # this narrows the remaining race window from the full diff/context/LLM
+    # call duration down to one GraphQL round trip immediately before the
+    # POST.
+    if existing_noema_review(fetch_pr(repo, number), actor):
+        print("Current head already has a Noema review as of just before submission; not posting a duplicate.")
+        return 0
     submit_review(repo, number, pr, actor, verdict)
     return 0
 
