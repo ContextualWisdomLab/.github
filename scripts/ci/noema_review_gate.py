@@ -493,22 +493,30 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
     """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
 
-    A lightweight, string-literal-aware delimiter stack: walks forward from
-    ``start`` (a ``{``), ignoring any ``{``/``[``/``}``/``]`` characters that
-    appear inside a JSON string literal, and returns ``True`` as soon as the
-    opening brace's matching close is found without nesting exceeding
+    A lightweight, string-literal-aware bracket-type stack: walks forward
+    from ``start`` (a ``{``), ignoring any ``{``/``[``/``}``/``]`` characters
+    that appear inside a JSON string literal, and returns ``True`` as soon as
+    the opening brace's matching close is found without nesting exceeding
     ``max_depth``, or ``False`` the moment ``max_depth`` is exceeded. Running
     off the end of ``text`` without closing (an unterminated candidate) is
     reported as within bound — that shape is already a decode failure
     ``json.JSONDecoder.raw_decode`` reports on its own; this function's only
     job is bounding nesting *depth*, not validating overall JSON shape.
 
+    A closer that does not match the innermost open bracket's type (a ``]``
+    where the enclosing container is a ``{``, or vice versa) is a no-op: it
+    does not pop the stack. A plain up/down counter that treated ``{``/``[``
+    interchangeably would let such a mismatched closer prematurely signal
+    "the outer bracket is closed" while genuinely deeper structure follows,
+    under-counting the real nesting depth ``raw_decode`` would encounter on
+    this exact candidate (Devin review on PR #1507).
+
     This check runs before ``raw_decode`` is attempted on a candidate, ahead
     of and independent of ``json.JSONDecoder``'s own recursion behavior —
     see ``extract_json_object``'s docstring for why that behavior cannot be
     trusted to reject excessive nesting on its own.
     """
-    delimiters: list[str] = []
+    stack: list[str] = []
     in_string = False
     escaped = False
     for index in range(start, len(text)):
@@ -524,15 +532,20 @@ def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
         if char == '"':
             in_string = True
         elif char in "{[":
-            delimiters.append(char)
-            if len(delimiters) > max_depth:
+            stack.append(char)
+            if len(stack) > max_depth:
                 return False
-        elif char in "}]" and delimiters:
-            if delimiters[-1] != ("{" if char == "}" else "["):
-                continue
-            delimiters.pop()
-            if not delimiters:
-                return True
+        elif char == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+                if not stack:
+                    # Only "{" can empty the stack: text[start] is always
+                    # "{" (this function's own contract), so it is always
+                    # the bottom-most, last-popped element; a "]" popping
+                    # an inner "[" can never reach an empty stack itself.
+                    return True
+        elif char == "]" and stack and stack[-1] == "[":
+            stack.pop()
     return True
 
 
@@ -547,13 +560,12 @@ def extract_json_object(text: str) -> dict[str, Any]:
     summary, or a malformed finding — instead of letting a malformed or
     truncated LLM response's ``json.JSONDecodeError`` propagate as an
     unhandled exception and crash the review job. Only top-level brace groups
-    are candidates: a ``{`` is a candidate only while depth (tracked across
-    both ``{``/``}`` and ``[``/``]``) is zero, so a valid nested object cannot
-    escape a malformed outer *object or array* wrapper. Every candidate
-    starts at a ``{``, making each successful parse a JSON object (``dict``);
-    only the decode failure itself needs converting. Delimiter types are
-    matched, so a mismatched closer cannot release a nested object as a new
-    top-level candidate.
+    are candidates: a ``{`` is a candidate only while a bracket-type stack
+    (tracking ``{``/``[`` opens against their own matching ``}``/``]``
+    closes) is empty, so a valid nested object cannot escape a malformed
+    outer *object or array* wrapper. Every candidate starts at a ``{``,
+    making each successful parse a JSON object (``dict``); only the decode
+    failure itself needs converting.
 
     The raised diagnostic never embeds the raw (or scrubbed) model response.
     This is a ``pull_request_target`` workflow whose Actions logs are public
@@ -593,7 +605,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     decode_error: json.JSONDecodeError | None = None
     candidate_starts: list[int] = []
-    delimiters: list[str] = []
+    stack: list[str] = []
     in_string = False
     escaped = False
     for index, character in enumerate(stripped):
@@ -607,13 +619,18 @@ def extract_json_object(text: str) -> dict[str, Any]:
             continue
         if character == '"':
             in_string = True
-        elif character in "{[":
-            if character == "{" and not delimiters:
+        elif character == "{":
+            if not stack:
                 candidate_starts.append(index)
-            delimiters.append(character)
-        elif character in "}]" and delimiters:
-            if delimiters[-1] == ("{" if character == "}" else "["):
-                delimiters.pop()
+            stack.append("{")
+        elif character == "[":
+            stack.append("[")
+        elif character == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif character == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
 
     for start in candidate_starts:
         if not _json_nesting_within_bound(stripped, start, MAX_JSON_NESTING_DEPTH):

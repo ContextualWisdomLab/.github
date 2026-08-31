@@ -687,6 +687,43 @@ def test_extract_json_object_rejects_recovery_after_mismatched_delimiter(payload
         noema.extract_json_object(payload)
 
 
+def test_extract_json_object_rejects_nested_recovery_via_a_mismatched_closer():
+    """A stray closer of the wrong bracket type must not fake-close a wrapper.
+
+    Candidate discovery uses a bracket-*type* stack, not a plain up/down
+    counter: a ``]`` only pops an innermost ``[``, and a ``}`` only pops an
+    innermost ``{``. A plain counter that treated any closer as -1 would let
+    a mismatched closer (which cannot legitimately close the container it
+    appears in) prematurely signal "back to depth zero," so a later nested
+    recovery object's own ``{`` would wrongly be seen as a fresh top-level
+    candidate (Devin review on PR #1507). Covers both mismatch directions:
+    a stray ``]`` inside an unterminated ``{``, and a stray ``}`` inside an
+    unterminated ``[``."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '{"broken": ]{"decision":"comment","summary":"ok","findings":[]}'
+        )
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '{"broken": [}{"decision":"comment","summary":"ok","findings":[]}'
+        )
+
+
+def test_json_nesting_within_bound_does_not_undercount_past_a_mismatched_closer():
+    """A mismatched closer must not make the bound-check think a candidate
+    closed early, undercounting nesting that raw_decode would still walk
+    through when this candidate is actually decoded. Covers both mismatch
+    directions: a stray ``]`` inside an unterminated ``{``, and a stray
+    ``}`` inside an unterminated ``[``."""
+    deep = "[" * 5
+    stray_bracket = '{"a": ]' + deep + "0" + "]" * 5 + "}"
+    assert noema._json_nesting_within_bound(stray_bracket, 0, 100) is True
+    assert noema._json_nesting_within_bound(stray_bracket, 0, 3) is False
+
+    stray_brace = '{"a": [}0]}'
+    assert noema._json_nesting_within_bound(stray_brace, 0, 100) is True
+
+
 def test_extract_json_object_fails_closed_on_a_real_deep_payload():
     """A genuinely deep JSON payload must fail closed on this job's own runtime.
 
