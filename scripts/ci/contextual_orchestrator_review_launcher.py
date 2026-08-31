@@ -1193,7 +1193,9 @@ def _catalog_account_cap(default: int) -> int:
     the "빈 깡통 경로" report it responds to). Routing the default through the
     caller-supplied ``policy.DEFAULT_ACCOUNT_CAP`` (rather than hand-typing a
     literal here) keeps this module's cap from silently drifting out of sync
-    with the policy module's own declared intent.
+    with the policy module's own declared intent. `main` PR #1487 landed the
+    identical fix independently, converging on this exact name and shape;
+    this is the single canonical implementation.
 
     Args:
         default: The cap to use when ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` is

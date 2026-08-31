@@ -2196,18 +2196,18 @@ def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
 
     Regression for a real, observed failure mode
     (ContextualWisdomLab/.github#1415, reported as "빈 깡통 경로 너무 많다"): this
-    module's ``_catalog_family_cap()`` helper (since renamed and fixed here)
-    fell back to ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the *total*
-    preflight budget -- instead of the intended per-account cap whenever its
-    env var was unset. That silently disabled per-account diversification: in
-    a live production run, two NVIDIA NIM credentials sharing one
-    rate-limited upstream jointly consumed all 12 preflight slots, of which
-    10 (83%) were then rejected via 429/404/timeout. This helper must never
-    resolve to the same value as the total-routes budget when given the real
-    ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly smaller.
+    module's ``_catalog_family_cap()`` helper (since renamed and fixed here --
+    `main` PR #1487 landed the identical fix independently under the same
+    final name) fell back to ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the
+    *total* preflight budget -- instead of the intended per-account cap
+    whenever its env var was unset. That silently disabled per-account
+    diversification: in a live production run, two NVIDIA NIM credentials
+    sharing one rate-limited upstream jointly consumed all 12 preflight
+    slots, of which 10 (83%) were then rejected via 429/404/timeout. This
+    helper must never resolve to the same value as the total-routes budget
+    when given the real ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly
+    smaller.
     """
-    from scripts.ci import contextual_orchestrator_review_policy as policy
-
     namespace = _load_launcher()
     account_cap = namespace["_catalog_account_cap"]
     assert callable(account_cap)
@@ -2252,8 +2252,6 @@ def test_catalog_account_cap_honors_an_explicit_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still takes effect."""
-    from scripts.ci import contextual_orchestrator_review_policy as policy
-
     namespace = _load_launcher()
     monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
     assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
