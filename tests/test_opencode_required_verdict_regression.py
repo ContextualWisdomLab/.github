@@ -102,6 +102,17 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
 
     assert "pull-requests: read" in workflow
     assert "Fail closed without a current-head OpenCode verdict" in workflow
+    assert "Request current-head OpenCode review execution" in workflow
+    assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
+    assert "exchange_github_app_token" in workflow
+    target_job = workflow.split("  opencode-review-target:\n", 1)[1]
+    assert "timeout-minutes: 100" in target_job.split("    steps:\n", 1)[0]
+    assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
+    assert 'event_type:"merge-scheduler"' in workflow
+    assert "trigger_reviews:true" in workflow
+    assert "for attempt in $(seq 1 180)" in target_job
+    assert "sleep 30" in target_job
+    assert "enable_auto_merge:false" in workflow
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
