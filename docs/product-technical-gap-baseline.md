@@ -1715,6 +1715,48 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
+
+The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an
+unhandled `json.decoder.JSONDecodeError` inside `extract_json_object`, called from `call_llm` in
+`scripts/ci/noema_review_gate.py`. Investigated the canonical-source question first, since this is
+exactly the shape of a central-vs-local drift-copy question this repo's own policy addresses:
+`contextual-orchestrator` has no `scripts/ci/noema_review_gate.py` committed at all and no
+`noema-review.yml` workflow of its own — the required `Required Noema Review` workflow
+(`.github/workflows/noema-review.yml`, this repo) materializes this file from a tarball of this repo's
+trusted commit SHA into every target repo's runner (`Materialize trusted Noema review gate` step), so the
+fix belongs here only; there was no local drift copy in `contextual-orchestrator` to remove either, since
+none existed.
+
+Root cause: `extract_json_object` located a `{...}` substring in the LLM's response content and called
+`json.loads()` on it directly with no exception handling. A truncated or malformed model reply (observed:
+an unquoted property name partway through the object — exactly `Expecting property name enclosed in
+double quotes`) raised `json.JSONDecodeError`, which propagated out of `call_llm`, `inspect_and_review`,
+and `main`, past the module's `except RuntimeError` guard in `__main__` (which only catches
+`RuntimeError`), crashing the whole `noema-review` job with a raw Python traceback and zero signal about
+why the review didn't complete. Every PR org-wide that hit this same LLM-output edge case would hit the
+identical unhandled crash, since the same materialized file runs in every target repo.
+
+Fixed by catching `json.JSONDecodeError` in `extract_json_object` and converting it into the same
+fail-closed `RuntimeError` this file already raises for its other "no usable verdict" cases in `call_llm`
+(unsupported decision, missing summary, malformed finding) — reusing the existing failure path rather
+than inventing a new one; the module's existing top-level handler already turns any `RuntimeError` into a
+clean, non-zero exit. The error message embeds the raw model response, scrubbed of secrets via
+`scrub_sensitive_data` and bounded to a new `MAX_LLM_RESPONSE_LOG_CHARS` (2000 chars), so the job log
+still shows *why* the verdict was unusable. (The candidate substring `extract_json_object` extracts is
+guaranteed to start with `{`, so per JSON grammar a successful parse can only ever yield an object — a
+"valid JSON but not an object" branch would be unreachable dead code under this repo's 100%-coverage gate
+and was deliberately not added.) The top-level `__main__` handler was also changed to print
+`::error::{exc}` instead of a bare message, matching this repo's own convention in sibling CI gates
+(`opencode_review_receipt_gate.py`, `select_nvidia_nim_model.py`).
+
+Regression tests reproduce the exact reported crash signature at both layers —
+`test_extract_json_object_fails_closed_on_malformed_json` (brace-wrapped invalid JSON, mid-object
+truncation, secret-scrubbing, length-bounding) and `test_call_llm_fails_closed_on_malformed_json_response`
+(an end-to-end `call_llm` call with a mocked malformed response) — both asserting a clean `RuntimeError`
+propagates, never the raw `json.JSONDecodeError`. 2128 tests pass (1 skipped, 21 subtests); 100% coverage
+and 100% docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
