@@ -91,106 +91,7 @@ def test_split_repo_and_graphql(monkeypatch):
         noema.fetch_pr("owner/repo", 8)
 
 
-def test_review_state_helpers_cover_current_head_logic():
-    marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
-    current = review(body=marker_body)
-    old = review(commit="old", body=marker_body)
-    pr = make_pr(reviews={"nodes": [old, current]})
-
-    assert noema.review_author(current) == "opencode-agent"
-    assert noema.review_author({}) == ""
-    assert noema.review_commit(current) == "head"
-    assert noema.review_commit({}) == ""
-    assert noema.current_primary_approval(pr) == current
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [old]})) is None
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [review("COMMENTED", body=marker_body)]})) is None
-    assert noema.current_primary_approval(make_pr(reviews={"nodes": [review(login="human", body=marker_body)]})) is None
-    assert noema.current_primary_approval(
-        make_pr(
-            reviews={
-                "nodes": [review(login="github-actions[bot]", body=marker_body)]
-            }
-        )
-    ) is None
-    assert noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED")]}))
-    assert not noema.has_current_changes_requested(make_pr(reviews={"nodes": [review("CHANGES_REQUESTED", commit="old")]}))
-    assert noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}))
-    assert not noema.has_unresolved_threads(make_pr(reviewThreads={"nodes": [{"isResolved": False, "isOutdated": True}]}))
-
-
-def test_review_state_helpers_reject_explicit_previous_head_evidence():
-    current_head = "a" * 40
-    previous_head = "b" * 40
-    approval_marker = "Result: APPROVE"
-    stale_approval = review(
-        commit=current_head,
-        body=f"{approval_marker}\n\n- Head SHA: `{previous_head}`",
-    )
-    exact_approval = review(
-        commit=current_head,
-        body=f"{approval_marker}\n\n- Head SHA: `{current_head}`",
-    )
-    stale_change_request = review(
-        "CHANGES_REQUESTED",
-        commit=current_head,
-        body=f"Result: REQUEST_CHANGES\n\n- Head SHA: `{previous_head}`",
-    )
-
-    assert noema.current_primary_approval(
-        make_pr(headRefOid=current_head, reviews={"nodes": [stale_approval]})
-    ) is None
-    assert noema.current_primary_approval(
-        make_pr(headRefOid=current_head, reviews={"nodes": [exact_approval]})
-    ) == exact_approval
-    assert not noema.has_current_changes_requested(
-        make_pr(headRefOid=current_head, reviews={"nodes": [stale_change_request]})
-    )
-
-
-def test_check_helpers_and_existing_noema_review():
-    status_context = {"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}
-    check_run = {
-        "__typename": "CheckRun",
-        "name": "build",
-        "status": "COMPLETED",
-        "conclusion": "SUCCESS",
-        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
-    }
-    failed_run = {
-        "__typename": "CheckRun",
-        "name": "lint",
-        "status": "COMPLETED",
-        "conclusion": "FAILURE",
-        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
-    }
-    running_run = {
-        "__typename": "CheckRun",
-        "name": "slow",
-        "status": "IN_PROGRESS",
-        "conclusion": None,
-        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
-    }
-
-    assert noema.check_label(status_context) == "ci"
-    assert noema.check_label(check_run) == "CI / build"
-    blockers = noema.blocking_checks(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {
-                    "nodes": [
-                        status_context,
-                        check_run,
-                        failed_run,
-                        running_run,
-                        {"__typename": "CheckRun", "name": "Required Noema Review", "status": "IN_PROGRESS"},
-                    ]
-                }
-            }
-        )
-    )
-    assert "ci: FAILURE" in blockers
-    assert "CI / lint: FAILURE" in blockers
-    assert "CI / slow: IN_PROGRESS" in blockers
+def test_existing_noema_review_matches_actor_and_head():
     noema_marker = "<!-- noema-review-gate head_sha=head -->"
     assert noema.existing_noema_review(
         make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
@@ -217,6 +118,14 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     assert noema.current_actor() == "noema"
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
     assert noema.current_actor() == ""
+
+    def app_identity(args, **kwargs):
+        if args[2] == "user":
+            return ""
+        return "cwl-noema-review\n"
+
+    monkeypatch.setattr(noema, "run", app_identity)
+    assert noema.current_actor() == "cwl-noema-review[bot]"
 
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5))
     diff, truncated = noema.fetch_diff("owner/repo", 1)
@@ -534,8 +443,7 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
-    marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
-    clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
+    clean_pr = make_pr()
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
@@ -548,13 +456,8 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert calls
 
     cases = [
-        (make_pr(), "noema"),
         (make_pr(isDraft=True), "noema"),
         (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
-        (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
-        (clean_pr, "opencode-agent"),
     ]
     for pr, actor in cases:
         calls.clear()
@@ -562,6 +465,139 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7) == 0
         assert calls == []
+
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "")
+    with pytest.raises(RuntimeError, match="identity could not be verified"):
+        noema.inspect_and_review("owner/repo", 7)
+
+    monkeypatch.setattr(noema, "current_actor", lambda: "opencode-agent")
+    with pytest.raises(RuntimeError, match="independent reviewer credential"):
+        noema.inspect_and_review("owner/repo", 7)
+
+
+def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatch):
+    pr = make_pr(
+        reviews={"nodes": [review("CHANGES_REQUESTED")]},
+        reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
+        statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}},
+    )
+    calls = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert calls
+
+
+def test_call_llm_rejects_empty_review_content(monkeypatch):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="substantive summary"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+
+@pytest.mark.parametrize("message", [[], {}, 0, "   "])
+def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    verdict = {
+        "decision": "request_changes",
+        "summary": "blocking issue",
+        "findings": [{"severity": "high", "file": "a.py", "line": 1, "message": message}],
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="malformed finding"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+
+@pytest.mark.parametrize(
+    ("findings", "error"),
+    [
+        (None, "list of objects"),
+        ([0], "list of objects"),
+        ([{"severity": "info", "file": "a.py", "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": 1, "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": " ", "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": "a.py", "line": "1", "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": "a.py", "line": 0, "message": "bad"}], "malformed finding"),
+        ([], "substantive finding"),
+    ],
+)
+def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    verdict = {"decision": "request_changes", "summary": "blocking issue", "findings": findings}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match=error):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+
+@pytest.mark.parametrize(
+    "findings",
+    [
+        [],
+        [
+            {"severity": "low", "file": "a.py", "line": 1, "message": "note"},
+            {"severity": "medium", "file": "b.py", "line": 2, "message": "check"},
+        ],
+    ],
+)
+def test_call_llm_accepts_substantive_approve(monkeypatch, findings):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    verdict = {"decision": "approve", "summary": "No blocking issues found.", "findings": findings}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    assert noema.call_llm("owner/repo", 7, make_pr(), "diff", False) == verdict
 
 
 def test_parse_args_and_main(monkeypatch):

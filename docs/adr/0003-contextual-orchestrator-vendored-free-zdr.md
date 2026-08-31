@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`30c6d71680e659f25a0a433d4726ad0d437f9757` today) into `RUNNER_TEMP`. The
+   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -74,12 +74,19 @@ all five, and auto-optimize routing by cost.
    primary, and the admitted priced tier remains fallback-only.
    `scripts/ci/contextual_orchestrator_review_policy.py` turns the discovery
    report into a free-first, cost-evidence-ranked, ZDR-prioritized,
-   provider-family-diverse agents catalog (primary/secondary NVIDIA keys share
-   one outage-domain family), capped in size, in the orchestrator's own
-   `ModelAgent` schema. The sidecar defaults the family cap to the same 24-route
-   total budget so a single configured provider's catalog is not silently
-   truncated before preflight; `ORCHESTRATOR_CATALOG_FAMILY_CAP` remains an
-   explicit operator override for a stricter cap.
+   credential-account-diverse agents catalog, capped in size, in the
+   orchestrator's own `ModelAgent` schema. Every KV credential is an independent
+   account; vendor or endpoint identity does not imply model equivalence. Only
+   explicit `model_group` membership may share routing evidence. The sidecar
+   defaults the per-account cap to `contextual_orchestrator_review_policy`'s
+   own `DEFAULT_ACCOUNT_CAP` (4), never to the total preflight-route budget: an
+   earlier version of this ADR described defaulting the cap to the same
+   24-route total budget "so a single provider's catalog is not truncated,"
+   but that was a real, live-evidenced bug (ContextualWisdomLab/.github#1415)
+   — it silently disabled per-account diversification and let two
+   rate-limited NVIDIA NIM credentials sharing one upstream jointly occupy an
+   entire 12-slot preflight batch. `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` remains
+   an explicit operator override.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
    provision the sidecar with the five secrets before OpenCode runs and point
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
@@ -211,8 +218,8 @@ all five, and auto-optimize routing by cost.
   other caller that opts into it explicitly — this amendment only removes it
   as Strix's default and as an accepted Strix override value.
 - **Monitoring evidence for the accepted risk above:** `scripts/ci/contextual_orchestrator_review_policy.py`
-  now reports `free_family_diversity` in the catalog report — the count of
-  distinct outage-domain provider families (see `provider_family`) among
+  now reports `free_account_diversity` in the catalog report — the count of
+  independently credentialed accounts (see `provider_account`) among
   *all* discovered free routes, independent of which pool is requested. This
   was drafted (in a now-superseded addendum proposing to gate the `free`
   decision on this evidence rather than making it directly) before the
@@ -223,3 +230,10 @@ all five, and auto-optimize routing by cost.
   amendment" (above) are closed, without requiring a manual re-audit.
   `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
   records that PR's own reasoning trail.
+- **2026-08-31 amendment: Noema reviews independently of OpenCode.** Noema no
+  longer waits for an OpenCode approval, review-thread state, or other check
+  conclusions before calling the gateway and submitting its current-head
+  review. A colliding OpenCode reviewer credential fails closed. The Noema LLM
+  response must include a non-empty summary and an object-list `findings`
+  field; `request_changes` additionally requires a substantive finding, so a
+  bare decision cannot synthesize an evidence-free green review.

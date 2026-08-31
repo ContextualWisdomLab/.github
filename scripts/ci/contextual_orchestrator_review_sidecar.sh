@@ -9,12 +9,12 @@
 # are registered into the process-local KV by the launcher in the SAME process
 # that performs live model discovery and serves requests — never read back at
 # request time. The in-process free-priced discovery evidence is turned into a
-# ZDR-prioritized, provider-family-diverse agents catalog by
+# ZDR-prioritized, credential-account-diverse agents catalog by
 # scripts/ci/contextual_orchestrator_review_policy.py for the `orchestrator/free`
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-30c6d71680e659f25a0a433d4726ad0d437f9757}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-8cd99f139915131ba0239bce12a5d6a5fd85394e}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -35,49 +35,50 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # finishes, letting the shell script wait for a deterministic marker instead
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
-# 2026-08-30: family_cap raised from 4 to 8, then further to 24 (== the total
-# route budget below) once route probing itself became a batched, concurrent
-# operation. contextual_orchestrator_review_policy.py's family_cap groups
-# nvidia_nim and nvidia_nim_sub as one outage-domain family and, per an
-# exact-head evidence trail, currently that single family is the *only* one
-# populating orchestrator/free (46 free rows, 100% nvidia_nim* -- 23 distinct
-# model ids shared by both keys). Candidate selection sorts eligible rows
-# alphabetically by (provider, model) with no reliability awareness, so a
-# family_cap of 4 deterministically admitted the same four alphabetically-
-# first candidates on every run -- always including two NVIDIA-retired model
-# ids (google/gemma-3-12b-it, google/gemma-3-4b-it; confirmed HTTP 404 on live
-# preflight) plus two others that timed out in the same recovered run -- while
-# never giving the other ~19 healthy free nvidia_nim* models in the same run's
-# own discovery report a chance. This is not throughput tuning: it is the
+# 2026-08-30: this cap was raised from 4 to 8, then -- mistakenly -- all the
+# way to 24 (== the total route budget below, i.e. no cap at all) once route
+# probing itself became a batched, concurrent operation. That last raise was
+# a real, live-evidenced bug (ContextualWisdomLab/.github#1415): per an
+# exact-head evidence trail, orchestrator/free's 46 discovered free rows were
+# 100% nvidia_nim/nvidia_nim_sub (two credentials sharing one rate-limited
+# upstream, integrate.api.nvidia.com), so a cap equal to the total budget let
+# those two credentials jointly occupy the entire preflight batch every run
+# (a live run showed `probed_count: 12, ready_count: 2, rejected_count: 10` --
+# 83% rejected via 429/404/timeout). Candidate selection sorts eligible rows
+# alphabetically by (provider, model) with no reliability awareness, so an
+# uncapped or too-generous cap deterministically re-admits the same
+# alphabetically-first candidates on every run -- including confirmed-dead
+# model ids (e.g. google/gemma-3-12b-it, google/gemma-3-4b-it; HTTP 404 on
+# live preflight) -- while starving the remaining healthy free routes in the
+# same discovery report of a chance. This is not throughput tuning: it is the
 # confirmed, reproducible root cause of orchestrator/free's "no provider route
 # passed the Strix plain-chat preflight" failures (see
 # docs/product-technical-gap-baseline.md's 2026-08-30 sidecar-preflight
-# entries for the full evidence, including the exact discovery/preflight
-# artifact this comment is based on).
-# The intermediate raise to 8 was a deliberately moderate step while route
-# probing was still a single sequential loop, where the absolute worst case
-# across any number of families was REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x
-# CATALOG_LIMIT candidates regardless of family_cap. Route probing is now
-# batched (contextual_orchestrator_review_launcher.py's
+# entries for the full evidence).
+# Each KV credential is an independent account (contextual-orchestrator PR
+# #1468), including two credentials for the same vendor or endpoint. The
+# account cap below keeps that real, per-credential meaning -- a value
+# strictly smaller than CATALOG_LIMIT -- rather than collapsing to a
+# provider-family equivalence relation or, worse, to CATALOG_LIMIT itself.
+# Route probing is now batched (contextual_orchestrator_review_launcher.py's
 # REVIEW_PREFLIGHT_BATCH_SIZE): up to REVIEW_PREFLIGHT_BATCH_SIZE candidates
-# run concurrently per batch, so a much higher family_cap (here, equal to the
-# total route budget -- i.e. effectively no additional cap beyond it) no
-# longer multiplies worst-case wall time the way it would have under
-# sequential probing; see that module's own REVIEW_PREFLIGHT_MAX_ESCALATIONS
-# comment for the current, batching-aware worst-case arithmetic. If real
-# hosted runs show a single family still starves the pool even at this
-# raised cap, or the added concurrency itself becomes the bottleneck, the more
-# complete fix is a live provider /v1/models cross-check at discovery time to
-# drop retired model ids before they ever reach preflight -- see git history's
-# now-removed select_nvidia_nim_model.py (removed in #1442) for a worked
-# example of that exact query-the-provider-catalog pattern, applied there to a
-# different, direct-provider caller -- rather than raising this further. The
-# PR number is used here, not a raw commit SHA or the removing branch's name:
-# a squash merge would leave a raw pre-merge commit unreachable in plain git
-# once the branch is deleted, while the PR itself (and its full commit
-# history) stays permanently resolvable on GitHub.
+# run concurrently per batch, so this cap no longer multiplies worst-case wall
+# time the way a higher cap would have under the old sequential probing; see
+# that module's own REVIEW_PREFLIGHT_MAX_ESCALATIONS comment for the current,
+# batching-aware worst-case arithmetic. If real hosted runs show a single
+# account still starves the pool even at this cap, or the added concurrency
+# itself becomes the bottleneck, the more complete fix is a live provider
+# /v1/models cross-check at discovery time to drop retired model ids before
+# they ever reach preflight -- see git history's now-removed
+# select_nvidia_nim_model.py (removed in #1442) for a worked example of that
+# exact query-the-provider-catalog pattern, applied there to a different,
+# direct-provider caller -- rather than raising this cap further. PR numbers
+# are used here, not raw commit SHAs or branch names: a squash merge would
+# leave a raw pre-merge commit unreachable in plain git once the branch is
+# deleted, while the PR itself (and its full commit history) stays
+# permanently resolvable on GitHub.
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
-CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-24}"
+CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
 
@@ -349,7 +350,7 @@ log "startup watchdog: ${sidecar_startup_watchdog_seconds}s (derived from contex
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
-export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
+export ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"
 # Stream stdout/stderr through the redacting sanitizer as two named, awaitable
 # processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
 # so a failure handler can wait for the sanitizer to finish flushing before it

@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "30c6d71680e659f25a0a433d4726ad0d437f9757"
+ORCH_PIN_SHA = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
 
 
 def _read(path: Path) -> str:
@@ -78,7 +78,7 @@ def test_sidecar_and_adr_pin_the_bounded_preflight_contract() -> None:
     adr = _read(SIDECAR_ADR)
 
     assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
-    assert 'CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-24}"' in sidecar
+    assert 'CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"' in sidecar
     assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24" in launcher
     assert "REVIEW_PREFLIGHT_BATCH_SIZE = 4" in launcher
     assert "at most 24" in adr

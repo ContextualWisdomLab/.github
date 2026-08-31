@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a real, live-evidenced bug in the sidecar's per-account catalog cap
+  (flagged in review on this same PR,
+  ContextualWisdomLab/.github#1415#issuecomment-5474321491): the
+  batched-preflight merge below introduced `_catalog_family_cap()`, which
+  defaulted to `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES` (24) whenever
+  `ORCHESTRATOR_CATALOG_FAMILY_CAP` was unset — the *total* preflight budget,
+  not a real per-account cap — silently disabling per-account
+  diversification entirely. Production evidence: the freshest `noema-review`
+  run showed `probed_count: 12, ready_count: 2, rejected_count: 10` (83%
+  rejected via 429/404/timeout) with the admitted free-pool catalog 100%
+  `nvidia_nim`/`nvidia_nim_sub` — two credentials sharing one rate-limited
+  upstream (`integrate.api.nvidia.com`) jointly occupying the entire 12-slot
+  preflight batch, reproduced byte-for-byte across two consecutive production
+  runs. This is the same mechanism CodeRabbit's automated walkthrough flagged
+  as "Merge Risk: Moderate" on this PR. Rebased onto `main`'s
+  `provider_account`/`account_cap` rename (#1468) and Noema-independence work
+  (#1477/#1480); the renamed `_catalog_account_cap(default)` helper now
+  requires its caller to supply `contextual_orchestrator_review_policy`'s own
+  `DEFAULT_ACCOUNT_CAP` (4) as the default, mirroring the equivalent hardening
+  in `main` PR #1487 (`_catalog_account_cap()` sourcing the account-cap
+  default from the policy module instead of a literal), and the entry below
+  claiming the 24-route default was intentional is superseded by this fix. An
+  explicit `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` override remains honored.
 - Merge the batched-concurrent-preflight architecture (below) with `main`'s
   independently-landed ADR-0005 diagnostic, bounded-retry preflight: routes
   are now probed `REVIEW_PREFLIGHT_BATCH_SIZE`-at-a-time, concurrently, up to
@@ -116,14 +139,20 @@ Semantic Versioning where the repository publishes a release.
 - Make sidecar-backed gateway requests explicit `orchestration: route` so the
   smoke and Noema review paths exercise the direct virtual-pool route without
   invoking auto-mode triage; provider response errors remain fail-closed.
-- Keep the sidecar's provider-family cap aligned with its 24-route total
-  startup budget by default, so a single provider catalog is not truncated to
-  four routes before bounded preflight; explicit `ORCHESTRATOR_CATALOG_FAMILY_CAP`
-  overrides remain honored.
 - Probe contextual-orchestrator review routes in bounded concurrent batches so
   a rejected first discovery slice can advance to later routes, and capture the
   intentional oversized-body 413 self-test without mislabeling it as provider
   discovery failure.
+- Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
+  (flagged by Devin Review on that PR): the standing operating directive
+  still named the removed `free_family_diversity` evidence field instead of
+  its `free_account_diversity` replacement, which could send future
+  monitoring work looking for a field that no longer exists.
+- Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
+  at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
+  as an independent discovery account. Same-vendor credentials no longer
+  collapse into a provider family; only explicit model groups may share
+  routing evidence.
 - Web verification now runs backend, frontend, and E2E commands inside an
   isolated Linux bubblewrap workspace by default (`--isolation required`),
   mounting a read-only runtime root with a single writable `/workspace`

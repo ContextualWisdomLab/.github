@@ -12,7 +12,7 @@ The difference from ``review_gateway.main()`` is the agent pool: discovery runs
 in-process (so the KV-backed credentials are visible to it), the zero-cost
 ("free") routes are collected into a report, and
 ``scripts/ci/contextual_orchestrator_review_policy.py`` turns that report into a
-ZDR-prioritized, provider-family-diverse catalog for ``orchestrator/free``.
+ZDR-prioritized, credential-account-diverse catalog for ``orchestrator/free``.
 Keeping the decision logic in that stdlib-only module lets every branch of the
 ZDR policy be tested offline in this repository while ``orchestrator/free``
 still resolves from authentically zero-priced models discovered by the
@@ -1101,31 +1101,51 @@ def _bounded_fallback_catalog_limit(requested_limit: int, *, primary_count: int)
     return total_limit - primary_count
 
 
-def _catalog_family_cap() -> int:
-    """Return the configured family cap without narrowing the bounded default."""
-    return int(
-        os.environ.get(
-            "ORCHESTRATOR_CATALOG_FAMILY_CAP",
-            str(REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES),
-        )
-    )
+def _catalog_account_cap(default: int) -> int:
+    """Return the configured per-account catalog admission cap.
+
+    ``default`` must be ``scripts.ci.contextual_orchestrator_review_policy``'s
+    own ``DEFAULT_ACCOUNT_CAP`` -- the single source of truth for how many
+    routes one credential account may contribute to the bounded preflight
+    budget. A caller must never substitute a total-routes-scale constant
+    (e.g. ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES``) here: doing so silently
+    disables per-account diversification and lets one rate-limited account
+    consume the entire preflight budget. That is not a hypothetical failure
+    mode -- an earlier revision of this helper (under a different name)
+    defaulted to exactly ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` and, in a live
+    production run, let two NVIDIA NIM credentials sharing one rate-limited
+    upstream jointly occupy 12/12 preflight slots, of which 10 were then
+    rejected with 429/404/timeout (see ContextualWisdomLab/.github#1415 and
+    the "빈 깡통 경로" report it responds to). Routing the default through the
+    caller-supplied ``policy.DEFAULT_ACCOUNT_CAP`` (rather than hand-typing a
+    literal here) keeps this module's cap from silently drifting out of sync
+    with the policy module's own declared intent.
+
+    Args:
+        default: The cap to use when ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` is
+            unset, always ``policy.DEFAULT_ACCOUNT_CAP``.
+
+    Returns:
+        The per-account cap to pass to ``build_zdr_prioritized_catalog``.
+    """
+    return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
 
 
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
     *,
-    provider_family: Any,
+    provider_account: Any,
 ) -> dict[str, object]:
     """Copy a stage report while restoring full discovery-tier counts.
 
-    ``free_family_diversity`` is recomputed here from the full discovery-wide
+    ``free_account_diversity`` is recomputed here from the full discovery-wide
     ``rows``, not trusted from the stage report: the primary ``auto``-pool
     stage may have selected only ZDR-admitted free rows (undercounting
     diversity whenever ``--require-zdr`` excludes some free routes) and the
     priced-fallback stage selects only priced rows (so its own internally
     computed diversity is always zero) -- either stage report's
-    ``free_family_diversity``, as returned by ``build_zdr_prioritized_catalog``
+    ``free_account_diversity``, as returned by ``build_zdr_prioritized_catalog``
     from whatever narrower row set it was given, would otherwise contradict
     that field's documented "among *all* discovered free routes" contract.
     """
@@ -1136,9 +1156,9 @@ def _with_discovery_counts(
             "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
-            "free_family_diversity": len(
+            "free_account_diversity": len(
                 {
-                    provider_family(str(row["provider"]))
+                    provider_account(str(row["provider"]))
                     for row in rows
                     if row.get("cost_evidence") == "free"
                 }
@@ -1250,12 +1270,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
+        DEFAULT_ACCOUNT_CAP,
         PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
         is_zdr_model,
         parse_discovery_report,
-        provider_family,
+        provider_account,
     )
 
     registered = register_review_credentials(os.environ)
@@ -1326,13 +1347,13 @@ def main(argv: list[str] | None = None) -> int:
     result = build_zdr_prioritized_catalog(
         primary_rows,
         limit=primary_limit,
-        family_cap=_catalog_family_cap(),
+        account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
     result["report"] = _with_discovery_counts(
-        result["report"], normalized_rows, provider_family=provider_family
+        result["report"], normalized_rows, provider_account=provider_account
     )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
@@ -1357,7 +1378,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
                 limit=fallback_limit,
-                family_cap=_catalog_family_cap(),
+                account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",
@@ -1366,7 +1387,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows, provider_family=provider_family
+                fallback_result["report"], normalized_rows, provider_account=provider_account
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"

@@ -27,13 +27,8 @@ from scripts.ci.zdr_policy import (
     route_key,
 )
 
-PROVIDER_FAMILIES: Mapping[str, str] = {
-    "nvidia_nim": "nvidia_nim",
-    "nvidia_nim_sub": "nvidia_nim",
-}
-
 DEFAULT_CATALOG_LIMIT = 12
-DEFAULT_FAMILY_CAP = 4
+DEFAULT_ACCOUNT_CAP = 4
 
 COST_FREE = "free"
 COST_PRICED = "priced"
@@ -51,9 +46,9 @@ class PolicyError(ValueError):
     """Raised when discovery evidence cannot produce a governed catalog."""
 
 
-def provider_family(provider_name: str) -> str:
-    """Return the outage-domain family for a provider."""
-    return PROVIDER_FAMILIES.get(provider_name, provider_name)
+def provider_account(provider_name: str) -> str:
+    """Return the independently credentialed provider account identity."""
+    return provider_name
 
 
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
@@ -198,27 +193,23 @@ def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
     limit: int = DEFAULT_CATALOG_LIMIT,
-    family_cap: int = DEFAULT_FAMILY_CAP,
+    account_cap: int = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, provider-family-diverse catalog.
+    """Select a free-first, ZDR-aware, credential-account-diverse catalog.
 
-    The returned report's ``free_family_diversity`` counts the distinct
-    outage-domain families (see ``provider_family``) among *all* discovered
-    free routes, independent of ``pool`` or the per-family selection cap.
-    A caller deciding whether a CI consumer may run on a strict, fail-closed
-    ``orchestrator/free`` pool without an ``orchestrator/auto`` paid-route
-    safety net should require at least two independent families here — one
-    family alone (e.g. every free route sharing a single upstream provider,
-    as recorded for Strix in ADR-0003) means that provider's outage takes
-    the whole free catalog down with it.
+    The returned report's ``free_account_diversity`` counts the distinct
+    credential accounts among *all* discovered free routes, independent of
+    ``pool`` or the per-account selection cap. Vendor identity is not model
+    equivalence; only an explicit contextual-orchestrator ``model_group`` may
+    share routing evidence across routes.
 
     This counts routes discovery reports as free, not routes runtime
     preflight has confirmed are actually serving requests: a value of two or
-    more is evidence that a family-outage cannot immediately empty the free
-    catalog, not proof that either family is presently reachable. A caller
+    more is evidence that one account failure cannot immediately empty the free
+    catalog, not proof that either account is presently reachable. A caller
     needing readiness, not just discovery-time diversity, must combine this
     with the runtime preflight report the sidecar already produces.
     """
@@ -257,13 +248,13 @@ def build_zdr_prioritized_catalog(
         )
     )
 
-    per_family: Counter[str] = Counter()
+    per_account: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
     for row in eligible_rows:
-        family = provider_family(str(row["provider"]))
-        if per_family[family] >= family_cap:
+        account = provider_account(str(row["provider"]))
+        if per_account[account] >= account_cap:
             continue
-        per_family[family] += 1
+        per_account[account] += 1
         picked.append(row)
         if len(picked) >= limit:
             break
@@ -310,8 +301,8 @@ def build_zdr_prioritized_catalog(
             }
         )
 
-    free_family_diversity = len(
-        {provider_family(str(row["provider"])) for row in all_free_rows}
+    free_account_diversity = len(
+        {provider_account(str(row["provider"])) for row in all_free_rows}
     )
 
     selected_evidence = [_cost_evidence(row) for row in picked]
@@ -323,7 +314,7 @@ def build_zdr_prioritized_catalog(
             "total_free_routes": len(all_free_rows),
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
-            "free_family_diversity": free_family_diversity,
+            "free_account_diversity": free_account_diversity,
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": selected_evidence.count(COST_FREE),
@@ -381,7 +372,7 @@ def build_catalog_from_paths(
     out_path: str,
     report_path: str,
     limit: int = DEFAULT_CATALOG_LIMIT,
-    family_cap: int = DEFAULT_FAMILY_CAP,
+    account_cap: int = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
     pool: str = "free",
@@ -391,7 +382,7 @@ def build_catalog_from_paths(
     result = build_zdr_prioritized_catalog(
         parse_discovery_report(report),
         limit=limit,
-        family_cap=family_cap,
+        account_cap=account_cap,
         zdr_endpoints=_load_zdr_endpoints(zdr_endpoints_path),
         require_zdr=require_zdr,
         pool=pool,
@@ -418,7 +409,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="Path to write agents JSON")
     parser.add_argument("--report", required=True, help="Path to write audit JSON")
     parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
-    parser.add_argument("--family-cap", type=int, default=DEFAULT_FAMILY_CAP)
+    parser.add_argument("--account-cap", type=int, default=DEFAULT_ACCOUNT_CAP)
     parser.add_argument("--zdr-endpoints", default=None)
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
@@ -434,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path=args.out,
             report_path=args.report,
             limit=args.limit,
-            family_cap=args.family_cap,
+            account_cap=args.account_cap,
             zdr_endpoints_path=args.zdr_endpoints,
             require_zdr=args.require_zdr,
             pool=args.pool,
