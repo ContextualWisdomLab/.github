@@ -187,9 +187,25 @@ def _reject_escaping_symlinks(destination: Path) -> None:
     cannot be resolved, aborts the whole copy rather than being silently
     dropped or repaired, since a repository author who plants one such link
     cannot be assumed not to have planted others.
+
+    Walking starts from ``root`` -- ``destination`` fully resolved -- rather
+    than ``destination`` itself, and every symlink found is then checked
+    with ``path.relative_to(root)``. When some *ancestor* of ``destination``
+    is itself reached through a symlink (for example a temp directory whose
+    default OS location is a symlink, unrelated to anything the copied
+    repository controls), ``destination`` and ``root`` are different, only
+    lexically equal-looking strings for the same real location. Walking from
+    the unresolved ``destination`` would then yield paths still prefixed
+    with that unresolved string, which are never actually relative to
+    ``root`` -- so ``relative_to`` raises before this function's own escape
+    check ever runs, rejecting an entirely legitimate copy that contains no
+    escaping symlink at all. Walking from ``root`` instead guarantees every
+    yielded path already shares ``root``'s own resolved prefix, so
+    ``relative_to`` only ever fails for the cases this function exists to
+    reject.
     """
     root = destination.resolve(strict=True)
-    for path in destination.rglob("*"):
+    for path in root.rglob("*"):
         if path.is_symlink():
             _resolve_symlink_components(
                 path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path

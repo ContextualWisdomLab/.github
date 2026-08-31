@@ -109,7 +109,39 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     for name in args.allow_env:
         if not sandboxed_verify.ENV_NAME_RE.match(name):
             parser.error(f"--allow-env must be an environment variable name: {name}")
+    for flag, value in (
+        ("--backend-cmd", args.backend_cmd),
+        ("--frontend-cmd", args.frontend_cmd),
+        ("--e2e-cmd", args.e2e_cmd),
+    ):
+        _require_parseable_command(parser, flag, value)
     return args
+
+
+def _require_parseable_command(parser: argparse.ArgumentParser, flag: str, value: str) -> None:
+    """Reject a command that fails to shell-tokenize or tokenizes to nothing.
+
+    ``isolated_command`` performs this exact ``shlex.split`` validation
+    itself, but only reaches it when isolation is enabled. With
+    ``--isolation disabled`` (the explicit, documented "trusted local
+    debugging" escape hatch), a command string bypasses ``isolated_command``
+    entirely and is handed straight to ``start_service``/``run_shell``, which
+    call ``shlex.split`` directly with no ``except`` around either call. A
+    blank command, or one with an unmatched shell-quote character, then
+    raised an uncaught ``ValueError`` from deep inside ``main`` instead of
+    the clean, coded CLI failure every other bad input in this module
+    produces. Validating here, in ``parse_args``, runs for both isolation
+    modes -- disabled included -- so a malformed command is always rejected
+    the same way, through argparse's own clean-exit path, before ``main``
+    ever tries to run it.
+    """
+    try:
+        tokens = shlex.split(value)
+    except ValueError as exc:
+        parser.error(f"{flag} is not a valid shell command: {exc}")
+    else:
+        if not tokens:
+            parser.error(f"{flag} must not be blank")
 
 
 BIND_ROOTS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt")
@@ -236,7 +268,30 @@ def _sandbox_environment(env: dict[str, str], sandbox_root: Path) -> dict[str, s
         value = mapped.get(key)
         if value:
             mapped[key] = value.replace(source, SANDBOX_MOUNT, 1)
+    path_value = mapped.get("PATH")
+    if path_value:
+        mapped["PATH"] = os.pathsep.join(
+            _translate_sandbox_path_entry(entry, source) for entry in path_value.split(os.pathsep)
+        )
     return mapped
+
+
+def _translate_sandbox_path_entry(entry: str, source: str) -> str:
+    """Rewrite one ``PATH`` entry rooted under the host sandbox copy into its ``/workspace`` form.
+
+    A command that relies on ``PATH`` lookup for a workspace-local binary
+    (rather than naming it by an explicit path) is launched with the *host*
+    copy's absolute path still present in its inherited ``PATH`` -- the same
+    host path ``isolated_command`` resolves it against for validation, but
+    one that does not exist inside the bubblewrap mount, where only
+    ``SANDBOX_MOUNT`` is bound. An entry that is not rooted under the sandbox
+    copy (for example a bind-mounted system directory like ``/usr/bin``) is
+    returned unchanged, matching how ``HOME``/``TMPDIR`` and friends above
+    are left alone when they do not reference the sandbox copy either.
+    """
+    if entry == source or entry.startswith(source + os.sep):
+        return entry.replace(source, SANDBOX_MOUNT, 1)
+    return entry
 
 
 def _which_relative_to_cwd(argv0: str, *, cwd: Path, sandbox_root: Path, path: str | None) -> Path | None:
@@ -329,7 +384,12 @@ def isolated_command(
     inside the sandboxed workspace or the read-only bind roots. An
     executable that cannot be resolved is rejected rather than passed
     through unvalidated, so a lookup failure can never silently bypass the
-    workspace/read-only-root check it was supposed to receive.
+    workspace/read-only-root check it was supposed to receive. An absolute
+    executable path that resolves inside the sandbox copy is rewritten to
+    its ``SANDBOX_MOUNT``-relative form: bubblewrap binds ``sandbox_root`` at
+    ``SANDBOX_MOUNT``, not at its original host path, so the literal host
+    absolute path this function validated against would not exist inside
+    the sandbox and the command would fail to launch there unchanged.
     """
     argv = shlex.split(command)
     if not argv:
@@ -349,6 +409,8 @@ def isolated_command(
         raise RuntimeError(
             f"executable is outside the isolated bind roots: {executable_path}"
         )
+    if Path(argv[0]).is_absolute() and executable_path.is_relative_to(sandbox_root):
+        argv[0] = str(Path(SANDBOX_MOUNT) / executable_path.relative_to(sandbox_root))
     args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
@@ -457,13 +519,60 @@ def require_loopback_readiness_url(url: str) -> None:
     _require_loopback_ip_text(hostname, hostname)
 
 
+def require_unoccupied_readiness_port(url: str) -> None:
+    """Reject a readiness URL whose port already answers before this run starts a service.
+
+    ``require_loopback_readiness_url`` only proves the URL targets loopback;
+    it says nothing about *which* process on loopback will eventually answer
+    it. ``isolated_command`` does not create a network namespace for the
+    commands it wraps -- the backend, frontend, and E2E command all still
+    need to reach the same host loopback interface the readiness poller
+    itself uses (the poller runs unsandboxed, in this process), so giving the
+    sandboxed commands a private network namespace is not an available
+    option here without breaking that readiness/E2E flow. On a shared
+    loopback interface, an operator- or config-supplied readiness URL that
+    happens to name a port some other, unrelated process on the CI runner
+    already occupies would otherwise be polled exactly like the real target:
+    a response from that unrelated process reads as this run's service being
+    ready, and any later request the E2E command makes to the same address
+    reaches it too, whether or not it was ever meant to be reachable this
+    way. Calling this once, immediately after ``require_loopback_readiness_url``
+    and before ``start_service`` starts anything, ensures a port that
+    answers now can only be attributed to some other process -- this run's
+    own service cannot yet be listening -- so it is rejected here rather
+    than trusted. A connection refusal or timeout means nothing is listening
+    yet, which is the expected, accepted state before the service starts.
+    """
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        with socket.create_connection((hostname, port), timeout=0.2):
+            pass
+    except OSError:
+        return
+    raise ValueError(
+        f"readiness port is already in use by another process before this run started its service: {url}"
+    )
+
+
 def wait_for_url(url: str, timeout: int, service: Service) -> bool:
-    """Poll a readiness URL until it responds or the service exits."""
+    """Poll a readiness URL until it responds or the service exits.
+
+    The opener is built with an explicitly empty ``ProxyHandler({})`` so this
+    loopback-only poll can never be routed through an ``HTTP_PROXY`` /
+    ``HTTPS_PROXY`` / ``*_proxy`` environment variable. ``urllib.request``
+    otherwise installs a default ``ProxyHandler`` (via ``getproxies()``) for
+    every opener that does not already carry one, so a caller's process
+    environment could silently forward this "loopback-only, isolated"
+    readiness probe to an external proxy server, defeating the point of
+    ``require_loopback_readiness_url``'s SSRF check below.
+    """
     if not url:
         return True
     require_loopback_readiness_url(url)
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
@@ -620,8 +729,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             if args.backend_ready_url:
                 require_loopback_readiness_url(args.backend_ready_url)
+                require_unoccupied_readiness_port(args.backend_ready_url)
             if args.frontend_ready_url:
                 require_loopback_readiness_url(args.frontend_ready_url)
+                require_unoccupied_readiness_port(args.frontend_ready_url)
         except ValueError as exc:
             print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
             exit_code = 125

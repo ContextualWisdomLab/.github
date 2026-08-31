@@ -241,6 +241,49 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
 
+def test_wait_for_url_ignores_proxy_environment_variables(monkeypatch, tmp_path):
+    """Readiness polling must not honor HTTP_PROXY/HTTPS_PROXY environment variables.
+
+    ``require_loopback_readiness_url`` only proves the *target* is loopback;
+    without an explicit, empty ``ProxyHandler``, ``urllib.request.build_opener``
+    still installs a default proxy handler that reads ``http_proxy``/
+    ``https_proxy`` (etc.) from the process environment via ``getproxies()``,
+    so the actual HTTP request could still be routed through an external
+    proxy server even though the URL itself was validated as loopback-only --
+    completely defeating the point of the loopback check. This test proves
+    the opener ignores the environment by pointing the proxy at a definitely
+    closed local port: if the proxy were honored, every poll attempt would
+    be refused by that dead port and ``wait_for_url`` would time out and
+    return ``False``; with the proxy ignored, the request goes directly to
+    the real local server and succeeds quickly.
+    """
+
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+
+    port = free_port()
+    server_code = (
+        "import http.server, socketserver; "
+        "socketserver.TCPServer.allow_reuse_address=True; "
+        f"server=socketserver.TCPServer(('127.0.0.1', {port}), http.server.SimpleHTTPRequestHandler); "
+        "server.serve_forever()"
+    )
+    server = subprocess.Popen([sys.executable, "-c", server_code], text=True)
+    monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{dead_port}")
+    monkeypatch.setenv("https_proxy", f"http://127.0.0.1:{dead_port}")
+    try:
+        service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "missing.log")
+        assert sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{port}/", 10, service) is True
+    finally:
+        server.terminate()
+        server.wait(timeout=5)
+
+
 def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
     """Readiness polling must fail closed on public, metadata, and userinfo targets."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
@@ -345,6 +388,73 @@ def test_require_loopback_readiness_url_rejects_malformed_ports():
             sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:99999/ready")
         with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
             sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:-1/ready")
+
+
+def test_require_unoccupied_readiness_port_rejects_pre_existing_listener():
+    """A port already answering before this run's service starts is rejected.
+
+    ``isolated_command`` does not create a network namespace for the
+    commands it wraps -- the backend, frontend, and E2E command all still
+    need to reach the same host loopback interface the readiness poller
+    itself uses, so a private network namespace is not an option here.
+    Without this check, a readiness URL naming a port some other, unrelated
+    process on the CI runner already occupies would be polled exactly like
+    the real target, and any later request the E2E command makes would
+    reach it too.
+    """
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+        with pytest.raises(ValueError, match="readiness port is already in use"):
+            sandboxed_web_e2e.require_unoccupied_readiness_port(f"http://127.0.0.1:{port}/health")
+
+
+def test_require_unoccupied_readiness_port_allows_a_free_port():
+    """A port nothing is listening on yet passes the pre-start occupancy check."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    # The socket above is closed (and never listened), so the port is free again.
+    sandboxed_web_e2e.require_unoccupied_readiness_port(f"http://127.0.0.1:{port}/health")
+
+
+def test_main_reports_occupied_readiness_port_before_starting_services(monkeypatch, tmp_path, capsys):
+    """A readiness port already occupied by another process fails closed with exit 125."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    started = []
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+
+        exit_code = sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--isolation",
+                "disabled",
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--backend-ready-url",
+                f"http://127.0.0.1:{port}/health",
+                "--e2e-cmd",
+                "e2e",
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert exit_code == 125
+    assert not started
+    assert "invalid readiness URL: readiness port is already in use" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
+    assert payload["exit_code"] == 125
 
 
 def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(monkeypatch, tmp_path, capsys):
@@ -667,13 +777,20 @@ def test_main_reports_rejected_isolated_command(monkeypatch, tmp_path, capsys):
 
 
 def test_main_reports_coded_failure_for_whitespace_only_command(monkeypatch, tmp_path, capsys):
-    """A whitespace-only command fails closed with coded 126, not an uncaught traceback.
+    """A whitespace-only command fails closed via argparse, not an uncaught traceback.
 
-    ``isolated_command`` raises ``ValueError`` (not ``RuntimeError``) for a
-    command that is empty once split, so the previous except clause around
-    these calls let it propagate out of ``main`` uncaught -- printing a
-    Python traceback and skipping the documented isolation-rejection exit
-    code entirely.
+    ``isolated_command`` raises ``ValueError`` for a command that is empty
+    once split, but that check is only ever reached when isolation is
+    enabled -- ``--isolation disabled`` bypasses ``isolated_command``
+    entirely and used to let a blank command reach ``shlex.split`` deep
+    inside ``start_service``/``run_shell`` uncaught (see the disabled-mode
+    tests below). ``parse_args`` now validates all three commands up front,
+    independent of isolation mode, so this required-isolation case is now
+    rejected even earlier than before -- through argparse's own clean
+    ``SystemExit(2)`` usage-error path -- before ``isolation_backend`` or any
+    service ever starts. ``isolated_command``'s own defensive check for a
+    blank command is unchanged and still independently covered by
+    ``test_isolated_command_rejects_empty_command``.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -682,28 +799,26 @@ def test_main_reports_coded_failure_for_whitespace_only_command(monkeypatch, tmp
     monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
-    exit_code = sandboxed_web_e2e.main(
-        [
-            "--repo-root",
-            str(repo),
-            "--backend-cmd",
-            "   ",
-            "--frontend-cmd",
-            "frontend",
-            "--e2e-cmd",
-            "e2e",
-        ]
-    )
+    with pytest.raises(SystemExit) as exc_info:
+        sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--backend-cmd",
+                "   ",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "e2e",
+            ]
+        )
     captured = capsys.readouterr()
 
-    assert exit_code == 126
+    assert exc_info.value.code == 2
     assert not started
-    assert "isolation rejected command" in captured.err
+    assert "--backend-cmd must not be blank" in captured.err
     assert "Traceback" not in captured.err
     assert "Traceback" not in captured.out
-    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
-    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
-    assert payload["exit_code"] == 126
 
 
 def test_main_reports_unavailable_required_isolation(monkeypatch, tmp_path, capsys):
@@ -1128,8 +1243,16 @@ def test_isolation_backend_fails_closed_when_namespaces_denied(monkeypatch):
 
 
 def test_probe_isolation_capability_accepts_working_bwrap(monkeypatch):
-    """A probe that exits zero proves bubblewrap can build the sandbox."""
-    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+    """A probe that exits zero proves bubblewrap can build the sandbox.
+
+    ``_probe_isolation_capability`` resolves its probe shell through
+    ``_probe_shell`` (checked against the fixed ``PROBE_SHELL_PATHS``), not
+    through ``shutil.which`` -- mocking ``_probe_shell`` directly is what
+    actually controls this test's inputs; a ``shutil.which`` mock here would
+    be a silent no-op and this test would instead depend on whatever real
+    shell the host happens to have mounted.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_shell", lambda: "/bin/true")
     monkeypatch.setattr(
         sandboxed_web_e2e.subprocess,
         "run",
@@ -1139,8 +1262,12 @@ def test_probe_isolation_capability_accepts_working_bwrap(monkeypatch):
 
 
 def test_probe_isolation_capability_rejects_denied_namespaces(monkeypatch):
-    """A nonzero probe exit is classified as bubblewrap being unable to isolate."""
-    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+    """A nonzero probe exit is classified as bubblewrap being unable to isolate.
+
+    Mocks ``_probe_shell`` directly rather than ``shutil.which``, which
+    ``_probe_isolation_capability`` no longer consults for its probe shell.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_shell", lambda: "/bin/true")
     monkeypatch.setattr(
         sandboxed_web_e2e.subprocess,
         "run",
@@ -1153,8 +1280,12 @@ def test_probe_isolation_capability_rejects_denied_namespaces(monkeypatch):
 
 
 def test_probe_isolation_capability_rejects_when_probe_cannot_run(monkeypatch):
-    """A probe that cannot even start is classified as unavailable isolation."""
-    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/true")
+    """A probe that cannot even start is classified as unavailable isolation.
+
+    Mocks ``_probe_shell`` directly rather than ``shutil.which``, which
+    ``_probe_isolation_capability`` no longer consults for its probe shell.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_shell", lambda: "/bin/true")
 
     def _raise(*args, **kwargs):
         raise OSError("no such file or directory")
@@ -1233,8 +1364,15 @@ def test_probe_shell_fails_clearly_when_no_mounted_shell_exists(monkeypatch, tmp
 
 
 def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
-    """A probe that hangs past its bounded timeout is classified as unavailable."""
-    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: None)
+    """A probe that hangs past its bounded timeout is classified as unavailable.
+
+    Mocks ``_probe_shell`` directly rather than ``shutil.which``, which
+    ``_probe_isolation_capability`` no longer consults for its probe shell;
+    a ``None`` return from a ``shutil.which`` mock would previously have
+    been a silent no-op here, leaving this test's actual behavior dependent
+    on whether the host happens to have a mounted probe shell.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_shell", lambda: "/bin/sh")
 
     def _raise(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="bwrap", timeout=10)
@@ -1408,6 +1546,39 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypa
     assert command.endswith("tool")
 
 
+def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(monkeypatch, tmp_path):
+    """An absolute copied-repo launcher path is rewritten to its /workspace equivalent.
+
+    ``isolated_command`` binds ``sandbox_root`` at ``SANDBOX_MOUNT`` inside
+    bubblewrap, not at its original host path. A caller that copies a
+    repo-local script alongside the source and invokes it by its absolute
+    host path (as opposed to a relative ``./launch.sh``-style launcher)
+    would otherwise pass that literal host path straight through -- a path
+    that does not exist inside the sandbox, where only ``SANDBOX_MOUNT`` is
+    bound, so the command would fail to launch there unchanged.
+    """
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
+    sandbox = tmp_path / "sandbox"
+    repo = sandbox / "repo"
+    repo.mkdir(parents=True)
+    launcher = repo / "launch.sh"
+    launcher.write_text("#!/bin/sh\necho launch\n", encoding="utf-8")
+    launcher.chmod(0o755)
+
+    command = sandboxed_web_e2e.isolated_command(
+        f"{launcher} --flag",
+        backend="/usr/bin/bwrap",
+        cwd=repo,
+        sandbox_root=sandbox,
+        env={"PATH": "/usr/bin"},
+    )
+
+    assert command.startswith("/usr/bin/bwrap")
+    assert "--chdir /workspace/repo" in command
+    assert command.endswith("/workspace/repo/launch.sh --flag")
+    assert str(launcher) not in command
+
+
 def test_which_relative_to_cwd_returns_none_for_empty_path(tmp_path):
     """An empty PATH string yields no matches without touching the filesystem."""
     sandbox = tmp_path / "sandbox"
@@ -1568,6 +1739,35 @@ def test_sandbox_environment_maps_host_paths_to_workspace(tmp_path):
     assert "XDG_CACHE_HOME" not in mapped
 
 
+def test_sandbox_environment_translates_workspace_path_entries(tmp_path):
+    """A PATH entry rooted under the sandbox copy is rewritten to its /workspace form.
+
+    A command that relies on PATH lookup for a workspace-local binary (as
+    opposed to naming it by an explicit path) inherits this environment
+    unchanged once launched. Without this translation its PATH would still
+    name the host copy's absolute directory, which does not exist inside
+    the bubblewrap mount -- only SANDBOX_MOUNT is bound there -- so the
+    lookup would fail at runtime even though ``isolated_command`` validated
+    the same executable successfully ahead of time.
+    """
+    sandbox = tmp_path / "sandbox"
+    workspace_bin = sandbox / "repo" / "bin"
+    env = {"PATH": f"{workspace_bin}{os.pathsep}/usr/bin"}
+
+    mapped = sandboxed_web_e2e._sandbox_environment(env, sandbox)
+
+    assert mapped["PATH"] == f"/workspace/repo/bin{os.pathsep}/usr/bin"
+
+
+def test_sandbox_environment_skips_path_translation_when_path_is_absent(tmp_path):
+    """No PATH key is added when the source environment does not carry one."""
+    sandbox = tmp_path / "sandbox"
+
+    mapped = sandboxed_web_e2e._sandbox_environment({"HOME": str(sandbox / "home")}, sandbox)
+
+    assert "PATH" not in mapped
+
+
 def test_isolated_command_rejects_empty_command(tmp_path):
     """Empty commands fail before bubblewrap arguments are constructed."""
     with pytest.raises(ValueError, match=re.escape("command must not be empty")):
@@ -1621,6 +1821,110 @@ def test_parse_args_rejects_invalid_inputs():
                 "bad-name!",
             ]
         )
+
+
+def test_parse_args_rejects_blank_backend_frontend_e2e_commands(capsys):
+    """A blank command on any of the three flags is rejected during parse_args.
+
+    This validation is independent of ``--isolation`` -- unlike
+    ``isolated_command``'s own blank-command check, which only ever runs
+    when isolation is enabled -- so a blank command is rejected the same way
+    whether or not isolation is later requested as ``disabled``.
+    """
+    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
+    for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
+        argv = list(base)
+        argv[base.index(flag) + 1] = "   "
+        with pytest.raises(SystemExit) as exc_info:
+            sandboxed_web_e2e.parse_args(argv)
+        assert exc_info.value.code == 2
+        assert f"{flag} must not be blank" in capsys.readouterr().err
+
+
+def test_parse_args_rejects_malformed_quoting_in_commands(capsys):
+    """A command with an unmatched shell-quote character is rejected during parse_args.
+
+    Previously, with isolation disabled, this exact input reached
+    ``shlex.split`` uncaught deep inside ``start_service``/``run_shell`` and
+    crashed with a raw ``ValueError`` traceback instead of a clean CLI
+    failure. Validating in ``parse_args`` catches it up front for both
+    isolation modes.
+    """
+    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
+    for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
+        argv = list(base)
+        argv[base.index(flag) + 1] = "echo 'unterminated"
+        with pytest.raises(SystemExit) as exc_info:
+            sandboxed_web_e2e.parse_args(argv)
+        assert exc_info.value.code == 2
+        assert f"{flag} is not a valid shell command" in capsys.readouterr().err
+
+
+def test_main_disabled_isolation_reports_clean_failure_for_blank_command(tmp_path, capsys):
+    """Disabled isolation still fails a blank command closed, not with a traceback.
+
+    This is the exact bug this validation fixes: with ``--isolation
+    disabled``, a blank command used to bypass ``isolated_command`` entirely
+    and reach ``shlex.split`` inside ``start_service`` uncaught.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(SystemExit) as exc_info:
+        sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--isolation",
+                "disabled",
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "   ",
+                "--e2e-cmd",
+                "e2e",
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 2
+    assert "--frontend-cmd must not be blank" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
+
+
+def test_main_disabled_isolation_reports_clean_failure_for_malformed_quoting(tmp_path, capsys):
+    """Disabled isolation still fails malformed shell-quoting closed, not with a traceback.
+
+    This is the exact bug this validation fixes: with ``--isolation
+    disabled``, unmatched shell-quote characters used to bypass
+    ``isolated_command`` entirely and raise an uncaught ``ValueError`` from
+    ``shlex.split`` inside ``run_shell``.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(SystemExit) as exc_info:
+        sandboxed_web_e2e.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--isolation",
+                "disabled",
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "echo 'unterminated",
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert exc_info.value.code == 2
+    assert "--e2e-cmd is not a valid shell command" in captured.err
+    assert "Traceback" not in captured.err
+    assert "Traceback" not in captured.out
 
 
 def test_module_main_entrypoint_parse_error(monkeypatch):

@@ -339,6 +339,54 @@ def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tm
     assert not (copied / "dangling.txt").exists()
 
 
+def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+    """A benign internal symlink is accepted even when an *ancestor* of the sandbox
+    root is itself reached through a symlink (for example a symlinked default
+    temp directory, unrelated to anything the copied repository controls).
+
+    Before this fix, ``_reject_escaping_symlinks`` walked ``destination.rglob("*")``
+    -- the *unresolved* path -- but checked each symlink's position with
+    ``path.relative_to(root)``, where ``root`` is ``destination`` fully
+    *resolved*. When some ancestor directory leading to ``destination`` is a
+    symlink, those two strings diverge even though they name the same real
+    location, so ``relative_to`` raised ``ValueError`` for every symlink in an
+    entirely legitimate copy, aborting the whole run with no actual escape
+    present.
+    """
+    real_root = tmp_path / "real_sandbox_root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked_sandbox_root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+    (repo / "link.txt").symlink_to("real.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, linked_root, [])
+
+    assert (copied / "link.txt").is_symlink()
+    assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+    """A genuinely escaping symlink is still rejected when the sandbox root is
+    itself reached through a symlinked ancestor -- walking from the resolved
+    root (this fix) must not weaken the escape check itself.
+    """
+    real_root = tmp_path / "real_sandbox_root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked_sandbox_root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "evil.txt").symlink_to("/etc/passwd")
+
+    with pytest.raises(ValueError, match="workspace symlink escapes the sandbox root"):
+        sandboxed_verify.copy_workspace(repo, linked_root, [])
+
+
 def test_copy_workspace_rejects_symlink_chain_past_the_hop_limit(tmp_path):
     """A long, never-repeating, never-escaping symlink chain still fails closed.
 

@@ -62,7 +62,12 @@ credential-bearing dotfiles/dirs a checkout can carry (`.env*`, `.netrc`,
 `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, `.ssh`, `.gnupg`, `.aws`,
 `.kube`, `.docker`) so a repository that happens to have one of these present
 at copy time never rides along into the sandboxed command's writable,
-readable mount. Logs and the scrubbed per-command home directories are
+readable mount. The broad `.env*` exclusion has one deliberate carve-out:
+`DEFAULT_ENV_TEMPLATE_ALLOWLIST` (`.env.example`, `.env.sample`,
+`.env.template`) still copies those committed, secret-free dotenv templates
+through, since verification commands read them for local defaults; a caller
+can still force one of those names back out with an explicit `--ignore`.
+Logs and the scrubbed per-command home directories are
 intentionally part of that same writable mount — the tested command needs to
 write them — this exclusion list narrows what "writable and readable by the
 command under test" actually contains; it does not attempt to split the mount
