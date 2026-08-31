@@ -303,6 +303,7 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
     saw_trns = False
     saw_idat = False
     finished_idat = False
+    singleton_ancillary_chunks: set[bytes] = set()
     while offset + 12 <= len(raw):
         length = int.from_bytes(raw[offset : offset + 4], "big")
         end = offset + 12 + length
@@ -381,6 +382,55 @@ def _is_recognized_documentation_image(path: str, raw: bytes) -> bool:
             if width is None or saw_trns or saw_idat or not valid_length:
                 return False
             saw_trns = True
+        elif chunk_type in {b"cHRM", b"gAMA", b"iCCP", b"sBIT", b"sRGB"}:
+            if (
+                width is None
+                or saw_plte
+                or saw_idat
+                or chunk_type in singleton_ancillary_chunks
+                or (chunk_type == b"iCCP" and b"sRGB" in singleton_ancillary_chunks)
+                or (chunk_type == b"sRGB" and b"iCCP" in singleton_ancillary_chunks)
+            ):
+                return False
+            valid_ancillary = False
+            if chunk_type == b"cHRM":
+                valid_ancillary = length == 32
+            elif chunk_type == b"gAMA":
+                valid_ancillary = length == 4 and int.from_bytes(chunk_data, "big") != 0
+            elif chunk_type == b"sRGB":
+                valid_ancillary = length == 1 and chunk_data[0] <= 3
+            elif chunk_type == b"iCCP":
+                separator = chunk_data.find(b"\x00")
+                valid_ancillary = (
+                    1 <= separator <= 79
+                    and separator + 2 < length
+                    and chunk_data[separator + 1] == 0
+                )
+                if valid_ancillary:
+                    try:
+                        profile_decoder = zlib.decompressobj()
+                        profile = profile_decoder.decompress(chunk_data[separator + 2 :], MAX_IMAGE_DECODED_BYTES + 1)
+                        profile += profile_decoder.flush()
+                    except zlib.error:
+                        valid_ancillary = False
+                    else:
+                        valid_ancillary = (
+                            profile_decoder.eof
+                            and not profile_decoder.unused_data
+                            and not profile_decoder.unconsumed_tail
+                            and 0 < len(profile) <= MAX_IMAGE_DECODED_BYTES
+                        )
+            elif chunk_type == b"sBIT":
+                expected_length = {0: 1, 2: 3, 3: 3, 4: 2, 6: 4}.get(color_type)
+                sample_limit = 8 if color_type == 3 else bit_depth
+                valid_ancillary = (
+                    length == expected_length
+                    and sample_limit is not None
+                    and all(0 < value <= sample_limit for value in chunk_data)
+                )
+            if not valid_ancillary:
+                return False
+            singleton_ancillary_chunks.add(chunk_type)
         elif chunk_type == b"IDAT":
             if width is None or finished_idat or (color_type == 3 and not saw_plte):
                 return False

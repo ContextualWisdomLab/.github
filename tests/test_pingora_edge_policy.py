@@ -331,6 +331,61 @@ def test_documentation_png_rejects_each_malformed_envelope_boundary() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("chunk_type", "chunk_data"),
+    [
+        (b"cHRM", b"\x00" * 32),
+        (b"gAMA", (45455).to_bytes(4, "big")),
+        (b"iCCP", b"profile\x00\x00" + policy.zlib.compress(b"icc-profile")),
+        (b"sBIT", b"\x08" * 4),
+        (b"sRGB", b"\x00"),
+    ],
+)
+def test_documentation_png_enforces_standard_ancillary_order_and_cardinality(
+    chunk_type: bytes, chunk_data: bytes
+) -> None:
+    """Color-space and significant-bit chunks occur once before image data."""
+
+    raw = build_png(color_type=6, bit_depth=8, width=1, height=1)
+    before_idat = insert_png_chunk(raw, chunk_type, chunk_data)
+    assert policy._is_recognized_documentation_image(
+        "docs/acceptance.png", before_idat
+    )
+
+    iend_offset = raw.index(b"IEND") - 4
+    after_idat = raw[:iend_offset] + png_chunk(chunk_type, chunk_data) + raw[iend_offset:]
+    duplicate = insert_png_chunk(before_idat, chunk_type, chunk_data)
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", after_idat
+    )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", duplicate
+    )
+
+
+def test_documentation_png_rejects_conflicting_or_malformed_color_chunks() -> None:
+    """Color-space chunks fail closed on conflicts and malformed payloads."""
+
+    raw = build_png(color_type=6, bit_depth=8, width=1, height=1)
+    srgb = insert_png_chunk(raw, b"sRGB", b"\x00")
+    conflicting = insert_png_chunk(
+        srgb, b"iCCP", b"profile\x00\x00" + policy.zlib.compress(b"icc-profile")
+    )
+    for chunk_type, chunk_data in (
+        (b"cHRM", b"\x00" * 31),
+        (b"gAMA", b"\x00" * 4),
+        (b"iCCP", b"profile\x00\x00not-zlib"),
+        (b"sBIT", b"\x09" * 4),
+        (b"sRGB", b"\x04"),
+    ):
+        assert not policy._is_recognized_documentation_image(
+            "docs/acceptance.png", insert_png_chunk(raw, chunk_type, chunk_data)
+        )
+    assert not policy._is_recognized_documentation_image(
+        "docs/acceptance.png", conflicting
+    )
+
+
 def test_documentation_png_always_requires_final_byte_validation() -> None:
     """Recognized documentation PNG paths remain final-content scan candidates."""
 
