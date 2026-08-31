@@ -68,11 +68,11 @@ def _report() -> dict[str, object]:
     }
 
 
-def test_provider_family_groups_nvidia_keys() -> None:
-    """The primary and secondary NVIDIA keys share one outage-domain family."""
-    assert policy.provider_family("nvidia_nim") == "nvidia_nim"
-    assert policy.provider_family("nvidia_nim_sub") == "nvidia_nim"
-    assert policy.provider_family("openai") == "openai"
+def test_provider_account_keeps_nvidia_keys_independent() -> None:
+    """The primary and secondary NVIDIA credentials are separate accounts."""
+    assert policy.provider_account("nvidia_nim") == "nvidia_nim"
+    assert policy.provider_account("nvidia_nim_sub") == "nvidia_nim_sub"
+    assert policy.provider_account("openai") == "openai"
 
 
 @pytest.mark.parametrize(
@@ -187,7 +187,7 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
     result = policy.build_zdr_prioritized_catalog(
         parsed,
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
     agents = result["agents"]
@@ -211,7 +211,7 @@ def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
     result = policy.build_zdr_prioritized_catalog(
         parsed,
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
         pool="auto",
     )
@@ -262,7 +262,7 @@ def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
         require_zdr=True,
         pool="auto",
@@ -274,27 +274,19 @@ def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
     assert result["report"]["priced_selected_count"] == 0
 
 
-def test_build_catalog_reports_free_family_diversity() -> None:
-    """Diversity counts distinct outage-domain families among all free routes."""
+def test_build_catalog_reports_free_account_diversity() -> None:
+    """Diversity counts independently credentialed accounts with free routes."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
-    # openrouter, nvidia_nim (+ its nvidia_nim_sub sibling), openai, bytez.
-    assert result["report"]["free_family_diversity"] == 4
+    assert result["report"]["free_account_diversity"] == 5
 
 
-def test_build_catalog_reports_single_family_free_concentration() -> None:
-    """A free catalog sharing one outage domain reports diversity of one.
-
-    Regression coverage for the 2026-08-29 Strix finding recorded in
-    ADR-0003: every discovered free route sharing one upstream provider
-    means that provider's outage takes down the whole free catalog, which
-    is why Strix cannot safely run on a strict ``orchestrator/free`` pool
-    without this evidence showing at least two independent families.
-    """
+def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
+    """Same-vendor credentials remain distinct discovery accounts."""
     single_family_report = {
         "models": [
             {
@@ -316,9 +308,9 @@ def test_build_catalog_reports_single_family_free_concentration() -> None:
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(single_family_report),
         limit=12,
-        family_cap=4,
+        account_cap=4,
     )
-    assert result["report"]["free_family_diversity"] == 1
+    assert result["report"]["free_account_diversity"] == 2
 
 
 def test_build_catalog_rejects_unknown_pool() -> None:
@@ -334,7 +326,7 @@ def test_build_catalog_assigns_unique_priorities() -> None:
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
     priorities = [agent["priority"] for agent in result["agents"]]
@@ -344,8 +336,8 @@ def test_build_catalog_assigns_unique_priorities() -> None:
     assert result["report"]["total_free_routes"] == 5
 
 
-def test_build_catalog_applies_family_cap() -> None:
-    """A family cap keeps one outage domain from absorbing the pool."""
+def test_build_catalog_applies_account_cap() -> None:
+    """An account cap keeps one credential from absorbing the pool."""
     report = {
         "models": [
                 {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
@@ -367,14 +359,15 @@ def test_build_catalog_applies_family_cap() -> None:
         ]
     }
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(report), limit=12, family_cap=2
+        policy.parse_discovery_report(report), limit=12, account_cap=2
     )
-    family_counts: dict[str, int] = {}
+    account_counts: dict[str, int] = {}
     for agent in result["agents"]:
-        family = policy.provider_family(agent["provider_name"])
-        family_counts[family] = family_counts.get(family, 0) + 1
-    assert family_counts["nvidia_nim"] == 2
-    assert family_counts["openai"] == 2
+        account = policy.provider_account(agent["provider_name"])
+        account_counts[account] = account_counts.get(account, 0) + 1
+    assert account_counts["nvidia_nim"] == 2
+    assert account_counts["nvidia_nim_sub"] == 2
+    assert account_counts["openai"] == 2
 
 
 def test_build_catalog_respects_limit() -> None:
@@ -386,7 +379,7 @@ def test_build_catalog_respects_limit() -> None:
         ]
     }
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(report), limit=5, family_cap=100
+        policy.parse_discovery_report(report), limit=5, account_cap=100
     )
     assert len(result["agents"]) == 5
 
@@ -408,14 +401,14 @@ def test_build_catalog_fails_closed_without_free_models() -> None:
     }
     with pytest.raises(policy.PolicyError, match="no free"):
         policy.build_zdr_prioritized_catalog(
-            policy.parse_discovery_report(report), limit=12, family_cap=4
+            policy.parse_discovery_report(report), limit=12, account_cap=4
         )
 
 
 def test_build_catalog_uses_static_table_without_feed() -> None:
     """Without a feed, OpenRouter is not granted ZDR for every free route."""
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(_report()), limit=12, family_cap=4
+        policy.parse_discovery_report(_report()), limit=12, account_cap=4
     )
     assert result["report"]["zdr_endpoints_feed_used"] is False
     assert result["report"]["zdr_selected_count"] == 0
@@ -472,7 +465,7 @@ def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:
         out_path=str(catalog),
         report_path=str(report),
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints_path=str(feed),
     )
     assert catalog.exists()
@@ -497,7 +490,7 @@ def test_main_success_writes_catalog(tmp_path) -> None:
             str(report),
             "--limit",
             "12",
-            "--family-cap",
+            "--account-cap",
             "4",
         ]
     )
@@ -549,7 +542,7 @@ def test_private_catalog_admits_only_attested_zdr_routes() -> None:
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
-        family_cap=4,
+        account_cap=4,
         zdr_endpoints=ZDR_FEED,
         require_zdr=True,
     )
@@ -567,6 +560,6 @@ def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
         policy.build_zdr_prioritized_catalog(
             policy.parse_discovery_report(_report()),
             limit=12,
-            family_cap=4,
+            account_cap=4,
             require_zdr=True,
         )
