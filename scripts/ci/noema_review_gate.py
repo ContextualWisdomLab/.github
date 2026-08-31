@@ -171,7 +171,10 @@ def require_expected_head(pr: dict[str, Any], expected_head_sha: str) -> None:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
         raise RuntimeError("Expected pull request head must be a full commit SHA")
     live_head_sha = str(pr.get("headRefOid") or "")
-    if str(pr.get("state") or "OPEN").upper() != "OPEN" or live_head_sha != expected_head_sha:
+    if (
+        str(pr.get("state") or "OPEN").upper() != "OPEN"
+        or live_head_sha.lower() != expected_head_sha.lower()
+    ):
         raise RuntimeError(
             "Pull request is closed or its head changed before Noema review: "
             f"expected {expected_head_sha}, observed {live_head_sha or '<missing>'}"

@@ -255,7 +255,7 @@ jobs:
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+          if [ "$live_state" != "open" ] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
             printf '::error::Noema review target is closed or stale. expected head=%s; live state=%s head=%s.\n' \
               "$EXPECTED_HEAD_SHA" "${live_state:-missing}" "${live_head_sha:-missing}"
             exit 1

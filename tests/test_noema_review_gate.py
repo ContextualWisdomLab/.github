@@ -118,6 +118,7 @@ def test_existing_noema_review_matches_actor_and_head():
 def test_require_expected_head_rejects_invalid_closed_and_stale_targets():
     head = "a" * 40
     noema.require_expected_head(make_pr(headRefOid=head), head)
+    noema.require_expected_head(make_pr(headRefOid=head), head.upper())
     with pytest.raises(RuntimeError, match="full commit SHA"):
         noema.require_expected_head(make_pr(headRefOid=head), "short")
     with pytest.raises(RuntimeError, match="closed or its head changed"):
