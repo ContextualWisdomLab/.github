@@ -112,33 +112,38 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     assert routable([]) == []
 
 
-def test_routable_discovered_models_exempts_openrouter_from_evidence_only() -> None:
-    """OpenRouter rows are never dropped on evidence_only alone.
+def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_evidence_only() -> None:
+    """OpenRouter rows are exempt from evidence_only while every row still shows it.
 
-    Regression for a confirmed bug: ``contextual-orchestrator``'s OpenRouter
-    ``ProviderModelSource`` currently hardcodes ``evidence_only=True`` for
-    every discovered model unconditionally (not computed per model from
-    real evidence), which -- if this filter applied to OpenRouter like
-    every other provider -- would strip every OpenRouter row, including
-    genuinely servable ones, before ``zdr_policy.is_zdr_model()``'s
-    purpose-built per-route OpenRouter ZDR-feed check ever runs on them.
-    Both an evidence-only-tagged and an untagged OpenRouter row must pass
-    through; a same-shaped row from a different provider must not.
+    Regression for a confirmed bug (``ContextualWisdomLab/contextual-
+    orchestrator#950``, open, not yet merged): ``contextual-orchestrator``'s
+    OpenRouter ``ProviderModelSource`` currently hardcodes
+    ``evidence_only=True`` for every discovered model unconditionally (not
+    computed per model from real evidence) -- so today's real signature is
+    that *every* discovered OpenRouter row carries ``evidence_only=True``,
+    with no exceptions, even genuinely servable ones. If this filter
+    applied to OpenRouter like every other provider while that bug is
+    live, it would strip every OpenRouter row, including genuinely
+    servable ones, before ``zdr_policy.is_zdr_model()``'s purpose-built
+    per-route OpenRouter ZDR-feed check ever runs on them. Both OpenRouter
+    rows here carry ``evidence_only=True`` (today's real bug shape) and
+    both must still pass through; a same-shaped row from a different
+    provider must not.
     """
     namespace = _load_launcher()
     routable = namespace["_routable_discovered_models"]
 
-    openrouter_evidence_only = SimpleNamespace(
-        id="openrouter_evidence_only",
+    openrouter_evidence_only_a = SimpleNamespace(
+        id="openrouter_evidence_only_a",
         provider_name="openrouter",
         model_id="some/model",
         evidence_only=True,
     )
-    openrouter_live = SimpleNamespace(
-        id="openrouter_ready",
+    openrouter_evidence_only_b = SimpleNamespace(
+        id="openrouter_evidence_only_b",
         provider_name="openrouter",
         model_id="ready/free",
-        evidence_only=False,
+        evidence_only=True,
     )
     nvidia_evidence_only = SimpleNamespace(
         id="nvidia_evidence_only",
@@ -148,8 +153,41 @@ def test_routable_discovered_models_exempts_openrouter_from_evidence_only() -> N
     )
 
     assert routable(
-        [openrouter_evidence_only, openrouter_live, nvidia_evidence_only]
-    ) == [openrouter_evidence_only, openrouter_live]
+        [openrouter_evidence_only_a, openrouter_evidence_only_b, nvidia_evidence_only]
+    ) == [openrouter_evidence_only_a, openrouter_evidence_only_b]
+
+
+def test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence() -> None:
+    """The historical exemption turns off the moment per-model evidence appears.
+
+    Once ``ContextualWisdomLab/contextual-orchestrator#950`` merges and the
+    vendored pin advances past it, OpenRouter starts reporting real
+    per-model ``evidence_only`` (at minimum ``False`` for its genuinely
+    ZDR-attested free models). This is the post-fix signature: a run whose
+    OpenRouter rows are no longer uniformly ``True`` must go back through
+    the same ``evidence_only`` contract every other provider's rows
+    already get -- an attested row still passes (it always would have, on
+    its own merit), but an unattested OpenRouter row is now excluded here
+    exactly like a same-shaped row from any other provider, with no pin
+    bump or manual code edit required to reach this behavior.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_attested = SimpleNamespace(
+        id="openrouter_attested",
+        provider_name="openrouter",
+        model_id="attested/free",
+        evidence_only=False,
+    )
+    openrouter_unattested = SimpleNamespace(
+        id="openrouter_unattested",
+        provider_name="openrouter",
+        model_id="unattested/model",
+        evidence_only=True,
+    )
+
+    assert routable([openrouter_attested, openrouter_unattested]) == [openrouter_attested]
 
 
 def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(

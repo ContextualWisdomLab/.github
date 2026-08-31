@@ -1767,6 +1767,70 @@ orchestrator_review_sidecar_contract.py` pinning the exemption's presence in sou
 repo's existing pattern of pinning exact prose/structure in trusted scripts. Full suite: 2093 passed, 1
 skipped, 21 subtests passed. 100% coverage and 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 follow-up: making the OpenRouter `evidence_only` exemption self-correcting
+
+**Gap raised by Devin Review on `ContextualWisdomLab/.github#1476`.** The blanket exemption above does not
+distinguish "the vendored `contextual-orchestrator` still has the confirmed blanket-`evidence_only=True`
+bug" from "the vendored copy now computes `evidence_only` correctly per model" (the fix proposed in
+`ContextualWisdomLab/contextual-orchestrator#950`, **open, not yet merged** as of this entry). Left
+unconditional forever, this launcher would keep admitting genuinely evidence-only (non-ZDR-attested)
+OpenRouter rows even after `#950` merges and `ORCHESTRATOR_PIN_SHA` is bumped past it -- silently defeating
+the very fix `#950` delivers, for exactly the population of rows `evidence_only` exists to gate.
+
+**Design considered: pin-SHA ancestry.** `#950`'s base SHA (`c107e3e52371993aa9c326fcc245e01c41fc3850`)
+is confirmed to equal this repo's current `ORCHESTRATOR_PIN_SHA` default
+(`scripts/ci/contextual_orchestrator_review_sidecar.sh`), so once `#950` merges its resulting SHA on
+`contextual-orchestrator`'s `main` becomes the natural gating threshold. The sidecar's vendored clone at
+`$ORCHESTRATOR_SOURCE` is a non-shallow (`--filter=blob:none`, full commit/tree history, blobs only) clone
+of every ref, so `git -C "$ORCHESTRATOR_SOURCE" merge-base --is-ancestor <fix-sha> "$ORCHESTRATOR_PIN_SHA"`
+is technically reachable at review-time. It was not implemented now: `#950` has not merged, so no concrete
+fix-commit SHA exists yet to gate on, and wiring the check in ahead of that would require new plumbing
+(passing `$ORCHESTRATOR_SOURCE` or the pin itself into the launcher via a new CLI argument/env var, a
+`subprocess` git call, and matching `contextual_orchestrator_review_sidecar.sh` / contract-test changes)
+built against a threshold this org does not yet have -- over-engineering ahead of the actual need.
+
+**Fix implemented instead: an observed-behavior signature check, not a version marker.**
+`_openrouter_reports_per_model_evidence()` (`scripts/ci/contextual_orchestrator_review_launcher.py`) reads
+this run's own discovered OpenRouter rows: if at least one reports `evidence_only=False`, that is real
+per-model evidence, and `_routable_discovered_models()` immediately stops exempting OpenRouter and applies
+the same `evidence_only` contract every other provider already gets -- unattested OpenRouter rows are
+excluded, attested ones pass on their own merit. While every OpenRouter row still reports
+`evidence_only=True` (today's exact, confirmed bug signature), the historical exemption stays active. This
+needs no pin tracking, no `subprocess` calls, and no manual conversion step once `#950` merges: the check
+self-corrects the moment the vendored pin actually includes the fix and a run observes real per-model
+variation, because it is reading the vendored code's actual output rather than trusting a commit SHA to
+imply that output. Documented as the more robust, less brittle choice for this reason in
+`_openrouter_reports_per_model_evidence()`'s own docstring.
+
+**Known, accepted limitation, documented in the same docstring.** A genuinely-fixed vendored copy that
+reports `evidence_only=True` for every OpenRouter row in one particular run -- a total ZDR-feed-fetch
+failure that run (`#950`'s own documented fail-closed behavior), or simply zero ZDR-attested OpenRouter
+models discovered that run -- is indistinguishable from the still-buggy blanket signature by this check
+alone, and the exemption stays active for that one run. This only widens which OpenRouter rows reach the
+same downstream, `evidence_only`-independent chat-capability check every other provider's rows already
+pass through; it does not touch the separate ZDR admission gate (`is_zdr_model()` / `_zdr_admitted_rows()`)
+that guards `--require-zdr` private targets, which never depended on `evidence_only` in the first place.
+
+**TODO, tracked here explicitly (`ContextualWisdomLab/contextual-orchestrator#950`,
+`ContextualWisdomLab/.github#1476`):** once `#950` merges, re-verify this reasoning holds under its actual
+merged test suite (the negative case `test_discover_all_models_openrouter_model_absent_from_zdr_feed_stays_
+evidence_only` and the feed-failure case `test_discover_all_models_openrouter_zdr_feed_failure_keeps_every_
+row_evidence_only`, per `#950`'s own description) and once `ORCHESTRATOR_PIN_SHA` is bumped past it, confirm
+in a real CI run that `_openrouter_reports_per_model_evidence()` observes the expected per-model variation
+and the exemption turns itself off with no code change required. If real-world experience ever shows the
+observed-behavior check's known limitation above firing often enough to matter (e.g. OpenRouter's ZDR feed
+proves flaky in practice), revisit the pin-ancestry alternative recorded here, now that a concrete
+fix-commit SHA would exist to gate on.
+
+**Tests.** `test_routable_discovered_models_exempts_openrouter_from_evidence_only` (previous entry's
+regression) split into two: `test_routable_discovered_models_exempts_openrouter_when_every_row_reports_
+evidence_only` (blanket-`True` pre-fix signature -- both OpenRouter rows pass) and
+`test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence` (mixed
+post-fix signature -- the unattested row is now excluded, matching the same-shaped non-OpenRouter case).
+Full suite: 2094 passed, 1 skipped, 21 subtests passed. 100% coverage (the launcher stays coverage-omitted
+per `pyproject.toml`'s existing, unchanged rationale -- it imports the vendored library only present inside
+the sidecar's own runtime) and 100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
