@@ -1717,8 +1717,9 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
 
 ## 2026-08-31 opencode-review structural deadlock: unresolved threads starve the dispatch that would resolve them
 
-**Root cause found while investigating why `.github#1500`'s `opencode-review` required check exhausted
-its full 90-minute active-dispatch-and-poll window (added by #1497) with no `opencode-agent` verdict.**
+**Root cause found while investigating why `ContextualWisdomLab/.github#1500`'s `opencode-review`
+required check exhausted its full 90-minute active-dispatch-and-poll window (added by #1497) with no
+`opencode-agent` verdict.**
 `pr_review_merge_scheduler.py`'s `decide()` has an unconditional early return
 (`scripts/ci/pr_review_merge_scheduler.py:3462-3474`): `if unresolved_thread_count(pr): return
 decide("block", ...)`, before any code path can reach `dispatch_opencode_review()`. That gate long
@@ -1753,17 +1754,17 @@ separate predicate for review-dispatch eligibility distinct from merge eligibili
 coverage across informational-only, actionable-bot, and human-reviewer-`CHANGES_REQUESTED` thread shapes,
 before any PR is unblocked by classification logic rather than manual resolution.
 
-**Two related, smaller gaps found and stood down on in `.github#1415`'s own review, tracked here rather
-than dropped:**
-- *Streaming responses can defeat a bare socket timeout.* Both `.github#1415`'s preflight ModelClient
-  (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS`) and — independently found on `.github#1509` — `noema_review_gate.py`'s
+**Two related, smaller gaps found and stood down on in `ContextualWisdomLab/.github#1415`'s own review,
+tracked here rather than dropped:**
+- *Streaming responses can defeat a bare socket timeout.* Both `#1415`'s preflight ModelClient
+  (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS`) and — independently found on `ContextualWisdomLab/.github#1509` — `noema_review_gate.py`'s
   `call_llm` bound each HTTP attempt with a plain per-operation socket `timeout=`, which only bounds time
   *between* reads, not total attempt duration: a provider trickling data slowly enough (each chunk just
   under the timeout) could keep one attempt alive far past its nominal budget. `#1509` already built a
   real deadline-watchdog wrapper (arm a timer, forcibly close the connection past total budget) for the
   serving side; the preflight side needs the same treatment once that mechanism lands somewhere mergeable,
   rather than a second, possibly-inconsistent implementation.
-- *Discovery time is unbounded in catalog size.* `.github#1415`'s
+- *Discovery time is unbounded in catalog size.* `#1415`'s
   `REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP` assumes a bounded number of pagination rounds; if
   OpenRouter's free-model catalog grows past that assumption, discovery can exceed
   `REVIEW_STARTUP_WATCHDOG_SECONDS` and abort an otherwise-healthy sidecar. Needs either a deadline-based
