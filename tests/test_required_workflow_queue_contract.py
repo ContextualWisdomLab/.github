@@ -255,7 +255,11 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run.pull_requests[0].number" in concurrency_contract
             assert "github.event.pull_request.head.sha" in concurrency_contract
-            assert "github.event.workflow_run.head_sha" in concurrency_contract
+            assert (
+                "github.event.workflow_run.pull_requests[0].head.sha"
+                in concurrency_contract
+            )
+            assert "github.event.workflow_run.head_sha" not in concurrency_contract
             assert "github.event.client_payload.pr_head_sha" in concurrency_contract
             assert "github.event_name }}" not in concurrency_contract
             procedure = (
@@ -268,7 +272,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "concurrency key includes the triggering head SHA" in procedure
             for source in (
                 "`pull_request_target` uses `pull_request.head.sha`",
-                "`workflow_run` uses `workflow_run.head_sha`",
+                "`workflow_run` uses `workflow_run.pull_requests[0].head.sha`",
                 "`repository_dispatch` uses `client_payload.pr_head_sha`",
             ):
                 assert source in procedure

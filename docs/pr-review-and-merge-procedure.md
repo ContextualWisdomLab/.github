@@ -162,7 +162,7 @@ PR before credential/model setup and immediately before publication; a stale
 run cannot review or publish against a newer head.
 
 The trigger mapping is explicit: `pull_request_target` uses `pull_request.head.sha`,
-`workflow_run` uses `workflow_run.head_sha`, and
+`workflow_run` uses `workflow_run.pull_requests[0].head.sha`, and
 `repository_dispatch` uses `client_payload.pr_head_sha`. Missing or malformed
 HEAD identity fails closed before reviewer credentials or model capacity are
 used.

@@ -911,7 +911,8 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
-    if str(pr.get("headRefOid") or "") != expected_head:
+    expected_head = expected_head.lower()
+    if str(pr.get("headRefOid") or "").lower() != expected_head:
         print("Trigger head is stale; Noema review skipped before model work.")
         return 0
     actor = current_actor()
@@ -933,7 +934,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
-    if str(current_pr.get("headRefOid") or "") != expected_head:
+    if str(current_pr.get("headRefOid") or "").lower() != expected_head:
         print("Pull request head changed during review; stale verdict was not published.")
         return 0
     submit_review(repo, number, current_pr, actor, verdict)

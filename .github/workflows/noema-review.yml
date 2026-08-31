@@ -5,7 +5,7 @@ run-name: >-
   github.event.client_payload.pr_number || github.event.pull_request.number ||
   github.event.workflow_run.pull_requests[0].number || 'event' }}@${{
   github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
-  github.event.workflow_run.head_sha || github.sha }}
+  github.event.workflow_run.pull_requests[0].head.sha || github.sha }}
 
 on:
   pull_request_target:
@@ -26,7 +26,7 @@ concurrency:
     github.event.client_payload.pr_number ||
     github.run_id }}-${{
     github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
-    github.event.workflow_run.head_sha || github.sha }}
+    github.event.workflow_run.pull_requests[0].head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -60,7 +60,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || '' }}
-      EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || '' }}
+      EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.pull_requests[0].head.sha || '' }}
     steps:
       - name: Skip events without pull request context
         if: env.PR_NUMBER == ''
@@ -147,7 +147,7 @@ jobs:
             exit 1
           fi
           live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+          if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
             echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD}, observed ${live_head}."
             exit 1
           fi

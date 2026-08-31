@@ -28,9 +28,12 @@ def test_noema_concurrency_is_bound_to_the_triggering_head():
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
     assert "github.event.client_payload.pr_head_sha" in concurrency
     assert "github.event.pull_request.head.sha" in concurrency
-    assert "github.event.workflow_run.head_sha" in concurrency
+    assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency
+    assert "github.event.workflow_run.head_sha" not in concurrency
+    assert "github.event.workflow_run.head_sha" not in workflow
     assert "EXPECTED_HEAD:" in workflow
     assert "--expected-head \"$EXPECTED_HEAD\"" in workflow
+    assert '"${live_head,,}" != "${EXPECTED_HEAD,,}"' in workflow
     assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
         "Select fail-closed Noema reviewer credential"
     )
@@ -881,6 +884,18 @@ def test_stale_trigger_stops_before_identity_or_model_work(monkeypatch):
         lambda: pytest.fail("stale execution must stop before identity lookup"),
     )
     assert noema.inspect_and_review("owner/repo", 7, "old") == 0
+
+
+def test_expected_head_comparison_is_case_insensitive(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        noema,
+        "fetch_pr",
+        lambda repo, number: make_pr(headRefOid="a" * 40, isDraft=True),
+    )
+    monkeypatch.setattr(noema, "current_actor", lambda: seen.append("actor") or "noema")
+    assert noema.inspect_and_review("owner/repo", 7, "A" * 40) == 0
+    assert seen == ["actor"]
 
 
 def test_head_movement_stops_before_review_publication(monkeypatch):
