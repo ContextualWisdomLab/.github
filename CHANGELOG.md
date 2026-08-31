@@ -5,6 +5,13 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Remove the orphaned `required-workflow-bootstrap` job from
+  `opencode-review-dispatch.yml`: it only echoed a materialization message and
+  was never referenced by any `needs:` clause in that repository_dispatch-only
+  workflow, which fires only in an already-trusted, non-PR context (the
+  matching trust-boundary bootstrap that the pattern is for stays in the
+  `pull_request_target`-triggered `opencode-review.yml`, whose branch-protection
+  contract still requires it).
 - Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
   (flagged by Devin Review on that PR): the standing operating directive
   still named the removed `free_family_diversity` evidence field instead of
