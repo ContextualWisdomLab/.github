@@ -309,9 +309,10 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event.action }}" = "closed" ]; then
+          if [ "$PR_ACTION" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
             exit 0
@@ -387,9 +388,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           INITIAL_VERDICT: ${{ needs.opencode-review-wait-window-one.outputs.verdict }}
+          PR_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event.action }}" = "closed" ]; then
+          if [ "$PR_ACTION" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             exit 0
           fi
