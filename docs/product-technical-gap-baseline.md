@@ -1715,6 +1715,61 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 noema-review serving-call timeout: retry×failover budget mismatch, root-caused
+
+**A distinct failure mode from the 2026-08-30 preflight-outage entries above**: those covered the
+sidecar's own *startup* preflight (`healthz`, the launcher's `_preflight_with_fallback`) rejecting
+candidates or the running server's virtual-model route returning 502. This entry covers a case where
+preflight succeeds — `contextual-orchestrator#956`'s `noema-review` run (`run 33439328660` / job
+`99643408237`) reached `[contextual-orchestrator-sidecar] gateway chat/completions preflight
+confirmed (attempt 1/3)` and reported `free_account_diversity: 3`, `ready_count: 2` of 12 probed
+routes — and the *serving* request still fails with a raw `TimeoutError: timed out` at
+`scripts/ci/noema_review_gate.py:656`'s `opener.open(request, timeout=120)`.
+
+Root cause (verified against job logs, not speculation; full arithmetic in
+`contextual-orchestrator#974`'s PR body): `noema_review_gate.py`'s single serving request carries a
+fixed 120s socket timeout with **zero retries on the caller side**, but the vendored
+`contextual_orchestrator_review_launcher.py` constructs its *serving* `ModelClient`/`TaskOrchestrator`
+with no overrides — general-purpose defaults `ModelClient(timeout=90, max_retries=2)` and
+`TaskOrchestrator`'s default `tool_retry_attempts=1`. Three multiplying layers, each individually
+correct for their general-purpose callers, combine into a budget the external 120s caller has no
+visibility into: (1) `ModelClient._send_with_retry`, up to 3 HTTP attempts per `chat()` call ≈ 271.5s
+worst case for one call alone — already 2.26x the external budget; (2) `_invoke`'s same-agent tool
+retry (`tool_retry_attempts=1` ⇒ 2 full `chat()` calls per agent) ≈ 543s worst case per agent; (3)
+`_invoke`'s cross-candidate failover over the review sidecar's up-to-12-route catalog with no combined
+ceiling ≈ 6519s worst case if every candidate fails. Even without layers 2-3, layer 1 alone
+(`2×90=180s`) already exceeds 120s. This also explains why the *preflight* correctly reports a route
+"ready": the preflight client is deliberately bounded (`timeout=10s, max_retries=0`) and uses a tiny
+~60-character probe, while the real review's diff+context payload (up to 60,000 + 24,000 chars) under
+the *serving* client's un-tuned defaults can legitimately need more than one 90s attempt, triggering
+the retry cascade above.
+
+**Fix, in flight across both repos, not yet landed as of this entry:**
+
+- `contextual-orchestrator#974` adds an opt-in, additive `deadline_seconds` parameter to
+  `TaskOrchestrator.route_once()` (threaded into `_invoke()` as an absolute deadline) bounding the
+  *combined* wall-clock across same-agent retry and cross-candidate failover to a caller-chosen
+  ceiling. Left `None` (the default), every existing caller's behavior is unchanged — confirmed by the
+  full existing test suite passing unmodified. This repository alone cannot fix the symptom: the
+  values that need to change are constructed entirely inside this org's `.github` repo.
+- `ContextualWisdomLab/.github#1415` is the companion change to
+  `scripts/ci/contextual_orchestrator_review_launcher.py`'s serving-client construction (bounding
+  `ModelClient`'s serving timeout/retries and `TaskOrchestrator`'s `tool_retry_attempts`) plus a small
+  margin added to `noema_review_gate.py`'s own 120s socket timeout so a legitimate near-the-limit
+  single attempt does not fail closed with zero margin for TLS/JSON/GC overhead.
+- A secondary, unrelated diagnosability gap noted alongside this fix (not yet fixed): `main()`'s
+  top-level handler in `noema_review_gate.py` only catches `RuntimeError`; `TimeoutError` is an
+  `OSError` subtype, so this failure surfaces as a raw uncaught Python traceback instead of the gate's
+  own clean, redacted error path.
+
+Standing-down comment with this analysis posted on `contextual-orchestrator#956` (not a defect in that
+PR's own diff); tracked for re-check once #974/#1415 land. `#1519` in this repo hit a related-but-
+distinct symptom the same day — a required `strix` check cancelled by this repo's own per-repository
+Strix concurrency group (a sibling PR's scan superseding a queued/pending run,
+`.github/workflows/strix.yml`'s documented `cancel-in-progress: false` behavior) with no automatic
+re-dispatch observed 8+ hours later despite the workflow's own comment describing one; manually
+re-triggered via the Actions API as a stopgap, not yet root-caused as a scheduler bug.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
