@@ -605,6 +605,16 @@ def call_llm(
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
     reject_private_llm_url(api_url)
 
+    allowed_locations = [
+        {"path": path, "line": line, "side": side}
+        for path, line, side in sorted(changed_diff_locations(diff))
+    ]
+    location_example = (
+        allowed_locations[0]
+        if allowed_locations
+        else {"path": "path", "line": 0, "side": "RIGHT"}
+    )
+
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -612,8 +622,39 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
+                json.dumps(
+                    {
+                        "decision": "approve|request_changes|comment",
+                        "summary": "...",
+                        "reviewed_lines": [{**location_example, "analysis": "..."}],
+                        "adversarial_validation": {
+                            "status": "passed|failed",
+                            "residual_risk": "...",
+                            "probes": [
+                                {
+                                    **location_example,
+                                    "hypothesis": "...",
+                                    "attack_or_counterexample": "...",
+                                    "evidence": "observed or source-traced result",
+                                    "outcome": "falsified|confirmed",
+                                }
+                            ],
+                        },
+                        "findings": [
+                            {
+                                "severity": "high|medium|low",
+                                "file": location_example["path"],
+                                "line": location_example["line"],
+                                "side": location_example["side"],
+                                "message": "...",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Allowed exact changed-side locations: "
+                + json.dumps(allowed_locations, separators=(",", ":")),
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
@@ -653,7 +694,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    with opener.open(request) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

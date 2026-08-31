@@ -687,8 +687,8 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
             ).encode()
 
     class Opener:
-        def open(self, request, timeout):
-            assert timeout == 120
+        def open(self, request, timeout=None):
+            assert timeout is None
             payloads.append(json.loads(request.data))
             return Response(invalid if len(payloads) == 1 else valid)
 
@@ -697,6 +697,11 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
     assert noema.call_llm("owner/repo", 7, make_pr(), diff, False)["decision"] == "approve"
     assert len(payloads) == 2
     assert "trusted validator" in payloads[1]["messages"][1]["content"]
+    assert (
+        'Allowed exact changed-side locations: [{"path":"tool.py","line":1,"side":"LEFT"},'
+        '{"path":"tool.py","line":1,"side":"RIGHT"}]'
+        in payloads[1]["messages"][1]["content"]
+    )
 
 
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():
