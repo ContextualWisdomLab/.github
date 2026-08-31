@@ -115,8 +115,10 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
 def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_evidence_only() -> None:
     """OpenRouter rows are exempt from evidence_only while every row still shows it.
 
-    Regression for a confirmed bug (``ContextualWisdomLab/contextual-
-    orchestrator#950``, open, not yet merged): ``contextual-orchestrator``'s
+    Regression for a confirmed bug, fixed upstream at
+    ``ContextualWisdomLab/contextual-orchestrator#949`` (merged, not yet
+    pinned in this repo as of this writing -- see
+    ``ContextualWisdomLab/.github#1477``): ``contextual-orchestrator``'s
     OpenRouter ``ProviderModelSource`` currently hardcodes
     ``evidence_only=True`` for every discovered model unconditionally (not
     computed per model from real evidence) -- so today's real signature is
@@ -160,8 +162,8 @@ def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_ev
 def test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence() -> None:
     """The historical exemption turns off the moment per-model evidence appears.
 
-    Once ``ContextualWisdomLab/contextual-orchestrator#950`` merges and the
-    vendored pin advances past it, OpenRouter starts reporting real
+    Once ``ContextualWisdomLab/.github#1477`` lands the
+    ``ContextualWisdomLab/contextual-orchestrator#949`` pin bump, OpenRouter starts reporting real
     per-model ``evidence_only`` (at minimum ``False`` for its genuinely
     ZDR-attested free models). This is the post-fix signature: a run whose
     OpenRouter rows are no longer uniformly ``True`` must go back through
@@ -188,6 +190,211 @@ def test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_
     )
 
     assert routable([openrouter_attested, openrouter_unattested]) == [openrouter_attested]
+
+
+def test_routable_discovered_models_excludes_spend_blocked_rows() -> None:
+    """A ``spend_admitted=False`` row is excluded the same way as ``evidence_only=True``.
+
+    ``contextual-orchestrator#949`` added ``DiscoveredModel.spend_admitted``
+    (default ``True``): a priced OpenRouter row becomes ``False`` when
+    ``openrouter_paid_inference_available()`` cannot confirm usable credit.
+    The vendored library's own ``is_routable_discovered_model()`` already
+    refuses to activate such a row as an agent; this launcher must refuse it
+    too, with the same ``getattr(..., True)`` default so a vendored pin that
+    predates ``#949`` (and so has no ``spend_admitted`` attribute at all)
+    keeps behaving exactly as it did before this filter existed.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    spend_blocked = SimpleNamespace(
+        id="openrouter_spend_blocked",
+        provider_name="openrouter",
+        model_id="provider/paid",
+        evidence_only=False,
+        spend_admitted=False,
+    )
+    spend_admitted_row = SimpleNamespace(
+        id="openrouter_spend_admitted",
+        provider_name="openrouter",
+        model_id="provider/paid-ok",
+        evidence_only=False,
+        spend_admitted=True,
+    )
+    no_spend_attribute = SimpleNamespace(
+        id="nvidia_untagged",
+        provider_name="nvidia_nim",
+        model_id="untagged/model",
+        evidence_only=False,
+    )
+
+    assert routable([spend_blocked, spend_admitted_row, no_spend_attribute]) == [
+        spend_admitted_row,
+        no_spend_attribute,
+    ]
+
+
+def test_routable_discovered_models_excludes_spend_blocked_openrouter_row_even_while_evidence_only_exempt() -> None:
+    """The ``spend_admitted`` exclusion applies independently of the ``evidence_only`` exemption.
+
+    A spend-blocked OpenRouter row that also still carries today's blanket
+    ``evidence_only=True`` bug signature -- so the OpenRouter ``evidence_
+    only`` exemption would otherwise let it through -- must still be
+    excluded: the two filters are independent conditions, and neither
+    exemption weakens the other.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_blanket_and_spend_blocked = SimpleNamespace(
+        id="openrouter_blanket_spend_blocked",
+        provider_name="openrouter",
+        model_id="provider/paid",
+        evidence_only=True,
+        spend_admitted=False,
+    )
+    openrouter_blanket_and_admitted = SimpleNamespace(
+        id="openrouter_blanket_admitted",
+        provider_name="openrouter",
+        model_id="provider/free",
+        evidence_only=True,
+        spend_admitted=True,
+    )
+
+    assert routable(
+        [openrouter_blanket_and_spend_blocked, openrouter_blanket_and_admitted]
+    ) == [openrouter_blanket_and_admitted]
+
+
+def test_pool_auto_never_admits_a_spend_blocked_priced_openrouter_row() -> None:
+    """A credit-exhausted paid OpenRouter row must never reach ``orchestrator/auto``.
+
+    Regression for the real, latent gap found while investigating whether
+    this repo's pipeline needs to respect ``spend_admitted``:
+    ``orchestrator/free`` never considers priced rows at all (its
+    ``selected_models`` loop in ``main()`` drops anything outside
+    ``free_route_identities`` before it becomes a report row), so it was
+    never exposed to a spend-blocked row. ``--pool auto`` is real, tested,
+    reachable code (``CONTEXTUAL_ORCHESTRATOR_POOL=auto``, no other change
+    needed) whose candidate rows explicitly include priced ones
+    (``build_zdr_prioritized_catalog``'s ``[*all_free_rows,
+    *all_priced_rows]`` for ``pool="auto"``, plus ``main()``'s explicit
+    priced-fallback stage) -- so without the ``spend_admitted`` filter in
+    ``_routable_discovered_models``, a spend-blocked row could have reached
+    a served ``auto`` catalog exactly as if it were servable. This composes
+    the real pipeline: ``_routable_discovered_models`` -> ``_report_rows``
+    -> ``parse_discovery_report`` -> ``build_zdr_prioritized_catalog``.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+    report_rows = namespace["_report_rows"]
+    route_identity = namespace["_route_identity"]
+
+    free_model = SimpleNamespace(
+        provider_name="nvidia_nim",
+        model_id="free/model",
+        agent_id="nvidia_nim_free_model",
+        evidence_only=False,
+        spend_admitted=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    spend_blocked_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        agent_id="openrouter_provider_paid",
+        evidence_only=False,
+        spend_admitted=False,
+        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="OPENROUTER_API_KEY",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=0.1,
+        completion_price_per_1k=0.1,
+        currency_code="USD",
+    )
+    discovered = [free_model, spend_blocked_model]
+
+    routable_discovered = routable(discovered)
+    assert routable_discovered == [free_model]
+
+    free_route_identities = frozenset({route_identity(free_model)})
+    rows = report_rows(routable_discovered, free_route_identities)
+    normalized_rows = policy.parse_discovery_report({"models": rows})
+
+    result = policy.build_zdr_prioritized_catalog(normalized_rows, pool="auto")
+
+    assert {entry["model"] for entry in result["agents"]} == {"free/model"}
+
+
+def test_require_zdr_still_excludes_non_zdr_openrouter_route_despite_evidence_only_exemption() -> None:
+    """The ``evidence_only`` exemption never weakens the real ZDR admission gate.
+
+    Devin Review flagged (``ContextualWisdomLab/.github#1476``, discussion
+    ``r3891875749``, 🟥) that ``_routable_discovered_models`` converting
+    every OpenRouter row into a serving candidate while every row still
+    carries the vendored ``evidence_only=True`` bug signature could let
+    "private review content reach third-party routes the vendored ZDR
+    contract forbids serving." Traced end to end, this is a false alarm:
+    becoming a *candidate* that survives ``_routable_discovered_models`` is
+    not the same as being *admitted* to a ``--require-zdr`` (private)
+    target's served catalog. The real, independent admission gate for that
+    path is ``is_zdr_model()`` (``scripts/ci/zdr_policy.py``), which
+    ``build_zdr_prioritized_catalog`` -- the function that actually builds
+    the served ``agents`` catalog -- re-applies as its own ``eligible_rows``
+    filter whenever ``require_zdr=True``, completely independent of
+    ``evidence_only``. This reproduces the real pipeline
+    (``_routable_discovered_models`` -> ``_report_rows`` ->
+    ``parse_discovery_report`` -> ``build_zdr_prioritized_catalog(...,
+    require_zdr=True)``) with two free OpenRouter rows that BOTH still
+    report ``evidence_only=True`` (today's exact bug signature, so the
+    exemption is active for both) -- only the one genuinely present in the
+    live OpenRouter ZDR feed is ever admitted to the catalog.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+    report_rows = namespace["_report_rows"]
+    route_identity = namespace["_route_identity"]
+
+    zdr_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="zdr/free-model",
+        agent_id="openrouter_zdr_free_model",
+        evidence_only=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    non_zdr_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="forbidden/free-model",
+        agent_id="openrouter_forbidden_free_model",
+        evidence_only=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    discovered = [zdr_model, non_zdr_model]
+
+    routable_discovered = routable(discovered)
+    # Both rows survive the still-blanket-marked exemption: exactly the
+    # shape the Devin finding is concerned about.
+    assert routable_discovered == discovered
+
+    free_route_identities = frozenset(route_identity(model) for model in discovered)
+    rows = report_rows(discovered, free_route_identities)
+    normalized_rows = policy.parse_discovery_report({"models": rows})
+
+    result = policy.build_zdr_prioritized_catalog(
+        normalized_rows,
+        zdr_endpoints=frozenset({"openrouter/zdr/free-model"}),
+        require_zdr=True,
+        pool="free",
+    )
+
+    selected_models = {entry["model"] for entry in result["agents"]}
+    assert selected_models == {"zdr/free-model"}
+    assert "forbidden/free-model" not in selected_models
 
 
 def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
