@@ -3,12 +3,87 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
+
+
+def test_noema_close_cleanup_selects_only_the_closed_pr_from_one_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Execute cleanup against shared-SHA runs and cancel only the closed PR."""
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Cancel queued and running Noema reviews for the closed pull request",
+        ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
+    )
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 101,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "requested",
+            },
+            {
+                "id": 102,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "queued",
+            },
+            {
+                "id": 103,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "completed",
+            },
+        ]
+    }
+    runs_file = tmp_path / "runs.json"
+    runs_file.write_text(json.dumps(runs), encoding="utf-8")
+    calls_file = tmp_path / "calls.txt"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"--paginate"* ]]; then
+  cat "$FAKE_RUNS_FILE"
+else
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
+            "CLOSED_PR_NUMBER": "7",
+            "CLOSED_PR_HEAD_SHA": "a" * 40,
+            "CURRENT_RUN_ID": "999",
+            "FAKE_RUNS_FILE": str(runs_file),
+            "FAKE_CALLS_FILE": str(calls_file),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = calls_file.read_text(encoding="utf-8")
+    assert "/actions/runs/101/cancel" in calls
+    assert "/actions/runs/102/cancel" not in calls
+    assert "/actions/runs/103/cancel" not in calls
 
 
 def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:

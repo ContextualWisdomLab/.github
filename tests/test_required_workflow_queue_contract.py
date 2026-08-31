@@ -424,12 +424,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         if filename in {"strix.yml", "noema-review.yml"}:
             noun = "scans" if filename == "strix.yml" else "Noema reviews"
             assert f"Cancel queued and running {noun} for the closed pull request" in workflow
-            assert "CLOSED_PR_HEAD_SHA" in workflow
             assert "leaving runs unchanged" in workflow
-            assert (
-                "for active_status in queued in_progress requested waiting pending"
-                in workflow
-            )
             next_job = "strix" if filename == "strix.yml" else "noema-review"
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
                 f"  {next_job}:", 1
@@ -438,6 +433,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
             if filename == "strix.yml":
+                assert "CLOSED_PR_HEAD_SHA" in workflow
+                assert (
+                    "for active_status in queued in_progress requested waiting pending"
+                    in workflow
+                )
                 assert (
                     "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
                     "|| github.token"

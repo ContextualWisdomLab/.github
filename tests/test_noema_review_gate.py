@@ -49,9 +49,8 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert "Cancel queued and running Noema reviews for the closed pull request" in cleanup
     assert 'select(.name == "Required Noema Review")' in cleanup
     assert "CLOSED_PR_NUMBER" in cleanup
-    assert "CLOSED_PR_HEAD_SHA" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
-    assert "for active_status in queued in_progress requested waiting pending" in cleanup
+    assert "actions/workflows/noema-review.yml/runs?per_page=100" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
 
 
