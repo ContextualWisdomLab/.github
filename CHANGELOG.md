@@ -26,6 +26,25 @@ Semantic Versioning where the repository publishes a release.
   whatever succeeded" handling, which downstream evidence showed is needed
   since single-provider hiccups are common and should not be fatal to the
   whole pool). See the merge commit and PR #1415 for full evidence.
+- Fix a real gap Devin Review found on this same PR ("Serving-incompatible
+  routes pass startup", `ContextualWisdomLab/.github#1454`): the routing
+  probe's base attempt (`REVIEW_PREFLIGHT_BASE_TOKENS`, 16) alone was enough
+  to admit a candidate, even though real review traffic always requests
+  `REVIEW_MAX_OUTPUT_TOKENS` (4096) — a route whose provider could satisfy a
+  16-token completion but rejected or emptied out at 4096 passed startup and
+  only failed once real serving began. `_preflight_review_agents` now
+  requires a SECOND, confirming attempt at the real serving budget
+  (`REVIEW_PREFLIGHT_ESCALATED_TOKENS`) before admitting ANY route — whether
+  the base probe already succeeded (now recorded `confirmed_at_serving_budget`)
+  or failed with a budget-too-small signature (still recorded `escalated`,
+  unchanged) — both draw from the same shared, bounded
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS` counter rather than a new, separate one,
+  so the per-candidate worst case stays at most one base attempt plus one
+  more, and `REVIEW_PREFLIGHT_WORST_CASE_SECONDS`/
+  `REVIEW_STARTUP_WATCHDOG_SECONDS` are unchanged. Added regression coverage
+  for a mocked route that succeeds at the base probe but fails/rejects at the
+  serving budget (must not be admitted) and for the shared budget bounding
+  confirmations the same way it already bounded escalations.
 - Keep startup route probes on a ten-second timeout while giving serving-time
   model calls the Noema gate's 120-second transport budget; both retain a
   zero-retry transport policy at the client level (ADR-0005's own,

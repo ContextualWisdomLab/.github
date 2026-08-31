@@ -112,7 +112,14 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # truth so a future change to either phase's constants cannot silently
 # desynchronize the two budgets again. #1454 (a base-probe *success* never
 # confirms the candidate at the real serving budget, REVIEW_MAX_OUTPUT_TOKENS)
-# is a separate, still-open gap this fix does not address.
+# is FIXED (Devin Review, "Serving-incompatible routes pass startup"): a
+# base-probe success now always draws one confirming attempt at
+# REVIEW_PREFLIGHT_ESCALATED_TOKENS from this SAME shared counter before
+# being admitted, exactly like a base-probe failure's existing escalation
+# attempt -- see _preflight_review_agents's docstring. Per-candidate worst
+# case stays at most one base + one second attempt either way, so the
+# REVIEW_PREFLIGHT_WORST_CASE_SECONDS/REVIEW_STARTUP_WATCHDOG_SECONDS
+# arithmetic derived below is unchanged by this fix.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 # Mirrors contextual_orchestrator.model_discovery.DISCOVERY_TIMEOUT_SECONDS at
@@ -494,27 +501,54 @@ def _preflight_review_agents(
 
     ADR-0005: a single fixed ``max_tokens`` cannot fit every model in a
     heterogeneous pool. Each candidate gets one cheap base-budget probe
-    (``REVIEW_PREFLIGHT_BASE_TOKENS``); when that specific candidate's
-    response is empty for a "budget too small" reason -- either
-    ``choices[0].finish_reason == "length"`` (OpenAI's documented signature),
-    or the vendored ``ModelClient._response_content``'s own broader signature
-    (a populated ``message.reasoning`` with no string ``content``, which a
-    reasoning model can hit under a different ``finish_reason`` -- provider
-    ``finish_reason`` semantics for this case are not verified as uniform
-    across the pool, and this is the exact original failure mode PR #1436
-    responded to) -- that *same* candidate is retried once at a larger,
-    escalated budget (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``) before being
-    marked rejected -- bounded by a shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
-    counter, which the ``escalations_used`` argument carries forward across
-    calls (not per candidate, and not reset per call): a caller that probes
-    two stages of the same preflight run (e.g. ``_preflight_with_fallback``'s
-    primary and fallback stages) must pass the previous stage's ending count
-    back in here so the two stages share one budget instead of each getting
-    its own -- otherwise the computed worst-case bound this counter exists to
-    enforce silently doubles. Every other failure class (transport exception,
-    non-2xx, or empty content matching neither signature) is not retried: a
-    genuinely-down candidate never reaches the escalation path, so it cannot
-    produce a false "healthy" read.
+    (``REVIEW_PREFLIGHT_BASE_TOKENS``). Admission always requires a SECOND,
+    confirming probe at the real serving budget
+    (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``, equal to the ``REVIEW_MAX_OUTPUT_TOKENS``
+    ``main()``'s ``ModelClient`` actually requests during review traffic) --
+    fixed as `ContextualWisdomLab/.github#1454` (Devin Review, "Serving-
+    incompatible routes pass startup"): the base probe alone previously
+    admitted a candidate having proven nothing beyond
+    ``REVIEW_PREFLIGHT_BASE_TOKENS``, so a candidate whose real completion
+    ceiling sat strictly between the base and serving budgets passed startup
+    and only failed once real review traffic began. There are exactly two
+    ways a candidate reaches that confirming probe:
+
+    1. **The base probe already returned usable text.** This is the
+       ordinary, most common case; the second probe exists purely to CONFIRM
+       that same candidate also serves the real budget, not to diagnose a
+       failure. Success marks ``confirmed_at_serving_budget`` (not
+       ``escalated``) on the row -- the base attempt already worked, this
+       second attempt only re-proves it at the real budget.
+    2. **The base probe's response was empty for a "budget too small" reason**
+       -- either ``choices[0].finish_reason == "length"`` (OpenAI's
+       documented signature), or the vendored
+       ``ModelClient._response_content``'s own broader signature (a populated
+       ``message.reasoning`` with no string ``content``, which a reasoning
+       model can hit under a different ``finish_reason`` -- provider
+       ``finish_reason`` semantics for this case are not verified as uniform
+       across the pool, and this is the exact original failure mode PR #1436
+       responded to). Success marks ``escalated`` on the row -- the base
+       attempt failed and this second attempt is what actually rescued it.
+
+    Either way, the SAME candidate gets at most one additional attempt (never
+    a third), and that attempt is bounded by one shared
+    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` counter -- there is no separate
+    counter for "confirming a success" versus "escalating a failure", since
+    both are the identical "one more attempt at the larger budget" action for
+    worst-case-timing purposes. The counter's ``escalations_used`` argument
+    carries forward across calls (not per candidate, and not reset per
+    call): a caller that probes two stages of the same preflight run (e.g.
+    ``_preflight_with_fallback``'s primary and fallback stages) must pass the
+    previous stage's ending count back in here so the two stages share one
+    budget instead of each getting its own -- otherwise the computed
+    worst-case bound this counter exists to enforce silently doubles. A base
+    response that is empty for any OTHER reason (no budget-too-small
+    signature) is not retried at all: a genuinely-down candidate never
+    reaches the second-attempt path, so it cannot produce a false "healthy"
+    read, and a candidate denied its second attempt by the shared budget
+    (whichever of the two reasons brought it there) is recorded
+    ``escalation_budget_exhausted`` and not admitted -- fails closed, exactly
+    like a base failure that never got its own escalation slot.
     An exception on the escalated attempt (transport failure, auth failure,
     rate limit, server error, or a genuine budget rejection) is recorded via
     ``_record_provider_exception`` -- the SAME sanitized classification the
@@ -598,58 +632,58 @@ def _preflight_review_agents(
             _record_provider_exception(row, exc)
             routes.append(row)
             continue
-        if _chat_response_has_text(response):
-            # KNOWN GAP, tracked (not yet fixed) as
-            # ContextualWisdomLab/.github#1454: this admits the candidate
-            # having only proven it works at REVIEW_PREFLIGHT_BASE_TOKENS
-            # (16), never at the real serving budget
-            # (REVIEW_MAX_OUTPUT_TOKENS, 4096) main()'s ModelClient actually
-            # requests. ADR-0005's own Research (axis 2) already documents
-            # that a provider's hard completion-token ceiling is a real,
-            # separate-from-reasoning-overhead quantity per model; a
-            # candidate whose real ceiling sits strictly between 16 and 4096
-            # would pass here and only fail later, on real review traffic.
-            # Mitigated in production (not fixed here) by
-            # contextual_orchestrator.orchestrator.TaskOrchestrator's own
-            # per-request failover/circuit-breaker, which this preflight
-            # does not replace.
-            row["status"] = "ready"
-            # Populated on every outcome, including this most-common,
-            # ordinary success path -- not just failure/escalation --  so
-            # future tuning has a real "normal" baseline to compare against,
-            # not just evidence of what went wrong.
-            row["finish_reason"] = _response_finish_reason(response) or "unknown"
-            row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
-            routes.append(row)
-            viable.append(agent)
-            continue
+
+        base_has_text = _chat_response_has_text(response)
         finish_reason = _response_finish_reason(response)
+        # Populated on every response-bearing outcome, including an
+        # eventually-superseded base attempt -- not just failure/escalation
+        # -- so future tuning has a real "normal" baseline to compare
+        # against. Overwritten below if a second attempt is made (see the
+        # docstring: both fields always describe the same, most recent
+        # attempt, never a mix of the two).
         row["finish_reason"] = finish_reason or "unknown"
         reasoning_without_content = _response_has_reasoning_without_content(response)
         row["reasoning_without_content"] = reasoning_without_content
-        budget_signature = finish_reason == "length" or reasoning_without_content
-        # KNOWN, ACCEPTED, TRACKED LIMITATION on the escalations_used >=
-        # REVIEW_PREFLIGHT_MAX_ESCALATIONS branch below, ContextualWisdomLab/.github#1458
-        # (originally documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
-        # escalations_used is one shared, first-come-first-served counter for
-        # the whole run, consumed in catalog order
+
+        if not base_has_text:
+            budget_signature = finish_reason == "length" or reasoning_without_content
+            if not budget_signature:
+                # Genuinely down (or an unrelated malformed reply): no
+                # signature suggests a bigger budget would help, so this
+                # candidate never reaches the second-attempt path -- it
+                # cannot produce a false "healthy" read.
+                row["status"] = "rejected"
+                row["error_type"] = "invalid_chat_response"
+                routes.append(row)
+                continue
+        # Either the base probe already has usable text (fix for
+        # ContextualWisdomLab/.github#1454: admission still requires
+        # confirming that text holds at the real serving budget, not just
+        # REVIEW_PREFLIGHT_BASE_TOKENS) or it matched a "budget too small"
+        # signature above and needs the existing escalation retry. Both
+        # reach the SAME shared, bounded second-attempt path below.
+        #
+        # KNOWN, ACCEPTED, TRACKED LIMITATION on the budget.try_reserve()
+        # branch below, ContextualWisdomLab/.github#1458 (originally
+        # documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
+        # the shared counter is first-come-first-served in catalog order
         # (build_zdr_prioritized_catalog's (cost_evidence_rank,
-        # zdr_attested_rank, provider, model) sort, not random). A
-        # later-sorting candidate can be denied its own escalation attempt
-        # purely because REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates
-        # already claimed the shared budget -- even if it would have been the
-        # only one to succeed at REVIEW_PREFLIGHT_ESCALATED_TOKENS.
-        # Deliberately not reordered (round-robin/random): a fixed-size
-        # shared budget smaller than the candidate pool always has to deny
-        # someone an escalation, so reordering only changes who, and picking
-        # a specific policy without real telemetry on which candidates
-        # actually need escalation would itself be the kind of unjustified
-        # heuristic this design rejects elsewhere.
-        if not budget_signature or not budget.try_reserve():
+        # zdr_attested_rank, provider, model) sort, not random), for BOTH the
+        # confirmation and escalation uses added by this fix. A
+        # later-sorting candidate -- whether it needs confirmation of an
+        # already-successful base probe, or escalation of a failed one -- can
+        # be denied its own second attempt purely because
+        # REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates already claimed
+        # the shared budget, even if it would have succeeded at
+        # REVIEW_PREFLIGHT_ESCALATED_TOKENS. Deliberately not reordered
+        # (round-robin/random): a fixed-size shared budget smaller than the
+        # candidate pool always has to deny someone a second attempt, so
+        # reordering only changes who, and picking a specific policy without
+        # real telemetry on which candidates actually need it would itself be
+        # the kind of unjustified heuristic this design rejects elsewhere.
+        if not budget.try_reserve():
             row["status"] = "rejected"
-            row["error_type"] = (
-                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
-            )
+            row["error_type"] = "escalation_budget_exhausted"
             routes.append(row)
             continue
         row["attempts"] = 2
@@ -666,18 +700,30 @@ def _preflight_review_agents(
             # the same sanitized classification the base probe uses, rather
             # than the previous "escalated_probe_rejected" label, which
             # over-claimed budget-specific attribution this codebase has no
-            # validated signal to actually support.
+            # validated signal to actually support. This also applies to a
+            # candidate whose base probe already had text: a rejection here
+            # is exactly the ContextualWisdomLab/.github#1454 scenario --
+            # usable at the base budget, rejected outright at the real
+            # serving budget -- and it must not be admitted just because an
+            # earlier, smaller attempt happened to succeed.
             _record_provider_exception(row, exc)
             routes.append(row)
             continue
         if _chat_response_has_text(escalated_response):
             row["status"] = "ready"
-            row["escalated"] = True
+            if base_has_text:
+                # The base attempt already had usable text; this second
+                # attempt only confirms that same candidate also serves the
+                # real budget -- distinct from `escalated`, which means the
+                # base attempt FAILED and this second attempt is what
+                # rescued it.
+                row["confirmed_at_serving_budget"] = True
+            else:
+                row["escalated"] = True
             # Overwrite the base attempt's stale diagnostic fields with the
             # escalated (successful, final) attempt's own state -- otherwise
-            # a ready route's evidence would still show the budget-too-small
-            # signature that triggered the escalation in the first place,
-            # describing a response this route no longer produced.
+            # a ready route's evidence would still show the base attempt's
+            # signature, describing a response this route no longer produced.
             row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
             row["reasoning_without_content"] = _response_has_reasoning_without_content(
                 escalated_response
@@ -685,6 +731,10 @@ def _preflight_review_agents(
             routes.append(row)
             viable.append(agent)
             continue
+        # ContextualWisdomLab/.github#1454's exact failure mode when
+        # base_has_text is True: usable at REVIEW_PREFLIGHT_BASE_TOKENS,
+        # empty at the real REVIEW_PREFLIGHT_ESCALATED_TOKENS serving budget
+        # -- never admitted, regardless of the earlier, smaller success.
         row["status"] = "rejected"
         row["error_type"] = "invalid_chat_response"
         # Both fields now describe this escalated (2nd, final) attempt,

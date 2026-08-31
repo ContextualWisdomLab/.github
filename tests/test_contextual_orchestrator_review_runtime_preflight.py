@@ -249,13 +249,19 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
     assert secret not in repr(report)
 
     # Regression for Devin Review's successful-probes-omit-diagnostics
-    # finding: the ordinary, most-common outcome (an immediate base-probe
-    # success, no escalation needed) must still populate finish_reason and
-    # reasoning_without_content -- not just failure/escalation outcomes --
-    # so there is a real "normal" baseline to compare future telemetry
-    # against.
+    # finding: the ordinary, most-common outcome (a base-probe success,
+    # confirmed at the real serving budget -- see below) must still populate
+    # finish_reason and reasoning_without_content -- not just
+    # failure/escalation outcomes -- so there is a real "normal" baseline to
+    # compare future telemetry against.
     ready_row = report["routes"][2]
     assert ready_row["status"] == "ready"
+    assert ready_row["attempts"] == 2
+    # ContextualWisdomLab/.github#1454 fix: a base-probe success alone is not
+    # admission -- it must also be confirmed at the real serving budget
+    # (REVIEW_PREFLIGHT_ESCALATED_TOKENS) before this route is marked ready.
+    assert ready_row["confirmed_at_serving_budget"] is True
+    assert "escalated" not in ready_row
     assert ready_row["finish_reason"] == "unknown"
     assert ready_row["reasoning_without_content"] is False
 
@@ -263,13 +269,22 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         assert endpoint == "chat/completions"
         assert payload["model"] == agent.model
         assert payload["stream"] is False
-        assert payload["max_tokens"] == 16
         assert payload["temperature"] == 1.0
         assert payload["messages"] == [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Reply with just 'OK'."},
         ]
         assert "tools" not in payload
+
+    # The rejected and malformed routes each make exactly one call (base
+    # budget); the ready route makes two -- its base probe, then the
+    # mandatory confirmation at the real serving budget.
+    assert [payload["max_tokens"] for _, _, payload in client.calls] == [
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+    ]
 
 
 def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
@@ -399,19 +414,20 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     reasoning tokens, so the gateway rejected a route its own routing probe
     had just proven healthy.
 
-    Since ADR-0005 (this PR), most routes now prove readiness at the much
-    cheaper ``REVIEW_PREFLIGHT_BASE_TOKENS`` (16) instead -- `4096` is used
-    by the routing probe only on the ESCALATED retry (a candidate that
-    failed the cheap probe with a budget-too-small signature) and, always,
-    by the real serving `ModelClient` for actual review traffic (see
-    `ContextualWisdomLab/.github#1454` for the resulting known gap: an
-    ordinary base-probe success is never itself confirmed at this budget).
-    This test's own assertion is unaffected by that: Layer 2 never
-    escalates (ADR-0005 Decision SS1) and always uses the real serving
+    Since ADR-0005 (this PR), most routes first prove liveness at the much
+    cheaper ``REVIEW_PREFLIGHT_BASE_TOKENS`` (16) -- `4096` is then used by
+    the routing probe's second attempt for every admitted route, always: to
+    rescue a candidate that failed the cheap probe with a budget-too-small
+    signature, AND (fixed as `ContextualWisdomLab/.github#1454`, Devin
+    Review, "Serving-incompatible routes pass startup") to confirm a
+    candidate whose cheap probe already succeeded, before that route is ever
+    marked ready -- and, always, by the real serving `ModelClient` for actual
+    review traffic. This test's own assertion is unaffected by that: Layer 2
+    never escalates (ADR-0005 Decision SS1) and always uses the real serving
     budget, so its literal must still equal `REVIEW_MAX_OUTPUT_TOKENS`
     exactly, for the same reason as before -- a smaller Layer 2 budget can
-    still reject a route the routing probe (at either of its own budgets)
-    already proved ready.
+    still reject a route the routing probe (which now confirms every
+    admitted route at this same real serving budget) already proved ready.
     """
     namespace = _load_launcher()
     review_max_output_tokens = namespace["REVIEW_MAX_OUTPUT_TOKENS"]
@@ -995,7 +1011,8 @@ def test_base_probe_success_with_reasoning_and_content_is_never_flagged_as_starv
     response that ALSO discloses a reasoning trace alongside real content
     must never be recorded as ``reasoning_without_content: True`` -- that
     would falsely pollute the evidence this preflight exists to produce, on
-    the single most common outcome (an immediate base-probe success).
+    the single most common outcome (a base-probe success, confirmed at the
+    real serving budget per the ContextualWisdomLab/.github#1454 fix).
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -1024,9 +1041,17 @@ def test_base_probe_success_with_reasoning_and_content_is_never_flagged_as_starv
     assert viable == [transparent_reasoner]
     row = report["routes"][0]
     assert row["status"] == "ready"
-    assert row["attempts"] == 1
+    # Two attempts: the base probe (16 tokens) plus the mandatory
+    # confirmation at the real serving budget (ContextualWisdomLab/.github#1454).
+    assert row["attempts"] == 2
+    assert row["confirmed_at_serving_budget"] is True
+    assert "escalated" not in row
     assert row["finish_reason"] == "stop"
     assert row["reasoning_without_content"] is False
+    assert [call[2]["max_tokens"] for call in client.calls] == [
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+    ]
 
 
 def test_finish_reason_length_escalates_and_can_succeed() -> None:
@@ -1076,6 +1101,106 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     assert row["finish_reason"] == "stop"
     assert row["reasoning_without_content"] is False
     assert report["escalations_used"] == 1
+
+
+def test_base_probe_success_not_admitted_when_serving_budget_probe_returns_empty() -> None:
+    """Regression for Devin Review's "Serving-incompatible routes pass
+    startup" finding (`ContextualWisdomLab/.github#1454`): a route that
+    succeeds at the cheap `REVIEW_PREFLIGHT_BASE_TOKENS` probe but returns
+    empty content at the real `REVIEW_PREFLIGHT_ESCALATED_TOKENS` serving
+    budget must NOT be marked ready -- admission requires success at the
+    actual serving-equivalent token budget, not merely at the escalation
+    sequence's first rung. Before this fix, `_build_model_client` would go
+    on to serve real reviews at `REVIEW_MAX_OUTPUT_TOKENS` against a route
+    this preflight had already (wrongly) admitted.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    serving_incompatible = SimpleNamespace(
+        id="nvidia_nim_serving_incompatible", provider_name="nvidia_nim", model="narrow/free"
+    )
+    client = _SequencedClient(
+        [
+            _openai_text("OK"),
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"], match="no provider route passed"):
+        preflight([serving_incompatible], client=client)
+
+    assert [call[2]["max_tokens"] for call in client.calls] == [
+        namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+    ]
+
+
+def test_base_probe_success_not_admitted_when_serving_budget_probe_raises() -> None:
+    """The sibling shape of the same Devin Review finding: the route's
+    confirming probe at the real serving budget doesn't just come back
+    empty, it is rejected outright (a provider whose real completion-token
+    ceiling sits strictly between the base and serving budgets, exactly the
+    axis ADR-0005's own Research already documented). Must still fail
+    closed, not admit the route on the strength of the earlier, smaller
+    success.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    narrow_ceiling = SimpleNamespace(
+        id="nvidia_nim_narrow_ceiling", provider_name="nvidia_nim", model="narrow/free"
+    )
+    client = _SequencedClient(
+        [
+            _openai_text("OK"),
+            RuntimeError("provider rejected the request: max_tokens exceeds model ceiling"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([narrow_ceiling], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["status"] == "rejected"
+    assert row["error_type"] == "RuntimeError"
+    assert row["attempts"] == 2
+    assert "escalated" not in row
+    assert "confirmed_at_serving_budget" not in row
+
+
+def test_base_probe_success_confirmation_shares_the_escalation_budget() -> None:
+    """A base-probe success's mandatory confirmation draws from the SAME
+    shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` counter a budget-too-small
+    escalation would -- there is no separate, unbounded allowance for
+    confirming successes, which would silently reintroduce an unbounded
+    worst case this fix must not create.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
+
+    agents = [
+        SimpleNamespace(id=f"confirmed_{index}", provider_name="openrouter", model="x/free")
+        for index in range(max_escalations)
+    ]
+    exhausted = SimpleNamespace(
+        id="confirmation_exhausted", provider_name="openrouter", model="x/free"
+    )
+    client = _ProbeClient(
+        {agent.id: _openai_text("OK") for agent in agents}
+        | {exhausted.id: _openai_text("OK")}
+    )
+
+    viable, report = preflight([*agents, exhausted], client=client)
+
+    assert viable == agents
+    exhausted_row = report["routes"][-1]
+    assert exhausted_row["status"] == "rejected"
+    assert exhausted_row["error_type"] == "escalation_budget_exhausted"
+    assert exhausted_row["attempts"] == 1
+    assert report["escalations_used"] == max_escalations
+    assert len(client.calls) == max_escalations * 2 + 1
 
 
 def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
@@ -1360,7 +1485,10 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert fallback_used is True
     assert report["fallback_reason"] == "primary_routes_unavailable"
     assert report["primary_attempt"]["ready_count"] == 0
-    assert [call[0] for call in client.calls] == [primary, fallback]
+    # The fallback route's base probe succeeds and is then confirmed at the
+    # real serving budget (ContextualWisdomLab/.github#1454) before being
+    # admitted, so it makes two calls.
+    assert [call[0] for call in client.calls] == [primary, fallback, fallback]
 
     ready_client = _ProbeClient(
         {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
@@ -1371,7 +1499,9 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert viable == [primary]
     assert fallback_used is False
     assert "fallback_reason" not in report
-    assert [call[0] for call in ready_client.calls] == [primary]
+    # Likewise, the primary route's base-probe success is confirmed at the
+    # real serving budget before admission -- two calls, both to primary.
+    assert [call[0] for call in ready_client.calls] == [primary, primary]
 
     failing_client = _ProbeClient(
         {primary.id: TimeoutError("unavailable"), fallback.id: RuntimeError("rejected")}
