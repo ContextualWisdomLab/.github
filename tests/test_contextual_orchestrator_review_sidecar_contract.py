@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
+ORCH_PIN_SHA = "9942b620bed03ca4f414338bf82a08cff4f267ed"
 
 
 def _read(path: Path) -> str:
@@ -64,6 +64,19 @@ def test_sidecar_pins_the_vendored_orchestrator_revision() -> None:
     assert "from contextual_orchestrator.review_gateway import register_review_credentials" in text
     assert 'ORCHESTRATOR_PORT="18080"' in text
     assert 'ORCHESTRATOR_HOST="127.0.0.1"' in text
+
+
+def test_single_candidate_attempt_is_explicit_and_preserves_normal_defaults() -> None:
+    """Only pinned workflow jobs remove the redundant in-process retry."""
+    sidecar = _read(SIDECAR)
+    launcher = _read(LAUNCHER)
+
+    assert "--single-candidate-attempt" in sidecar
+    assert 'launcher_attempt_args=(--single-candidate-attempt)' in sidecar
+    assert 'if args.single_candidate_attempt else {}' in launcher
+    assert '{"tool_retry_attempts": 0}' in launcher
+    assert "realtime_judge=False" not in launcher
+    assert "realtime_judge = False" not in launcher
 
 
 def test_sidecar_adr_names_the_current_vendored_revision() -> None:
@@ -510,7 +523,7 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
-    assert "${CONTEXTUAL_ORCHESTRATOR_TOKEN}" in workflow
+    assert 'NOEMA_LLM_API_KEY="$CONTEXTUAL_ORCHESTRATOR_TOKEN"' in workflow
     assert "https://integrate.api.nvidia.com" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
@@ -525,7 +538,8 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     launcher = _read(LAUNCHER)
 
     assert "Resolve Noema target repository visibility" in workflow
-    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "steps.target_visibility.outputs.require_zdr" in workflow
+    assert "needs.prepare.outputs.require_zdr" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
     assert "--require-zdr" in sidecar

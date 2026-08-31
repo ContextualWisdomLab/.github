@@ -44,16 +44,14 @@ jobs:
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
-  noema-review:
-    name: noema-review
+  prepare:
+    name: noema-review / prepare
     runs-on: ubuntu-latest
-    # Explicit, not GitHub's implicit default: self-documents the ceiling
-    # scripts/ci/noema_review_gate.py's CALL_LLM_TIMEOUT_SECONDS derivation
-    # cites (GitHub-hosted runners hard-cap a single job at 360 minutes
-    # regardless of this value). Unchanged from the platform default -- this
-    # does not alter behavior, only makes the ceiling discoverable next to
-    # the step whose worst-case timeout is now sized close to it.
-    timeout-minutes: 360
+    # Preparation is network/API work only; model serving is isolated in the
+    # two bounded candidate jobs below.
+    timeout-minutes: 30
+    outputs:
+      require_zdr: ${{ steps.target_visibility.outputs.require_zdr }}
     if: >-
       github.event_name == 'repository_dispatch'
       || (
@@ -297,45 +295,251 @@ jobs:
               ;;
           esac
 
-      - name: Provision contextual-orchestrator review sidecar
+      - name: Seal exact-head Noema review input
         if: env.PR_NUMBER != ''
         env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 -m scripts.ci.noema_review_gate \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --mode prepare \
+            --output "${RUNNER_TEMP}/noema-input.json"
+
+      - name: Upload sealed Noema review input
+        if: env.PR_NUMBER != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noema-review-input
+          path: |
+            ${{ runner.temp }}/noema-input.json
+            ${{ runner.temp }}/noema-input.json.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate-1:
+    name: noema-review / candidate-1
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Materialize trusted Noema source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -o "${RUNNER_TEMP}/trusted.tar.gz" "${GITHUB_API_URL}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "$GITHUB_WORKSPACE" --strip-components=1
+      - name: Download sealed Noema review input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noema-review-input
+          path: ${{ runner.temp }}/noema-input
+      - name: Provision candidate pool
+        env: &provider_credentials
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ steps.target_visibility.outputs.require_zdr }}
+          CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.prepare.outputs.require_zdr }}
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
+      - name: Run first candidate
+        id: review
+        timeout-minutes: 330
         run: |
           set -euo pipefail
-          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
-
-      - name: Run Noema LLM review and submit verdict
-        if: env.PR_NUMBER != ''
-        env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
-          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
-          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
-          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PR_NUMBER:-}" ]; then
-            echo "No pull request number was available for this event; skipping."
-            exit 0
-          fi
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
-            exit 1
-          fi
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
             echo "::error::contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
             exit 1
           fi
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+          candidate_id="$(jq -er '.routes[] | select(.status == "ready") | .agent_id' "$CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE" | head -1)"
+          printf '%s\n' "$candidate_id" >"${RUNNER_TEMP}/candidate-1.id"
           export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
           export NOEMA_LLM_MODEL="orchestrator/free"
-          export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+          export NOEMA_LLM_API_KEY="$CONTEXTUAL_ORCHESTRATOR_TOKEN"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
-          python3 -m scripts.ci.noema_review_gate \
-            --repo "$TARGET_REPOSITORY" \
-            --pr-number "$PR_NUMBER"
+          export NOEMA_LLM_CANDIDATE_ID="$candidate_id"
+          python3 -m scripts.ci.noema_review_gate --repo placeholder/repo --pr-number 1 \
+            --mode evaluate --input "${RUNNER_TEMP}/noema-input/noema-input.json" \
+            --output "${RUNNER_TEMP}/noema-verdict.json"
+      - name: Guarantee first candidate status handoff
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -e "${RUNNER_TEMP}/candidate-1.id" ]; then
+            : >"${RUNNER_TEMP}/candidate-1.id"
+          fi
+      - name: Upload first candidate handoff
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noema-candidate-1
+          path: |
+            ${{ runner.temp }}/candidate-1.id
+            ${{ runner.temp }}/noema-verdict.json
+            ${{ runner.temp }}/noema-verdict.json.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate-2:
+    name: noema-review / candidate-2
+    needs: [prepare, candidate-1]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Materialize trusted Noema source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -o "${RUNNER_TEMP}/trusted.tar.gz" "${GITHUB_API_URL}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "$GITHUB_WORKSPACE" --strip-components=1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noema-review-input
+          path: ${{ runner.temp }}/noema-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noema-candidate-1
+          path: ${{ runner.temp }}/candidate-1
+      - name: Reuse successful first verdict
+        id: reuse
+        run: |
+          if [ -s "${RUNNER_TEMP}/candidate-1/noema-verdict.json" ] && [ -s "${RUNNER_TEMP}/candidate-1/noema-verdict.json.sha256" ]; then
+            cp "${RUNNER_TEMP}/candidate-1/noema-verdict.json" "${RUNNER_TEMP}/noema-verdict.json"
+            cp "${RUNNER_TEMP}/candidate-1/noema-verdict.json.sha256" "${RUNNER_TEMP}/noema-verdict.json.sha256"
+            echo "reused=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "reused=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Provision fallback candidate pool
+        if: steps.reuse.outputs.reused != 'true'
+        env: *provider_credentials
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
+      - name: Run second candidate
+        if: steps.reuse.outputs.reused != 'true'
+        timeout-minutes: 330
+        run: |
+          set -euo pipefail
+          source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
+          first_id="$(cat "${RUNNER_TEMP}/candidate-1/candidate-1.id" 2>/dev/null || true)"
+          candidate_id="$(jq -er --arg excluded "$first_id" '.routes[] | select(.status == "ready" and .agent_id != $excluded) | .agent_id' "$CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE" | head -1)"
+          export NOEMA_LLM_API_URL="${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions"
+          export NOEMA_LLM_MODEL="orchestrator/free"
+          export NOEMA_LLM_API_KEY="$CONTEXTUAL_ORCHESTRATOR_TOKEN"
+          export NOEMA_LLM_VIA_ORCHESTRATOR=1
+          export NOEMA_LLM_CANDIDATE_ID="$candidate_id"
+          export NOEMA_LLM_EXCLUDE_CANDIDATE_IDS="$first_id"
+          python3 -m scripts.ci.noema_review_gate --repo placeholder/repo --pr-number 1 \
+            --mode evaluate --input "${RUNNER_TEMP}/noema-input/noema-input.json" \
+            --output "${RUNNER_TEMP}/noema-verdict.json"
+      - name: Upload final candidate handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noema-candidate-final
+          path: |
+            ${{ runner.temp }}/noema-verdict.json
+            ${{ runner.temp }}/noema-verdict.json.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    name: noema-review
+    needs: [prepare, candidate-2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      pull-requests: write
+    env:
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || '' }}
+    steps:
+      - name: Materialize trusted Noema source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SOURCE_REF: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TRUSTED_SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            -o "${RUNNER_TEMP}/trusted.tar.gz" "${GITHUB_API_URL}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
+          tar -xzf "${RUNNER_TEMP}/trusted.tar.gz" -C "$GITHUB_WORKSPACE" --strip-components=1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noema-review-input
+          path: ${{ runner.temp }}/noema-input
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noema-candidate-final
+          path: ${{ runner.temp }}/noema-verdict
+      - name: Select finalizer credential
+        id: credential
+        env:
+          APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+          REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}
+          EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+        run: |
+          set -euo pipefail
+          echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          if [ -n "$REVIEW_TOKEN" ]; then echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "$APP_CLIENT_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then echo "source=github-app" >>"$GITHUB_OUTPUT"
+          elif [ -n "$EXCHANGE_URL" ]; then echo "source=oidc" >>"$GITHUB_OUTPUT"
+          else echo "::error::Noema reviewer credential is unavailable."; exit 1; fi
+      - name: Mint repository-scoped Noema GitHub App token
+        id: app_token
+        if: steps.credential.outputs.source == 'github-app'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.credential.outputs.repository }}
+          permission-contents: read
+          permission-pull-requests: write
+      - name: Exchange finalizer token through OIDC
+        if: steps.credential.outputs.source == 'oidc'
+        id: oidc_token
+        env:
+          EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+          OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
+        run: |
+          set -euo pipefail
+          separator='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] && separator='&'
+          oidc="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -er .value)"
+          token="$(curl -fsS -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer ${oidc}" --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" "$EXCHANGE_URL" | jq -er .token)"
+          echo "::add-mask::$token"
+          echo "token=$token" >>"$GITHUB_OUTPUT"
+      - name: Submit sealed exact-head verdict
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.app_token.outputs.token || steps.oidc_token.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.credential.outputs.source }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.app_token.outputs['app-slug'] && format('{0}[bot]', steps.app_token.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.app_token.outputs['installation-id'] }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN:-}" || { echo "::error::Noema reviewer credential is unavailable."; exit 1; }
+          python3 -m scripts.ci.noema_review_gate --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+            --mode finalize --input "${RUNNER_TEMP}/noema-input/noema-input.json" \
+            --verdict "${RUNNER_TEMP}/noema-verdict/noema-verdict.json"

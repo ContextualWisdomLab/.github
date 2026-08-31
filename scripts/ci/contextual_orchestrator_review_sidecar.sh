@@ -14,7 +14,24 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-8cd99f139915131ba0239bce12a5d6a5fd85394e}"
+launcher_attempt_args=()
+case "${1:-}" in
+  "") ;;
+  --single-candidate-attempt)
+    launcher_attempt_args=(--single-candidate-attempt)
+    shift
+    ;;
+  *)
+    printf '[contextual-orchestrator-sidecar] error: unsupported argument: %s\n' "$1" >&2
+    exit 1
+    ;;
+esac
+if [ "$#" -ne 0 ]; then
+  printf '[contextual-orchestrator-sidecar] error: unexpected extra arguments\n' >&2
+  exit 1
+fi
+
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-9942b620bed03ca4f414338bf82a08cff4f267ed}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -434,6 +451,7 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --catalog-out "$catalog_file" \
     --report-out "$policy_report" \
     --preflight-out "$preflight_report" \
+    "${launcher_attempt_args[@]}" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
     "${pool_args[@]}" \

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
@@ -32,10 +34,10 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
-# A real judge-gated review may legitimately exceed two minutes. This outer
-# request deadline is shared with the serving transport; the workflow job is
-# the final safety boundary.
-CALL_LLM_TIMEOUT_SECONDS = 9600
+# The sidecar may spend 150 minutes on the selected reviewer and another 150
+# minutes on its preserved realtime judge. Keep 30 minutes for handoff and
+# transport overhead while remaining below GitHub's 360-minute job ceiling.
+CALL_LLM_TIMEOUT_SECONDS = 19800
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -649,6 +651,18 @@ def call_llm(
     }
     if is_allowed_orchestrator_sidecar_url(api_url):
         payload["orchestration"] = "route"
+        candidate_id = os.environ.get("NOEMA_LLM_CANDIDATE_ID", "").strip()
+        excluded = [
+            value.strip()
+            for value in os.environ.get("NOEMA_LLM_EXCLUDE_CANDIDATE_IDS", "").split(",")
+            if value.strip()
+        ]
+        if candidate_id or excluded:
+            payload["routing"] = {}
+            if candidate_id:
+                payload["routing"]["candidate_id"] = candidate_id
+            if excluded:
+                payload["routing"]["exclude_candidate_ids"] = excluded
     request = urllib.request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -810,11 +824,93 @@ def inspect_and_review(repo: str, number: int) -> int:
     return 0
 
 
+def _write_sealed(path: str, payload: dict[str, Any]) -> None:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    with open(path, "wb") as stream:
+        stream.write(encoded)
+    with open(f"{path}.sha256", "w", encoding="ascii") as stream:
+        stream.write(f"{hashlib.sha256(encoded).hexdigest()}\n")
+
+
+def _read_sealed(path: str) -> dict[str, Any]:
+    with open(path, "rb") as stream:
+        encoded = stream.read()
+    with open(f"{path}.sha256", encoding="ascii") as stream:
+        expected = stream.read().strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected) or hashlib.sha256(encoded).hexdigest() != expected:
+        raise RuntimeError("Noema handoff artifact digest mismatch")
+    payload = json.loads(encoded)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Noema handoff artifact must contain a JSON object")
+    return payload
+
+
+def prepare_review(repo: str, number: int, output: str) -> int:
+    """Seal immutable review input without calling a model or writing GitHub."""
+    pr = fetch_pr(repo, number)
+    if pr.get("isDraft"):
+        raise RuntimeError("Noema review preparation does not accept draft pull requests")
+    diff, truncated = fetch_diff(repo, number)
+    changed_paths = fetch_changed_file_paths(repo, number)
+    _write_sealed(output, {
+        "repo": repo,
+        "number": number,
+        "head_sha": pr.get("headRefOid"),
+        "pr": pr,
+        "diff": diff,
+        "truncated": truncated,
+        "changed_paths": changed_paths,
+        "review_context": build_review_context(repo, number, pr),
+    })
+    return 0
+
+
+def evaluate_review(input_path: str, output: str) -> int:
+    """Evaluate one sealed current-head input and seal the model verdict."""
+    prepared = _read_sealed(input_path)
+    repo, number = str(prepared["repo"]), int(prepared["number"])
+    verdict = call_llm(
+        repo, number, prepared["pr"], prepared["diff"], bool(prepared["truncated"]),
+        str(prepared.get("review_context") or ""), prepared.get("changed_paths") or (),
+    )
+    _write_sealed(output, {
+        "repo": repo,
+        "number": number,
+        "head_sha": prepared["head_sha"],
+        "input_sha256": hashlib.sha256(Path(input_path).read_bytes()).hexdigest(),
+        "candidate_id": os.environ.get("NOEMA_LLM_CANDIDATE_ID", "").strip(),
+        "verdict": verdict,
+    })
+    return 0
+
+
+def finalize_review(input_path: str, verdict_path: str) -> int:
+    """Submit only a sealed verdict bound to the sealed input and live head."""
+    prepared, result = _read_sealed(input_path), _read_sealed(verdict_path)
+    input_digest = hashlib.sha256(Path(input_path).read_bytes()).hexdigest()
+    if result.get("input_sha256") != input_digest or result.get("head_sha") != prepared.get("head_sha"):
+        raise RuntimeError("Noema verdict artifact is not bound to the prepared input")
+    repo, number = str(prepared["repo"]), int(prepared["number"])
+    pr = fetch_pr(repo, number)
+    if pr.get("headRefOid") != prepared.get("head_sha"):
+        raise RuntimeError("Noema verdict artifact is stale for the current pull request head")
+    actor = current_actor()
+    if not actor or actor in PRIMARY_REVIEW_AUTHORS:
+        raise RuntimeError("Noema requires a verified independent reviewer credential")
+    if not existing_noema_review(pr, actor):
+        submit_review(repo, number, pr, actor, result["verdict"])
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse Noema review gate command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--mode", choices=("review", "prepare", "evaluate", "finalize"), default="review")
+    parser.add_argument("--input")
+    parser.add_argument("--verdict")
+    parser.add_argument("--output")
     return parser.parse_args(argv)
 
 
@@ -823,6 +919,14 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
+    if args.mode == "prepare" and args.output:
+        return prepare_review(args.repo, args.pr_number, args.output)
+    if args.mode == "evaluate" and args.input and args.output:
+        return evaluate_review(args.input, args.output)
+    if args.mode == "finalize" and args.input and args.verdict:
+        return finalize_review(args.input, args.verdict)
+    if args.mode != "review":
+        raise SystemExit("selected mode requires its artifact path arguments")
     return inspect_and_review(args.repo, args.pr_number)
 
 

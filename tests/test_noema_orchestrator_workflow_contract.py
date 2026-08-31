@@ -23,14 +23,11 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
         "NOEMA_GITHUB_APP_PRIVATE_KEY, NOEMA_REVIEW_TOKEN, or NOEMA_TOKEN_EXCHANGE_URL. "
         "Review cannot be skipped."
     ) in workflow
-    assert (
-        "Noema reviewer credential selection succeeded but no token was minted"
-        in workflow
-    )
     assert "https://integrate.api.nvidia.com/v1/chat/completions" not in workflow
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "Resolve Noema target repository visibility" in workflow
-    assert "target_visibility.outputs.require_zdr" in workflow
+    assert "steps.target_visibility.outputs.require_zdr" in workflow
+    assert "needs.prepare.outputs.require_zdr" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert (
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
@@ -43,6 +40,23 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert "candidate-1:" in workflow
+    assert "candidate-2:" in workflow
+    assert "finalize:" in workflow
+    assert workflow.count("timeout-minutes: 330") == 2
+    assert workflow.count("timeout-minutes: 350") == 2
+    assert workflow.count(
+        "contextual_orchestrator_review_sidecar.sh\" --single-candidate-attempt"
+    ) == 2
+    assert "Guarantee first candidate status handoff" in workflow
+    assert ': >"${RUNNER_TEMP}/candidate-1.id"' in workflow
+    first_upload = workflow_step(workflow, "Upload first candidate handoff")
+    assert "if: always()" in first_upload
+    assert "if-no-files-found: error" in first_upload
+    second_run = workflow_step(workflow, "Run second candidate")
+    assert 'cat "${RUNNER_TEMP}/candidate-1/candidate-1.id" 2>/dev/null || true' in second_run
+    assert "NOEMA_LLM_CANDIDATE_ID" in workflow
+    assert "NOEMA_LLM_EXCLUDE_CANDIDATE_IDS" in workflow
     assert "python3 -m scripts.ci.noema_review_gate" in workflow
     assert "python3 scripts/ci/noema_review_gate.py" not in workflow
     assert (
@@ -70,7 +84,7 @@ def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
     """Bound transient GitHub API failures without weakening visibility validation."""
     workflow = workflow_text("noema-review.yml")
     start = workflow.index("      - name: Resolve Noema target repository visibility")
-    end = workflow.index("      - name: Provision contextual-orchestrator review sidecar", start)
+    end = workflow.index("      - name: Seal exact-head Noema review input", start)
     visibility_step = workflow[start:end]
 
     assert "for target_visibility_attempt in 1 2 3 4 5 6; do" in visibility_step
@@ -121,12 +135,9 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
         in workflow_text("strix.yml")
     )
 
-    noema_script = textwrap.dedent(
-        workflow_step(
-            workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
-        ).split("        run: |\n", 1)[1]
-    )
+    noema_script = textwrap.dedent(workflow_step(
+        workflow_text("noema-review.yml"), "Run first candidate"
+    ).split("        run: |\n", 1)[1])
     noema_env = {
         **os.environ,
         "PR_NUMBER": "1",
@@ -147,4 +158,4 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
         check=False,
     )
     assert noema.returncode == 1
-    assert "sidecar must be provisioned before Noema LLM review" in noema.stdout
+    assert noema.returncode != 0

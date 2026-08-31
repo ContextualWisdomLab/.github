@@ -392,6 +392,8 @@ def test_call_llm_selects_direct_route_for_the_process_local_sidecar(monkeypatch
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:18080/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    monkeypatch.setenv("NOEMA_LLM_CANDIDATE_ID", "candidate-one")
+    monkeypatch.setenv("NOEMA_LLM_EXCLUDE_CANDIDATE_IDS", "candidate-zero")
     seen = {}
 
     def fake_urlopen(request, timeout):
@@ -413,6 +415,10 @@ def test_call_llm_selects_direct_route_for_the_process_local_sidecar(monkeypatch
     # verdict satisfying that unrelated validation is deliberately avoided.
     assert noema.call_llm("owner/repo", 1, pr, "diff", False)["decision"] == "comment"
     assert seen["body"]["orchestration"] == "route"
+    assert seen["body"]["routing"] == {
+        "candidate_id": "candidate-one",
+        "exclude_candidate_ids": ["candidate-zero"],
+    }
 
 
 def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
@@ -441,7 +447,17 @@ def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
     noema.call_llm("owner/repo", 1, make_pr(), "diff", False)
-    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 9600
+    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 19800
+
+
+def test_sealed_handoff_rejects_modified_payload(tmp_path):
+    """Cross-job review input cannot change without invalidating its digest."""
+    handoff = tmp_path / "handoff.json"
+    noema._write_sealed(str(handoff), {"head_sha": "a" * 40})
+    assert noema._read_sealed(str(handoff))["head_sha"] == "a" * 40
+    handoff.write_text('{"head_sha":"changed"}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        noema._read_sealed(str(handoff))
 
 
 def test_noema_redirect_handler_rejects_redirects():

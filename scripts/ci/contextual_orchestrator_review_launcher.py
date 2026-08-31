@@ -50,7 +50,7 @@ REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 # A real review may legitimately run far beyond two minutes.  Keep the short
 # timeout confined to startup admission; the outer Noema request/job deadline
 # remains the serving safety boundary.
-REVIEW_SERVING_TIMEOUT_SECONDS = 9600
+REVIEW_SERVING_TIMEOUT_SECONDS = 9000
 REVIEW_PREFLIGHT_BATCH_SIZE = 4
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
@@ -1332,6 +1332,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
+    parser.add_argument(
+        "--single-candidate-attempt",
+        action="store_true",
+        help="Disable the redundant same-agent retry when job-level failover is active",
+    )
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
@@ -1504,28 +1509,16 @@ def main(argv: list[str] | None = None) -> int:
     client = _build_model_client(
         ModelClient, timeout=REVIEW_SERVING_TIMEOUT_SECONDS
     )
-    # CORRECTED (ContextualWisdomLab/.github#1415, Devin Review "Serving
-    # answers bypass quality validation"): an earlier version of this fix
-    # disabled TaskOrchestrator's tool_retry_attempts (to 0) and
-    # policy.realtime_judge (to False) to shave worst-case wall-clock. Both
-    # were wrong to touch. realtime_judge is not just a future-routing
+    # realtime_judge is not just a future-routing
     # quality-ledger signal -- route_once() uses it to gate acceptance of the
     # *current* answer and to fail over to the next measured candidate on
     # rejection (see route_once/_realtime_route_judge in
     # contextual_orchestrator/orchestrator.py); disabling it let a
     # judge-rejected, low-quality answer reach Noema instead of another ready
-    # route. Separately, tool_retry_attempts=0 was doubly wrong: besides
-    # removing _invoke's legitimate same-agent retry-on-transient-failure, it
-    # also drives route_once's own OWN outer cross-candidate loop bound
-    # (`max_attempts = 1 + min(tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)`
-    # in route_once) down to 1 -- so even with realtime_judge alone reverted,
-    # a judge rejection would still have nowhere to fail over to. Both
-    # defaults are restored here unmodified (tool_retry_attempts=1,
-    # realtime_judge=True, both TaskOrchestrator's own tested constructor/
-    # OrchestrationPolicy defaults) so serving keeps its full, intended
-    # per-request quality gate and failover; see CALL_LLM_TIMEOUT_SECONDS in
-    # noema_review_gate.py for the resulting (larger, honestly re-derived)
-    # client-side read-timeout this requires.
+    # route. Normal callers retain TaskOrchestrator's defaults. The explicit
+    # single-candidate job mode removes only its redundant same-agent retry;
+    # cross-candidate failover happens in the next workflow job, while the
+    # realtime judge remains enabled by its unchanged default.
     #
     # Sliced to REVIEW_SERVING_MAX_CANDIDATES (see that constant's own
     # comment): serving the full preflight-admitted pool made the honest
@@ -1533,8 +1526,9 @@ def main(argv: list[str] | None = None) -> int:
     # already preflight's own ranked, verified-ready ordering, so this keeps
     # the top-ranked candidates and only trims serving-time failover depth
     # among routes preflight already proved could serve a real request.
+    attempt_options = {"tool_retry_attempts": 0} if args.single_candidate_attempt else {}
     orchestrator = TaskOrchestrator(
-        agents[:REVIEW_SERVING_MAX_CANDIDATES], client=client
+        agents[:REVIEW_SERVING_MAX_CANDIDATES], client=client, **attempt_options
     )
     serve(
         orchestrator,

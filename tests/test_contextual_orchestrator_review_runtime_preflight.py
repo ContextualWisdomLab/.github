@@ -2488,7 +2488,7 @@ def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
     preflight, serving = CaptureClient.instances
 
     assert preflight["timeout"] == 10
-    assert serving["timeout"] == 9600
+    assert serving["timeout"] == 9000
     assert preflight["timeout"] != serving["timeout"]
     assert preflight["max_output_tokens"] == serving["max_output_tokens"] == 4096
     assert preflight["max_retries"] == serving["max_retries"] == 0
@@ -2503,7 +2503,7 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert "_preflight_with_fallback(" in launcher
     assert "preflight-out" in launcher
     assert "max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS" in launcher
-    assert "REVIEW_SERVING_TIMEOUT_SECONDS = 9600" in launcher
+    assert "REVIEW_SERVING_TIMEOUT_SECONDS = 9000" in launcher
     assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
     assert "timeout=REVIEW_SERVING_TIMEOUT_SECONDS" in launcher
     assert launcher.count("max_retries=0") == 1
