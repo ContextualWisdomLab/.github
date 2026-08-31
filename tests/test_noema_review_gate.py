@@ -513,8 +513,7 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
-    marker_body = "OpenCode reviewed the current-head bounded evidence and found no blocking issues."
-    clean_pr = make_pr(reviews={"nodes": [review(body=marker_body)]})
+    clean_pr = make_pr()
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
@@ -527,13 +526,8 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert calls
 
     cases = [
-        (make_pr(), "noema"),
         (make_pr(isDraft=True), "noema"),
         (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
-        (make_pr(reviews={"nodes": [review("CHANGES_REQUESTED"), review(body=marker_body)]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]}), "noema"),
-        (make_pr(reviews={"nodes": [review(body=marker_body)]}, statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}}), "noema"),
-        (clean_pr, "opencode-agent"),
     ]
     for pr, actor in cases:
         calls.clear()
@@ -541,6 +535,48 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7) == 0
         assert calls == []
+
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "opencode-agent")
+    with pytest.raises(RuntimeError, match="independent reviewer credential"):
+        noema.inspect_and_review("owner/repo", 7)
+
+
+def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatch):
+    pr = make_pr(
+        reviews={"nodes": [review("CHANGES_REQUESTED")]},
+        reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
+        statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}},
+    )
+    calls = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert calls
+
+
+def test_call_llm_rejects_empty_review_content(monkeypatch):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="substantive summary"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 
 def test_parse_args_and_main(monkeypatch):

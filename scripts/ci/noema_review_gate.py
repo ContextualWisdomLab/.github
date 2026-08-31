@@ -588,6 +588,14 @@ def call_llm(
     decision = str(verdict.get("decision") or "").strip().lower()
     if decision not in {"approve", "request_changes", "comment"}:
         raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
+    summary = verdict.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise RuntimeError("Noema LLM response did not contain a substantive summary")
+    findings = verdict.get("findings")
+    if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+        raise RuntimeError("Noema LLM response findings must be a list of objects")
+    if decision == "request_changes" and not format_findings(findings):
+        raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
     return verdict
 
 
@@ -647,35 +655,19 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 
 def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's LLM review when gates are clean."""
+    """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
     actor = current_actor()
     if actor in PRIMARY_REVIEW_AUTHORS:
-        print(
+        raise RuntimeError(
             f"Current token actor {actor!r} is already a primary review actor; "
-            "Noema review skipped so GitHub receives an independent reviewer."
+            "Noema requires an independent reviewer credential."
         )
-        return 0
     if pr.get("isDraft"):
         print("PR is draft; Noema review skipped.")
         return 0
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
-        return 0
-    if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
-        return 0
-    if has_current_changes_requested(pr):
-        print("Current head has requested changes; Noema review skipped.")
-        return 0
-    if has_unresolved_threads(pr):
-        print("PR has unresolved review threads; Noema review skipped.")
-        return 0
-    blockers = blocking_checks(pr)
-    if blockers:
-        print("Blocking checks remain; Noema review skipped:")
-        for blocker in blockers:
-            print(f"- {blocker}")
         return 0
     diff, truncated = fetch_diff(repo, number)
     review_context = build_review_context(repo, number, pr)
