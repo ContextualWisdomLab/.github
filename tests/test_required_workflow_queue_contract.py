@@ -782,6 +782,16 @@ def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> N
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
 
 
+def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
+    """Let the scheduler dispatch OpenCode when a review event clears its last blocker."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+
+    assert "github.event_name == 'pull_request_review'" in scan_job.split(
+        "TRIGGER_REVIEWS:", 1
+    )[1].splitlines()[0]
+
+
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 
