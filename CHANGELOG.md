@@ -5,6 +5,18 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `scripts/ci/test_strix_quick_gate.sh`'s `required-workflow-bootstrap` job-scope
+  check: its `awk` range used `/^[^ ]/` as the end pattern, which only matches a
+  fully-unindented line and so never stopped at the next 2-space-indented job
+  header — it silently swept every later job in `opencode-review.yml`
+  (`coverage-source-tree`, `coverage-evidence`, `opencode-review-target`) into
+  the check. That was latent until `#1497` ("require substantive agent
+  verdicts") added a genuine step-level `if: github.event.action != 'closed'`
+  inside `opencode-review-target`, which the over-broad range then
+  misattributed to `required-workflow-bootstrap` (which has no `if:` at all
+  and was always compliant), failing `exact-head-path-policy` on every open
+  PR in this repository. The corrected range now exits as soon as it reaches
+  the next 2-space-indented job header.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
