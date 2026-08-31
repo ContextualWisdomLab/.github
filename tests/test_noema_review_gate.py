@@ -119,6 +119,14 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
     assert noema.current_actor() == ""
 
+    def app_identity(args, **kwargs):
+        if args[2] == "user":
+            return ""
+        return "cwl-noema-review\n"
+
+    monkeypatch.setattr(noema, "run", app_identity)
+    assert noema.current_actor() == "cwl-noema-review[bot]"
+
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5))
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated
