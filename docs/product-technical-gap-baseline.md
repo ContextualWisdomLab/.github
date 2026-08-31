@@ -1653,6 +1653,48 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 sidecar pin bumped past #922's request-time failover fix
+
+- Bumps `ORCHESTRATOR_PIN_SHA` from `30c6d71680e659f25a0a433d4726ad0d437f9757`
+  (the #1430 pin) to `79c6841b9b3645d1f14b943985825d2302071f5b` in the same
+  three places #1430 established as the contract: the sidecar script default
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
+  test's `ORCH_PIN_SHA` (`tests/test_contextual_orchestrator_review_sidecar_contract.py`),
+  and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
+  reference.
+- This vendors `contextual-orchestrator` PR #922 (`fix(routing): classify
+  primary provider transport failures explicitly` — the classification fix
+  behind this Draft's own request-time failover acceptance contract, see
+  PR #1437) plus everything else that landed on that repo's `main` since the
+  last pin: #912 (video job resource normalization), #868 (gateway default
+  chat model + configured-gateway discovery + OpenRouter ZDR/privacy
+  metadata), #920/#921 (cleanup/docs), #928 (provider-catalog-sync outage
+  tolerance), #925 (`stream_options.include_usage` for tools passthrough),
+  and #929 (Bytez raw-token `Authorization` header fix) — 148 commits total
+  between the two pins.
+- Reviewed for anything that would break the sidecar's actual dependency
+  surface before bumping, since ADR-0003 requires this: `requirements.lock`
+  is byte-for-byte unchanged (no `--require-hashes` drift), and every change
+  to `contextual_orchestrator/__main__.py` (the CLI the launcher invokes) is
+  strictly additive -- new optional flags and discovery-source plumbing, zero
+  removed arguments or subcommands. The `register-credential` and `--serve
+  --agents ... --port ... --auth-token ...` invocations the sidecar/launcher
+  depend on are untouched.
+- Not independently verified live: this sandbox has no provider credentials
+  (`BYTEZ_API_KEY`/`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`/
+  `OPENROUTER_API_KEY`/`OPENAI_API_KEY`), so an actually-executed end-to-end
+  sidecar run against real providers isn't possible here the way ADR-0003's
+  own PoC bar asks for. Local verification is `.github`'s own full suite
+  (2023 passed, 1 skipped, 100% coverage/docstrings) plus the static
+  sidecar/pin contract tests; the real live proof is the next hosted
+  `noema-review`/`opencode-review`/`strix` run against this new pin, once
+  the ongoing org-wide `opencode-review` outage (tracked on PR #1437 and
+  elsewhere in this baseline) clears enough to observe one. Left as this
+  entry's own concrete follow-up rather than a bypass-merge, since (unlike
+  the scheduler-script hotfixes bypass-merged earlier this session) this
+  change's actual correctness depends on live provider behavior this
+  sandbox cannot exercise.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

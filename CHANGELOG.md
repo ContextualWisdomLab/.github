@@ -5,6 +5,14 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Bump the vendored `ORCHESTRATOR_PIN_SHA` from `30c6d71680e659f25a0a433d4726ad0d437f9757`
+  to `79c6841b9b3645d1f14b943985825d2302071f5b` in the sidecar script, its
+  contract test, and ADR-0003 -- vendoring `contextual-orchestrator`'s
+  request-time failover classification fix (#922) and everything else that
+  landed on that repo's `main` since the last pin. `requirements.lock` is
+  unchanged and every CLI change is additive, so the sidecar's dependency
+  surface is unaffected; see `docs/product-technical-gap-baseline.md` for
+  the full review and the still-open live-verification follow-up.
 - Fix two live-on-`main` regressions Devin Review found immediately after
   PRs #1456 and #1459 merged (both bypass-merged past the org-wide
   `opencode-review` outage; these hotfixes correct real defects the local
