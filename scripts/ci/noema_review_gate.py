@@ -567,6 +567,22 @@ def extract_json_object(text: str) -> dict[str, Any]:
     making each successful parse a JSON object (``dict``); only the decode
     failure itself needs converting.
 
+    A closer that cannot legally match the innermost open bracket — nothing
+    open at all, or the innermost open bracket is the other type — stops
+    candidate discovery outright instead of being a no-op on the stack. Only
+    ignoring the mismatch (popping nothing, but continuing to scan) is not
+    enough: a *later*, otherwise-well-formed ``[``/``]`` or ``{``/``}`` pair
+    can still legitimately re-close the stack down to empty despite the
+    earlier mismatch, so a subsequent ``{`` would again be seen as a fresh
+    top-level candidate even though the response as a whole was never
+    cleanly-formed JSON (Devin review on PR #1507, e.g. ``[} ] {...}``: the
+    stray ``}`` is a no-op, but the following ``]`` still validly closes the
+    ``[``, and the ``{`` after that would wrongly look top-level again). Any
+    closer this malformed anywhere in the response is treated as proof the
+    whole response cannot be trusted to contain a clean top-level object
+    from that point on, not just proof that one bracket group failed to
+    close.
+
     The raised diagnostic never embeds the raw (or scrubbed) model response.
     This is a ``pull_request_target`` workflow whose Actions logs are public
     on this org's public repos, and ``scrub_sensitive_data`` is a finite,
@@ -626,11 +642,20 @@ def extract_json_object(text: str) -> dict[str, Any]:
         elif character == "[":
             stack.append("[")
         elif character == "}":
-            if stack and stack[-1] == "{":
-                stack.pop()
+            if not stack or stack[-1] != "{":
+                # A closer that cannot legally appear here (nothing open, or
+                # the innermost open bracket is a "[") is proof this response
+                # is not cleanly-formed JSON at all, not just proof that one
+                # bracket group failed to close. Stop finding new candidates
+                # rather than let bracket-type matching alone "resync" past
+                # it and treat a later, structurally-unrelated { as a fresh
+                # top-level verdict (Devin review on PR #1507).
+                break
+            stack.pop()
         elif character == "]":
-            if stack and stack[-1] == "[":
-                stack.pop()
+            if not stack or stack[-1] != "[":
+                break
+            stack.pop()
 
     for start in candidate_starts:
         if not _json_nesting_within_bound(stripped, start, MAX_JSON_NESTING_DEPTH):

@@ -709,6 +709,29 @@ def test_extract_json_object_rejects_nested_recovery_via_a_mismatched_closer():
         )
 
 
+def test_extract_json_object_stops_discovery_after_any_mismatched_closer():
+    """A mismatched closer must poison the *rest* of discovery, not just the
+    bracket group it appears in.
+
+    Merely making a mismatched closer a stack no-op (ignored rather than
+    popped) is not enough on its own: a later, otherwise-well-formed pair
+    can still validly re-close the stack down to empty despite the earlier
+    mismatch, so a subsequent { would again look like a fresh top-level
+    candidate. ``[} ] {...}`` -- the stray } is a no-op against the open [,
+    but the following ] still legitimately closes that [, and the { after
+    it would wrongly look top-level again if discovery kept scanning
+    (Devin review on PR #1507). No candidate must be found past the
+    mismatch at all."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '[} ] {"decision":"comment","summary":"ok","findings":[]}'
+        )
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '{] } {"decision":"comment","summary":"ok","findings":[]}'
+        )
+
+
 def test_json_nesting_within_bound_does_not_undercount_past_a_mismatched_closer():
     """A mismatched closer must not make the bound-check think a candidate
     closed early, undercounting nesting that raw_decode would still walk
