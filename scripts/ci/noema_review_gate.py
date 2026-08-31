@@ -520,6 +520,11 @@ def extract_json_object(text: str) -> dict[str, Any]:
             continue
         try:
             candidate, _end = decoder.raw_decode(stripped, start)
+        except RecursionError:
+            decode_error = json.JSONDecodeError(
+                "JSON nesting exceeds decoder limit", stripped, start
+            )
+            break
         except json.JSONDecodeError as exc:
             decode_error = exc
             continue

@@ -535,6 +535,17 @@ def test_extract_json_object_balances_wrapped_and_multiple_objects():
     ) == verdict
 
 
+def test_extract_json_object_fails_closed_on_excessive_nesting():
+    """Map the stdlib decoder's recursion limit to the bounded diagnostic."""
+    depth = max(20_000, sys.getrecursionlimit() * 2)
+    nested = '{"decision":' + ("[" * depth) + "0" + ("]" * depth) + "}"
+    with pytest.raises(RuntimeError, match="was not valid JSON") as excinfo:
+        noema.extract_json_object(nested)
+    assert not isinstance(excinfo.value, RecursionError)
+    assert "decision" not in str(excinfo.value)
+    assert f"response length={len(nested)} chars" in str(excinfo.value)
+
+
 def test_extract_json_object_fails_closed_on_malformed_json():
     """A brace-wrapped but syntactically invalid LLM response must raise the
     same fail-closed RuntimeError this module uses for other unusable-verdict
