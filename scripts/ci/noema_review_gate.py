@@ -490,6 +490,53 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
+    """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
+
+    A lightweight, string-literal-aware bracket counter: walks forward from
+    ``start`` (a ``{``), ignoring any ``{``/``[``/``}``/``]`` characters that
+    appear inside a JSON string literal, and returns ``True`` as soon as the
+    opening brace's matching close is found without nesting exceeding
+    ``max_depth``, or ``False`` the moment ``max_depth`` is exceeded. Running
+    off the end of ``text`` without closing (an unterminated candidate) is
+    reported as within bound — that shape is already a decode failure
+    ``json.JSONDecoder.raw_decode`` reports on its own; this function's only
+    job is bounding nesting *depth*, not validating overall JSON shape.
+
+    This check runs before ``raw_decode`` is attempted on a candidate, ahead
+    of and independent of ``json.JSONDecoder``'s own recursion behavior —
+    see ``extract_json_object``'s docstring for why that behavior cannot be
+    trusted to reject excessive nesting on its own.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+            if depth > max_depth:
+                return False
+        elif char in "}]":
+            depth -= 1
+            if depth == 0:
+                return True
+    return True
+
+
+MAX_JSON_NESTING_DEPTH = 100
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response.
 
@@ -513,27 +560,28 @@ def extract_json_object(text: str) -> dict[str, Any]:
     content fingerprint are logged — enough to correlate repeat failures for
     the same underlying (unlogged) response without exposing its bytes.
 
-    The excessively-deep-nesting branch below is defense-in-depth, not a
-    proven-reachable crash fix: ``RecursionError`` is a ``RuntimeError``
-    subclass, so ``call_llm``'s own ``except RuntimeError`` (wrapping this
-    call plus every post-decode field check) already turns an *unhandled*
-    ``RecursionError`` from ``raw_decode`` into the same clean fail-closed
-    exit, with or without this ``except`` clause. Verified directly: a real
-    ``depth = max(20_000, sys.getrecursionlimit() * 2)`` nested-array payload
-    raises ``RecursionError`` on Python 3.11-3.13 but is decoded successfully
-    (no exception at all) by the C-accelerated scanner on the Python 3.14.7
-    hosted runner this job actually runs on (job 99642234627, commit
-    ``ec23350e``: ``test_extract_json_object_fails_closed_on_excessive_nesting``
-    failed with "DID NOT RAISE RuntimeError" against that real payload). That
-    is why the regression test monkeypatches ``raw_decode`` to force
-    ``RecursionError`` deterministically instead of constructing a real deep
-    payload — no real depth reproduces the condition on this job's own
-    runtime, so a "real payload" test would either be flaky across Python
-    versions or assert nothing. What this branch buys over the pre-existing
-    upstream ``except RuntimeError`` is strictly better diagnostics (the
-    same bounded, scrubbed, fingerprinted message as every other decode
-    failure here) instead of a raw, unbounded recursion traceback — not a
-    different fail-closed outcome.
+    Excessive nesting is rejected by an explicit ``_json_nesting_within_bound``
+    check against ``MAX_JSON_NESTING_DEPTH`` (100 — generously above the
+    verdict schema's own real maximum of roughly 5 levels: object ->
+    ``findings``/``reviewed_lines``/``adversarial_validation.probes`` ->
+    each list's object entries), evaluated *before* ``raw_decode`` is ever
+    attempted, rather than by trusting ``json.JSONDecoder``'s own recursion
+    behavior to raise on deep input. That behavior is not a stable contract:
+    a real ``depth = max(20_000, sys.getrecursionlimit() * 2)`` nested-array
+    payload raises ``RecursionError`` from the C-accelerated scanner on
+    Python 3.11-3.13, but is decoded successfully (no exception at all) on
+    the Python 3.14.7 hosted runner this job actually runs on (job
+    99642234627, commit ``ec23350e``:
+    ``test_extract_json_object_fails_closed_on_excessive_nesting`` failed
+    with "DID NOT RAISE RuntimeError" against that exact real payload).
+    Relying on ``RecursionError`` alone would make this fail-closed guarantee
+    a property of whichever CPython version happens to run the job, not of
+    this function. The explicit bound removes that dependency; a residual
+    ``except RecursionError`` is kept only as defense-in-depth for whatever
+    lies within the bound (``RecursionError`` is itself a ``RuntimeError``
+    subclass, so even an unhandled one here would already surface through
+    ``call_llm``'s own ``except RuntimeError`` around this call and every
+    post-decode field read).
     """
     stripped = text.strip()
     decoder = json.JSONDecoder()
@@ -561,6 +609,13 @@ def extract_json_object(text: str) -> dict[str, Any]:
             depth -= 1
 
     for start in candidate_starts:
+        if not _json_nesting_within_bound(stripped, start, MAX_JSON_NESTING_DEPTH):
+            decode_error = json.JSONDecodeError(
+                f"JSON nesting exceeds the bounded limit ({MAX_JSON_NESTING_DEPTH} levels)",
+                stripped,
+                start,
+            )
+            break
         try:
             candidate, _end = decoder.raw_decode(stripped, start)
         except RecursionError:

@@ -650,19 +650,47 @@ def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object
         )
 
 
-def test_extract_json_object_fails_closed_on_excessive_nesting(monkeypatch):
-    """Deep JSON must reach the bounded diagnostic instead of RecursionError.
+def test_extract_json_object_fails_closed_on_a_real_deep_payload():
+    """A genuinely deep JSON payload must fail closed on this job's own runtime.
 
-    This monkeypatches ``raw_decode`` rather than constructing a real deep
-    payload on purpose: a real ``depth = max(20_000, recursionlimit * 2)``
-    nested array does raise ``RecursionError`` on Python 3.11-3.13, but is
-    decoded successfully (no exception) by the C-accelerated scanner on the
-    Python 3.14 runner this job actually runs on, so no real payload
-    reproduces the condition on this job's own runtime (see
+    Deliberately real input, not a monkeypatch: ``json.JSONDecoder.raw_decode``'s
+    own recursion behavior is not a stable contract across Python versions —
+    a real ``depth = max(20_000, sys.getrecursionlimit() * 2)`` nested array
+    raises ``RecursionError`` on Python 3.11-3.13 but decodes successfully
+    (no exception) on the Python 3.14 runner this job actually runs on (see
     ``extract_json_object``'s docstring for the verifying CI evidence). This
-    test instead pins the code's *contract* — if ``raw_decode`` ever raises
-    ``RecursionError`` on any Python version or input, the result is the
-    same bounded, scrubbed diagnostic as every other decode failure here."""
+    test proves the *explicit* ``MAX_JSON_NESTING_DEPTH`` bound rejects real
+    excessive nesting regardless of which behavior the running interpreter
+    happens to have, rather than proving only that a raised RecursionError is
+    handled (see the sibling ``..._on_a_recursion_error_from_the_decoder``
+    test below for that narrower, supplemental contract)."""
+    depth = max(20_000, sys.getrecursionlimit() * 2)
+    nested = '{"decision":' + ("[" * depth) + "0" + ("]" * depth) + "}"
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(nested)
+
+
+def test_extract_json_object_accepts_nesting_within_the_bound():
+    """A legitimately nested verdict (well under the depth bound) still decodes."""
+    nested = '{"decision":' + ("[" * 10) + "0" + ("]" * 10) + "}"
+    assert noema.extract_json_object(nested) == {"decision": json.loads("[" * 10 + "0" + "]" * 10)}
+
+
+def test_json_nesting_within_bound_handles_escaped_quotes_inside_strings():
+    """An escaped quote inside a string must not be mistaken for the string's
+    terminator: unrelated bracket characters that happen to follow inside the
+    same string value must not be miscounted as real nesting depth, or a
+    shallow, valid verdict would be wrongly rejected as excessively nested."""
+    payload = '{"decision": "abc\\"' + ("[" * 200) + 'def"}'
+    assert json.loads(payload) == {"decision": 'abc"' + ("[" * 200) + "def"}
+    assert noema.extract_json_object(payload) == json.loads(payload)
+
+
+def test_extract_json_object_fails_closed_on_a_recursion_error_from_the_decoder(monkeypatch):
+    """Supplemental coverage: an actual RecursionError from raw_decode (should
+    the running interpreter ever raise one within the bound) still reaches
+    the same bounded, scrubbed diagnostic as every other decode failure
+    here, on top of the explicit depth bound proven above."""
     def reject_deep_json(_decoder, _text, _start=0):
         raise RecursionError("maximum recursion depth exceeded")
 

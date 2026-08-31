@@ -5,6 +5,19 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Reject excessively nested Noema LLM JSON responses with an explicit,
+  string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
+  checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of
+  relying on `raw_decode`'s own recursion behavior to reject deep input
+  (review follow-up on #1507): a real 20,000-level-deep payload raises
+  `RecursionError` from the C-accelerated scanner on Python 3.11-3.13 but
+  decodes successfully with no exception at all on the Python 3.14 hosted
+  runner this job actually runs on, so relying on that behavior made the
+  fail-closed guarantee a property of whichever CPython version happened to
+  run the job rather than of this code. Restored the excessive-nesting
+  regression to a real deep payload (not a monkeypatch) now that this bound
+  makes the real case reproducible everywhere; the synthetic
+  `RecursionError`-from-the-decoder test remains as supplemental coverage.
 - Convert JSON decoder recursion failures from deeply nested Noema responses
   into the existing bounded, fingerprinted fail-closed diagnostic instead of
   allowing an unhandled `RecursionError` to crash the required review.
