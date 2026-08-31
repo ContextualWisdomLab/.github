@@ -704,7 +704,7 @@ def test_attempt_ceiling_bounds_provider_spend(tmp_path: Path) -> None:
 
 
 def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> None:
-    """Small PRs fail through hung/unavailable providers quickly with a visible budget reason."""
+    """Changed-file cadence never reintroduces an inference deadline."""
     result = run_failed_model(
         tmp_path,
         changed_files=["pyproject.toml", "uv.lock"],
@@ -719,20 +719,9 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 1
-    assert (
-        "OpenCode dynamic review cadence selected 7s per attempt and 11s total budget "
-        "for 2 changed file(s); max-cycles=1."
-    ) in result.stdout
-    attempt_budget = re.search(
-        r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
-        r"with (\d+)s retry budget remaining\.",
-        result.stdout,
-    )
-    assert attempt_budget is not None
-    run_timeout, remaining_budget = map(int, attempt_budget.groups())
-    assert 1 <= run_timeout <= 7
-    assert run_timeout <= remaining_budget <= 11
-    assert "retry budget remaining." in result.stdout
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "7s per attempt" not in result.stdout
+    assert "attempt 1/1 has no model inference timeout" in result.stdout
 
 
 def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -> None:
@@ -742,8 +731,8 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
         tmp_path,
         changed_files=changed_files,
         extra_env={
-            "OPENCODE_DYNAMIC_REVIEW_CADENCE": "true",
-            "OPENCODE_DYNAMIC_MAX_CYCLES": "0",
+                "OPENCODE_DYNAMIC_REVIEW_CADENCE": "true",
+                "OPENCODE_DYNAMIC_MAX_CYCLES": "1",
             "OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS": "1",
             "OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS": "3600",
             "OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS": "7200",
@@ -753,21 +742,8 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
     assert result.returncode == 1
-    # Default dynamic timeout cap is now 3600s (hour-class large-repo allowance),
-    # so per-attempt 3600s is not reduced; only the total budget cap (1s) applies.
-    assert (
-        "OpenCode dynamic review cadence queue cap applied: per-attempt 3600s -> 3600s, "
-        "total budget 7200s -> 1s, max-cycles 0 -> 0"
-    ) in result.stdout or (
-        "total budget 7200s -> 1s" in result.stdout
-        and "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
-        "for 21 changed file(s); max-cycles=0." in result.stdout
-    )
-    assert (
-        "OpenCode dynamic review cadence selected 3600s per attempt and 1s total budget "
-        "for 21 changed file(s); max-cycles=0."
-    ) in result.stdout
-    assert "OpenCode model pool reached configured max cycle count" not in result.stdout
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "total budget" not in result.stdout
     assert (
         "OpenCode model pool exhausted before producing a valid control conclusion."
         in result.stdout
@@ -785,19 +761,9 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert (
-        "OpenCode github-models/openai/gpt-5 runtime cap selected 3s instead of 9s "
-        "because this provider has a bounded failover window."
-    ) in result.stdout
-    attempt_budget = re.search(
-        r"OpenCode github-models/openai/gpt-5 attempt 1/1 using (\d+)s run timeout "
-        r"with (\d+)s retry budget remaining\.",
-        result.stdout,
-    )
-    assert attempt_budget is not None
-    run_timeout, remaining_budget = map(int, attempt_budget.groups())
-    assert run_timeout == 3
-    assert run_timeout <= remaining_budget <= 30
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "runtime cap selected" not in result.stdout
+    assert "attempt 1/1 has no model inference timeout" in result.stdout
 
 
 def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
@@ -812,10 +778,8 @@ def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 1
-    assert (
-        "OpenCode opencode-free/nemotron-3-ultra-free runtime cap selected 3s "
-        "instead of 9s because this provider has a bounded failover window."
-    ) in result.stdout
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "runtime cap selected" not in result.stdout
 
 
 def test_nvidia_nim_candidate_requires_key(
@@ -848,10 +812,8 @@ def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert (
-        "OpenCode nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b runtime cap "
-        "selected 3s instead of 9s because this provider has a bounded failover window."
-    ) in result.stdout
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "runtime cap selected" not in result.stdout
 
 
 def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
@@ -880,12 +842,9 @@ def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
     )
 
     assert result.returncode == 1
-    assert "OpenCode NVIDIA NIM combined runtime used" in result.stdout
-    assert (
-        "Skipping OpenCode nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-        "because the NVIDIA NIM combined runtime budget of 1s is exhausted"
-        in result.stdout
-    )
+    assert "OpenCode NVIDIA NIM combined runtime used" not in result.stdout
+    assert "model inference has no wall-clock timeout" in result.stdout
+    assert "combined runtime budget" not in result.stdout
     assert "OpenCode opencode-free/nemotron-3-ultra-free attempt 1/2" in result.stdout
     assert "schema-repair attempt 2/2" not in result.stdout
 

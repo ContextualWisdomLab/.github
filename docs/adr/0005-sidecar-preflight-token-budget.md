@@ -1,6 +1,6 @@
 # ADR-0005: Replace the sidecar's fixed-`max_tokens` gateway checks with diagnostic, bounded-retry readiness
 
-- Status: proposed
+- Status: superseded by ADR 0003's 2026-08-31 no-timeout amendment
 - Date: 2026-08-30
 - Scope: `ContextualWisdomLab/.github` central review pipelines' vendored `contextual-orchestrator`
   sidecar — `scripts/ci/contextual_orchestrator_review_launcher.py`'s existing
@@ -19,6 +19,13 @@
 - Ownership: `.github` owns the sidecar/launcher script and this ADR; `ContextualWisdomLab/contextual-orchestrator`
   owns the gateway internals cited as evidence and the three follow-up issues.
 - Figma File ID: N/A (no customer UI).
+
+> **Supersession note (2026-08-31):** The fixed inference, discovery, ZDR,
+> DNS/TLS, and `/healthz` wall-clock budgets recorded below are historical and
+> MUST NOT be implemented. ADR 0003 now requires these operations to run
+> without a fixed timeout; cancellation is limited to an operator action or a
+> superseded PR head. The token-budget diagnostics and fail-closed response
+> validation in this ADR remain applicable.
 
 ## Context
 

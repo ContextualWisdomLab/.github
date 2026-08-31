@@ -89,38 +89,6 @@ env_integer_or_default() {
 	fi
 }
 
-cap_dynamic_cadence_for_queue() {
-	local timeout_cap budget_cap cycle_cap previous_run_timeout previous_budget_seconds previous_max_cycles
-
-	timeout_cap="$(env_integer_or_default OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600)"
-	budget_cap="$(env_integer_or_default OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS 7200)"
-	cycle_cap="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES_CAP 0)"
-	previous_run_timeout="$original_run_timeout"
-	previous_budget_seconds="$budget_seconds"
-	previous_max_cycles="$max_cycles"
-
-	if [ "$timeout_cap" -gt 0 ] && [ "$original_run_timeout" -gt "$timeout_cap" ]; then
-		original_run_timeout="$timeout_cap"
-	fi
-	if [ "$budget_cap" -gt 0 ] && [ "$budget_seconds" -gt "$budget_cap" ]; then
-		budget_seconds="$budget_cap"
-	fi
-	if [ "$cycle_cap" -gt 0 ]; then
-		if [ "$max_cycles" -eq 0 ] || [ "$max_cycles" -gt "$cycle_cap" ]; then
-			max_cycles="$cycle_cap"
-		fi
-	fi
-
-	if [ "$original_run_timeout" != "$previous_run_timeout" ] ||
-		[ "$budget_seconds" != "$previous_budget_seconds" ] ||
-		[ "$max_cycles" != "$previous_max_cycles" ]; then
-		printf 'OpenCode dynamic review cadence queue cap applied: per-attempt %ss -> %ss, total budget %ss -> %ss, max-cycles %s -> %s; set OPENCODE_DYNAMIC_*_CAP_SECONDS or OPENCODE_DYNAMIC_MAX_CYCLES_CAP to 0 to disable a specific queue cap.\n' \
-			"$previous_run_timeout" "$original_run_timeout" \
-			"$previous_budget_seconds" "$budget_seconds" \
-			"$previous_max_cycles" "$max_cycles"
-	fi
-}
-
 count_changed_files_for_cadence() {
 	local changed_files_file="${OPENCODE_CHANGED_FILES_FILE:-}"
 
@@ -419,33 +387,6 @@ should_skip_model_candidate() {
 	return 1
 }
 
-cap_model_run_timeout() {
-	local model_candidate="$1"
-	local run_timeout_seconds="$2"
-	local cap_seconds
-
-	case "$model_candidate" in
-	nvidia-nim/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180)"
-		;;
-	opencode-free/*)
-		cap_seconds="$(env_integer_or_default OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600)"
-		;;
-	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat)
-		cap_seconds="$(env_integer_or_default OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS 45)"
-		;;
-	*)
-		printf '%s\n' "$run_timeout_seconds"
-		return 0
-		;;
-	esac
-	if [ "$cap_seconds" -gt 0 ] && [ "$run_timeout_seconds" -gt "$cap_seconds" ]; then
-		printf '%s\n' "$cap_seconds"
-	else
-		printf '%s\n' "$run_timeout_seconds"
-	fi
-}
-
 run_one_model_attempt() {
 	local model_candidate="$1"
 	local attempt="$2"
@@ -455,35 +396,33 @@ run_one_model_attempt() {
 	local candidate_output_file="$6"
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
-	local run_timeout_seconds export_timeout_seconds opencode_status session_id opencode_stderr_file
+	local export_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_poll_seconds
 
-	run_timeout_seconds="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
-	timeout --kill-after=30s "${run_timeout_seconds}s" \
-		env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+	env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
 		opencode run "$(cat "$prompt_file")" \
 		--pure \
 		--agent "$agent" \
 		--model "$model_candidate" \
 		--format json \
-		--title "PR #${PR_NUMBER} OpenCode bounded review ${model_candidate} attempt ${attempt}/${attempts}" \
+		--title "PR #${PR_NUMBER} OpenCode review ${model_candidate} attempt ${attempt}/${attempts}" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
 	# Some providers (github-models ContextOverflowError) log a fatal error and
-	# then hang instead of exiting, burning the whole run timeout. Watch the JSON
+	# then hang instead of exiting. Watch the JSON
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
 		if has_fatal_provider_error_event "$opencode_json_file"; then
-			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; killing the hung process instead of waiting out the %ss run timeout.\n' \
-				"$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
+			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; cancelling that failed process.\n' \
+				"$model_candidate" "$attempt" "$attempts"
 			kill "$opencode_pid" 2>/dev/null
 			for _ in $(seq 1 30); do
 				kill -0 "$opencode_pid" 2>/dev/null || break
@@ -500,9 +439,6 @@ run_one_model_attempt() {
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
 		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
-		if [ "$opencode_status" -eq 124 ] || [ "$opencode_status" -eq 137 ]; then
-			printf 'OpenCode %s attempt %s/%s timed out after %ss; falling through within the remaining retry budget instead of blocking the org queue.\n' "$model_candidate" "$attempt" "$attempts" "$run_timeout_seconds"
-		fi
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
@@ -542,13 +478,9 @@ run_one_model_attempt() {
 }
 
 main() {
-	local attempts schema_repair_attempts effective_attempts budget_seconds deadline now remaining model_candidate attempt safe_model prompt_file candidate_output_file
-	local opencode_json_file opencode_export_file agent retry_sleep original_run_timeout run_status cycle_sleep cycle max_cycles
-	local uncapped_run_timeout
-	local changed_file_count small_file_threshold medium_file_threshold
+	local attempts schema_repair_attempts effective_attempts model_candidate attempt safe_model prompt_file candidate_output_file
+	local opencode_json_file opencode_export_file agent retry_sleep run_status cycle_sleep cycle max_cycles
 	local invalid_control_cap max_total_attempts total_attempts alive_candidates
-	local nim_budget_seconds nim_elapsed_seconds nim_remaining_seconds
-	local nim_attempt_started nim_attempt_elapsed non_nim_candidate_count
 	local -A dead_candidate_reasons invalid_control_counts
 	local -a model_candidates
 
@@ -556,52 +488,20 @@ main() {
 	# control-rejected output or has exhausted provider credits must stop
 	# consuming paid requests instead of cycling until the retry budget
 	# elapses (run 30120972549 burned the org OpenRouter credit in ~102
-	# cycles of re-sent full prompts). Timeouts/deadlines are untouched.
+	# cycles of re-sent full prompts). These are request-count guards, not clocks.
 	invalid_control_cap="$(env_integer_or_default OPENCODE_INVALID_CONTROL_OUTPUT_CAP 3)"
 	max_total_attempts="$(env_integer_or_default OPENCODE_POOL_MAX_TOTAL_ATTEMPTS 30)"
 	total_attempts=0
 
 	attempts="${OPENCODE_MODEL_ATTEMPTS:-3}"
 	schema_repair_attempts="$(env_integer_or_default OPENCODE_SCHEMA_REPAIR_ATTEMPTS 1)"
-	original_run_timeout="${OPENCODE_RUN_TIMEOUT_SECONDS:-3600}"
-	budget_seconds="${OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500}"
 	max_cycles="${OPENCODE_POOL_MAX_CYCLES:-0}"
 	if [ "${CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE:-false}" = "true" ]; then
-		original_run_timeout="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS:-3600}"
-		budget_seconds="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS:-3600}"
 		max_cycles="${OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES:-1}"
-		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool to %ss per attempt, %ss total budget, and %s cycle(s) so provider delay is logged before the publish fallback evaluates current-head peer evidence.\n' \
-			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}" "$original_run_timeout" "$budget_seconds" "$max_cycles"
+		printf 'Central review-process evidence fallback eligible for scope "%s"; limiting OpenCode model pool by cycle count only.\n' \
+			"${CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL:-unsupported}"
 	elif [ "${OPENCODE_DYNAMIC_REVIEW_CADENCE:-false}" = "true" ]; then
-		small_file_threshold="$(env_integer_or_default OPENCODE_SMALL_CHANGE_FILE_THRESHOLD 3)"
-		medium_file_threshold="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD 20)"
-		if changed_file_count="$(count_changed_files_for_cadence)"; then
-			if [ "$changed_file_count" -le "$small_file_threshold" ]; then
-				original_run_timeout="$(env_integer_or_default OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS 900)"
-				budget_seconds="$(env_integer_or_default OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS 2100)"
-			elif [ "$changed_file_count" -le "$medium_file_threshold" ]; then
-				original_run_timeout="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-				budget_seconds="$(env_integer_or_default OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
-			else
-				original_run_timeout="$(env_integer_or_default OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-				budget_seconds="$(env_integer_or_default OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS 7200)"
-			fi
-			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
-			cap_dynamic_cadence_for_queue
-			printf 'OpenCode dynamic review cadence selected %ss per attempt and %ss total budget for %s changed file(s); max-cycles=%s.\n' \
-				"$original_run_timeout" "$budget_seconds" "$changed_file_count" "$max_cycles"
-		else
-			original_run_timeout="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS 3600)"
-			budget_seconds="$(env_integer_or_default OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS 3900)"
-			max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
-			cap_dynamic_cadence_for_queue
-			printf 'OpenCode dynamic review cadence could not read OPENCODE_CHANGED_FILES_FILE; using %ss per attempt and %ss total budget; max-cycles=%s.\n' \
-				"$original_run_timeout" "$budget_seconds" "$max_cycles"
-		fi
-	fi
-	deadline=0
-	if [ "$budget_seconds" -gt 0 ]; then
-		deadline=$((SECONDS + budget_seconds))
+		max_cycles="$(env_integer_or_default OPENCODE_DYNAMIC_MAX_CYCLES 0)"
 	fi
 	: >"$OPENCODE_OUTPUT_FILE"
 	cd "$OPENCODE_REVIEW_WORKDIR"
@@ -613,23 +513,8 @@ main() {
 		fi
 		exit 1
 	fi
-	nim_budget_seconds="$(env_integer_or_default OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900)"
-	nim_elapsed_seconds=0
-	non_nim_candidate_count=0
-	for model_candidate in "${model_candidates[@]}"; do
-		if ! is_nvidia_nim_candidate "$model_candidate"; then
-			non_nim_candidate_count=$((non_nim_candidate_count + 1))
-		fi
-	done
-	if [ "$non_nim_candidate_count" -gt 0 ] &&
-		[ "$budget_seconds" -gt 0 ] &&
-		[ "$nim_budget_seconds" -ge "$budget_seconds" ]; then
-		nim_budget_seconds=$((budget_seconds / 2))
-		printf 'OpenCode NVIDIA NIM combined runtime budget was capped at %ss so %s non-NIM fallback candidate(s) retain retry budget.\n' \
-			"$nim_budget_seconds" "$non_nim_candidate_count"
-	fi
-	printf 'Configured OpenCode model pool: candidates=%s attempts=%s per-model-timeout=%ss retry-budget=%ss max-cycles=%s NVIDIA-NIM-combined-budget=%ss.\n' \
-		"${#model_candidates[@]}" "$attempts" "$original_run_timeout" "$budget_seconds" "$max_cycles" "$nim_budget_seconds"
+	printf 'Configured OpenCode model pool: candidates=%s attempts=%s max-cycles=%s; model inference has no wall-clock timeout.\n' \
+		"${#model_candidates[@]}" "$attempts" "$max_cycles"
 
 	cycle=1
 	while :; do
@@ -641,12 +526,6 @@ main() {
 				continue
 			fi
 			if should_skip_model_candidate "$model_candidate"; then
-				continue
-			fi
-			if is_nvidia_nim_candidate "$model_candidate" &&
-				[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
-				printf 'Skipping OpenCode %s because the NVIDIA NIM combined runtime budget of %ss is exhausted; preserving the remaining retry budget for fallback candidates.\n' \
-					"$model_candidate" "$nim_budget_seconds"
 				continue
 			fi
 			assert_reasoning_effort_for_candidate "$model_candidate"
@@ -666,20 +545,6 @@ main() {
 					printf 'OpenCode %s schema-repair attempt %s/%s will re-review from trusted evidence with a non-replayable control checklist.\n' \
 						"$model_candidate" "$attempt" "$effective_attempts"
 				fi
-				now="$SECONDS"
-				if is_nvidia_nim_candidate "$model_candidate" &&
-					[ "$nim_elapsed_seconds" -ge "$nim_budget_seconds" ]; then
-					printf 'Stopping OpenCode %s retries because the NVIDIA NIM combined runtime budget of %ss is exhausted.\n' \
-						"$model_candidate" "$nim_budget_seconds"
-					break
-				fi
-				if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
-					printf 'OpenCode model pool retry deadline elapsed before %s attempt %s/%s.\n' "$model_candidate" "$attempt" "$effective_attempts"
-					if finish_pool_without_model; then
-						exit 0
-					fi
-					exit 1
-				fi
 				if [ "$max_total_attempts" -gt 0 ] && [ "$total_attempts" -ge "$max_total_attempts" ]; then
 					printf 'OpenCode model pool reached the per-run provider attempt ceiling of %s attempts; ending the pool to bound provider spend. Set OPENCODE_POOL_MAX_TOTAL_ATTEMPTS=0 to disable.\n' "$max_total_attempts"
 					if finish_pool_without_model; then
@@ -688,36 +553,12 @@ main() {
 					exit 1
 				fi
 				total_attempts=$((total_attempts + 1))
-				remaining="$original_run_timeout"
-				if [ "$deadline" -gt 0 ]; then
-					remaining=$((deadline - now))
-				fi
-				OPENCODE_RUN_TIMEOUT_SECONDS="$original_run_timeout"
-				if [ "$deadline" -gt 0 ] && [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$remaining" ]; then
-					OPENCODE_RUN_TIMEOUT_SECONDS="$remaining"
-				fi
-				if is_nvidia_nim_candidate "$model_candidate"; then
-					nim_remaining_seconds=$((nim_budget_seconds - nim_elapsed_seconds))
-					if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -gt "$nim_remaining_seconds" ]; then
-						printf 'OpenCode %s combined NVIDIA NIM budget cap selected %ss instead of %ss so fallback candidates retain retry budget.\n' \
-							"$model_candidate" "$nim_remaining_seconds" "$OPENCODE_RUN_TIMEOUT_SECONDS"
-						OPENCODE_RUN_TIMEOUT_SECONDS="$nim_remaining_seconds"
-					fi
-				fi
-				uncapped_run_timeout="$OPENCODE_RUN_TIMEOUT_SECONDS"
-				OPENCODE_RUN_TIMEOUT_SECONDS="$(cap_model_run_timeout "$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS")"
-				if [ "$OPENCODE_RUN_TIMEOUT_SECONDS" -lt "$uncapped_run_timeout" ]; then
-					printf 'OpenCode %s runtime cap selected %ss instead of %ss because this provider has a bounded failover window.\n' \
-						"$model_candidate" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$uncapped_run_timeout"
-				fi
-				export OPENCODE_RUN_TIMEOUT_SECONDS
-				printf 'OpenCode %s attempt %s/%s using %ss run timeout with %ss retry budget remaining.\n' "$model_candidate" "$attempt" "$effective_attempts" "$OPENCODE_RUN_TIMEOUT_SECONDS" "$remaining"
+				printf 'OpenCode %s attempt %s/%s has no model inference timeout.\n' "$model_candidate" "$attempt" "$effective_attempts"
 				agent="${OPENCODE_AGENT:-ci-review-fallback}"
 				if [ "$attempt" -eq 1 ] && [ -n "${OPENCODE_FIRST_ATTEMPT_AGENT:-}" ]; then
 					agent="$OPENCODE_FIRST_ATTEMPT_AGENT"
 				fi
 				run_status=0
-				nim_attempt_started="$SECONDS"
 				if run_one_model_attempt "$model_candidate" "$attempt" "$effective_attempts" "$agent" "$prompt_file" "$candidate_output_file" "$opencode_json_file" "$opencode_export_file"; then
 					cp "$candidate_output_file" "$OPENCODE_OUTPUT_FILE"
 					record_review_model "$model_candidate"
@@ -725,12 +566,6 @@ main() {
 					exit 0
 				else
 					run_status=$?
-				fi
-				if is_nvidia_nim_candidate "$model_candidate"; then
-					nim_attempt_elapsed=$((SECONDS - nim_attempt_started))
-					nim_elapsed_seconds=$((nim_elapsed_seconds + nim_attempt_elapsed))
-					printf 'OpenCode NVIDIA NIM combined runtime used %ss/%ss after %s attempt %s/%s.\n' \
-						"$nim_elapsed_seconds" "$nim_budget_seconds" "$model_candidate" "$attempt" "$effective_attempts"
 				fi
 				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
 					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
@@ -754,9 +589,6 @@ main() {
 				fi
 				if [ "$attempt" -lt "$effective_attempts" ] && [ "$attempt" -lt "$attempts" ]; then
 					retry_sleep="$(backoff_sleep "$attempt")"
-					if [ "$deadline" -gt 0 ] && [ $((SECONDS + retry_sleep)) -gt "$deadline" ]; then
-						retry_sleep=$((deadline - SECONDS))
-					fi
 					if [ "$retry_sleep" -gt 0 ]; then
 						printf 'Retrying OpenCode after exponential backoff of %ss.\n' "$retry_sleep"
 						sleep "$retry_sleep"
@@ -779,7 +611,7 @@ main() {
 			exit 1
 		fi
 
-		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion; continuing until a model succeeds or the retry budget/GitHub Actions job timeout is reached.\n'
+		printf 'OpenCode completed a full model-candidate cycle without a valid control conclusion.\n'
 		if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
 			printf 'OpenCode model pool reached configured max cycle count %s without a valid control conclusion.\n' "$max_cycles"
 			if finish_pool_without_model; then
@@ -787,18 +619,7 @@ main() {
 			fi
 			exit 1
 		fi
-		printf 'OpenCode retry budget and the workflow step timeout remain the outer guards for invalid or unavailable provider output.\n'
 		cycle_sleep="${OPENCODE_POOL_CYCLE_SLEEP_SECONDS:-60}"
-		if [ "$deadline" -gt 0 ] && [ $((SECONDS + cycle_sleep)) -gt "$deadline" ]; then
-			cycle_sleep=$((deadline - SECONDS))
-			if [ "$cycle_sleep" -le 0 ]; then
-				printf 'OpenCode model pool retry deadline elapsed after cycle %s.\n' "$cycle"
-				if finish_pool_without_model; then
-					exit 0
-				fi
-				exit 1
-			fi
-		fi
 		printf 'Restarting OpenCode model pool after %ss.\n' "$cycle_sleep"
 		sleep "$cycle_sleep"
 		cycle=$((cycle + 1))

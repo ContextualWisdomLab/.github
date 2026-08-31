@@ -235,7 +235,6 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 100
     permissions:
       contents: read
       pull-requests: read
@@ -292,7 +291,7 @@ jobs:
             exit 1
           fi
           verdict=""
-          for attempt in $(seq 1 180); do
+          while :; do
             reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
             verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
@@ -325,9 +324,7 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            if [ "$attempt" -lt 180 ]; then
-              sleep 30
-            fi
+            sleep 30
           done
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."

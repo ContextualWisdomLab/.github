@@ -214,9 +214,9 @@ all five, and auto-optimize routing by cost.
   completion ping, warm-up, retry, repair verdict, or substantive review call.
   A slow reasoning model such as DeepSeek is not unavailable merely because it
   takes minutes or hours to produce tokens. Cancellation remains an explicit
-  operator or superseded-head action. Non-inference readiness checks such as a
-  loopback `/healthz`, DNS/TLS connection establishment, and provider model-list
-  discovery may remain bounded because they do not classify generation speed
-  or terminate a model response. This amendment supersedes earlier fixed
-  inference-attempt budgets in ADR 0005; those values apply only to
-  non-generating transport/readiness probes after their callers are migrated.
+  operator or superseded-head action. The review bootstrap also MUST NOT impose
+  fixed wall-clock limits on loopback `/healthz`, DNS/TLS establishment, ZDR
+  metadata, or provider model-list discovery: those prerequisites can be slow
+  and a short bound can discard an otherwise usable route before inference.
+  This amendment supersedes all fixed readiness and inference-attempt budgets
+  in ADR 0005.
