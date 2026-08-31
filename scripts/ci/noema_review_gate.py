@@ -545,9 +545,11 @@ def extract_json_object(text: str) -> dict[str, Any]:
     summary, or a malformed finding — instead of letting a malformed or
     truncated LLM response's ``json.JSONDecodeError`` propagate as an
     unhandled exception and crash the review job. Only top-level brace groups
-    are candidates, so a valid nested object cannot escape a malformed outer
-    object. Every candidate starts at a ``{``, making each successful parse a
-    JSON object (``dict``); only the decode failure itself needs converting.
+    are candidates: a ``{`` is a candidate only while depth (tracked across
+    both ``{``/``}`` and ``[``/``]``) is zero, so a valid nested object cannot
+    escape a malformed outer *object or array* wrapper. Every candidate
+    starts at a ``{``, making each successful parse a JSON object (``dict``);
+    only the decode failure itself needs converting.
 
     The raised diagnostic never embeds the raw (or scrubbed) model response.
     This is a ``pull_request_target`` workflow whose Actions logs are public
@@ -601,11 +603,11 @@ def extract_json_object(text: str) -> dict[str, Any]:
             continue
         if character == '"':
             in_string = True
-        elif character == "{":
-            if depth == 0:
+        elif character in "{[":
+            if character == "{" and depth == 0:
                 candidate_starts.append(index)
             depth += 1
-        elif character == "}" and depth:
+        elif character in "}]" and depth:
             depth -= 1
 
     for start in candidate_starts:

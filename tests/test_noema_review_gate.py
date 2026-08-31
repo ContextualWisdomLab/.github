@@ -99,7 +99,21 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
-    """Execute the workflow's jq selector against current, sibling, and foreign runs."""
+    """Execute the workflow's jq selector against current, sibling, and foreign runs.
+
+    ``$current`` must be passed with ``--argjson`` (a number), matching the
+    production invocation (``--argjson current "$CURRENT_RUN_ID"``): jq's
+    type ordering ranks every number below every string, so passing it as a
+    string via ``--arg`` would make the selector's directional ``.id <
+    $current`` guard vacuously true for every fixture row regardless of the
+    actual id values, silently proving nothing about that guard (caught by
+    review on PR #1507). With the numeric type restored, the fixture's ids
+    must also be realistic: GitHub Actions run ids increase monotonically
+    over time, so the "current" run (the latest trigger) has the *highest*
+    id here, and the superseded same-PR sibling has a lower one — the
+    opposite of this fixture's original (also-wrong) ordering, under which
+    the directional guard's own vacuous-true bug happened to still produce
+    the expected output for an unrelated reason."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
@@ -110,20 +124,20 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     selector = workflow[start:end]
     runs = {
         "workflow_runs": [
+            {"id": 98, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 99, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
             {"id": 100, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
-            {"id": 101, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
-            {"id": 102, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
-            {"id": 103, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 97, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
         ]
     }
     result = subprocess.run(
-        [jq, "-r", "--arg", "pr", "7", "--arg", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", "current", selector],
+        [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", "current", selector],
         input=json.dumps(runs),
         text=True,
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["101"]
+    assert result.stdout.splitlines() == ["98"]
     assert "github.event.workflow_run.head_sha" not in workflow
     assert "EXPECTED_HEAD:" in workflow
     assert "--expected-head \"$EXPECTED_HEAD\"" in workflow
@@ -647,6 +661,22 @@ def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object
     with pytest.raises(RuntimeError, match="was not valid JSON"):
         noema.extract_json_object(
             'prefix {"broken": {"decision":"approve","summary":"nested"} trailing'
+        )
+
+
+def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_array():
+    """A valid nested object must not escape a malformed outer *array* either.
+
+    Candidate discovery must track ``[``/``]`` depth alongside ``{``/``}``:
+    without it, the inner object's own ``{`` is wrongly seen at depth zero
+    (only brace nesting was tracked) and treated as a fresh top-level
+    candidate, letting a complete inner object "recover" out of an
+    unterminated outer array — the same class of bug
+    ``test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object``
+    covers for an outer object wrapper."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '[{"decision":"comment","summary":"ok","findings":[]}'
         )
 
 
