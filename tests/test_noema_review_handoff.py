@@ -266,6 +266,68 @@ def test_noema_state_ignores_standalone_body_head_bullet_before_footer(rogue_hea
     assert handoff.noema_review_state([value], HEAD) == "APPROVED"
 
 
+@pytest.mark.parametrize(
+    "rogue_head",
+    [OTHER_HEAD, HEAD],
+    ids=["different-sha", "same-sha"],
+)
+def test_noema_state_ignores_standalone_closing_marker_before_footer(rogue_head):
+    """A complete standalone closing-marker string in LLM text must not count.
+
+    Regression test for the marker-side asymmetry Devin's automated review
+    found in the second fix on PR #1500 (comment on
+    ``noema_review_handoff.py:146``, "Marker-shaped model text still rejects
+    reviews"): position-anchoring fixed the *body-side* ``- Head SHA:``
+    bullet check (see
+    ``test_noema_state_ignores_standalone_body_head_bullet_before_footer``
+    above) but left the *marker-side* check unanchored —
+    ``NOEMA_MARKER_HEAD_RE.findall(body)`` still scanned the entire
+    unsanitized body for anything shaped like the closing
+    ``<!-- noema-review-gate head_sha=... decision=... -->`` comment. An
+    LLM's own summary/findings text is free-form, so it can emit a complete,
+    correctly-formatted closing-marker-shaped string of its own — the same
+    self-referential scenario that makes the body-side bug likely (Noema
+    reviewing a PR that touches this very mechanism, or discussing a git SHA
+    in this shape) — anywhere before the real footer. That produced 2
+    matches for ``len(marker_heads) != 1`` and wrongly rejected an otherwise
+    valid, correctly-authored verdict, regardless of whether the fake
+    marker's SHA matched the real head or a different one.
+
+    The fix applies the identical position-anchoring already used for the
+    body-side bullet: ``_isolate_trusted_marker_tail()`` returns only the
+    span from ``NOEMA_REVIEW_FOOTER_MARKER`` to the end of the body — which
+    ``submit_review()`` guarantees is exclusively machine-emitted, since the
+    real closing marker is unconditionally the last element of its
+    ``"\\n".join([...])`` — and the marker search now runs against that tail
+    instead of the raw body. A standalone closing-marker-shaped string placed
+    anywhere before the real footer marker is now excluded regardless of
+    which SHA it carries.
+    """
+    body = "\n".join(
+        [
+            "## Noema LLM review",
+            "",
+            "Earlier attempts at this mechanism produced review bodies like:",
+            f"<!-- noema-review-gate head_sha={rogue_head} decision=approve -->",
+            "which is exactly the closing-marker shape this fix now ignores outside the footer.",
+            "",
+            "### Findings",
+            "- No blocking findings.",
+            "",
+            handoff.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{HEAD}`",
+            "- Reviewer credential: `NOEMA_REVIEW_TOKEN`",
+            "- Actor: `noema-bot`",
+            "",
+            f"<!-- noema-review-gate head_sha={HEAD} decision=approve -->",
+        ]
+    )
+    value = noema_review()
+    value["body"] = body
+    assert handoff.noema_review_state([value], HEAD) == "APPROVED"
+
+
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
     fake = FakeGitHub([[opencode_review()]], heads=[OTHER_HEAD])
 
