@@ -1454,6 +1454,57 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
 
+def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-account cap falls back to ``policy.DEFAULT_ACCOUNT_CAP``, not the total budget.
+
+    Regression for a real, observed failure mode
+    (ContextualWisdomLab/.github#1415, reported as "빈 깡통 경로 너무 많다"): a
+    sibling helper (``_catalog_family_cap()``) fell back to
+    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the *total* preflight budget --
+    instead of the intended per-account cap whenever its env var was unset.
+    That silently disabled per-account diversification: in a live production
+    run, two NVIDIA NIM credentials sharing one rate-limited upstream jointly
+    consumed all 12 preflight slots, of which 10 (83%) were then rejected via
+    429/404/timeout. This module's own equivalent helper must never resolve
+    to the same value as the total-routes budget when given the real
+    ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly smaller.
+    """
+    namespace = _load_launcher()
+    monkeypatch.delenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", raising=False)
+    cap = namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP)
+    assert cap == policy.DEFAULT_ACCOUNT_CAP
+    assert cap != namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    assert cap < namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+
+
+def test_catalog_account_cap_honors_an_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still takes effect."""
+    namespace = _load_launcher()
+    monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
+    assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
+
+
+def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:
+    """``main()`` must wire the cap default from ``policy.DEFAULT_ACCOUNT_CAP``.
+
+    A hand-typed literal (or, worse, a total-routes-scale constant) can
+    silently drift out of sync with ``policy.DEFAULT_ACCOUNT_CAP`` with no
+    test catching it -- the exact drift that produced
+    ContextualWisdomLab/.github#1415's real preflight-budget waste. This
+    source-level contract test pins both ``build_zdr_prioritized_catalog``
+    call sites in ``main()`` to the single source of truth and forbids the
+    total-routes constant from ever reappearing as the account-cap fallback.
+    """
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    assert source.count("account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP)") == 2
+    assert "ORCHESTRATOR_CATALOG_FAMILY_CAP" not in source
+    assert 'os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")' not in source
+
+
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
     """Privacy admission precedes the free-first tier decision."""
     namespace = _load_launcher()
@@ -1486,13 +1537,13 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
         {"cost_evidence": "unknown", "provider": "bytez"},
     ]
     enriched = namespace["_with_discovery_counts"](
-        base, rows, provider_family=policy.provider_family
+        base, rows, provider_account=policy.provider_account
     )
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
-    assert enriched["free_family_diversity"] == 1
+    assert enriched["free_account_diversity"] == 1
 
 
 def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
@@ -1500,13 +1551,13 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
 
     Regression for a real bug: the ``auto``-pool primary stage only sees
     ZDR-admitted free rows, and the priced-fallback stage sees no free rows
-    at all, so either stage's internally computed ``free_family_diversity``
+    at all, so either stage's internally computed ``free_account_diversity``
     (whatever ``build_zdr_prioritized_catalog`` returned from its own
     narrower input) would undercount or read zero even when the full
-    discovery has multi-family free-route diversity.
+    discovery has multiple credential accounts with free routes.
     """
     namespace = _load_launcher()
-    stage_report_from_priced_only_rows = {"free_family_diversity": 0}
+    stage_report_from_priced_only_rows = {"free_account_diversity": 0}
     full_discovery_rows = [
         {"cost_evidence": "free", "provider": "nvidia_nim"},
         {"cost_evidence": "free", "provider": "openrouter"},
@@ -1515,9 +1566,9 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
     enriched = namespace["_with_discovery_counts"](
         stage_report_from_priced_only_rows,
         full_discovery_rows,
-        provider_family=policy.provider_family,
+        provider_account=policy.provider_account,
     )
-    assert enriched["free_family_diversity"] == 2
+    assert enriched["free_account_diversity"] == 2
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:
