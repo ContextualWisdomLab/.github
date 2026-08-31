@@ -2720,6 +2720,42 @@ bash scripts/ci/test_strix_quick_gate.sh` 전체 실행 → 정확히 이 assert
 diff range" 지적 2건(project-graph mismatch, 중복검사 workspace 누락)은 일반 PR issue comment로
 답변했다.
 
+## 2026-08-31 시간별 재개: naruon#1486 Devin 재분석 3건(quarantine 검색 노출 수정, TicketTask/reparse 두 건은 근거 있는 반려)
+
+이전 항목(head `786d1544`) 이후 Devin이 head를 재분석하며 새로 지적한 🔍 analysis 3건을 각각
+실제 코드로 검증했다.
+
+1. **✅ 수정: quarantine된 첨부파일의 base64 원본 payload가 hybrid 검색에 그대로 노출됨.**
+   `Attachment.parse_status`가 `"parsed"`가 아닌 모든 상태(이 PR이 새로 추가한
+   `content_type_mismatch_quarantined` 포함, 기존 `pdf_dom_recognition_pending` 등)는
+   `content`에 실제 파싱된 텍스트 대신 base64 인코딩된 원본 바이트나 빈 문자열을 저장하는데,
+   `build_lexical_attachment_statement`/`build_dense_attachment_statement`(둘 다 이 PR에서는
+   손대지 않은 기존 코드)가 이를 필터링 없이 그대로 검색 대상으로 삼고 있었다. 같은 파일의
+   `project_graph_object` 채널이 이미 `_EXCLUDED_PROJECT_OBJECT_STATUS_CODES`로 유사한 상태
+   필터링을 하고 있어 그 패턴을 따라 두 statement 모두
+   `.where(Attachment.parse_status == "parsed")`를 추가(커밋 `968b21fc`). 새 테스트 2개로 진짜
+   RED(`assert "email_attachments.parse_status" in sql` 실패) 확인 후 GREEN. 전체 백엔드 스위트
+   1902 passed / 36 skipped, ruff clean.
+2. **반려(범위 밖으로 결정, 후속 과제로 기록): `TicketTask`에 workspace 스코프가 없음.**
+   `TicketTask`는 이 PR 이전부터 `(user_id, organization_id)`로만 스코프되어 있었고
+   `workspace_id` 컬럼 자체가 없다 — `_build_task_query`의 outer join은 소스 이메일을
+   workspace로 필터링해 숨길 뿐, `TicketTask` 행 자신과 WHERE절에는 workspace 조건이 없어
+   같은 owner의 여러 workspace에 걸친 task가 서로 조회·수정 가능하다. 실재하는 아키텍처 격차이나,
+   이미 63파일/6800줄 이상인 이 PR에 새 마이그레이션 + 모델/쿼리 변경 + 테스트가 필요한 별도
+   증분을 얹기보다 후속 과제로 분리하기로 결정. **다음 증분에서 필요**: `TicketTask`에
+   `workspace_id` 컬럼 추가(마이그레이션 + 백필), `_build_task_query`/`update_ticket_task` 등
+   모든 task 엔드포인트에 workspace 필터 적용, 회귀 테스트.
+3. **반려(근거 확인 후 불필요로 결론): reparse 경로에 실제 PostgreSQL 커버리지가 없다는 지적.**
+   `calendar_conflict_judgment_service.apply_correction`은 `with_for_update()` row lock을 쓰기
+   때문에 이 PR에서 실제 real-Postgres smoke 테스트를 추가했다(mock 세션은 실제 lock 동작을
+   재현할 수 없으므로). 반면 reparse 경로(`api/data.py`의 reparse 라우트,
+   `attachment_reparse_worker.py`)는 lock이나 제약조건 의존 동작이 전혀 없는 단순 단일 행
+   읽기→필드변경→commit이라, 기존 mock 세션 unit test가 이미 실제 로직(상태 전이, retained
+   payload 보존)을 충실히 검증하고 있음을 확인 — 추가할 real-Postgres 테스트가 검증할 새로운
+   내용이 없어 추가하지 않기로 결정.
+
+세 건 모두 스레드에 답글·resolve 완료.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
