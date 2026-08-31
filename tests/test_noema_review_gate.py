@@ -286,6 +286,33 @@ def test_extract_llm_message_content_fails_closed_on_non_string_content(content)
         )
 
 
+def test_decode_llm_response_body_happy_path():
+    """A well-formed UTF-8 response body decodes normally."""
+    assert noema.decode_llm_response_body("hello world".encode("utf-8")) == "hello world"
+
+
+def test_decode_llm_response_body_fails_closed_on_invalid_utf8():
+    """Devin Review bug finding on PR #1507 round 3: a gateway reply
+    containing invalid UTF-8 must raise the same bounded RuntimeError
+    call_llm's repair path already uses for a malformed envelope, never an
+    unhandled UnicodeDecodeError. The raised message must never embed the
+    raw response bytes — even an attempted-decode fragment near the bad
+    byte — matching extract_json_object's no-raw-content pattern, since a
+    body containing invalid UTF-8 could still contain a credential-adjacent
+    byte sequence."""
+    secret_like_prefix = b"token=ghp_deadbeef1234567890"
+    raw_bytes = secret_like_prefix + bytes([0xFF]) + b"unrecoverable tail bytes"
+    with pytest.raises(RuntimeError) as excinfo:
+        noema.decode_llm_response_body(raw_bytes)
+    message = str(excinfo.value)
+    assert "not valid UTF-8" in message
+    assert "ghp_" not in message
+    assert "unrecoverable tail" not in message
+    fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
+    assert f"response length={len(raw_bytes)} bytes" in message
+    assert f"sha256={fingerprint}" in message
+
+
 def test_call_llm_repairs_one_malformed_envelope_before_failing_closed(monkeypatch):
     """The envelope-level fail-closed path integrates with the existing
     verdict-repair boundary: a malformed gateway reply gets one repair-retry
@@ -365,6 +392,44 @@ def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):
     with pytest.raises(RuntimeError, match="response body was not a JSON object"):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
     assert len(open_calls) == 2
+
+
+def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch):
+    """Devin Review bug finding on PR #1507 round 3: a gateway reply
+    containing invalid UTF-8 bytes used to raise UnicodeDecodeError before
+    extract_llm_message_content or the verdict-JSON repair boundary ever
+    ran, crashing the required review check with an unhandled traceback.
+    It must instead integrate with the existing repair-retry boundary
+    exactly like a malformed JSON envelope already does: one repair-retry
+    request, then a single clean top-level RuntimeError when the retry
+    response is *also* invalid UTF-8 — never an unhandled traceback."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Invalid UTF-8: a lone continuation byte with no lead byte.
+            return b"not utf-8 at all: \x80\x81\xfe"
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="response body was not valid UTF-8"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+    # One initial request plus exactly one repair-retry request — not an
+    # unbounded retry loop, and not a crash on the first attempt.
+    assert len(open_calls) == 2
+    assert "prior verdict was rejected" in json.loads(open_calls[1].data)["messages"][1]["content"]
 
 
 @pytest.mark.parametrize("choices", [{"a": 1}, 5])

@@ -1806,6 +1806,56 @@ exhausted-repair paths end-to-end (`test_call_llm_repairs_one_malformed_envelope
 docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507 (same PR; addressed before
 merge).
 
+## 2026-08-31 noema-review-gate follow-up round 3: non-UTF-8 gateway replies still crashed before the
+repair boundary
+
+Devin Review's third pass on PR #1507 found one more instance of the same crash-before-repair-boundary
+class the round-2 fix above closed for a malformed JSON envelope, plus two informational confirmations
+that needed verifying rather than fixing.
+
+**Bug: a non-UTF-8 response body still crashed before the repair boundary.** `call_llm` decoded the raw
+HTTP response with a plain `response.read().decode("utf-8")` sitting *before* the `try` that feeds the
+repair-retry — the same unguarded-preamble shape the round-2 envelope fix closed for `json.loads` and the
+chained `.get()`/`[0]` accesses, just one step earlier. A gateway reply containing invalid UTF-8 bytes
+raised an unhandled `UnicodeDecodeError` before `extract_llm_message_content` or the JSON repair boundary
+ever ran, crashing the required review check with a traceback instead of getting the same one-time
+schema-repair attempt every other malformed-envelope shape already gets. Fixed with a new
+`decode_llm_response_body(raw_bytes)` that converts a `UnicodeDecodeError` into the same bounded
+`RuntimeError` `call_llm` already uses elsewhere, called from inside the existing repair-retry `try`
+block (`raw = decode_llm_response_body(raw_bytes)`, ahead of `extract_llm_message_content(raw)`). Per the
+round-2 security fix, the raised diagnostic never embeds the raw response bytes — not even the
+undecodable fragment, since a body containing invalid UTF-8 could still contain a credential-adjacent
+byte sequence — only a length and a truncated SHA-256 fingerprint, matching `extract_json_object`'s
+no-raw-content pattern exactly.
+
+Regression tests: `test_decode_llm_response_body_happy_path` and
+`test_decode_llm_response_body_fails_closed_on_invalid_utf8` give direct unit coverage of the new
+function (including that a secret-shaped prefix and an unrecoverable tail around the bad byte never
+appear in the raised message), and `test_call_llm_fails_closed_after_repeated_invalid_utf8_response`
+integrates it end-to-end: one repair-retry request, then a clean top-level `RuntimeError` when the retry
+response is *also* invalid UTF-8 — never an unhandled traceback. 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`.
+
+**Confirmed correct, no change needed — repair recursion remains bounded.** `call_llm`'s `except
+RuntimeError` handler only recurses once: `if repair_error: raise` re-raises immediately on a second
+failure instead of recursing again, so total gateway calls per review are capped at two regardless of
+which layer (decode, envelope, or verdict JSON) keeps failing. Already covered by
+`test_call_llm_fails_closed_after_repeated_malformed_envelope` and the new
+`test_call_llm_fails_closed_after_repeated_invalid_utf8_response`, both of which assert exactly two
+requests were made.
+
+**Confirmed correct, no change needed — falsey envelope values still fail closed.** A `choices`,
+`message`, or `content` field that is present but falsey-and-wrong-shaped for the lenient branch (e.g.
+`choices: false`, `choices: 0`, `choices: ""`, `choices: []`) is treated by `extract_llm_message_content`
+the same as an absent field — deliberately lenient, per that function's existing docstring — and resolves
+to empty `content`. That empty string is not silently accepted: `extract_json_object` requires content
+starting with `{` and raises its own bounded `RuntimeError` ("did not contain a JSON object") for an
+empty string, so the falsey-envelope path still fails closed one layer down. Verified directly against
+`extract_llm_message_content` + `extract_json_object` for `choices` in `{False, 0, "", []}`.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge). Devin's own framing marked this
+the last expected finding in this decode/parse vein for this PR.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

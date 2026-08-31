@@ -591,6 +591,41 @@ def extract_llm_message_content(raw: str) -> str:
     return content.strip()
 
 
+def decode_llm_response_body(raw_bytes: bytes) -> str:
+    """Decode the raw gateway HTTP response body as UTF-8 text.
+
+    Devin Review bug finding on PR #1507 round 3: a gateway reply containing
+    invalid UTF-8 used to raise ``UnicodeDecodeError`` at the plain
+    ``response.read().decode("utf-8")`` call in ``call_llm``, before that
+    body ever reached ``extract_llm_message_content`` or the verdict-JSON
+    repair boundary. That crashed the required review check with an
+    unhandled traceback instead of getting the same one-time schema-repair
+    retry every other malformed-envelope shape already gets. Call this
+    inside ``call_llm``'s existing repair-retry ``try`` block so a decode
+    failure converts to the same bounded ``RuntimeError`` and gets the same
+    fail-closed treatment.
+
+    The raised diagnostic never embeds the raw response bytes — not even
+    the undecodable fragment. Only a length and a SHA-256 content
+    fingerprint are logged, matching ``extract_json_object``'s no-raw-content
+    pattern: a body containing invalid UTF-8 could still contain a
+    credential-adjacent byte sequence, and this is a ``pull_request_target``
+    workflow whose Actions logs are public on this org's public repos.
+    """
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
+        raise RuntimeError(
+            f"Noema LLM response body was not valid UTF-8 ({exc}). Raw "
+            "response bytes are not logged here (this pull_request_target "
+            "workflow's logs are public and a finite secret-scrub pattern "
+            "list cannot guarantee an LLM-echoed or hallucinated credential "
+            "in an unrecognized byte sequence is caught): response "
+            f"length={len(raw_bytes)} bytes, sha256={fingerprint}."
+        ) from exc
+
+
 def _truthy_env(name: str) -> bool:
     """Return whether a process environment flag is an explicit truthy value."""
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
@@ -745,8 +780,9 @@ def call_llm(
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
     with opener.open(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+        raw_bytes = response.read()
     try:
+        raw = decode_llm_response_body(raw_bytes)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
         decision = str(verdict.get("decision") or "").strip().lower()
