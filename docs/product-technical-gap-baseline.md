@@ -1784,6 +1784,34 @@ and 100% docstring coverage on `scripts/ci/`.
 **Not touched:** open PR #1437's own gating logic. Its reviewer should read `free_outage_domain_
 diversity`, not `free_account_diversity`, when wiring the `>= 2` eligibility check this file documents.
 
+**Follow-up (same PR, same day): raw-string comparison would have reintroduced the same class of bug.**
+A Devin Review finding on this PR pointed out that `_outage_domain(row)` as first written compared raw
+`base_url` strings -- so a hostname-case difference, an explicit default port (`:443`), or a trailing
+slash between two rows that are actually the *same* physical endpoint would split them into two outage
+domains, silently reintroducing the exact diversity-overstating/cap-bypassing bug this PR set out to fix.
+Verified against this codebase's actual code before acting, not assumed: every `DiscoveredModel.chat_
+base_url` in `contextual-orchestrator/contextual_orchestrator/model_discovery.py` traces to one of a
+fixed set of hardcoded Python string literals (the `nvidia_nim`/`nvidia_nim_sub` entries are byte-
+identical), and this repo's launcher (`_report_rows`) copies that value verbatim, falling back only to
+`zdr_policy.PROVIDER_BASE_URLS` -- confirmed byte-identical to the same literals for all five tracked
+providers. So the risk is **not reachable through this repo's one production caller (the sidecar/
+launcher) today**. It *is* reachable through `contextual_orchestrator_review_policy.py`'s own public,
+independently invocable `--discovery-report` CLI, which reads an arbitrary JSON file and is not
+restricted to the launcher's exact generation path -- not wired into any current production workflow
+(`hourly-nvidia-nim-review-repair.yml` only runs tests/coverage against this file, never the CLI on live
+input), so the risk is latent, not live, but real for that public surface. Given the fix is cheap and
+behavior-neutral on every input this repo's sidecar produces today, it was applied rather than left as an
+unstated assumption: `_outage_domain` now compares `_normalize_base_url(row["base_url"])`, which
+lowercases scheme/host, drops an explicit default port, and strips a trailing slash, while preserving a
+different host, non-default port, path, or scheme as genuinely distinct domains, and falling back to a
+lowercased/stripped whole-string comparison (never raising) for anything it cannot parse into a scheme,
+host, and numeric port. Five new tests cover the exact equivalent-spelling cases Devin named (case,
+default port, trailing slash), confirm genuine distinctions still separate, confirm no-raise on malformed
+input (including a non-numeric port, which `urlsplit(...).port` raises `ValueError` on), and one
+end-to-end test through `build_zdr_prioritized_catalog` itself with two differently-spelled rows for the
+same endpoint. Full suite green (2106 tests); 100% coverage (including the new fallback branch) and 100%
+docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

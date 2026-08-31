@@ -86,6 +86,68 @@ def test_outage_domain_groups_by_shared_base_url() -> None:
 
 
 @pytest.mark.parametrize(
+    ("base_url", "equivalent_to"),
+    [
+        ("HTTPS://Integrate.API.Nvidia.COM/v1", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com:443/v1", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com/v1/", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com/v1//", "https://integrate.api.nvidia.com/v1"),
+    ],
+)
+def test_normalize_base_url_treats_equivalent_spellings_as_one_domain(
+    base_url: str, equivalent_to: str
+) -> None:
+    """Case, an explicit default port, and a trailing slash do not split a domain.
+
+    Regression for a Devin Review finding on this fix: comparing raw
+    ``base_url`` strings would let a hostname-case difference, an explicit
+    ``:443``, or a trailing slash split one physical endpoint into two
+    outage domains by formatting accident alone -- silently reintroducing
+    the diversity-overstating, cap-bypassing bug this module exists to fix,
+    for exactly the ``nvidia_nim``/``nvidia_nim_sub`` pair it was written to
+    protect.
+    """
+    assert policy._normalize_base_url(base_url) == policy._normalize_base_url(equivalent_to)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "distinct_from"),
+    [
+        ("https://integrate.api.nvidia.com/v1", "https://api.openai.com/v1"),
+        ("https://integrate.api.nvidia.com:8443/v1", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com/v2", "https://integrate.api.nvidia.com/v1"),
+        ("http://integrate.api.nvidia.com/v1", "https://integrate.api.nvidia.com/v1"),
+    ],
+)
+def test_normalize_base_url_preserves_genuine_distinctions(
+    base_url: str, distinct_from: str
+) -> None:
+    """A different host, non-default port, path, or scheme stays a different domain."""
+    assert policy._normalize_base_url(base_url) != policy._normalize_base_url(distinct_from)
+
+
+def test_normalize_base_url_falls_back_on_unparseable_input() -> None:
+    """A hostless or malformed-port URL groups by a stripped, lowercased copy.
+
+    Never raises: this function only needs equal inputs to compare equal,
+    not a validated URL, since it groups audit evidence, not user input that
+    must be rejected.
+    """
+    assert policy._normalize_base_url("") == policy._normalize_base_url("")
+    assert policy._normalize_base_url(" NOT-A-URL ") == policy._normalize_base_url("not-a-url")
+    assert policy._normalize_base_url(
+        "https://host:notaport/v1"
+    ) == policy._normalize_base_url("HTTPS://HOST:NOTAPORT/v1")
+
+
+def test_outage_domain_uses_normalized_base_url() -> None:
+    """Two rows spelling one endpoint differently share one outage domain."""
+    assert policy._outage_domain(
+        {"base_url": "https://integrate.api.nvidia.com/v1"}
+    ) == policy._outage_domain({"base_url": "https://Integrate.API.Nvidia.com:443/v1/"})
+
+
+@pytest.mark.parametrize(
     ("candidate", "provider", "expected"),
     [
         ("or_ds_r1", "openrouter", "or_ds_r1"),
@@ -344,6 +406,48 @@ def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
     )
     assert result["report"]["free_account_diversity"] == 2
     assert result["report"]["free_outage_domain_diversity"] == 1
+
+
+def test_build_catalog_collapses_differently_spelled_equivalent_endpoints() -> None:
+    """A hostname-case/port/slash spelling difference cannot split one domain.
+
+    End-to-end regression for the same Devin Review finding as
+    ``test_normalize_base_url_treats_equivalent_spellings_as_one_domain``,
+    exercised through ``parse_discovery_report``'s ``base_url`` override
+    (the field a discovery report -- including this script's own
+    ``--discovery-report`` CLI input, not only the sidecar's exact
+    generation path -- may supply explicitly) rather than the unit-level
+    helper directly.
+    """
+    differently_spelled_report = {
+        "models": [
+            {
+                "provider": "nvidia_nim",
+                "model": "nvidia/nemotron-3-nano-30b-a3b",
+                "agent_id": "nim_nano_free",
+                "is_free": True,
+                "base_url": "https://integrate.api.nvidia.com/v1",
+                **FREE_PRICE,
+            },
+            {
+                "provider": "nvidia_nim_sub",
+                "model": "meta/llama-3.3-70b-instruct",
+                "agent_id": "nimsec_70b",
+                "is_free": True,
+                "base_url": "HTTPS://Integrate.API.Nvidia.com:443/v1/",
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(differently_spelled_report),
+        limit=12,
+        account_cap=1,
+    )
+    assert result["report"]["free_outage_domain_diversity"] == 1
+    # The shared domain's cap of 1 admits only the first-sorted row, not one
+    # from each differently-spelled row.
+    assert len(result["agents"]) == 1
 
 
 def test_build_catalog_rejects_unknown_pool() -> None:

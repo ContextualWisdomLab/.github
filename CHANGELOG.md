@@ -18,7 +18,11 @@ Semantic Versioning where the repository publishes a release.
   they now share one admission-cap budget and count as one outage domain. A
   new `free_outage_domain_diversity` report field (additive, alongside the
   existing `free_account_diversity`) reflects this for callers deciding
-  whether a single provider outage could empty the free catalog.
+  whether a single provider outage could empty the free catalog. Outage-
+  domain grouping normalizes each row's `base_url` first (lowercasing
+  scheme/host, dropping an explicit default port, stripping a trailing
+  slash), so a formatting difference alone cannot split one physical
+  endpoint into two domains.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer

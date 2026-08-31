@@ -16,6 +16,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from scripts.ci.zdr_policy import (
     PROVIDER_AUTH_SCHEMES,
@@ -29,6 +30,8 @@ from scripts.ci.zdr_policy import (
 
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_ACCOUNT_CAP = 4
+
+_DEFAULT_PORTS: Mapping[str, int] = {"http": 80, "https": 443}
 
 COST_FREE = "free"
 COST_PRICED = "priced"
@@ -80,8 +83,65 @@ def _outage_domain(row: Mapping[str, Any]) -> str:
     this cannot silently go stale independently of the ``base_url`` evidence
     the catalog itself already serves from -- the same failure mode that
     made the removed ``PROVIDER_FAMILIES`` mapping wrong in the first place.
+
+    Compares :func:`_normalize_base_url`'s normalized form, not the raw
+    string: two spellings of the identical endpoint (a hostname cased
+    differently, an explicit default port, a trailing slash on one row but
+    not another) must not be read as two outage domains, or a pure
+    formatting accident could reintroduce exactly the diversity-overstating,
+    cap-bypassing bug this function exists to fix. Every KV-credentialed
+    provider in this codebase today resolves ``base_url`` from one of a
+    fixed set of hardcoded string literals (never a live, potentially
+    differently-formatted network response), so this normalization changes
+    nothing for any input this repository's sidecar currently produces --
+    it exists to keep this public, independently invocable function (also
+    reachable through this script's own ``--discovery-report`` CLI, not only
+    the sidecar's exact generation path) correct for any future input, not
+    to compensate for an observed live discrepancy.
     """
-    return str(row["base_url"])
+    return _normalize_base_url(str(row["base_url"]))
+
+
+def _normalize_base_url(base_url: str) -> str:
+    """Return a case/port/trailing-slash-normalized identity for a base URL.
+
+    Scheme and host are lowercased (both are case-insensitive per RFC 3986
+    3.1/3.2.2); an explicit port equal to the scheme's default (``:443`` for
+    ``https``, ``:80`` for ``http``) is dropped, since it is equivalent to
+    omitting it; exactly one trailing slash is stripped from the path, since
+    a base URL's trailing slash does not change which resource it addresses.
+    Every other distinction -- a different host, a different non-default
+    port, a different path -- is preserved verbatim, including the query and
+    fragment components (routing evidence has no legitimate reason to carry
+    either; preserving rather than dropping them means an unexpected one
+    cannot silently vanish from the computed identity). Any userinfo
+    component present is dropped rather than preserved: outage-domain
+    identity is about the physical endpoint, not which credential reaches
+    it, and this codebase's base URLs never carry userinfo (see
+    ``configured_gateway_source`` in ``contextual-orchestrator``, which
+    rejects one outright).
+
+    A string this cannot parse into a scheme, host, and numeric port --
+    including an empty string (which would otherwise normalize to a value
+    indistinct from a real one-character path) and a non-numeric port
+    substring (``urlsplit(...).port`` raises ``ValueError`` for one) --
+    falls back to a simple lowercased, stripped copy of the whole string:
+    grouping only needs equal inputs to compare equal, not a validated URL,
+    and this function must never raise on evidence it merely groups.
+    """
+    text = base_url.strip()
+    parsed = urlsplit(text)
+    if not parsed.scheme or not parsed.hostname:
+        return text.casefold()
+    try:
+        port = parsed.port
+    except ValueError:
+        return text.casefold()
+    scheme = parsed.scheme.casefold()
+    host = parsed.hostname.casefold()
+    netloc = host if port is None or port == _DEFAULT_PORTS.get(scheme) else f"{host}:{port}"
+    path = parsed.path.rstrip("/")
+    return urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
 
 
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
