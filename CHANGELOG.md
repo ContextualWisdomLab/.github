@@ -5,6 +5,14 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Remove the permanently-unreachable PR #827 repair workflow
+  (`.github/workflows/repair-pr827-coderabbit-comments.yml`) and its driver
+  script (`scripts/ci/repair_pr827_coderabbit_comments.py`): PR #827 is
+  closed and unmerged, GitHub never reuses PR numbers, so the workflow's
+  `github.event.pull_request.number == 827` gate could never fire again.
+  Its only caller was that workflow; the script's sole remaining reference
+  was a synthetic-fixture test kept alive purely to satisfy the 100%
+  coverage gate, which is removed along with it.
 - Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
   (flagged by Devin Review on that PR): the standing operating directive
   still named the removed `free_family_diversity` evidence field instead of
