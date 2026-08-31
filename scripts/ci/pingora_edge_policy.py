@@ -457,12 +457,12 @@ def _binary_documentation_evidence_confirms(
 
 
 def _is_complete_png(raw: bytes) -> bool:
-    """Validate one bounded, non-interlaced PNG including its image stream."""
+    """Validate one bounded PNG including its null- or Adam7-interlaced stream."""
 
     if not raw.startswith(PNG_SIGNATURE):
         return False
     offset = len(PNG_SIGNATURE)
-    header: tuple[int, int, int, int] | None = None
+    header: tuple[int, int, int, int, int] | None = None
     palette_seen = False
     image_data: list[bytes] = []
     image_data_closed = False
@@ -474,7 +474,11 @@ def _is_complete_png(raw: bytes) -> bool:
         chunk_type = raw[offset + 4 : offset + 8]
         chunk_data = raw[offset + 8 : offset + 8 + length]
         expected_crc = int.from_bytes(raw[offset + 8 + length : chunk_end], "big")
-        if zlib.crc32(chunk_type + chunk_data) != expected_crc:
+        if (
+            any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in chunk_type)
+            or chunk_type[2] & 0x20
+            or zlib.crc32(chunk_type + chunk_data) != expected_crc
+        ):
             return False
         if header is None:
             if chunk_type != b"IHDR" or length != 13 or offset != len(PNG_SIGNATURE):
@@ -489,14 +493,17 @@ def _is_complete_png(raw: bytes) -> bool:
             if (
                 width == 0 or height == 0
                 or bit_depth not in allowed_depths.get(color_type, set())
-                or compression != 0 or filtering != 0 or interlace != 0
+                or compression != 0 or filtering != 0 or interlace not in {0, 1}
             ):
                 return False
-            header = (width, height, bit_depth, color_type)
+            header = (width, height, bit_depth, color_type, interlace)
         elif chunk_type == b"IHDR":
             return False
         elif chunk_type == b"PLTE":
             if palette_seen or image_data or length == 0 or length > 768 or length % 3:
+                return False
+            _width, _height, bit_depth, color_type, _interlace = header
+            if color_type == 3 and length // 3 > 1 << bit_depth:
                 return False
             palette_seen = True
         elif chunk_type == b"IDAT":
@@ -506,16 +513,29 @@ def _is_complete_png(raw: bytes) -> bool:
         elif chunk_type == b"IEND":
             if length != 0 or not image_data or chunk_end != len(raw):
                 return False
-            width, height, bit_depth, color_type = header
+            width, height, bit_depth, color_type, interlace = header
             if (color_type == 3 and not palette_seen) or (
                 color_type in {0, 4} and palette_seen
             ):
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
-            row_bytes = (width * channels * bit_depth + 7) // 8
-            expected_size = height * (row_bytes + 1)
-            if expected_size > MAX_RESPONSE_BYTES:
-                return False
+            passes = (
+                ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+                 (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+                if interlace else ((0, 0, 1, 1),)
+            )
+            scanlines: list[tuple[int, int]] = []
+            expected_size = 0
+            for x_start, y_start, x_step, y_step in passes:
+                if width <= x_start or height <= y_start:
+                    continue
+                pass_width = (width - x_start + x_step - 1) // x_step
+                pass_height = (height - y_start + y_step - 1) // y_step
+                row_bytes = (pass_width * channels * bit_depth + 7) // 8
+                expected_size += pass_height * (row_bytes + 1)
+                if expected_size > MAX_RESPONSE_BYTES:
+                    return False
+                scanlines.append((pass_height, row_bytes))
             decoder = zlib.decompressobj()
             try:
                 decoded = decoder.decompress(b"".join(image_data), expected_size + 1)
@@ -526,7 +546,13 @@ def _is_complete_png(raw: bytes) -> bool:
                 or decoder.unused_data or decoder.unconsumed_tail
             ):
                 return False
-            return all(decoded[row * (row_bytes + 1)] <= 4 for row in range(height))
+            decoded_offset = 0
+            for row_count, row_bytes in scanlines:
+                for _ in range(row_count):
+                    if decoded[decoded_offset] > 4:
+                        return False
+                    decoded_offset += row_bytes + 1
+            return decoded_offset == len(decoded)
         elif chunk_type[0] & 0x20 == 0:
             return False
         elif image_data:

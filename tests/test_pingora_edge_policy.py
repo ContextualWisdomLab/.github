@@ -501,17 +501,23 @@ def test_png_semantic_validation_fails_closed() -> None:
         (1).to_bytes(4, "big") * 2 + bytes((4, 2, 0, 0, 0)),
         (1).to_bytes(4, "big") * 2 + bytes((8, 6, 1, 0, 0)),
         (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 1, 0)),
-        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 2)),
     )
     assert all(not policy._is_complete_png(png(header, image, end)) for header in invalid_headers)
     assert not policy._is_complete_png(png(rgba, chunk(b"IHDR", rgba), image, end))
     assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b""), image, end))
     assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x" * 769), image, end))
     assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"1EXt", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"tExt", b""), image, end))
     assert not policy._is_complete_png(png(rgba, chunk(b"ABCD", b""), image, end))
     assert policy._is_complete_png(png(rgba, chunk(b"tEXt", b"x"), image, end))
     assert not policy._is_complete_png(png(rgba, image, chunk(b"tEXt", b"x"), image, end))
     assert not policy._is_complete_png(png(indexed, image, end))
+    indexed_one_bit = (1).to_bytes(4, "big") * 2 + bytes((1, 3, 0, 0, 0))
+    assert not policy._is_complete_png(
+        png(indexed_one_bit, chunk(b"PLTE", b"\0" * 9), chunk(b"IDAT", zlib.compress(b"\0\0")), end)
+    )
     assert not policy._is_complete_png(png(gray, chunk(b"PLTE", b"\0\0\0"), chunk(b"IDAT", zlib.compress(b"\0\0")), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", b"not-zlib"), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
@@ -519,6 +525,20 @@ def test_png_semantic_validation_fails_closed() -> None:
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
     huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
     assert not policy._is_complete_png(png(huge, image, end))
+
+    adam7 = (8).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    adam7_scanlines = b"".join(
+        b"\0" + b"\0" * (pass_width * 4)
+        for pass_width, pass_height in ((1, 1), (1, 1), (2, 1), (2, 2), (4, 2), (4, 4), (8, 4))
+        for _ in range(pass_height)
+    )
+    assert policy._is_complete_png(
+        png(adam7, chunk(b"IDAT", zlib.compress(adam7_scanlines)), end)
+    )
+    adam7_one_pixel = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    assert policy._is_complete_png(
+        png(adam7_one_pixel, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0")), end)
+    )
 
 
 def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:

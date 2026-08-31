@@ -34,8 +34,9 @@ so a governed shared implementation is required.
 7. PHP workloads move to an HTTP application server or reviewed FastCGI adapter
    behind Pingora before the public listener changes.
 8. Documentation PNG screenshots and PDF papers without a text diff are verified
-   from bounded format evidence (a complete CRC-valid PNG chunk stream whose
-   bounded decompressed scanlines match IHDR, or a PDF signature) and excluded
+   from bounded format evidence (a complete CRC-valid PNG chunk stream with
+   conforming chunk names and palette bounds whose bounded null- or
+   Adam7-interlaced decompressed scanlines match IHDR, or a PDF signature) and excluded
    from runtime-content scanning;
    runtime paths and malformed or unsupported binary evidence still fail closed.
 
