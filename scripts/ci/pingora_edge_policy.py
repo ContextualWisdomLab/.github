@@ -149,17 +149,9 @@ OpenJson = Callable[[str, str], object]
 class NoRedirectHandler(HTTPRedirectHandler):
     """Reject redirects so validated GitHub API requests keep one origin."""
 
-    def redirect_request(
-        self,
-        req: Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> None:
-        """Raise an HTTPError instead of following the redirect."""
-        raise HTTPError(req.full_url, code, msg, headers, fp)
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        """Return no follow-up request for any HTTP redirect response."""
+        return None
 
 
 github_opener = build_opener(NoRedirectHandler())
