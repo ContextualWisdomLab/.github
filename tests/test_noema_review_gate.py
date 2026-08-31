@@ -476,6 +476,17 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
         noema.extract_json_object("not-json")
 
 
+def test_extract_json_object_balances_wrapped_and_multiple_objects():
+    """Decode one complete object without joining unrelated brace-bearing text."""
+    verdict = {"decision": "approve", "summary": "balanced { text }"}
+    assert noema.extract_json_object(
+        "prose {not JSON} before " + json.dumps(verdict) + " after {brace prose}"
+    ) == verdict
+    assert noema.extract_json_object(
+        json.dumps(verdict) + "\n" + json.dumps({"decision": "comment"})
+    ) == verdict
+
+
 def test_extract_json_object_fails_closed_on_malformed_json():
     """A brace-wrapped but syntactically invalid LLM response must raise the
     same fail-closed RuntimeError this module uses for other unusable-verdict

@@ -513,16 +513,27 @@ def extract_json_object(text: str) -> dict[str, Any]:
     the same underlying (unlogged) response without exposing its bytes.
     """
     stripped = text.strip()
-    if stripped.startswith("{"):
-        candidate = stripped
-    else:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end < start:
-            raise RuntimeError("Noema LLM response did not contain a JSON object")
-        candidate = stripped[start : end + 1]
+    decoder = json.JSONDecoder()
+    decode_error: json.JSONDecodeError | None = None
+    for start, character in enumerate(stripped):
+        if character != "{":
+            continue
+        try:
+            candidate, _end = decoder.raw_decode(stripped, start)
+        except json.JSONDecodeError as exc:
+            decode_error = exc
+            continue
+        if isinstance(candidate, dict):
+            return candidate
+
+    if "{" not in stripped:
+        raise RuntimeError("Noema LLM response did not contain a JSON object")
+
+    exc = decode_error or json.JSONDecodeError(
+        "No JSON object could be decoded", stripped, 0
+    )
     try:
-        return json.loads(candidate)
+        raise exc
     except json.JSONDecodeError as exc:
         fingerprint = hashlib.sha256(
             stripped.encode("utf-8", errors="surrogatepass")
