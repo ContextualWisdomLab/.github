@@ -217,6 +217,13 @@ jobs:
             exit 1
           }
 
+          case "$TOKEN_EXCHANGE_URL" in
+            https://*) ;;
+            *)
+              fail_unavailable "Noema app token exchange unavailable: TOKEN_EXCHANGE_URL must start with https:// to avoid sending the OIDC token over cleartext (observed ${TOKEN_EXCHANGE_URL:-<empty>})."
+              ;;
+          esac
+
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
           fi
@@ -391,6 +398,13 @@ jobs:
             echo "::error::$message"
             exit 1
           }
+
+          case "$TOKEN_EXCHANGE_URL" in
+            https://*) ;;
+            *)
+              fail_unavailable "Noema app submission token exchange unavailable: TOKEN_EXCHANGE_URL must start with https:// to avoid sending the OIDC token over cleartext (observed ${TOKEN_EXCHANGE_URL:-<empty>})."
+              ;;
+          esac
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             fail_unavailable "Noema app submission token exchange unavailable: OIDC request environment is missing."

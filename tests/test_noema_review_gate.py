@@ -1,6 +1,9 @@
 import base64
+import http.server
 import json
 import sys
+import threading
+import time
 
 import pytest
 
@@ -258,8 +261,11 @@ class FakeResponse:
         """Propagate exceptions from the with-statement body."""
         return False
 
-    def read(self):
-        """Return the payload as encoded JSON bytes."""
+    def read(self, amt=None):
+        """Return the payload as encoded JSON bytes, then an empty chunk."""
+        if getattr(self, "_read_done", False):
+            return b""
+        self._read_done = True
         return json.dumps(self.payload).encode("utf-8")
 
 
@@ -414,6 +420,179 @@ def test_llm_request_timeout_matches_org_two_hour_per_model_policy():
         noema.LLM_REQUEST_TIMEOUT_SECONDS * max_call_llm_attempts_per_review
         == noema.LLM_REQUEST_TOTAL_BUDGET_SECONDS
     )
+
+
+def test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response(monkeypatch):
+    """call_llm must not let a trickling response outlive the total budget.
+
+    Regression coverage for CodeRabbit's finding on ContextualWisdomLab/.github#1509:
+    ``opener.open(..., timeout=LLM_REQUEST_TIMEOUT_SECONDS)`` only bounds the
+    connection phase and each individual socket read (confirmed CPython
+    ``urllib.request``/``socket`` timeout semantics), not the cumulative time
+    spent in ``response.read()``. A server that keeps trickling small amounts
+    of data at intervals shorter than that per-read timeout could otherwise
+    keep a still-alive connection open past ``LLM_REQUEST_TOTAL_BUDGET_SECONDS``.
+
+    This spins up a real local HTTP server (through the loopback sidecar
+    allowlist, not a mock) that sends its body in small delayed chunks whose
+    total duration comfortably exceeds a monkeypatched, deliberately tiny
+    ``LLM_REQUEST_TOTAL_BUDGET_SECONDS``, and asserts call_llm fails closed
+    with a clear error well before the full trickle would have completed --
+    proving the deadline is enforced mid-read, not just once per attempt.
+    """
+    chunk_delay_seconds = 0.3
+    chunk_count = 12  # 3.6s of total trickle time, well over the budget below
+
+    class SlowTrickleHandler(http.server.BaseHTTPRequestHandler):
+        """A local HTTP handler that dribbles its body out in small pieces."""
+
+        def do_POST(self):
+            """Consume the request body, then trickle a slow, chunked reply."""
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                for _ in range(chunk_count):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(chunk_delay_seconds)
+            except OSError:
+                pass  # The client is expected to disconnect once its deadline fires.
+
+        def log_message(self, *_args):
+            """Silence the default per-request stderr logging."""
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowTrickleHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        monkeypatch.setenv("NOEMA_LLM_API_URL", f"{origin}/v1/chat/completions")
+        monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+        # Route through the loopback sidecar allowlist (is_allowed_orchestrator_sidecar_url)
+        # so reject_private_llm_url permits this 127.0.0.1 target.
+        monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", origin)
+        monkeypatch.setattr(noema, "LLM_REQUEST_TOTAL_BUDGET_SECONDS", 1.0)
+        monkeypatch.setattr(noema, "LLM_REQUEST_TIMEOUT_SECONDS", 10)
+
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="LLM_REQUEST_TOTAL_BUDGET_SECONDS"):
+            noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        elapsed = time.monotonic() - start
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+    # Must abort close to the 1.0s budget, not after the full ~3.6s trickle
+    # and not after the (monkeypatched to 10s) per-attempt LLM_REQUEST_TIMEOUT_SECONDS.
+    assert elapsed < chunk_count * chunk_delay_seconds
+
+
+def test_read_response_body_within_deadline_rejects_already_expired_deadline():
+    """An already-passed deadline must fail before any read is attempted."""
+
+    class _UnreadableResponse:
+        def read(self):
+            raise AssertionError("must not be called once the deadline has passed")
+
+    with pytest.raises(RuntimeError, match="before the response body could be read"):
+        noema._read_response_body_within_deadline(_UnreadableResponse(), time.monotonic() - 1)
+
+
+def test_read_response_body_within_deadline_tolerates_a_failing_shutdown():
+    """A watchdog whose shutdown() itself fails must still fail closed on timeout."""
+
+    class _FailingRawSocket:
+        def shutdown(self, how):
+            raise OSError("shutdown not supported by this fake socket")
+
+    class _Raw:
+        def __init__(self, sock):
+            self._sock = sock
+
+    class _SlowResponse:
+        def __init__(self):
+            self.fp = type("Fp", (), {"raw": _Raw(_FailingRawSocket())})()
+
+        def read(self):
+            time.sleep(0.2)  # long enough for the watchdog to have already fired
+            return b"partial body despite the failed shutdown"
+
+    with pytest.raises(RuntimeError, match="while reading the response body"):
+        noema._read_response_body_within_deadline(_SlowResponse(), time.monotonic() + 0.05)
+
+
+def test_read_response_body_within_deadline_converts_reset_after_watchdog_fires():
+    """A read() that raises OSError once the watchdog has fired must fail closed."""
+
+    class _RawSocket:
+        def __init__(self):
+            self.shutdown_called = threading.Event()
+
+        def shutdown(self, how):
+            self.shutdown_called.set()
+
+    class _Raw:
+        def __init__(self, sock):
+            self._sock = sock
+
+    class _ResetOnShutdownResponse:
+        def __init__(self):
+            self._sock = _RawSocket()
+            self.fp = type("Fp", (), {"raw": _Raw(self._sock)})()
+
+        def read(self):
+            self._sock.shutdown_called.wait(timeout=5)
+            raise OSError("connection reset by the watchdog's shutdown()")
+
+    with pytest.raises(RuntimeError, match="while reading the response body"):
+        noema._read_response_body_within_deadline(_ResetOnShutdownResponse(), time.monotonic() + 0.05)
+
+
+def test_read_response_body_within_deadline_reraises_unrelated_os_error():
+    """An OSError raised before the watchdog ever fires must propagate unchanged."""
+
+    class _RawSocket:
+        def shutdown(self, how):
+            raise AssertionError("must not be called; the read fails before any timeout")
+
+    class _Raw:
+        def __init__(self, sock):
+            self._sock = sock
+
+    class _ImmediatelyBrokenResponse:
+        def __init__(self):
+            self.fp = type("Fp", (), {"raw": _Raw(_RawSocket())})()
+
+        def read(self):
+            raise OSError("connection reset by peer, unrelated to the deadline")
+
+    with pytest.raises(OSError, match="unrelated to the deadline"):
+        noema._read_response_body_within_deadline(_ImmediatelyBrokenResponse(), time.monotonic() + 5)
+
+
+def test_call_llm_rejects_an_already_expired_deadline_before_any_request(monkeypatch):
+    """call_llm's own top-of-function budget check must fail closed pre-request.
+
+    This also guards the repair-retry recursion: if the original attempt
+    consumed the entire LLM_REQUEST_TOTAL_BUDGET_SECONDS, the recursive
+    repair call (which threads the same shared deadline through) must not
+    silently get a fresh timeout budget instead of failing closed.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("must not attempt a network call past the deadline")
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", fail_if_called)
+    with pytest.raises(RuntimeError, match="before this attempt could start"):
+        noema.call_llm(
+            "owner/repo", 7, make_pr(), "diff", False, deadline=time.monotonic() - 1
+        )
 
 
 def test_noema_redirect_handler_rejects_redirects():
@@ -608,6 +787,7 @@ def test_submit_pending_verdict_matches_and_rejects_identity_drift(monkeypatch):
     calls = []
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
     monkeypatch.setattr(noema, "current_actor", lambda: "cwl-noema-review[bot]")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     state = {
         "pr": make_pr(),
         "actor": "cwl-noema-review[bot]",
@@ -627,6 +807,33 @@ def test_submit_pending_verdict_matches_and_rejects_identity_drift(monkeypatch):
         noema.submit_pending_verdict("owner/repo", 7, state)
 
 
+def test_submit_pending_verdict_rejects_stale_head_between_phases(monkeypatch):
+    """submit_pending_verdict must refuse to submit against a moved PR head.
+
+    Regression coverage for CodeRabbit's finding on ContextualWisdomLab/.github#1509:
+    submit_pending_verdict did not re-call fetch_pr before submit_review, so a new
+    commit landing during the (now up to ~4-hour) window between run_review_phase
+    persisting state and this phase running would silently submit a verdict
+    attached to a stale commit_id -- directly undermining this org's exact-head
+    evidence model (PR_GOVERNANCE_AUDIT.md: "Old approvals and old checks are not
+    merge evidence after the head SHA changes"). fetch_pr must now be re-called
+    here, and a headRefOid mismatch must abort before submit_review is ever
+    called.
+    """
+    calls = []
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(noema, "current_actor", lambda: "cwl-noema-review[bot]")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="new-commit-landed"))
+    state = {
+        "pr": make_pr(headRefOid="stale-head"),
+        "actor": "cwl-noema-review[bot]",
+        "verdict": {"decision": "approve", "summary": "ok", "findings": []},
+    }
+    with pytest.raises(RuntimeError, match="PR head changed"):
+        noema.submit_pending_verdict("owner/repo", 7, state)
+    assert calls == []
+
+
 def test_call_llm_rejects_empty_review_content(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
@@ -638,7 +845,10 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, amt=None):
+            if getattr(self, "_read_done", False):
+                return b""
+            self._read_done = True
             return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -663,7 +873,10 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, amt=None):
+            if getattr(self, "_read_done", False):
+                return b""
+            self._read_done = True
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -696,7 +909,10 @@ def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, amt=None):
+            if getattr(self, "_read_done", False):
+                return b""
+            self._read_done = True
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -716,7 +932,10 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, amt=None):
+            if getattr(self, "_read_done", False):
+                return b""
+            self._read_done = True
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -781,6 +1000,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
     class Response:
         def __init__(self, verdict):
             self.verdict = verdict
+            self._read_done = False
 
         def __enter__(self):
             return self
@@ -788,7 +1008,10 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self):
+        def read(self, amt=None):
+            if self._read_done:
+                return b""
+            self._read_done = True
             return json.dumps(
                 {"choices": [{"message": {"content": json.dumps(self.verdict)}}]}
             ).encode()

@@ -13,6 +13,8 @@ import re
 import socket
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -619,6 +621,88 @@ def reject_private_llm_url(api_url: str) -> None:
             raise ValueError("URL cannot target internal IP addresses")
 
 
+def _response_raw_socket(response: Any) -> Any | None:
+    """Return the underlying socket of an open urllib HTTP response, or None.
+
+    Used only to force-interrupt a still-blocked read once the monotonic
+    deadline passes (see ``_read_response_body_within_deadline``). Not every
+    response-like object exposes this (test doubles, for instance), so
+    callers must tolerate ``None`` and fall back to the pre-read deadline
+    check alone -- the same bound ``call_llm`` already applied before this
+    helper existed.
+    """
+    try:
+        return response.fp.raw._sock  # noqa: SLF001
+    except AttributeError:
+        return None
+
+
+def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes:
+    """Read an HTTP response body without exceeding a monotonic deadline.
+
+    ``opener.open(..., timeout=...)`` bounds only the connection phase and
+    each individual blocking socket read (CPython's documented
+    ``urllib.request``/``socket`` timeout semantics) -- it does not bound the
+    total time spent in ``response.read()``. A server that keeps trickling
+    small amounts of data at intervals shorter than that per-read timeout
+    could otherwise keep ``response.read()`` blocked well past
+    ``LLM_REQUEST_TOTAL_BUDGET_SECONDS``: ``io.BufferedReader.read()`` issues
+    as many underlying socket reads as it takes to reach EOF, and each one
+    individually satisfies the per-read timeout even though their sum does
+    not, so re-checking the deadline only *between* whole ``read()`` calls
+    would never see the pathological case in time.
+
+    Instead, arm a watchdog timer for the remaining budget that force-closes
+    the read side of the socket (``shutdown(SHUT_RDWR)``, which reliably
+    unblocks a concurrent blocking read on the same socket, unlike
+    ``close()``) if it fires before ``response.read()`` returns on its own,
+    then read the body in one call exactly as before. If the watchdog fired,
+    raise the same bounded, fail-closed ``RuntimeError`` this module already
+    uses elsewhere, whether the interrupted read raised an ``OSError`` or
+    returned a truncated body without one.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError(
+            "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS "
+            "before the response body could be read"
+        )
+    raw_socket = _response_raw_socket(response)
+    timed_out = threading.Event()
+    watchdog: threading.Timer | None = None
+    if raw_socket is not None:
+
+        def _expire() -> None:
+            """Mark the deadline as passed and force-close the read side."""
+            timed_out.set()
+            try:
+                raw_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        watchdog = threading.Timer(remaining, _expire)
+        watchdog.daemon = True
+        watchdog.start()
+    try:
+        body = response.read()
+    except OSError as exc:
+        if timed_out.is_set():
+            raise RuntimeError(
+                "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS "
+                "while reading the response body"
+            ) from exc
+        raise
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
+    if timed_out.is_set():
+        raise RuntimeError(
+            "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS "
+            "while reading the response body"
+        )
+    return body
+
+
 def call_llm(
     repo: str,
     number: int,
@@ -628,8 +712,24 @@ def call_llm(
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
+    deadline: float | None = None,
 ) -> dict[str, Any]:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
+    """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
+
+    ``deadline`` is a ``time.monotonic()`` timestamp shared across the
+    original attempt and its at-most-one repair retry, so the two together
+    are held to ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` end-to-end rather than
+    each independently getting a fresh full timeout. Callers should leave it
+    unset; it is set once here on the first (non-retry) call and threaded
+    through the recursive repair-retry call below.
+    """
+    if deadline is None:
+        deadline = time.monotonic() + LLM_REQUEST_TOTAL_BUDGET_SECONDS
+    remaining_budget = deadline - time.monotonic()
+    if remaining_budget <= 0:
+        raise RuntimeError(
+            "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS before this attempt could start"
+        )
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
@@ -685,8 +785,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=LLM_REQUEST_TIMEOUT_SECONDS) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+    attempt_timeout = min(LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)
+    with opener.open(request, timeout=attempt_timeout) as response:  # nosec B310
+        raw = _read_response_body_within_deadline(response, deadline).decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)
@@ -727,6 +828,7 @@ def call_llm(
             review_context,
             changed_paths,
             str(exc),
+            deadline=deadline,
         )
     return verdict
 
@@ -873,6 +975,16 @@ def submit_pending_verdict(repo: str, number: int, state: dict[str, Any]) -> Non
     identity between the two phases is refused instead of silently trusted --
     this preserves the same verified-reviewer-identity guarantee
     ``run_review_phase`` already enforced, under the new credential.
+
+    The same multi-hour window means a new commit can land on the PR between
+    when ``run_review_phase`` persisted ``state["pr"]["headRefOid"]`` and when
+    this function actually runs. Re-fetch the PR here and compare the fresh
+    ``headRefOid`` against the persisted one before submitting: this org's own
+    exact-head evidence model treats a review attached to a commit other than
+    the one it was computed against as invalid (see
+    ``PR_GOVERNANCE_AUDIT.md``: "Old approvals and old checks are not merge
+    evidence after the head SHA changes"), so a head mismatch here must abort
+    the submission rather than silently post a verdict against a stale diff.
     """
     actor = current_actor()
     if not actor:
@@ -882,6 +994,14 @@ def submit_pending_verdict(repo: str, number: int, state: dict[str, Any]) -> Non
             f"Noema submission credential identity {actor!r} does not match the "
             f"identity {state['actor']!r} that computed the verdict; refusing to "
             "submit under a different identity."
+        )
+    persisted_head = str((state.get("pr") or {}).get("headRefOid") or "")
+    current_head = str(fetch_pr(repo, number).get("headRefOid") or "")
+    if current_head != persisted_head:
+        raise RuntimeError(
+            f"Noema PR head changed from {persisted_head!r} to {current_head!r} "
+            "between the review and submission phases; refusing to submit a "
+            "verdict computed against a stale commit."
         )
     submit_review(repo, number, state["pr"], actor, state["verdict"])
 

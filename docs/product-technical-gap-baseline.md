@@ -1871,6 +1871,113 @@ eight) pass `bash -n`; the workflow parses under PyYAML with the expected 12 ste
 `timeout-minutes: 300`. 2134 tests pass (2133 plus one pre-existing skip); 100% coverage and 100%
 docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 PR #1509 CodeRabbit 3건 검증: 모두 실재 결함으로 확인 후 수정
+
+CodeRabbit posted a review on `ContextualWisdomLab/.github#1509` (the same PR as the two entries
+above) with three "major"-severity findings, each with concrete evidence from the current diff.
+Investigated all three directly against the current `noema-review.yml` and `noema_review_gate.py`
+content rather than trusting the bot's framing. **All three confirmed real, none were false
+positives or already-handled.**
+
+**Finding 1 — OIDC token exchange over plaintext HTTP was possible.** `TOKEN_EXCHANGE_URL` (`vars.
+NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL`) is a repository variable with no scheme
+validation before either of the two "Exchange ... Noema app ... token through OIDC" steps POSTed
+the freshly-minted OIDC identity token to it. A misconfigured `http://` value (or any non-`https://`
+scheme) would have sent that token in cleartext. Confirmed by reading both steps directly: neither
+had a scheme check anywhere before their `curl -X POST ... "${TOKEN_EXCHANGE_URL}"` call.
+
+**Fix.** Added a `case "$TOKEN_EXCHANGE_URL" in https://*) ;; *) fail_unavailable "..."; esac` guard
+immediately after each step's existing `fail_unavailable()` helper definition, before either curl
+request runs (including the earlier one to `ACTIONS_ID_TOKEN_REQUEST_URL` that fetches the OIDC
+identity token in the first place, so a misconfigured target is caught before that token is even
+requested, not just before it is sent onward). Both the initial "Exchange Noema app token through
+OIDC" step and the post-`call_llm` "Exchange fresh Noema app submission token through OIDC" step got
+the same guard, matching this file's `set -euo pipefail` / `fail_unavailable()` style exactly rather
+than inventing a new error-handling shape. `TOKEN_EXCHANGE_URL` is a repo-owned config value (already
+gated to `source == 'oidc'`, meaning it is guaranteed non-empty by the time this runs), not
+attacker-controlled input, so this is defense-in-depth against a misconfiguration, sized as
+CodeRabbit itself scoped it ("quick win").
+
+**Finding 2 — `submit_pending_verdict` did not re-verify the PR head before submitting.**
+Read `submit_pending_verdict` directly: it re-verifies reviewer *identity* against the fresh
+submission credential (the fix from the entry above) but never re-called `fetch_pr`, so it always
+submitted `state["pr"]` -- the PR snapshot `run_review_phase` fetched before the (now up to ~4-hour)
+`call_llm` call -- unconditionally. A new commit landing on the PR during that window would make
+`submit_review`'s `commit_id` (from the stale `state["pr"]["headRefOid"]`) point at a commit that is
+no longer the PR's head, attaching a review to an outdated diff -- directly contradicting this org's
+own exact-head evidence model (`PR_GOVERNANCE_AUDIT.md`: "Old approvals and old checks are not merge
+evidence after the head SHA changes").
+
+**Fix.** `submit_pending_verdict` now calls `fetch_pr(repo, number)` again immediately before
+`submit_review`, compares the freshly-fetched `headRefOid` against `state["pr"]["headRefOid"]`, and
+raises a bounded `RuntimeError` ("PR head changed from ... to ...") if they differ -- the same
+fail-closed pattern (`main`'s top-level handler turns any `RuntimeError` into a clean non-zero exit
+with a `::error::` annotation) this file already uses for the identity-mismatch case right above it.
+`submit_review` is never called once a mismatch is detected. Regression test
+`test_submit_pending_verdict_rejects_stale_head_between_phases` mocks `fetch_pr` to return a
+different `headRefOid` on the (now second) call than the one persisted in `state`, and asserts
+`submit_review` is not called. The pre-existing
+`test_submit_pending_verdict_matches_and_rejects_identity_drift` was updated to mock `fetch_pr`
+returning a matching head, since the happy path now depends on it.
+
+**Finding 3 — no monotonic total deadline on `call_llm`'s HTTP read.** Read `call_llm` in full
+(the single `opener.open(request, timeout=LLM_REQUEST_TIMEOUT_SECONDS)` plus one unconditional
+`response.read()`). Confirmed CodeRabbit's cited `urllib.request`/`socket` semantics empirically in
+this sandbox (a real local HTTP server trickling small chunks with delays under the socket's
+configured timeout kept `response.read()` blocked for the whole trickle regardless of the timeout
+value): the `timeout=` argument to `opener.open` bounds the connection phase and each individual
+blocking socket read, never the cumulative time `response.read()` spends looping over many such
+reads to reach EOF. A server -- pathological or merely very slow -- trickling data at intervals
+shorter than `LLM_REQUEST_TIMEOUT_SECONDS` could keep one `call_llm` attempt's read phase alive
+indefinitely, and combined with the one possible repair-retry attempt, blow past the declared
+`LLM_REQUEST_TOTAL_BUDGET_SECONDS` (14400s) worst-case bound this PR's own tests assert elsewhere.
+
+**Fix.** `call_llm` now accepts an optional `deadline` (a `time.monotonic()` timestamp), defaulting
+to `time.monotonic() + LLM_REQUEST_TOTAL_BUDGET_SECONDS` on the first call and threaded unchanged
+through the recursive repair-retry call, so the original attempt and its retry share one end-to-end
+budget instead of each implicitly getting a fresh one. Before each attempt, a
+`remaining_budget <= 0` check fails closed immediately ("before this attempt could start") rather
+than starting a network call that cannot legally complete. The per-attempt connection timeout is now
+`min(LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)` instead of the constant
+`LLM_REQUEST_TIMEOUT_SECONDS`. The response body is read through a new
+`_read_response_body_within_deadline` helper: since `io.BufferedReader.read()` issues as many
+underlying socket reads as it takes to reach EOF (confirmed directly, not assumed -- see the sandbox
+probe above) and each individually satisfies a per-read timeout even when their sum does not,
+re-checking the deadline only *between* whole `read()` calls would not catch the pathological case
+in time. Instead, a `threading.Timer` watchdog is armed for the remaining budget; if it fires before
+`response.read()` returns on its own, it force-closes the read side of the socket
+(`shutdown(SHUT_RDWR)`, confirmed in this sandbox to reliably interrupt a concurrent blocked read,
+unlike `close()`, which does not reliably unblock another thread's in-progress `recv()`). Whether the
+interrupted read then raises `OSError` or simply returns a truncated body without one (both observed
+empirically depending on timing), the helper raises the same bounded, fail-closed `RuntimeError`
+this module already uses elsewhere. An OSError raised for an unrelated reason, before the watchdog
+ever fires, still propagates unchanged rather than being misreported as a budget failure. Works on
+Python >= 3.10 (this repo's `pyproject.toml` `requires-python`; `scripts/ci/noema_review_gate.py` has
+no narrower pin) -- confirmed no APIs used here (`threading.Timer`, `socket.shutdown`,
+`time.monotonic`, `response.fp.raw._sock`) require anything newer.
+
+Regression coverage (`tests/test_noema_review_gate.py`):
+`test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response` spins up a real local
+`http.server.HTTPServer` (routed through the existing loopback sidecar allowlist, not a mock) that
+trickles its body in 12 chunks 0.3s apart (3.6s total) against a monkeypatched 1.0s
+`LLM_REQUEST_TOTAL_BUDGET_SECONDS`, and asserts `call_llm` raises the bounded `RuntimeError` in well
+under the full trickle duration -- proving the deadline is enforced mid-read, not merely once per
+attempt. Four focused unit tests on `_read_response_body_within_deadline` directly cover the
+already-expired-deadline pre-check, a failing `shutdown()` that must not prevent the timeout from
+still being reported, an interrupted read that raises `OSError` after the watchdog fires, and an
+unrelated `OSError` raised before the watchdog ever fires (which must propagate unmodified). One more
+test exercises `call_llm`'s own pre-attempt budget check directly via the (now public in signature)
+`deadline` keyword, asserting no network call is attempted once the shared deadline has already
+passed. All pre-existing `call_llm` tests' response-double `read()` methods were widened to accept
+(and safely ignore, via a `_read_done` guard returning `b""` on a second call) an optional chunk-size
+argument, since production code no longer calls the zero-argument form directly through those doubles
+in every path. 2141 tests pass (2140 plus one pre-existing skip; up from the prior entry's 2134 --
+the net of Finding 2's one new regression test and Finding 3's six); 100% coverage and 100% docstring
+coverage on `scripts/ci/` (`coverage run -m pytest tests && coverage report --show-missing`,
+`interrogate`). `.github/workflows/noema-review.yml`'s twelve `run: |` shell blocks still all pass
+`bash -n`; the workflow still parses under PyYAML with the same 12 steps and `timeout-minutes: 300`
+(only two `run:` step bodies gained lines; no step was added, removed, or renamed).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
