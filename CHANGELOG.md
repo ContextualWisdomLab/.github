@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
+  (flagged by Devin Review on that PR): the standing operating directive
+  still named the removed `free_family_diversity` evidence field instead of
+  its `free_account_diversity` replacement, which could send future
+  monitoring work looking for a field that no longer exists.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer
