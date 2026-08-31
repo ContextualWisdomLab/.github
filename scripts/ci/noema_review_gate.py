@@ -23,19 +23,6 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
 }
-PRIMARY_REVIEW_MARKERS = (
-    "OpenCode reviewed the current-head bounded evidence and found no blocking issues.",
-    "Result: APPROVE",
-    "opencode-review-control-v1",
-)
-REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
-IGNORED_RUNNING_CHECKS = {
-    "approve-after-primary-review",
-    "noema-review",
-    "Required Noema Review",
-}
-FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -181,83 +168,6 @@ def review_author(review: dict[str, Any]) -> str:
 def review_commit(review: dict[str, Any]) -> str:
     """Return the review commit oid from a review node."""
     return ((review.get("commit") or {}).get("oid") or "").strip()
-
-
-def review_body_head_sha(review: dict[str, Any]) -> str | None:
-    """Return the last explicit current-head SHA recorded in a review body."""
-    matches = REVIEW_BODY_HEAD_SHA_RE.findall(str(review.get("body") or ""))
-    return matches[-1] if matches else None
-
-
-def review_matches_current_head(review: dict[str, Any], head_sha: str) -> bool:
-    """Return whether commit and explicit review-body evidence match the live head."""
-    if not head_sha or review_commit(review) != head_sha:
-        return False
-    body_head = review_body_head_sha(review)
-    return body_head is None or body_head.lower() == head_sha.lower()
-
-
-def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the current-head OpenCode approval when it matches the contract."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
-    for review in reversed(reviews):
-        if not review_matches_current_head(review, head_sha):
-            continue
-        if str(review.get("state") or "").upper() != "APPROVED":
-            continue
-        body = str(review.get("body") or "")
-        author = review_author(review)
-        if author in PRIMARY_REVIEW_AUTHORS and any(marker in body for marker in PRIMARY_REVIEW_MARKERS):
-            return review
-    return None
-
-
-def has_current_changes_requested(pr: dict[str, Any]) -> bool:
-    """Return whether the current head has any changes-requested review."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
-    for review in reversed(reviews):
-        if review_matches_current_head(review, head_sha) and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
-            return True
-    return False
-
-
-def has_unresolved_threads(pr: dict[str, Any]) -> bool:
-    """Return whether any non-outdated review thread is unresolved."""
-    threads = (((pr.get("reviewThreads") or {}).get("nodes")) or [])
-    return any(not thread.get("isResolved") and not thread.get("isOutdated") for thread in threads)
-
-
-def check_label(node: dict[str, Any]) -> str:
-    """Return a human-readable label for a status context or check run."""
-    if node.get("__typename") == "StatusContext":
-        return str(node.get("context") or "")
-    workflow = ((((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name") or "")
-    name = str(node.get("name") or "")
-    return f"{workflow} / {name}" if workflow else name
-
-
-def blocking_checks(pr: dict[str, Any]) -> list[str]:
-    """Return check contexts that should block Noema review."""
-    contexts = ((((pr.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")) or [])
-    blockers: list[str] = []
-    for node in contexts:
-        label = check_label(node)
-        if label in IGNORED_RUNNING_CHECKS or str(node.get("name") or "") in IGNORED_RUNNING_CHECKS:
-            continue
-        if node.get("__typename") == "StatusContext":
-            state = str(node.get("state") or "").upper()
-            if state not in {"SUCCESS", "NEUTRAL"}:
-                blockers.append(f"{label}: {state}")
-            continue
-        status = str(node.get("status") or "").upper()
-        conclusion = str(node.get("conclusion") or "").upper()
-        if conclusion in FAILED_CONCLUSIONS:
-            blockers.append(f"{label}: {conclusion}")
-        elif status in RUNNING_STATES and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
-            blockers.append(f"{label}: {status}")
-    return blockers
 
 
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
@@ -594,7 +504,18 @@ def call_llm(
     findings = verdict.get("findings")
     if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
         raise RuntimeError("Noema LLM response findings must be a list of objects")
-    if decision == "request_changes" and not format_findings(findings):
+    for finding in findings:
+        if (
+            finding.get("severity") not in {"high", "medium", "low"}
+            or not isinstance(finding.get("file"), str)
+            or not finding["file"].strip()
+            or type(finding.get("line")) is not int
+            or finding["line"] <= 0
+            or not isinstance(finding.get("message"), str)
+            or not finding["message"].strip()
+        ):
+            raise RuntimeError("Noema LLM response contained a malformed finding")
+    if decision == "request_changes" and not findings:
         raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
     return verdict
 
@@ -658,6 +579,8 @@ def inspect_and_review(repo: str, number: int) -> int:
     """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
     actor = current_actor()
+    if not actor:
+        raise RuntimeError("Noema reviewer identity could not be verified")
     if actor in PRIMARY_REVIEW_AUTHORS:
         raise RuntimeError(
             f"Current token actor {actor!r} is already a primary review actor; "
