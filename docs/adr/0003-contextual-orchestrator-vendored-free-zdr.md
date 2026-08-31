@@ -143,7 +143,7 @@ all five, and auto-optimize routing by cost.
 
 - **Separate startup and serving budgets (2026-08-30):** route admission keeps
   the ten-second timeout so unavailable providers cannot delay healthz, while
-  the serving `ModelClient` uses the Noema gate's 120-second transport budget.
+  the serving `ModelClient` uses the Noema gate's 9,600-second review budget.
   Both phases keep zero retries and the same bounded request policy; the
   launcher test verifies the two constructed client configurations separately.
 
