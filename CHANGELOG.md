@@ -5,6 +5,41 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Web verification now runs backend, frontend, and E2E commands inside an
+  isolated Linux bubblewrap workspace by default (`--isolation required`),
+  mounting a read-only runtime root with a single writable `/workspace`
+  bind; trusted local debugging may opt out with `--isolation disabled`.
+  Isolation-backend resolution and the existing loopback readiness-URL
+  boundary are now both checked before any service starts, so an
+  unavailable isolation backend or an invalid readiness URL fails closed
+  with a clear diagnostic (exit code 126/125) instead of after services are
+  already running.
+- Close four gaps a Devin Review pass found in the same web E2E isolation
+  helper (`scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`):
+  a non-numeric or out-of-range readiness-URL port now raises the same
+  `ValueError` every other readiness check raises, instead of an uncaught
+  `http.client.InvalidURL` escaping past `main`'s exit-125 handling; a `bwrap`
+  binary on `PATH` now passes a bounded capability preflight (proving it can
+  actually create the sandbox's namespaces) before isolation is trusted as
+  available, so a restricted host fails closed with exit 126 instead of a
+  later, confusing readiness/test failure; an executable that cannot be
+  resolved on `PATH` is now a hard `isolated_command` failure rather than a
+  silent fallthrough that ran unwrapped and unvalidated; and the shared
+  workspace copy now rejects (fails the whole copy closed) any symlink whose
+  resolved target lands outside the copied tree, since `copytree(...,
+  symlinks=True)` otherwise preserves an escaping symlink as a live link
+  inside the bind-mounted `/workspace`.
+- (Devin review 반영, 후속 라운드) 같은 sandboxed web E2E isolation 헬퍼에 두 건을 추가로
+  hardening했습니다: (1) `_probe_isolation_capability`가 이제 `isolated_command`가 실제로
+  수행하는 모든 연산(`--new-session`, `/tmp` tmpfs, 실제 명령이 사용하는 것과 동일한 mount
+  point로의 쓰기 가능한 bind+chdir)을 진짜 임시 디렉터리로 그대로 재현합니다 — 이전의 축소된
+  probe는 이 중 하나를 거부하는 host에서는 통과했다가 실제 서비스 실행에서만 실패할 수
+  있었습니다. (2) `scripts/ci/sandboxed_verify.py`의 `copy_workspace` 기본 제외 목록에
+  자격증명 관련 dotfile/디렉터리(`.env*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`,
+  `.git-credentials`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`)를 추가했습니다 — 쓰기
+  가능한 `/workspace` mount는 테스트 대상 명령이 읽고 쓸 수 있으므로, repo checkout에 우연히
+  존재하는 자격증명 파일이 그대로 복사되어서는 안 됩니다(로그·per-command home은 명령이 실제로
+  써야 하므로 의도적으로 동일 mount 안에 유지).
 - Fix two live-on-`main` regressions Devin Review found immediately after
   PRs #1456 and #1459 merged (both bypass-merged past the org-wide
   `opencode-review` outage; these hotfixes correct real defects the local
