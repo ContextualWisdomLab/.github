@@ -628,6 +628,122 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     assert payload["client_payload"]["target_repository"] == "owner/repo"
 
 
+def test_is_rate_limit_error_matches_known_github_signatures():
+    """Rate-limit detection matches GitHub's primary and secondary wording."""
+    assert fix.is_rate_limit_error(RuntimeError("gh: API rate limit exceeded for installation ID 1"))
+    assert fix.is_rate_limit_error(RuntimeError("You have exceeded a Secondary rate limit"))
+    assert not fix.is_rate_limit_error(RuntimeError("gh: Resource not accessible by integration"))
+
+
+def test_issue_comments_retries_rate_limit_then_succeeds(monkeypatch):
+    """A transient rate-limit error is retried with backoff before succeeding."""
+    calls = []
+    sleeps = []
+    attempts = {"count": 0}
+
+    def fake_run(argv, *, stdin=None):
+        calls.append(argv)
+        attempts["count"] += 1
+        if attempts["count"] < 2:
+            raise RuntimeError("gh: API rate limit exceeded for installation ID 1")
+        return "[[{\"id\": 1}]]"
+
+    monkeypatch.setattr(fix, "run", fake_run)
+    monkeypatch.setattr(fix.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert fix.issue_comments("owner/repo", 7) == [{"id": 1}]
+    assert len(calls) == 2
+    assert sleeps == [fix.ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS]
+    assert all("per_page=100" in argv for argv in calls)
+
+
+def test_issue_comments_exhausts_retries_and_raises(monkeypatch):
+    """A persistent rate-limit error still propagates once retries are spent."""
+    sleeps = []
+
+    def always_rate_limited(argv, *, stdin=None):
+        raise RuntimeError("gh: API rate limit exceeded for installation ID 1")
+
+    monkeypatch.setattr(fix, "run", always_rate_limited)
+    monkeypatch.setattr(fix.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(RuntimeError, match="rate limit exceeded"):
+        fix.issue_comments("owner/repo", 7)
+    assert len(sleeps) == fix.ISSUE_COMMENTS_RETRY_ATTEMPTS
+
+
+def test_issue_comments_does_not_retry_non_rate_limit_errors(monkeypatch):
+    """A non-rate-limit failure propagates immediately without backoff."""
+    sleeps = []
+
+    def fail_once(argv, *, stdin=None):
+        raise RuntimeError("gh: Resource not accessible by integration")
+
+    monkeypatch.setattr(fix, "run", fail_once)
+    monkeypatch.setattr(fix.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(RuntimeError, match="not accessible"):
+        fix.issue_comments("owner/repo", 7)
+    assert sleeps == []
+
+
+def test_process_queue_defers_prs_whose_comment_fetch_failed(monkeypatch, capsys):
+    """A single failing comment fetch defers that PR instead of erroring."""
+    pr = make_pr()
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+
+    def failing_issue_comments(repo, number):
+        raise RuntimeError("gh: API rate limit exceeded for installation ID 1")
+
+    monkeypatch.setattr(fix, "issue_comments", failing_issue_comments)
+    inspect_calls = []
+    monkeypatch.setattr(
+        fix,
+        "inspect_pr",
+        lambda repo, pr, args, **kwargs: inspect_calls.append(kwargs) or ("dispatch", ("reason",)),
+    )
+
+    assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
+
+    assert inspect_calls == []
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["autofix_dispatches"] == 0
+    assert payload["decisions"][0]["action"] == "wait"
+    assert "deferring to next scheduled pass" in payload["decisions"][0]["reasons"][0]
+
+
+def test_process_queue_concurrent_fetch_defers_only_the_failing_pr(monkeypatch, capsys):
+    """The concurrent comment-fetch path defers only the PR whose fetch failed."""
+    pr1 = make_pr(number=1)
+    pr2 = make_pr(number=2)
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr1, pr2])
+    monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
+
+    def flaky_issue_comments(repo, number):
+        if number == 1:
+            raise RuntimeError("gh: API rate limit exceeded for installation ID 1")
+        return []
+
+    monkeypatch.setattr(fix, "issue_comments", flaky_issue_comments)
+    inspect_calls = []
+
+    def fake_inspect_pr(repo, pr, args, **kwargs):
+        inspect_calls.append((pr["number"], kwargs.get("comments")))
+        return "dispatch", ("reason",)
+
+    monkeypatch.setattr(fix, "inspect_pr", fake_inspect_pr)
+
+    assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run", "--max-dispatches", "2"]) == 0
+
+    assert inspect_calls == [(2, [])]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    decisions_by_pr = {d["pr"]: d for d in payload["decisions"]}
+    assert decisions_by_pr[1]["action"] == "wait"
+    assert "deferring to next scheduled pass" in decisions_by_pr[1]["reasons"][0]
+    assert decisions_by_pr[2]["action"] == "dispatch"
+
+
 def _approved_dirty_pr(**overrides):
     """Return an approved PR that GitHub reports as conflicting."""
     fields = {
