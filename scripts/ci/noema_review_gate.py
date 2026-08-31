@@ -512,6 +512,28 @@ def extract_json_object(text: str) -> dict[str, Any]:
     it, the raw content is never logged at all. Only a length and a SHA-256
     content fingerprint are logged — enough to correlate repeat failures for
     the same underlying (unlogged) response without exposing its bytes.
+
+    The excessively-deep-nesting branch below is defense-in-depth, not a
+    proven-reachable crash fix: ``RecursionError`` is a ``RuntimeError``
+    subclass, so ``call_llm``'s own ``except RuntimeError`` (wrapping this
+    call plus every post-decode field check) already turns an *unhandled*
+    ``RecursionError`` from ``raw_decode`` into the same clean fail-closed
+    exit, with or without this ``except`` clause. Verified directly: a real
+    ``depth = max(20_000, sys.getrecursionlimit() * 2)`` nested-array payload
+    raises ``RecursionError`` on Python 3.11-3.13 but is decoded successfully
+    (no exception at all) by the C-accelerated scanner on the Python 3.14.7
+    hosted runner this job actually runs on (job 99642234627, commit
+    ``ec23350e``: ``test_extract_json_object_fails_closed_on_excessive_nesting``
+    failed with "DID NOT RAISE RuntimeError" against that real payload). That
+    is why the regression test monkeypatches ``raw_decode`` to force
+    ``RecursionError`` deterministically instead of constructing a real deep
+    payload — no real depth reproduces the condition on this job's own
+    runtime, so a "real payload" test would either be flaky across Python
+    versions or assert nothing. What this branch buys over the pre-existing
+    upstream ``except RuntimeError`` is strictly better diagnostics (the
+    same bounded, scrubbed, fingerprinted message as every other decode
+    failure here) instead of a raw, unbounded recursion traceback — not a
+    different fail-closed outcome.
     """
     stripped = text.strip()
     decoder = json.JSONDecoder()

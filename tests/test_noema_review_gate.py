@@ -651,7 +651,18 @@ def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object
 
 
 def test_extract_json_object_fails_closed_on_excessive_nesting(monkeypatch):
-    """Deep JSON must reach the bounded diagnostic instead of RecursionError."""
+    """Deep JSON must reach the bounded diagnostic instead of RecursionError.
+
+    This monkeypatches ``raw_decode`` rather than constructing a real deep
+    payload on purpose: a real ``depth = max(20_000, recursionlimit * 2)``
+    nested array does raise ``RecursionError`` on Python 3.11-3.13, but is
+    decoded successfully (no exception) by the C-accelerated scanner on the
+    Python 3.14 runner this job actually runs on, so no real payload
+    reproduces the condition on this job's own runtime (see
+    ``extract_json_object``'s docstring for the verifying CI evidence). This
+    test instead pins the code's *contract* — if ``raw_decode`` ever raises
+    ``RecursionError`` on any Python version or input, the result is the
+    same bounded, scrubbed diagnostic as every other decode failure here."""
     def reject_deep_json(_decoder, _text, _start=0):
         raise RecursionError("maximum recursion depth exceeded")
 
