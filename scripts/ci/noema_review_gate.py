@@ -172,7 +172,7 @@ def require_expected_head(pr: dict[str, Any], expected_head_sha: str) -> None:
         raise RuntimeError("Expected pull request head must be a full commit SHA")
     live_head_sha = str(pr.get("headRefOid") or "")
     if (
-        str(pr.get("state") or "OPEN").upper() != "OPEN"
+        str(pr.get("state") or "").upper() != "OPEN"
         or live_head_sha.lower() != expected_head_sha.lower()
     ):
         raise RuntimeError(
@@ -244,7 +244,12 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
         complete, separator, partial = bounded.rpartition("\n")
         if not separator:
             return diff[:MAX_DIFF_CHARS], truncated
-        if partial.startswith(("+", "-")) and not partial.startswith(("+++", "---")):
+        last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
+        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
+        inside_hunk = last_hunk > last_file
+        if partial.startswith(("+", "-")) and (
+            inside_hunk or not partial.startswith(("+++", "---"))
+        ):
             complete += f"\n{partial[0]}{marker}"
         diff = complete
     return diff, truncated

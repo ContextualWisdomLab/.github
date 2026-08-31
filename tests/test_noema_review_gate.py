@@ -119,6 +119,8 @@ def test_require_expected_head_rejects_invalid_closed_and_stale_targets():
     head = "a" * 40
     noema.require_expected_head(make_pr(headRefOid=head), head)
     noema.require_expected_head(make_pr(headRefOid=head), head.upper())
+    with pytest.raises(RuntimeError, match="closed or its head changed"):
+        noema.require_expected_head(make_pr(headRefOid=head, state=None), head)
     with pytest.raises(RuntimeError, match="full commit SHA"):
         noema.require_expected_head(make_pr(headRefOid=head), "short")
     with pytest.raises(RuntimeError, match="closed or its head changed"):
@@ -163,6 +165,13 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     assert diff.endswith("+[overlong changed line content omitted]")
     assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
     assert len(diff) <= noema.MAX_DIFF_CHARS
+
+    source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+++" + "x" * noema.MAX_DIFF_CHARS
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
+    diff, truncated = noema.fetch_diff("owner/repo", 1)
+    assert truncated
+    assert diff.endswith("+[overlong changed line content omitted]")
+    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}

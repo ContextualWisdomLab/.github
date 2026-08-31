@@ -330,7 +330,8 @@ cleanup_sidecar_on_error() {
 trap cleanup_sidecar_on_error EXIT
 
 i=0
-until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
+sidecar_readiness_timeout_seconds="${SIDECAR_READINESS_TIMEOUT_SECONDS:-180}"
+until curl --connect-timeout 2 --max-time 5 -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?
@@ -355,6 +356,9 @@ until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/de
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
+  if [ "$i" -ge "$sidecar_readiness_timeout_seconds" ]; then
+    fail "sidecar did not become healthy within ${sidecar_readiness_timeout_seconds}s"
+  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then

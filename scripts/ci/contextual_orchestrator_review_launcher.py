@@ -531,8 +531,8 @@ def _preflight_with_fallback(
     stage's ending ``escalations_used`` is passed as the fallback stage's
     starting point, so a run that rejects all 8 primary routes and then
     probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
-    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    base attempts + 4 escalations). This bounds request count, not individual
+    model response time; the sidecar independently bounds readiness. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its
