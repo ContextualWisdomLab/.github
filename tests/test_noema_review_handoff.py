@@ -121,6 +121,22 @@ def test_noema_state_ignores_forged_marker_from_other_actor():
     assert handoff.noema_review_state([unmarked], HEAD) is None
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        f"- Head SHA: `{OTHER_HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={OTHER_HEAD} decision=approved -->",
+        f"- Head SHA: `{HEAD}`\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+    ],
+)
+def test_noema_state_rejects_missing_stale_or_duplicate_head_bindings(body):
+    value = noema_review()
+    value["body"] = body
+    assert handoff.noema_review_state([value], HEAD) is None
+
+
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
     fake = FakeGitHub([[opencode_review()]], heads=[OTHER_HEAD])
 

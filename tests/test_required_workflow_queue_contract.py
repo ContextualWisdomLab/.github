@@ -670,6 +670,7 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
     assert "NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug']" in workflow
+    assert "NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}" in workflow
 
 
 def test_noema_review_mints_a_least_privilege_github_app_token() -> None:

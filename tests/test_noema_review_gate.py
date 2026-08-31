@@ -115,10 +115,14 @@ def test_existing_noema_review_matches_actor_and_head():
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setenv("NOEMA_REVIEW_ACTOR", "cwl-noema-review[bot]")
+    monkeypatch.setenv("NOEMA_REVIEW_INSTALLATION_ID", "123")
+    monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", "noema-review-github-app")
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("API not needed")))
     assert noema.current_actor() == "cwl-noema-review[bot]"
 
     monkeypatch.delenv("NOEMA_REVIEW_ACTOR")
+    monkeypatch.delenv("NOEMA_REVIEW_INSTALLATION_ID")
+    monkeypatch.delenv("NOEMA_REVIEW_TOKEN_SOURCE")
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
     assert noema.current_actor() == "noema"
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
@@ -141,6 +145,22 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
     with pytest.raises(RuntimeError, match="did not contain"):
         noema.extract_json_object("not-json")
+
+
+@pytest.mark.parametrize(
+    ("actor", "installation_id", "source"),
+    [
+        ("opencode-agent[bot]", "123", "noema-review-pat"),
+        ("not a bot", "123", "noema-review-github-app"),
+        ("cwl-noema-review[bot]", "not-numeric", "noema-review-github-app"),
+    ],
+)
+def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, installation_id, source):
+    monkeypatch.setenv("NOEMA_REVIEW_ACTOR", actor)
+    monkeypatch.setenv("NOEMA_REVIEW_INSTALLATION_ID", installation_id)
+    monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", source)
+    with pytest.raises(RuntimeError, match="identity binding is invalid"):
+        noema.current_actor()
 
 
 def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
