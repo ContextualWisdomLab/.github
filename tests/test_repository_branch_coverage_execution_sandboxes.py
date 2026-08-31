@@ -216,6 +216,8 @@ def test_web_readiness_retries_5xx_and_timeout_without_streams(
         [
             "--repo-root",
             str(repo),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
