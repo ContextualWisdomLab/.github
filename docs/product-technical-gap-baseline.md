@@ -1715,6 +1715,63 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 opencode-review structural deadlock: unresolved threads starve the dispatch that would resolve them
+
+**Root cause found while investigating why `.github#1500`'s `opencode-review` required check exhausted
+its full 90-minute active-dispatch-and-poll window (added by #1497) with no `opencode-agent` verdict.**
+`pr_review_merge_scheduler.py`'s `decide()` has an unconditional early return
+(`scripts/ci/pr_review_merge_scheduler.py:3462-3474`): `if unresolved_thread_count(pr): return
+decide("block", ...)`, before any code path can reach `dispatch_opencode_review()`. That gate long
+predates automated review bots (traced to `ea2b2cc8`, "Queue auto-merge for approved conflicts") and was
+reasonable when it existed: don't auto-merge or re-review while a real conversation is open. It has since
+become a structural deadlock, because `unresolved_thread_count()` counts *every* active, non-outdated
+thread uniformly, regardless of source or severity — including a purely informational, no-action-needed
+Devin/CodeRabbit note on a file `opencode-review`'s own verdict has nothing to do with. Since dispatching
+a fresh `opencode-review` event is the *only* path to a verdict for the required check, and Devin/
+CodeRabbit post threads faster than most PRs get them resolved, "≥1 unresolved thread" is close to the
+default state for any actively-reviewed PR in this repo — confirmed independently on `#1415` (3 open
+threads at the time of check), `#1507` (1), `#1508` (2), `#1509` (4), vs. `#1491` (0, and its
+`opencode-review` check passed normally). `#1504`'s successful `opencode-review` run the same day is a
+positive control proving the #1497 dispatch-and-poll mechanism itself works correctly whenever no
+unresolved thread blocks the scheduler at evaluation time.
+
+**Not fixed in this pass — the classification problem is genuinely hard to get safely right, not a quick
+patch.** The obvious fix (skip the block for "informational-only" threads) needs a way to tell
+"informational" from "actionable" that doesn't rely on fragile text-pattern matching across multiple
+different bots' own emoji/formatting conventions (Devin's 🔴/🟡/🔍/📝, CodeRabbit's own separate severity
+scheme, human reviewers who follow no pattern at all) — exactly the kind of heuristic this org's own
+conventions warn against, and a wrong classification in either direction is dangerous: too permissive
+silently defeats the safety gate for a real unaddressed finding; too conservative changes nothing. A more
+robust design likely needs to key off GitHub's own formal review *state* (only a thread tied to an actual
+`CHANGES_REQUESTED` review should block) rather than any inline comment thread, but confirming
+`reviewThreads` carries that linkage needs its own careful investigation and test coverage before landing
+a change to this security/trust-boundary-relevant scheduler. Tactically unblocked `#1500` and `#1415` by
+resolving their own already-addressed/informational threads (see those PRs' own threads for the specific
+acknowledgments) rather than touching the gate itself. **Next development increment**: a dedicated,
+narrowly-scoped PR against `pr_review_merge_scheduler.py`'s `unresolved_thread_count()` (or a new,
+separate predicate for review-dispatch eligibility distinct from merge eligibility), with regression
+coverage across informational-only, actionable-bot, and human-reviewer-`CHANGES_REQUESTED` thread shapes,
+before any PR is unblocked by classification logic rather than manual resolution.
+
+**Two related, smaller gaps found and stood down on in `.github#1415`'s own review, tracked here rather
+than dropped:**
+- *Streaming responses can defeat a bare socket timeout.* Both `.github#1415`'s preflight ModelClient
+  (`REVIEW_PREFLIGHT_TIMEOUT_SECONDS`) and — independently found on `.github#1509` — `noema_review_gate.py`'s
+  `call_llm` bound each HTTP attempt with a plain per-operation socket `timeout=`, which only bounds time
+  *between* reads, not total attempt duration: a provider trickling data slowly enough (each chunk just
+  under the timeout) could keep one attempt alive far past its nominal budget. `#1509` already built a
+  real deadline-watchdog wrapper (arm a timer, forcibly close the connection past total budget) for the
+  serving side; the preflight side needs the same treatment once that mechanism lands somewhere mergeable,
+  rather than a second, possibly-inconsistent implementation.
+- *Discovery time is unbounded in catalog size.* `.github#1415`'s
+  `REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP` assumes a bounded number of pagination rounds; if
+  OpenRouter's free-model catalog grows past that assumption, discovery can exceed
+  `REVIEW_STARTUP_WATCHDOG_SECONDS` and abort an otherwise-healthy sidecar. Needs either a deadline-based
+  (not round-count-based) bound in the launcher's discovery wrapper, or the vendored contextual-orchestrator
+  package's own OpenRouter discovery client exposing elapsed-time enforcement directly — a real redesign
+  in either case, not a constant tweak, and this exact family of finding has already been through several
+  rounds of patch → new finding on `#1415` without converging.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
