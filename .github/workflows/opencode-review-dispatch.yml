@@ -7583,7 +7583,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
-          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
         run: |
@@ -7592,14 +7591,24 @@ jobs:
             echo "::error::Required OpenCode run id is missing or non-canonical."
             exit 1
           }
+          # Validate the referenced run's head_sha (verified against live
+          # production data to equal the PR's actual head commit for
+          # pull_request_target runs -- NOT the base branch -- across both this
+          # repo's own PRs and required-workflow-ruleset runs on sibling repos)
+          # rather than `workflow_url`/`display_title`: the latter only carry
+          # PR/head-identifying info when this workflow fires as a native
+          # trigger on its own defining repo, and only carry the
+          # "/actions/required_workflows/" URL shape when it fires via the org
+          # required-workflow ruleset on a sibling repo -- this repo's actual
+          # central-hub use case -- never both at once, so a check requiring
+          # either can never pass for the other context.
           for attempt in $(seq 1 12); do
             run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
               select(.id == $run_id)
               | select(.event == "pull_request_target")
               | select(.path == ".github/workflows/opencode-review.yml")
-              | select(.workflow_url | contains("/actions/required_workflows/"))
-              | select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))
+              | select(.head_sha == $head)
               | [(.id // ""), (.status // ""), (.conclusion // "")]
               | @tsv
             ')"
