@@ -1611,7 +1611,8 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "Require authoritative base and head OSV evidence" in workflow
     assert "Require successful base and head OSV scans" not in workflow
     assert "Normalize successful empty OSV result documents" not in workflow
-    assert workflow.count("failure with authoritative vulnerability evidence") == 1
+    assert "failure with authoritative vulnerability evidence" not in workflow
+    assert workflow.count("non-successful scan outcome cannot prove completeness") == 1
     assert workflow.count("completed successfully without findings output") == 1
     assert workflow.count('runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"]') == 4
     assert "Preserve base OSV evidence and direct-source provenance" in workflow
@@ -1633,14 +1634,14 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         (
             "failure",
             {"results": [{"packages": [{"vulnerabilities": [{"id": "PYSEC-1"}]}]}]},
-            "true",
-            "failure with authoritative vulnerability evidence",
+            "false",
+            "non-successful scan outcome cannot prove completeness",
         ),
         (
             "failure",
             {"results": []},
             "false",
-            "failed without authoritative vulnerability evidence",
+            "non-successful scan outcome cannot prove completeness",
         ),
         (
             "failure",

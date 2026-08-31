@@ -251,6 +251,112 @@ class DirectSourceReconcileTests(unittest.TestCase):
                     {"groups": groups}, retained
                 )
 
+    def test_mixed_group_drops_removed_aliases_and_aggregate_severity(self) -> None:
+        """Do not attribute a reconciled advisory's aliases or severity to a survivor."""
+        removed = vulnerability("GHSA-removed", "< 0.20.2")
+        removed["aliases"] = ["CVE-2026-REMOVED"]
+        removed["severity"] = [
+            {
+                "type": "CVSS_V3",
+                "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+            }
+        ]
+        retained = vulnerability("GHSA-retained", "< 0.20.4")
+        retained["aliases"] = ["CVE-2026-RETAINED"]
+        retained["severity"] = [
+            {
+                "type": "CVSS_V3",
+                "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            }
+        ]
+        payload = results("0.20.3", [removed, retained])
+        package = payload["results"][0]["packages"][0]  # type: ignore[index]
+        package["groups"] = [
+            {
+                "ids": ["GHSA-removed", "GHSA-retained"],
+                "aliases": [
+                    "GHSA-removed",
+                    "GHSA-retained",
+                    "CVE-2026-REMOVED",
+                    "CVE-2026-RETAINED",
+                ],
+                "experimental_analysis": {
+                    "GHSA-removed": {"called": False, "unimportant": True},
+                    "GHSA-retained": {"called": True, "unimportant": False},
+                },
+                "max_severity": "10.0",
+            }
+        ]
+
+        reconciled, _ = self.run_case(payload, direct_lock("0.20.3"))
+
+        retained_package = reconciled["results"][0]["packages"][0]  # type: ignore[index]
+        self.assertEqual(
+            retained_package["groups"],
+            [
+                {
+                    "ids": ["GHSA-retained"],
+                    "aliases": ["CVE-2026-RETAINED", "GHSA-retained"],
+                    "experimental_analysis": {
+                        "GHSA-retained": {"called": True, "unimportant": False}
+                    },
+                    # The pinned reporter's aggregate cannot be safely decomposed.
+                    # Retained raw vulnerability severity remains authoritative.
+                    "max_severity": "",
+                }
+            ],
+        )
+
+    def test_mixed_usn_group_rebuilds_related_aliases_and_rejects_bad_metadata(
+        self,
+    ) -> None:
+        """Match the pinned USN alias rule and fail closed on malformed aliases."""
+        removed = vulnerability("GHSA-removed", "< 0.20.2")
+        retained = vulnerability("USN-7000-1", "< 0.20.4")
+        retained["aliases"] = ["CVE-2026-RETAINED"]
+        retained["upstream"] = ["UBUNTU-CVE-2026-RETAINED"]
+        retained["related"] = ["CVE-2026-RELATED"]
+        package = {
+            "groups": [
+                {
+                    "ids": ["GHSA-removed", "USN-7000-1"],
+                    "aliases": ["stale"],
+                    "max_severity": "9.9",
+                }
+            ]
+        }
+
+        OSV.reconcile_groups_for_retained_vulnerabilities(package, [retained])
+
+        self.assertEqual(
+            package["groups"][0]["aliases"],
+            [
+                "CVE-2026-RELATED",
+                "CVE-2026-RETAINED",
+                "UBUNTU-CVE-2026-RETAINED",
+                "USN-7000-1",
+            ],
+        )
+        for field, value in (
+            ("aliases", "bad"),
+            ("upstream", [1]),
+            ("related", "bad"),
+        ):
+            malformed = dict(retained)
+            malformed[field] = value
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                OSV.reconcile_groups_for_retained_vulnerabilities(
+                    {
+                        "groups": [
+                            {
+                                "ids": ["GHSA-removed", "USN-7000-1"],
+                                "aliases": [],
+                            }
+                        ]
+                    },
+                    [malformed],
+                )
+
     def test_registry_finding_from_another_lockfile_cannot_borrow_direct_source_provenance(
         self,
     ) -> None:

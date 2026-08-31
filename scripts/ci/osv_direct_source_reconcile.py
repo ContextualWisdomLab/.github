@@ -305,7 +305,36 @@ def reconcile_groups_for_retained_vulnerabilities(
             continue
         updated = dict(group)
         updated["ids"] = retained_group_ids
-        updated["aliases"] = aliases
+        if len(retained_group_ids) != len(ids):
+            retained_aliases = set(retained_group_ids)
+            for vulnerability_id in retained_group_ids:
+                vulnerability = next(
+                    item
+                    for item in retained
+                    if item.get("id") == vulnerability_id
+                )
+                for field in ("aliases", "upstream"):
+                    values = vulnerability.get(field, [])
+                    if not isinstance(values, list) or not all(
+                        isinstance(value, str) for value in values
+                    ):
+                        raise TypeError("OSV retained vulnerability aliases are malformed")
+                    retained_aliases.update(values)
+                if vulnerability_id.startswith("USN-"):
+                    related = vulnerability.get("related", [])
+                    if not isinstance(related, list) or not all(
+                        isinstance(value, str) for value in related
+                    ):
+                        raise TypeError("OSV retained vulnerability aliases are malformed")
+                    retained_aliases.update(related)
+            updated["aliases"] = sorted(retained_aliases)
+            # The aggregate score belongs to the pre-reconciliation group and
+            # cannot be safely decomposed. Keep each retained vulnerability's
+            # raw severity evidence authoritative instead of attributing a
+            # removed advisory's aggregate to the survivor.
+            updated["max_severity"] = ""
+        else:
+            updated["aliases"] = aliases
         updated["experimental_analysis"] = {
             vulnerability_id: value
             for vulnerability_id, value in analysis.items()

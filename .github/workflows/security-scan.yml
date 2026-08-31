@@ -132,17 +132,12 @@ jobs:
                           if not all(isinstance(item, dict) for item in vulnerabilities):
                               raise ValueError("each vulnerability must be an object")
                           finding_count += len(vulnerabilities)
-                  if outcome == "success":
-                      complete = True
-                      message = f"completed successfully with {finding_count} finding(s)"
-                  elif outcome == "failure" and finding_count > 0:
-                      complete = True
-                      message = (
-                          "failure with authoritative vulnerability evidence "
-                          f"({finding_count} finding(s)) is a completed scan, not infrastructure failure"
+                  if outcome != "success":
+                      raise ValueError(
+                          "non-successful scan outcome cannot prove completeness"
                       )
-                  else:
-                      raise ValueError("failed without authoritative vulnerability evidence")
+                  complete = True
+                  message = f"completed successfully with {finding_count} finding(s)"
           except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
               message = str(error)
 

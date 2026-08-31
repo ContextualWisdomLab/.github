@@ -189,11 +189,18 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
 
 
 def current_actor() -> str:
-    """Return the login for the active gh token, or empty string on failure."""
-    try:
-        return run(["gh", "api", "user", "--jq", ".login"]).strip()
-    except Exception:
-        return ""
+    """Return the verified user or GitHub App bot login for the active token."""
+    for args, suffix in (
+        (["gh", "api", "user", "--jq", ".login"], ""),
+        (["gh", "api", "/installation", "--jq", ".app_slug"], "[bot]"),
+    ):
+        try:
+            identity = run(args).strip()
+        except Exception:
+            continue
+        if identity:
+            return f"{identity}{suffix}"
+    return ""
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
