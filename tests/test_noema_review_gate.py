@@ -168,10 +168,10 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
-    original_fetch_paths = noema.fetch_changed_file_paths
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: [])
+    original_fetch_files = noema.fetch_changed_files
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", original_fetch_paths)
+    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_files)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
     calls = []
@@ -180,7 +180,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
-            return "src/a.py\nREADME.md\nempty.txt\n"
+            return "src/a.py\tmodified\nREADME.md\tmodified\nempty.txt\tmodified\n"
         if "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
@@ -235,12 +235,123 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     assert "CodeGraph context unavailable" in noema.load_codegraph_context()
 
     paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
-    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, head_sha: "x")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [(p, "modified") for p in paths])
+    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, ref: "x")
 
     context = noema.changed_file_context("owner/repo", 7, "head")
 
     assert "1 changed files omitted from context budget" in context
+
+
+def test_fetch_changed_file_paths_parses_plain_filenames(monkeypatch):
+    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "a.py\n\nb.py\n")
+    assert noema.fetch_changed_file_paths("owner/repo", 7) == ["a.py", "b.py"]
+
+
+def test_changed_file_context_removed_file_base_content_empty(monkeypatch):
+    def fake_run(args, stdin=None):
+        target = args[2]
+        if target.endswith("/files"):
+            return "gone.py\tremoved\n"
+        if "contents/gone.py?ref=base-sha" in target:
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(noema, "run", fake_run)
+    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
+
+    assert "no UTF-8 text content available from base content API" in context
+
+
+def test_fetch_changed_files_parses_path_and_status(monkeypatch):
+    monkeypatch.setattr(
+        noema,
+        "run",
+        lambda args, stdin=None: "a.py\tmodified\n\nb.py\tremoved\nfuzz/x.py\tadded\n",
+    )
+    assert noema.fetch_changed_files("owner/repo", 7) == [
+        ("a.py", "modified"),
+        ("b.py", "removed"),
+        ("fuzz/x.py", "added"),
+    ]
+
+
+def test_changed_file_context_removed_file_uses_base_content_not_head_error(monkeypatch):
+    """A deleted file must not surface as a generic head-content-fetch error.
+
+    Regression test for the false-positive "Unable to review due to missing
+    file content" failure Noema produced on ContextualWisdomLab/.github#1486,
+    which deleted fuzz/fuzz_opencode_normalize_output.py.
+    """
+    encoded = base64.b64encode(b"def doomed():\n    pass\n").decode("ascii")
+
+    def fake_run(args, stdin=None):
+        target = args[2]
+        if target.endswith("/files"):
+            return "fuzz/fuzz_opencode_normalize_output.py\tremoved\n"
+        if "contents/fuzz/fuzz_opencode_normalize_output.py?ref=base-sha" in target:
+            return encoded
+        raise AssertionError(args)
+
+    monkeypatch.setattr(noema, "run", fake_run)
+    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
+
+    assert "Unavailable from head content API" not in context
+    assert "File removed in this PR" in context
+    assert "def doomed" in context
+
+
+def test_changed_file_context_removed_file_without_base_sha(monkeypatch):
+    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "gone.py\tremoved\n")
+    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "")
+
+    assert "Unavailable from head content API" not in context
+    assert "no head-side content applicable" in context
+
+
+def test_changed_file_context_removed_file_base_fetch_failure(monkeypatch):
+    def fake_run(args, stdin=None):
+        target = args[2]
+        if target.endswith("/files"):
+            return "gone.py\tremoved\n"
+        raise RuntimeError("Command failed: 404 Not Found (token secret)")
+
+    monkeypatch.setattr(noema, "run", fake_run)
+    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
+
+    assert "Unavailable from head content API" not in context
+    assert "Unavailable from base content API" in context
+    assert "token secret" not in context
+
+
+def test_changed_file_context_non_removed_head_fetch_failure_is_unchanged(monkeypatch):
+    """A genuine head-content 404 on a file that still exists stays a real error."""
+
+    def fake_run(args, stdin=None):
+        target = args[2]
+        if target.endswith("/files"):
+            return "still-here.py\tmodified\n"
+        raise RuntimeError("Command failed: token secret")
+
+    monkeypatch.setattr(noema, "run", fake_run)
+    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
+
+    assert "Unavailable from head content API" in context
+
+
+def test_build_review_context_forwards_base_sha_to_changed_file_context(monkeypatch):
+    captured = {}
+
+    def fake_changed_file_context(repo, number, head_sha, base_sha=""):
+        captured["args"] = (repo, number, head_sha, base_sha)
+        return "files"
+
+    monkeypatch.setattr(noema, "changed_file_context", fake_changed_file_context)
+    pr = make_pr(headRefOid="head-sha", baseRefOid="base-sha")
+
+    noema.build_review_context("owner/repo", 7, pr)
+
+    assert captured["args"] == ("owner/repo", 7, "head-sha", "base-sha")
 
 
 class FakeResponse:

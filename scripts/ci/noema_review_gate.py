@@ -105,6 +105,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       body
       isDraft
       headRefOid
+      baseRefOid
       reviewDecision
       reviewThreads(first: 100) {
         nodes {
@@ -380,10 +381,38 @@ def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
-    """Fetch a changed file's current-head text content through the GitHub API."""
+def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
+    """Fetch each changed file's path together with its PR status.
+
+    Unlike :func:`fetch_changed_file_paths`, this also returns GitHub's
+    per-file ``status`` (``added``, ``modified``, ``removed``, ``renamed``,
+    ...) from the same ``pulls/{number}/files`` response, so callers can tell
+    a file that no longer exists at the PR head apart from one that does.
+    """
+    output = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/pulls/{number}/files",
+            "--paginate",
+            "--jq",
+            r'.[] | .filename + "\t" + .status',
+        ]
+    )
+    files: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        path, _, status = stripped.partition("\t")
+        files.append((path, status))
+    return files
+
+
+def fetch_head_file_content(repo: str, path: str, ref: str) -> str:
+    """Fetch a changed file's text content at ``ref`` through the GitHub API."""
     encoded_path = urllib.parse.quote(path, safe="/")
-    encoded_ref = urllib.parse.quote(head_sha, safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
         [
             "gh",
@@ -399,15 +428,38 @@ def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
     return base64.b64decode(compact).decode("utf-8", errors="replace")
 
 
-def changed_file_context(repo: str, number: int, head_sha: str) -> str:
+def removed_file_context_section(repo: str, path: str, base_sha: str) -> str:
+    """Build the context section for a file deleted by this PR.
+
+    A ``removed``-status file does not exist at the PR head by definition, so
+    fetching it there always 404s and carries no signal. Instead this fetches
+    the file's pre-deletion content at the PR base ref, which gives the
+    reviewer real evidence for judging whether the deletion is safe.
+    """
+    if not base_sha:
+        return f"### {path}\n[File removed in this PR — no head-side content applicable; base SHA unavailable for pre-deletion content.]"
+    try:
+        content = fetch_head_file_content(repo, path, base_sha)
+    except RuntimeError as exc:
+        reason = scrub_sensitive_data(str(exc)) or "unknown error"
+        return f"### {path}\n[File removed in this PR.] Unavailable from base content API: {reason}"
+    if not content:
+        return f"### {path}\n[File removed in this PR — no UTF-8 text content available from base content API.]"
+    return f"### {path}\n[File removed in this PR. Pre-deletion content at base ref:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+
+
+def changed_file_context(repo: str, number: int, head_sha: str, base_sha: str = "") -> str:
     """Build bounded changed-file context for cross-file review reasoning."""
     if not head_sha:
         return "Changed file context unavailable: missing PR head SHA."
-    paths = fetch_changed_file_paths(repo, number)
-    if not paths:
+    files = fetch_changed_files(repo, number)
+    if not files:
         return "Changed file context unavailable: PR reported no changed files."
     sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+    for path, status in files[:MAX_CONTEXT_FILES]:
+        if status == "removed":
+            sections.append(removed_file_context_section(repo, path, base_sha))
+            continue
         try:
             content = fetch_head_file_content(repo, path, head_sha)
         except RuntimeError as exc:
@@ -418,8 +470,8 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
             sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
-    if len(paths) > MAX_CONTEXT_FILES:
-        sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
+    if len(files) > MAX_CONTEXT_FILES:
+        sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
 
 
@@ -466,7 +518,9 @@ def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
-    files = changed_file_context(repo, number, str(pr.get("headRefOid") or ""))
+    files = changed_file_context(
+        repo, number, str(pr.get("headRefOid") or ""), str(pr.get("baseRefOid") or "")
+    )
     if files:
         sections.append("## Changed file context\n" + files)
     return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
