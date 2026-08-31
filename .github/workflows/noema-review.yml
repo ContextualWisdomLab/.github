@@ -24,7 +24,9 @@ concurrency:
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
     github.event.client_payload.pr_number ||
-    github.run_id }}
+    github.run_id }}-${{
+    github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
+    github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: true
 
 permissions:

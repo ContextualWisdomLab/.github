@@ -154,6 +154,11 @@ Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
 force-push, but PR-scoped concurrency includes the head SHA so an obsolete
 scan does not serialize newer current-head evidence.
 
+Noema keeps `cancel-in-progress: true` only within one exact PR head. Its
+concurrency key includes the triggering head SHA, so a delayed OpenCode or
+Strix `workflow_run` event from an older head cannot cancel the current-head
+Noema review.
+
 ## Approve-gate evidence
 
 OpenCode approval is evidence-gated. Before approval, the review summary must

@@ -23,6 +23,14 @@ def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     assert sum("tests/test_noema_review_gate.py" in entry for entry in entries) == 1
 
 
+def test_noema_concurrency_is_bound_to_the_triggering_head():
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+    assert "github.event.client_payload.pr_head_sha" in concurrency
+    assert "github.event.pull_request.head.sha" in concurrency
+    assert "github.event.workflow_run.head_sha" in concurrency
+
+
 def fake_secret(*parts: str) -> str:
     return "".join(parts)
 

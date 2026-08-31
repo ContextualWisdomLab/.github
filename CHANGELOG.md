@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Bind Noema workflow concurrency to the triggering PR head so a delayed
+  OpenCode/Strix completion from an older head cannot cancel the current-head
+  review run.
 - Keep the Noema malformed-response UUID fixture covered by gitleaks without
   weakening the secret gate: the historical ignore is limited to the exact
   superseded commit, test path, rule, and line, with an executable contract.
