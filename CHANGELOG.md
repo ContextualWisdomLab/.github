@@ -7,7 +7,9 @@ Semantic Versioning where the repository publishes a release.
 ## [Unreleased]
 - Bind Noema workflow concurrency to the triggering PR head so a delayed
   OpenCode/Strix completion from an older head cannot cancel the current-head
-  review run.
+  review run. The trigger head is also checked against the live PR before
+  credential/model setup and again before review publication, preventing a
+  stale run from reviewing or publishing against a newer live head.
 - Keep the Noema malformed-response UUID fixture covered by gitleaks without
   weakening the secret gate: the historical ignore is limited to the exact
   superseded commit, test path, rule, and line, with an executable contract.

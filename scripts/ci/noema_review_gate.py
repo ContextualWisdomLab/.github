@@ -908,9 +908,12 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int) -> int:
+def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
+    if str(pr.get("headRefOid") or "") != expected_head:
+        print("Trigger head is stale; Noema review skipped before model work.")
+        return 0
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
@@ -929,7 +932,11 @@ def inspect_and_review(repo: str, number: int) -> int:
     changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
-    submit_review(repo, number, pr, actor, verdict)
+    current_pr = fetch_pr(repo, number)
+    if str(current_pr.get("headRefOid") or "") != expected_head:
+        print("Pull request head changed during review; stale verdict was not published.")
+        return 0
+    submit_review(repo, number, current_pr, actor, verdict)
     return 0
 
 
@@ -938,6 +945,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--expected-head", required=True)
     return parser.parse_args(argv)
 
 
@@ -946,7 +954,9 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    return inspect_and_review(args.repo, args.pr_number)
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", args.expected_head):
+        raise SystemExit("--expected-head must be an exact 40-character Git SHA")
+    return inspect_and_review(args.repo, args.pr_number, args.expected_head)
 
 
 if __name__ == "__main__":  # pragma: no cover

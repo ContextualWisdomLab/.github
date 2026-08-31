@@ -157,7 +157,9 @@ scan does not serialize newer current-head evidence.
 Noema keeps `cancel-in-progress: true` only within one exact PR head. Its
 concurrency key includes the triggering head SHA, so a delayed OpenCode or
 Strix `workflow_run` event from an older head cannot cancel the current-head
-Noema review.
+Noema review. Each run also compares that immutable trigger head with the live
+PR before credential/model setup and immediately before publication; a stale
+run cannot review or publish against a newer head.
 
 ## Approve-gate evidence
 
