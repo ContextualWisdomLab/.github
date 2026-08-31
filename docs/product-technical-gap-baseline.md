@@ -2591,6 +2591,42 @@ OK.
 cleanup을 pool-flip 논의와 분리한 것이다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은
 git history를 가리키도록 갱신되었다. 이 branch에는 코드 변경이 필요 없다(이미 `main`을 merge해 반영됨).
 
+## 2026-08-31 시간별 재개: `.github#1438`의 `main` merge conflict 해소
+
+`naruon#1486`의 required Checks 진행 상황을 확인하던 중 `.github#1438`의 `mergeable_state`가
+`blocked`에서 **`dirty`**로 바뀐 것을 발견했다 — `main`이 이 세션의 마지막 동기화 이후 추가로
+전진해 있었다. `origin/main`을 이 branch에 ordinary merge commit으로 병합해(rebase/force-push
+없음) 정확히 예상대로 세 파일에서 충돌했다:
+
+- `.gitignore`: 양쪽이 서로 다른 무관한 항목(`.claude/` vs `strix_runs/`)을 추가한 것뿐이라 둘 다
+  유지.
+- `CHANGELOG.md`: `## [Unreleased]` 섹션에 양쪽이 각자 무관한 새 항목을 추가한 것뿐이라, 두
+  블록을 그대로 이어붙였다(HEAD 항목 다음에 `main` 항목).
+- `docs/product-technical-gap-baseline.md`: 이 문서 자체에 두 지점에서 충돌 — (1) HEAD의 훨씬
+  최신·상세한 시간별 pass 서술(naruon#1486/.github#1438/contextual-orchestrator#923/.github#1347
+  네 PR 재확인 이력 전체)과 `main`이 독립적으로 추가한 "PR #1347 Devin Review 6건 검증" 항목이
+  같은 위치에서 충돌 — 두 서술 모두 유효한 시간순 기록이라 HEAD 다음에 `main`의 항목을 이어붙였다.
+  (2) `### 5.1` "다음 개발 increment" 목록 — HEAD의 목록(네 PR의 현재 상태를 정확히 반영, 이미
+  §5.1 자체가 두 차례 갱신된 상태)이 `main`의 훨씬 오래되고 이미 stale한 목록(#1297/#1345/#1326 —
+  이 문서 앞부분의 "§5.1 next-increment list was stale" 항목이 이미 지적한 바로 그 항목들)과
+  충돌 — HEAD 목록을 유지하고, `main` 쪽에만 있던 새 정보 하나(`select_nvidia_nim_model.py` 고아
+  스크립트 제거, `fix/remove-orphaned-nim-model-resolver` PR로 이미 `main`에 반영됨)만 별도
+  참고 항목으로 보존했다.
+
+병합 커밋(`ca4c5ad4`) 검증: `PYTHONPATH=. python -m coverage run -m pytest tests` → 2097
+passed, 1 skipped, 21 subtests; `coverage report` → TOTAL 100% (statements 10454/10454, branches
+4164/4164); `interrogate` → 100.0%; `bash -n scripts/ci/contextual_orchestrator_review_sidecar.sh`
+→ syntax OK; `tests/test_product_technical_gap_baseline.py` → 5 passed (문서 계약 유지 확인). 푸시
+직전 재-fetch로 원격이 그대로임을 확인(경합 없음), 푸시 완료. `mergeable_state`가 `dirty`에서
+`blocked`(required Checks/리뷰 대기, 정상)로 복귀함을 확인했다.
+
+`naruon#1486`(head `ffed35e5`)은 이 시점 기준 `opencode-review`만 이미 문서화된 비동기 대기
+패턴으로 실패 중이고(`get_job_logs`로 "No APPROVED or CHANGES_REQUESTED from opencode-agent on
+the current head" 재확인), 나머지 대부분(backend/frontend/CodeQL/Semgrep/Trivy/osv-scan/
+scorecard/dependency-review/coverage-evidence/noema-review)은 이미 success — `strix`와 세 이미지
+validate job, `metadata-only gate evaluation`만 아직 in_progress. 다음 tick에서 이들이 완료되면
+bypass-merge 조건 충족 여부를 재확인한다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
