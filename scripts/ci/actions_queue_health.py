@@ -21,7 +21,7 @@ from typing import Any, Callable, Sequence, TextIO
 
 
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-QUEUE_STATES = {"QUEUED", "IN_PROGRESS"}
+QUEUE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED"}
 TERMINAL_STATES = {"COMPLETED"}
 DEFAULT_QUEUE_AGE_SLO_SECONDS = 900
 SCHEMA_VERSION = "actions.queue_health.v1"
@@ -368,41 +368,41 @@ def collect_snapshot(
         pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
         runs_by_id: dict[int, dict[str, Any]] = {}
         try:
-            for status in ("in_progress", "pending", "queued", "requested", "waiting"):
-                runs = _list_payload(
-                    github_json(
-                        f"repos/{repository}/actions/runs?status={status}&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
+            runs = _list_payload(
+                github_json(
+                    f"repos/{repository}/actions/runs?per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                    paginate=True,
+                    runner=runner,
+                ),
+                "workflow_runs",
+                max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
+            )
+            for run in runs:
+                status = str(run.get("status") or "").upper()
+                if status not in QUEUE_STATES | {"WAITING"}:
+                    continue
+                run_id = run.get("id")
+                if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                    raise QueueHealthError("workflow run id must be a positive integer")
+                candidate = _normalise_run(repository, run, [])
+                identity, _ = _run_identity(candidate, pull_requests_by_number)
+                if identity != "current_head" or candidate["status"] not in {
+                    "IN_PROGRESS",
+                    "WAITING",
+                }:
+                    runs_by_id[run_id] = candidate
+                    continue
+                jobs_payload = github_json(
+                    f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
+                    paginate=True,
+                    runner=runner,
                 )
-                for run in runs:
-                    run_id = run.get("id")
-                    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
-                        raise QueueHealthError("workflow run id must be a positive integer")
-                    if run_id in runs_by_id:
-                        continue
-                    candidate = _normalise_run(repository, run, [])
-                    identity, _ = _run_identity(candidate, pull_requests_by_number)
-                    if identity != "current_head" or candidate["status"] not in {
-                        "IN_PROGRESS",
-                        "WAITING",
-                    }:
-                        runs_by_id[run_id] = candidate
-                        continue
-                    jobs_payload = github_json(
-                        f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
-                        paginate=True,
-                        runner=runner,
-                    )
-                    jobs = _list_payload(
-                        jobs_payload,
-                        "jobs",
-                        max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
-                    )
-                    runs_by_id[run_id] = _normalise_run(repository, run, jobs)
+                jobs = _list_payload(
+                    jobs_payload,
+                    "jobs",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                )
+                runs_by_id[run_id] = _normalise_run(repository, run, jobs)
         except QueueHealthError as exc:
             collection_errors.append({"repository": repository, "error": str(exc)})
             continue

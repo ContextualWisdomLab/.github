@@ -477,18 +477,13 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     responses = {
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
-        "repos/owner/repo/actions/runs?status=queued&per_page=50": [queued_current, current],
-        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [current, unlinked],
+        "repos/owner/repo/actions/runs?per_page=50": [queued_current, current, unlinked],
         "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
     }
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = (
-            responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
-            else responses[args[-1]]
-        )
+        payload = responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -521,15 +516,13 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     assert bad_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
     invalid_run_responses = dict(responses)
-    invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=50"] = [{"id": 0}]
+    invalid_run_responses["repos/owner/repo/actions/runs?per_page=50"] = [
+        {"id": 0, "status": "queued"}
+    ]
 
     def invalid_run_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return an invalid workflow-run identity for the isolation case."""
-        payload = (
-            invalid_run_responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
-            else invalid_run_responses[args[-1]]
-        )
+        payload = invalid_run_responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -547,11 +540,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one incomplete pull response followed by a valid response."""
         nonlocal retry_calls
-        payload = (
-            responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
-            else responses[args[-1]]
-        )
+        payload = responses[args[-1]]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [bad_pull] if retry_calls == 1 else payload
@@ -568,8 +557,6 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         payload = (
             [bad_pull]
             if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
-            else responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
             else responses[args[-1]]
         )
         if "--paginate" in args:
@@ -610,8 +597,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
     responses = {
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
-        "repos/owner/repo/actions/runs?status=queued&per_page=50": [queued_current],
-        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [],
+        "repos/owner/repo/actions/runs?per_page=50": [queued_current],
     }
     empty_identity_pull = pull_request()
     empty_identity_pull["head"] = {"sha": ""}
@@ -622,11 +608,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one empty-identity pull response followed by a complete one."""
         nonlocal retry_calls
-        payload = (
-            responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
-            else responses[args[-1]]
-        )
+        payload = responses[args[-1]]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [empty_identity_pull] if retry_calls == 1 else payload
@@ -675,8 +657,7 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
     responses = {
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request(1, "pr-head-sha")],
-        "repos/owner/repo/actions/runs?status=queued&per_page=50": [],
-        "repos/owner/repo/actions/runs?status=in_progress&per_page=50": [pull_request_target_run],
+        "repos/owner/repo/actions/runs?per_page=50": [pull_request_target_run],
         "repos/owner/repo/actions/runs/70/jobs?per_page=100": {
             "jobs": [job(700, runner_id=9, runner_name="runner-9")]
         },
@@ -684,11 +665,7 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = (
-            responses.get(args[-1], [])
-            if "/actions/runs?status=" in args[-1]
-            else responses[args[-1]]
-        )
+        payload = responses[args[-1]]
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -711,7 +688,7 @@ def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evid
             payload: object = {"default_branch": "main"}
         elif path == "repos/good/repo/pulls?state=open&per_page=100":
             payload = []
-        elif "/actions/runs?status=" in path:
+        elif path == "repos/good/repo/actions/runs?per_page=50":
             payload = []
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
@@ -765,11 +742,21 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
             payload: object = {"default_branch": "main"}
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
             payload = []
-        elif "/actions/runs?status=" in path:
-            status = path.split("status=", 1)[1].split("&", 1)[0]
+        elif path == "repos/owner/repo/actions/runs?per_page=50":
+            statuses = (
+                "completed",
+                "in_progress",
+                "pending",
+                "queued",
+                "requested",
+                "waiting",
+            )
             payload = {
-                "total_count": 1,
-                "workflow_runs": [workflow_run(100 + len(requested_paths), status=status)],
+                "total_count": len(statuses),
+                "workflow_runs": [
+                    workflow_run(100 + index, status=status)
+                    for index, status in enumerate(statuses)
+                ],
             }
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
@@ -781,14 +768,8 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
         ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
     )
 
-    run_paths = [path for path in requested_paths if "/actions/runs?status=" in path]
-    assert run_paths == [
-        "repos/owner/repo/actions/runs?status=in_progress&per_page=50",
-        "repos/owner/repo/actions/runs?status=pending&per_page=50",
-        "repos/owner/repo/actions/runs?status=queued&per_page=50",
-        "repos/owner/repo/actions/runs?status=requested&per_page=50",
-        "repos/owner/repo/actions/runs?status=waiting&per_page=50",
-    ]
+    run_paths = [path for path in requested_paths if "/actions/runs?" in path]
+    assert run_paths == ["repos/owner/repo/actions/runs?per_page=50"]
     assert {run["status"] for run in snapshot["repositories"][0]["runs"]} == {
         "IN_PROGRESS",
         "PENDING",
@@ -846,6 +827,8 @@ def test_job_state_and_queue_age_cover_pending_terminal_and_unknown_paths() -> N
         True,
     )
     assert queue_health._job_state({"status": "queued"}) == ("queued_unassigned", True, False)
+    assert queue_health._job_state({"status": "pending"}) == ("queued_unassigned", True, False)
+    assert queue_health._job_state({"status": "requested"}) == ("queued_unassigned", True, False)
     assert queue_health._job_state({"status": "completed"}) == ("terminal", False, False)
     assert queue_health._job_state({"status": "", "conclusion": "failure"}) == ("terminal", False, False)
     # "waiting" (paused on an environment/deployment approval) is pending

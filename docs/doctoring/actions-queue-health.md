@@ -30,7 +30,9 @@ parent run's, so a later job in an already in-progress run (for example one
 gated by `needs:`) that only just became eligible is not measured against the
 whole run's age and does not trigger a false capacity-breach alert.
 
-Requested, pending, and queued runs use run-level evidence because GitHub has
+One bounded all-runs traversal is filtered locally so a status transition
+cannot fall between separate status-partitioned reads. Requested, pending, and
+queued runs use run-level evidence because GitHub has
 not assigned their jobs. Current-head `in_progress` and `waiting` runs make the
 additional jobs API read needed to distinguish concrete runner assignment from
 an environment or deployment approval wait.
