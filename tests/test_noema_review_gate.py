@@ -659,12 +659,119 @@ def test_call_llm_repairs_one_malformed_envelope_before_failing_closed(monkeypat
         return Response()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
-    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
     assert verdict["summary"] == "Recovered"
     assert len(requests) == 2
     assert "prior verdict was rejected" in requests[1]["messages"][1]["content"]
+
+
+def test_call_llm_skips_repair_retry_when_head_moves_before_it_fires(monkeypatch):
+    """CodeRabbit finding on PR #1507: ``expected_head`` is checked before
+    model work and before publication, but the one-time repair-retry request
+    inside ``call_llm`` used to fire unconditionally on a malformed first
+    verdict, even if the PR head had already moved. That burns a second,
+    potentially multi-hour ``NOEMA_LLM_TIMEOUT_SECONDS`` call on a review
+    ``inspect_and_review``'s own post-call stale-head check would discard
+    anyway. ``call_llm`` must instead re-check the live head via ``fetch_pr``
+    before the retry request and fail closed with
+    ``StaleHeadDuringRepairRetryError`` — cleanly, not a crash — issuing only
+    the one doomed first request."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Malformed: missing "choices" triggers call_llm's fail-closed
+            # RuntimeError path on the very first attempt.
+            return b"[]"
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    # The live PR head has moved on since the trigger fetched "head".
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="new"))
+
+    with pytest.raises(noema.StaleHeadDuringRepairRetryError, match="stale before repair retry"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    # Only the first, already-doomed request was made — the repair-retry
+    # request never fired once the live head no longer matched.
+    assert len(open_calls) == 1
+
+
+def test_call_llm_still_repairs_once_when_head_has_not_moved(monkeypatch):
+    """A matching live head must not block the existing one-time repair
+    retry — this is a narrow addition to the existing repair boundary, not a
+    behavior change for the unstale case."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    contents = iter(
+        (
+            "not-json-at-all",
+            json.dumps({"decision": "comment", "summary": "Recovered", "findings": []}),
+        )
+    )
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            content = next(contents)
+            return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="head"))
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(open_calls) == 2
+
+
+def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatch):
+    """``inspect_and_review`` must treat a stale-during-repair-retry signal
+    exactly like its own pre-model and pre-publication stale checks: a clean
+    skip (return 0), never an unhandled exception or a published review."""
+    pr = make_pr()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+
+    def fake_call_llm(*args, **kwargs):
+        raise noema.StaleHeadDuringRepairRetryError(
+            "Pull request head changed during review; stale before repair retry."
+        )
+
+    monkeypatch.setattr(noema, "call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: pytest.fail("stale-during-repair verdict must not publish"),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7, "head") == 0
 
 
 def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):
@@ -692,9 +799,10 @@ def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):
         return Response()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
     with pytest.raises(RuntimeError, match="response body was not a JSON object"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
     assert len(open_calls) == 2
 
 
@@ -727,9 +835,10 @@ def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch)
         return Response()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
     with pytest.raises(RuntimeError, match="response body was not valid UTF-8"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
     # One initial request plus exactly one repair-retry request — not an
     # unbounded retry loop, and not a crash on the first attempt.
     assert len(open_calls) == 2
@@ -754,9 +863,10 @@ def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choi
             return json.dumps({"choices": choices}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
     with pytest.raises(RuntimeError, match="'choices' was not a list"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize(
@@ -878,15 +988,16 @@ class FakeResponse:
 def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
     pr = make_pr()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.delenv("NOEMA_LLM_API_URL", raising=False)
     monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="not configured"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     with pytest.raises(ValueError, match="URL scheme must be http or https"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
@@ -926,7 +1037,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
             return self.call_func(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    verdict = noema.call_llm("owner/repo", 1, pr, "diff", True, "extra review context")
+    verdict = noema.call_llm("owner/repo", 1, pr, "diff", True, "head", "extra review context")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "https://llm.example.test/chat"
     assert seen["timeout"] == 14400
@@ -942,32 +1053,32 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         lambda *args: FakeOpener(fake_urlopen_defer)
     )
     with pytest.raises(RuntimeError, match="unsupported decision"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test case-insensitive valid URL
     monkeypatch.setenv("NOEMA_LLM_API_URL", "HTTPS://llm.example.test/chat")
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
 
     # Test invalid scheme (and no original URL in error)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "file:///etc/passwd")
     with pytest.raises(ValueError, match="URL scheme must be http or https"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test localhost rejection
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test missing hostname
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http:///chat")
     with pytest.raises(ValueError, match="URL must have a valid hostname"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test internal IP rejection
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     import socket
     original_getaddrinfo = socket.getaddrinfo
@@ -980,7 +1091,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test unresolved hostname does not break
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
@@ -988,7 +1099,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
 
     # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
@@ -997,7 +1108,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
 
 
 def test_noema_redirect_handler_rejects_redirects():
@@ -1032,7 +1143,7 @@ def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
     with pytest.raises(ValueError, match="must start with http:// or https://"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
 
 def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
@@ -1044,7 +1155,7 @@ def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
     monkeypatch.setattr(noema.urllib.parse, "urlparse", lambda _: parsed)
 
     with pytest.raises(ValueError, match="URL scheme must be http or https"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
 
 def test_format_findings_and_submit_review(monkeypatch):
@@ -1227,8 +1338,9 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
             return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     with pytest.raises(RuntimeError, match="substantive summary"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 def test_call_llm_fails_closed_on_malformed_json_response(monkeypatch):
@@ -1252,8 +1364,9 @@ def test_call_llm_fails_closed_on_malformed_json_response(monkeypatch):
             return json.dumps({"choices": [{"message": {"content": malformed_content}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     with pytest.raises(RuntimeError, match="was not valid JSON"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 def test_call_llm_repairs_one_malformed_json_response(monkeypatch):
@@ -1284,8 +1397,9 @@ def test_call_llm_repairs_one_malformed_json_response(monkeypatch):
         return Response()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
-    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
     assert verdict["summary"] == "Repaired JSON"
     assert len(requests) == 2
@@ -1313,8 +1427,9 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     with pytest.raises(RuntimeError, match="malformed finding"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize(
@@ -1346,8 +1461,9 @@ def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     with pytest.raises(RuntimeError, match=error):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypatch):
@@ -1366,8 +1482,9 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
     with pytest.raises(RuntimeError, match="parseable changed-line evidence"):
-        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
@@ -1446,8 +1563,9 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
             return Response(invalid if len(payloads) == 1 else valid)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
 
-    assert noema.call_llm("owner/repo", 7, make_pr(), diff, False)["decision"] == "approve"
+    assert noema.call_llm("owner/repo", 7, make_pr(), diff, False, "head")["decision"] == "approve"
     assert len(payloads) == 2
     assert "trusted validator" in payloads[1]["messages"][1]["content"]
 

@@ -16,6 +16,17 @@ Semantic Versioning where the repository publishes a release.
   closed for fork PRs at bootstrap, preventing untrusted external contributors
   from exhausting runner slots; maintainers must first materialize those
   contributions on a trusted base-repository branch.
+- Skip Noema's one-time repair-retry LLM request when the PR head has moved
+  since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
+  now takes `expected_head` and re-checks it against a fresh `fetch_pr`
+  lookup, lowercased like `inspect_and_review`'s existing two stale-head
+  checks, before firing the retry — avoiding a second, potentially
+  multi-hour `NOEMA_LLM_TIMEOUT_SECONDS` call for a verdict
+  `inspect_and_review`'s own post-call check would have discarded anyway. A
+  new `StaleHeadDuringRepairRetryError` reports this distinctly from the
+  existing "stale before model work" / "stale before publication" cases,
+  and `inspect_and_review` treats it the same way: a clean skip, not a
+  failure.
 - Re-pin the reviewed-blob contract test's SHA to the current
   `opencode-review-dispatch.yml` content after the review run timeout change,
   restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.

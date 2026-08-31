@@ -2151,6 +2151,70 @@ unchanged.
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
+## 2026-08-31 noema-review-gate: repair-retry request fired without re-checking a live-moved PR head
+
+CodeRabbit's review on PR #1507 found a real efficiency gap in `call_llm`'s one-time repair-retry path.
+`inspect_and_review(repo, number, expected_head)` already checks the normalized `expected_head` against
+the PR's live `headRefOid` twice -- once before any credential/model work, and again right before
+`submit_review` -- but `call_llm` itself had no `expected_head` parameter at all. Its self-recursive
+repair-retry branch (`except RuntimeError as exc: if repair_error: raise; return call_llm(..., str(exc))`,
+fired once whenever the first attempt's verdict is malformed) went straight to a second,
+`NOEMA_LLM_TIMEOUT_SECONDS`-bounded (currently 14,400 seconds) request with no live-head check of its own.
+Verified independently from a fresh isolated clone (not the branch's shared working checkout, given three
+concurrent actors were pushing to it) before making any change: confirmed both existing checks, confirmed
+`call_llm`'s signature had no `expected_head`, and confirmed the recursive retry call site had no head
+comparison anywhere on its path. Net effect was wasted compute, not a correctness gap -- the existing
+post-call check in `inspect_and_review` already stopped a genuinely stale verdict from publishing -- but a
+PR head moving mid-first-attempt could still burn a second, potentially multi-hour LLM call producing a
+verdict `inspect_and_review` was always going to discard once `call_llm` returned.
+
+**Fix.** `expected_head: str` was added to `call_llm`'s signature as a required parameter, positioned
+after the other required parameters (`repo`, `number`, `pr`, `diff`, `truncated`) and before the existing
+optional, default-valued ones (`review_context`, `changed_paths`, `repair_error`) -- keeping this file's
+existing convention of required-then-optional parameter ordering. Inside the repair-retry branch, after
+the existing `if repair_error: raise` short-circuit (which already caps retries at one) and before the
+recursive call, `call_llm` now re-fetches the live PR via the existing `fetch_pr` helper (no new HTTP
+call) and compares its `headRefOid`, lowercased, against `expected_head` -- the same lowercase-normalized
+comparison idiom `inspect_and_review`'s own two checks already use. A mismatch raises a new
+`StaleHeadDuringRepairRetryError(RuntimeError)` (defined immediately above `call_llm`) with a distinct
+message ("...stale before repair retry.") rather than a bare `RuntimeError`, so `inspect_and_review` can
+tell a benign stale-head race apart from a genuine review failure and keep treating it as the same kind of
+clean, non-error skip (`print(...); return 0`) as its other two stale-head checks -- not as a hard failure
+that would reach `main`'s top-level `except RuntimeError` / `::error::` / exit-1 path. `inspect_and_review`
+now calls `call_llm` inside a `try`/`except StaleHeadDuringRepairRetryError` for exactly that purpose.
+Scope was kept intentionally narrow: this does not touch the separate `submit_review` TOCTOU race
+CodeRabbit flagged on the same PR (tracked separately, not a code change), and it does not redesign
+`call_llm`'s retry/repair architecture -- one added live-head check on the one existing retry path.
+
+**Regression tests** (`tests/test_noema_review_gate.py`): `test_call_llm_skips_repair_retry_when_head_moves_before_it_fires`
+proves the retry request never fires (`len(open_calls) == 1`) and `StaleHeadDuringRepairRetryError` is
+raised with a "stale before repair retry" message when the live head has moved between the first attempt
+and the retry decision; `test_call_llm_still_repairs_once_when_head_has_not_moved` proves the existing
+one-time repair behavior is unchanged when the head has not moved; `test_inspect_and_review_reports_stale_before_repair_retry_cleanly`
+proves `inspect_and_review` converts that exception into a clean `return 0` without ever calling
+`submit_review`. Every pre-existing direct `call_llm(...)` call site across `tests/test_noema_review_gate.py`,
+`tests/test_noema_review_orchestrator_ssrf.py`, and `tests/test_repository_branch_coverage_review_schedulers.py`
+was updated for the new required parameter; call sites that raise before `call_llm`'s HTTP request (URL/
+SSRF validation) needed only the added argument, while call sites that exercise the repair-retry path
+needed a `fetch_pr` mock added alongside it so the new live-head check has something to compare against.
+
+Validation: `coverage run -m pytest tests -q` -- 2174 passed, 1 skipped, 21 subtests passed. Baseline
+before this change was 2170 passed; two concurrent sessions' opencode-review.yml poller-budget fixes
+landed and were picked up mid-session by this PR's mandatory pre-push `git fetch`/rebase protocol (first
+`ddaa917`, widening the poller's own budget past its downstream job, raising the baseline to 2173; then
+`4548f93`, which superseded that same-day fix with a different architecture -- two chained polling
+windows covering the complete multi-hour path -- landing at 2171 before this change's own 3 new tests).
+Both moves produced a `CHANGELOG.md` conflict against this entry's own `[Unreleased]` bullet (resolved by
+keeping this session's bullet plus whichever upstream bullet was current at that fetch, dropping the
+now-superseded intermediate one); `docs/product-technical-gap-baseline.md` conflicted once and auto-merged
+cleanly the second time. `coverage report --show-missing` -- 100% on `scripts/ci/` (`noema_review_gate.py`:
+517 stmts, 232 branches, 100%; TOTAL unchanged at 10,600 stmts / 4,252 branches, since neither concurrent
+fix touched a `scripts/ci/` production file); `interrogate` -- 100% docstring coverage (minimum 100.0%,
+actual 100.0%); `ruff check` on every touched file -- all checks passed. Full validation was re-run after
+every rebase, given the branch's ongoing concurrent commit velocity from multiple simultaneous sessions.
+
+PR: ContextualWisdomLab/.github#1507 (CodeRabbit review on #1507; same PR, addressed before merge).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
