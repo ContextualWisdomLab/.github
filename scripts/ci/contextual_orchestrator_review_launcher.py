@@ -796,7 +796,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
-    from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
+    from contextual_orchestrator.chat_capability import (
+        is_general_chat_agent_model_id,
+        requires_non_text_input,
+    )
     from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
@@ -836,6 +839,17 @@ def main(argv: list[str] | None = None) -> int:
     for model in routable_discovered:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
+            continue
+        if requires_non_text_input(getattr(model, "input_modalities", ()) or ()):
+            # Excludes vision/audio/video-input-only deployments (e.g. NVIDIA NIM's
+            # meta/llama-3.2-90b-vision-instruct) from this plain-text review catalog.
+            # `_has_text_output` above only checks output modality; contextual-orchestrator's
+            # own runtime `_is_general_free_agent` gate (orchestrator.py) reads an `input:`
+            # agent tag this sidecar's own catalog rows never carry, so it cannot catch this
+            # here -- the same NVIDIA NIM 400 this fixed once already in that repo (see
+            # `contextual_orchestrator.model_discovery._requires_non_text_input`'s docstring,
+            # citing ContextualWisdomLab/.github#1198) recurred via this independently
+            # rebuilt catalog. See ContextualWisdomLab/.github#1415's strix failure.
             continue
         if args.pool == "free" and _route_identity(model) not in free_route_identities:
             continue

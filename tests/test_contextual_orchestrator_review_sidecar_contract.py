@@ -279,7 +279,9 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
 def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
-    assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
+    assert "from contextual_orchestrator.chat_capability import (" in text
+    assert "is_general_chat_agent_model_id," in text
+    assert "requires_non_text_input," in text
     assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
     assert "routable_discovered = _routable_discovered_models(discovered)" in text
     assert "free_discovered_models(routable_discovered)" in text
@@ -289,6 +291,11 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
     assert "not _has_text_output(model)" in text
     assert 'model_id = getattr(model, "model_id", "")' in text
+    # Output modality alone is not enough: a vision/audio/video-input-only model can still
+    # declare a text output modality (e.g. NVIDIA NIM's meta/llama-3.2-90b-vision-instruct),
+    # so the catalog must separately exclude any model whose *input* modality evidence is
+    # non-text-only -- the exact recurrence this closes is ContextualWisdomLab/.github#1415.
+    assert 'requires_non_text_input(getattr(model, "input_modalities", ()) or ())' in text
 
     launcher = runpy.run_path(str(LAUNCHER))
     has_text_output = launcher["_has_text_output"]
