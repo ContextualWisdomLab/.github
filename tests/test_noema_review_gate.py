@@ -450,6 +450,28 @@ def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
     assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 19800
 
 
+def test_absolute_response_deadline_restores_signal_state(monkeypatch):
+    previous_handler = noema.signal.getsignal(noema.signal.SIGALRM)
+    previous_timer = noema.signal.getitimer(noema.signal.ITIMER_REAL)
+    with noema.absolute_response_deadline(1):
+        assert noema.signal.getitimer(noema.signal.ITIMER_REAL)[0] > 0
+    assert noema.signal.getsignal(noema.signal.SIGALRM) == previous_handler
+    assert noema.signal.getitimer(noema.signal.ITIMER_REAL) == previous_timer
+
+
+@pytest.mark.parametrize("pr", [
+    make_pr(isDraft=True),
+    make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}),
+])
+def test_prepare_review_skips_before_model_handoff(monkeypatch, tmp_path, pr):
+    output = tmp_path / "input.json"
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda *args: (_ for _ in ()).throw(AssertionError("diff must not load")))
+    assert noema.prepare_review("owner/repo", 7, str(output)) == 0
+    assert not output.exists()
+
+
 def test_sealed_handoff_rejects_modified_payload(tmp_path):
     """Cross-job review input cannot change without invalidating its digest."""
     handoff = tmp_path / "handoff.json"

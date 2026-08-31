@@ -26,6 +26,11 @@ case "${1:-}" in
     exit 1
     ;;
 esac
+
+launcher_exclusion_args=()
+if [ -n "${CONTEXTUAL_ORCHESTRATOR_EXCLUDE_CANDIDATE_ID:-}" ]; then
+  launcher_exclusion_args=(--exclude-candidate-id "$CONTEXTUAL_ORCHESTRATOR_EXCLUDE_CANDIDATE_ID")
+fi
 if [ "$#" -ne 0 ]; then
   printf '[contextual-orchestrator-sidecar] error: unexpected extra arguments\n' >&2
   exit 1
@@ -452,6 +457,7 @@ PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" \
     --report-out "$policy_report" \
     --preflight-out "$preflight_report" \
     "${launcher_attempt_args[@]}" \
+    "${launcher_exclusion_args[@]}" \
     "${zdr_args[@]}" \
     "${privacy_args[@]}" \
     "${pool_args[@]}" \

@@ -116,6 +116,26 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     assert routable([]) == []
 
 
+def test_fallback_exclusion_reaches_a_later_healthy_preflight_batch() -> None:
+    namespace = _load_launcher()
+    exclude = namespace["_without_excluded_agents"]
+    preflight = namespace["_preflight_review_agent_batches"]
+    batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
+    catalog = [{"id": "attempted"}] + [
+        {"id": f"failed-{index}"} for index in range(batch_size)
+    ] + [{"id": "later-healthy"}]
+    filtered = exclude(catalog, frozenset({"attempted"}))
+    agents = [SimpleNamespace(id=row["id"], provider_name="openrouter", model="x/free") for row in filtered]
+    outcomes = {agent.id: RuntimeError("unavailable") for agent in agents}
+    outcomes["later-healthy"] = _openai_text("ready")
+
+    viable, report = preflight(agents, client=_ProbeClient(outcomes))
+
+    assert [agent.id for agent in viable] == ["later-healthy"]
+    assert report["probed_count"] == batch_size + 1
+    assert all(route["agent_id"] != "attempted" for route in report["routes"])
+
+
 def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

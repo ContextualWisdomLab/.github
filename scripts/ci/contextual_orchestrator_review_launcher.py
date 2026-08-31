@@ -508,6 +508,17 @@ def _chat_response_has_text(response: object) -> bool:
     return isinstance(content, str) and bool(content.strip())
 
 
+def _without_excluded_agents(
+    agents: list[dict[str, object]], excluded_ids: frozenset[str]
+) -> list[dict[str, object]]:
+    """Remove prior attempts before batched preflight chooses where to stop."""
+    return [
+        agent
+        for agent in agents
+        if str(agent.get("id") or agent.get("agent_id") or "") not in excluded_ids
+    ]
+
+
 def _safe_http_status(exc: Exception) -> int | None:
     """Return one bounded HTTP status without persisting an exception message."""
     status = getattr(exc, "code", None)
@@ -1337,6 +1348,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Disable the redundant same-agent retry when job-level failover is active",
     )
+    parser.add_argument(
+        "--exclude-candidate-id",
+        action="append",
+        default=[],
+        help="Exclude a previously attempted agent id before runtime preflight",
+    )
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
@@ -1438,6 +1455,12 @@ def main(argv: list[str] | None = None) -> int:
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
+    excluded_candidate_ids = frozenset(args.exclude_candidate_id)
+    result["agents"] = _without_excluded_agents(
+        result["agents"], excluded_candidate_ids
+    )
+    if not result["agents"]:
+        raise SystemExit("review sidecar has no candidate after exclusions")
     result["report"] = _with_discovery_counts(
         result["report"], normalized_rows, provider_account=provider_account
     )
@@ -1468,6 +1491,9 @@ def main(argv: list[str] | None = None) -> int:
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",
+            )
+            fallback_result["agents"] = _without_excluded_agents(
+                fallback_result["agents"], excluded_candidate_ids
             )
         except PolicyError:
             fallback_result = None

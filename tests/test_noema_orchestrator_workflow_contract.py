@@ -43,7 +43,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "candidate-1:" in workflow
     assert "candidate-2:" in workflow
     assert "finalize:" in workflow
-    assert workflow.count("timeout-minutes: 330") == 2
+    assert workflow.count("timeout-minutes: 335") == 2
     assert workflow.count("timeout-minutes: 350") == 2
     assert workflow.count(
         "contextual_orchestrator_review_sidecar.sh\" --single-candidate-attempt"
@@ -53,10 +53,22 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     first_upload = workflow_step(workflow, "Upload first candidate handoff")
     assert "if: always()" in first_upload
     assert "if-no-files-found: error" in first_upload
+    first_provision = workflow_step(workflow, "Provision candidate pool")
+    assert "id: provision" in first_provision
+    assert "continue-on-error: true" in first_provision
+    first_run = workflow_step(workflow, "Run first candidate")
+    assert "if: steps.provision.outcome == 'success'" in first_run
+    assert "continue-on-error: true" in first_run
     second_run = workflow_step(workflow, "Run second candidate")
+    second_provision = workflow_step(workflow, "Provision fallback candidate pool")
+    assert "continue-on-error: true" not in second_provision
+    assert "continue-on-error: true" not in second_run
     assert 'cat "${RUNNER_TEMP}/candidate-1/candidate-1.id" 2>/dev/null || true' in second_run
     assert "NOEMA_LLM_CANDIDATE_ID" in workflow
-    assert "NOEMA_LLM_EXCLUDE_CANDIDATE_IDS" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_EXCLUDE_CANDIDATE_ID" in workflow
+    assert "NOEMA_LLM_EXCLUDE_CANDIDATE_IDS" not in workflow
+    assert "needs.prepare.outputs.review_ready == 'true'" in workflow
+    assert 'review_ready: ${{ steps.seal.outputs.review_ready }}' in workflow
     assert "python3 -m scripts.ci.noema_review_gate" in workflow
     assert "python3 scripts/ci/noema_review_gate.py" not in workflow
     assert (
@@ -77,6 +89,17 @@ def test_peer_workflow_completion_does_not_cancel_long_noema_review() -> None:
     assert (
         "cancel-in-progress: ${{ github.event_name == 'pull_request_target' || "
         "github.event_name == 'repository_dispatch' }}"
+    ) in workflow
+
+
+def test_noema_noop_events_do_not_download_missing_handoffs() -> None:
+    workflow = workflow_text("noema-review.yml")
+    assert "review_ready: ${{ steps.seal.outputs.review_ready }}" in workflow
+    assert "if: steps.seal.outputs.review_ready == 'true'" in workflow
+    assert "if: needs.prepare.outputs.review_ready == 'true'" in workflow
+    assert (
+        "if: always() && needs.prepare.result == 'success' && "
+        "needs.prepare.outputs.review_ready == 'true'"
     ) in workflow
 
 

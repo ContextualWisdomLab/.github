@@ -14,61 +14,19 @@ Semantic Versioning where the repository publishes a release.
   correction. No code changed; this closes out the "worth a follow-up doc
   cleanup" item recorded in `docs/product-technical-gap-baseline.md`'s
   2026-08-31 direct-NIM-communication audit entry.
-- Fix the root cause of `noema-review`'s four consecutive `TimeoutError`
-  failures on `contextual-orchestrator#946` (enumerated in
-  `contextual-orchestrator#974`), then correct that fix per Devin's follow-up
-  review on this same PR (ContextualWisdomLab/.github#1415, "Serving answers
-  bypass quality validation"): an initial version set
-  `tool_retry_attempts=0` and replaced the serving `TaskOrchestrator`'s
-  (frozen) `OrchestrationPolicy` with `realtime_judge=False`, reasoning that
-  the judge's quality-ledger learning (meant to steer a long-lived process's
-  *future* routing) had no opportunity to matter for this fresh,
-  one-shot-per-CI-run sidecar. That reasoning was incomplete on two counts:
-  `realtime_judge` also gates acceptance of the *current* answer and drives
-  failover to the next candidate on rejection — a real per-request quality
-  control, not just future-routing learning — and `tool_retry_attempts=0`
-  independently collapsed `route_once`'s own outer cross-candidate loop to a
-  single attempt (`max_attempts = 1 + min(tool_retry_attempts,
-  MAX_TOOL_RETRY_ATTEMPTS)`), so even reverting `realtime_judge` alone would
-  have left a judge-rejected answer with nowhere to fail over to. Both
-  defaults are now left untouched (`tool_retry_attempts=1`,
-  `realtime_judge=True`), fully restoring serving's per-request quality gate
-  and failover. `noema_review_gate.py`'s external read timeout is
-  re-derived honestly against that unmodified configuration: from the
-  previous fix's margin-free `120`, through an intermediate
-  `CALL_LLM_TIMEOUT_SECONDS=3000` (sized for the now-reverted reduced-retry
-  config), to `CALL_LLM_TIMEOUT_SECONDS=23040` — one `_invoke()` call (worker
-  or judge) tries up to `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`=24 candidates at
-  up to `1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4)=2`
-  attempts each, bounded by `REVIEW_SERVING_TIMEOUT_SECONDS`=120s
-  (24×2×120=5760s); one `route_once()` attempt makes both a worker and a
-  judge `_invoke()` call (5760+5760=11520s); and `route_once`'s own outer
-  loop retries up to `max_attempts`=2 top-level candidates on judge
-  rejection (2×11520=23040s) — not guessed. `noema-review.yml`'s
-  `noema-review` job now also declares an explicit `timeout-minutes: 360`
-  (GitHub-hosted runners' own hard ceiling, unchanged from the implicit
-  default) so that ceiling is discoverable next to the step it bounds.
-
-  Devin's next review round on this same PR ("Valid reviews exceed job
-  deadline") then caught that this was still wrong: `23040`s (384 minutes)
-  already exceeds that same `timeout-minutes: 360` (21600s) ceiling for a
-  *single* call, before even considering the second, one-shot repair call —
-  a client-side timeout the job can never actually honor is not a safety
-  margin, it is a false promise. Rather than shrink the timeout below what a
-  legitimate multi-candidate, judge-gated failover can need (reintroducing
-  #946's original bug), `scripts/ci/contextual_orchestrator_review_launcher.py`
-  now caps how many preflight-verified-ready candidates the *serving*
-  orchestrator draws from to a new `REVIEW_SERVING_MAX_CANDIDATES=10`, a
-  smaller number than preflight's own 24-route admission-testing depth
-  (every one of the 10 has already independently passed preflight's base
-  probe and serving-budget confirmation). Solved backwards from the job's
-  own ceiling (360 minutes, minus ~15 minutes of generously-rounded headroom
-  for the job's other steps, halved so a second repair call independently
-  fits too): `CALL_LLM_TIMEOUT_SECONDS` is now `9600` (10 candidates × 2
-  attempts × 2 roles × 2 outer attempts × `REVIEW_SERVING_TIMEOUT_SECONDS`=
-  120s), so the function's absolute worst case (two calls, 19200s) now
-  actually fits inside the 21600s job that enforces it, with real margin,
-  instead of relying on that job's own kill as an unacknowledged backstop.
+- Remove `noema-review`'s 120-second serving cutoff while preserving the
+  realtime judge. Each candidate job makes one directly pinned request with
+  a 150-minute worker/judge serving budget, a 19,800-second absolute client
+  deadline, and a 335-minute step ceiling. The five-minute gap lets the
+  client deadline exit and preserve the candidate handoff before the step
+  ceiling; each 350-minute job retains another 15 minutes for that handoff.
+  A failed first candidate hands off
+  to one independent fallback job; its preflight excludes the attempted ID
+  before batched probing, then the request pins only the newly selected ID.
+  Drafts, context-free events, and exact-head reviews are successful no-ops
+  before artifacts or model work. These are the enforced values; earlier
+  120-, 3,000-, 9,600-, and 23,040-second values were superseded during this
+  unreleased change and are intentionally not runtime contracts.
 - Fix two real bugs Devin's automated review found on this same PR
   (ContextualWisdomLab/.github#1415) against the just-landed
   `_catalog_account_cap(DEFAULT_ACCOUNT_CAP)` fix and the discovery-budget

@@ -6,14 +6,17 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import contextlib
 import hashlib
 import ipaddress
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +45,25 @@ DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
+
+
+@contextlib.contextmanager
+def absolute_response_deadline(seconds: int):
+    """Bound the complete streamed response, not each socket operation."""
+    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("Noema absolute response deadline is unavailable")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def expire(_signum: int, _frame: object) -> None:
+        raise TimeoutError(f"Noema LLM response exceeded {seconds} seconds")
+
+    signal.signal(signal.SIGALRM, expire)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -673,8 +695,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=CALL_LLM_TIMEOUT_SECONDS) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+    with absolute_response_deadline(CALL_LLM_TIMEOUT_SECONDS):
+        with opener.open(request, timeout=CALL_LLM_TIMEOUT_SECONDS) as response:  # nosec B310
+            raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)
@@ -848,8 +871,17 @@ def _read_sealed(path: str) -> dict[str, Any]:
 def prepare_review(repo: str, number: int, output: str) -> int:
     """Seal immutable review input without calling a model or writing GitHub."""
     pr = fetch_pr(repo, number)
+    actor = current_actor()
+    if not actor:
+        raise RuntimeError("Noema reviewer identity could not be verified")
+    if actor in PRIMARY_REVIEW_AUTHORS:
+        raise RuntimeError("Noema requires a verified independent reviewer credential")
     if pr.get("isDraft"):
-        raise RuntimeError("Noema review preparation does not accept draft pull requests")
+        print("PR is draft; Noema review skipped.")
+        return 0
+    if existing_noema_review(pr, actor):
+        print("Current head already has a Noema review; nothing to do.")
+        return 0
     diff, truncated = fetch_diff(repo, number)
     changed_paths = fetch_changed_file_paths(repo, number)
     _write_sealed(output, {

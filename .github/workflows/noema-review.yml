@@ -52,6 +52,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       require_zdr: ${{ steps.target_visibility.outputs.require_zdr }}
+      review_ready: ${{ steps.seal.outputs.review_ready }}
     if: >-
       github.event_name == 'repository_dispatch'
       || (
@@ -297,8 +298,12 @@ jobs:
 
       - name: Seal exact-head Noema review input
         if: env.PR_NUMBER != ''
+        id: seal
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
         run: |
           set -euo pipefail
           python3 -m scripts.ci.noema_review_gate \
@@ -306,9 +311,14 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --mode prepare \
             --output "${RUNNER_TEMP}/noema-input.json"
+          if [ -s "${RUNNER_TEMP}/noema-input.json" ] && [ -s "${RUNNER_TEMP}/noema-input.json.sha256" ]; then
+            echo "review_ready=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "review_ready=false" >>"$GITHUB_OUTPUT"
+          fi
 
       - name: Upload sealed Noema review input
-        if: env.PR_NUMBER != ''
+        if: steps.seal.outputs.review_ready == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: noema-review-input
@@ -321,6 +331,7 @@ jobs:
   candidate-1:
     name: noema-review / candidate-1
     needs: prepare
+    if: needs.prepare.outputs.review_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -345,6 +356,8 @@ jobs:
           name: noema-review-input
           path: ${{ runner.temp }}/noema-input
       - name: Provision candidate pool
+        id: provision
+        continue-on-error: true
         env: &provider_credentials
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -355,7 +368,9 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
       - name: Run first candidate
         id: review
-        timeout-minutes: 330
+        if: steps.provision.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 335
         run: |
           set -euo pipefail
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
@@ -395,7 +410,7 @@ jobs:
   candidate-2:
     name: noema-review / candidate-2
     needs: [prepare, candidate-1]
-    if: always() && needs.prepare.result == 'success'
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.review_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -433,10 +448,13 @@ jobs:
       - name: Provision fallback candidate pool
         if: steps.reuse.outputs.reused != 'true'
         env: *provider_credentials
-        run: bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
+        run: |
+          CONTEXTUAL_ORCHESTRATOR_EXCLUDE_CANDIDATE_ID="$(cat "${RUNNER_TEMP}/candidate-1/candidate-1.id" 2>/dev/null || true)"
+          export CONTEXTUAL_ORCHESTRATOR_EXCLUDE_CANDIDATE_ID
+          bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
       - name: Run second candidate
         if: steps.reuse.outputs.reused != 'true'
-        timeout-minutes: 330
+        timeout-minutes: 335
         run: |
           set -euo pipefail
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
@@ -447,7 +465,6 @@ jobs:
           export NOEMA_LLM_API_KEY="$CONTEXTUAL_ORCHESTRATOR_TOKEN"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
           export NOEMA_LLM_CANDIDATE_ID="$candidate_id"
-          export NOEMA_LLM_EXCLUDE_CANDIDATE_IDS="$first_id"
           python3 -m scripts.ci.noema_review_gate --repo placeholder/repo --pr-number 1 \
             --mode evaluate --input "${RUNNER_TEMP}/noema-input/noema-input.json" \
             --output "${RUNNER_TEMP}/noema-verdict.json"
