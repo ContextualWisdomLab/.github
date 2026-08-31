@@ -195,6 +195,27 @@ def test_fetch_diff_rejects_incomplete_paginated_responses(
         noema.fetch_diff("owner/repo", 1)
 
 
+def test_fetch_diff_round_trips_special_current_and_previous_filenames(monkeypatch):
+    """Synthesized diff headers preserve every Git-special filename byte."""
+    previous = 'src/old\t"quoted"\\name\n.py'
+    current = "src/새 이름\tcurrent.py"
+    pages = [[{
+        "filename": current,
+        "previous_filename": previous,
+        "status": "renamed",
+        "patch": "@@ -1 +1 @@\n-old\n+new",
+    }]]
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(pages))
+
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=1)
+
+    assert not truncated
+    assert noema.changed_diff_locations(diff) == {
+        (previous, 1, "LEFT"),
+        (current, 1, "RIGHT"),
+    }
+
+
 def test_fetch_diff_marks_unavailable_patch_as_truncated(monkeypatch):
     """A file without GitHub patch text remains visible but incomplete."""
     response = json.dumps([[{"filename": "removed.bin", "status": "removed"}]])

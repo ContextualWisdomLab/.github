@@ -255,14 +255,15 @@ def fetch_diff(
             raise RuntimeError("GitHub PR file record omitted its filename")
         old_filename = str(file.get("previous_filename") or filename)
         status = str(file.get("status") or "modified")
-        old_label = "/dev/null" if status == "added" else f"a/{old_filename}"
-        new_label = "/dev/null" if status == "removed" else f"b/{filename}"
+        old_label = "/dev/null" if status == "added" else _format_diff_path(old_filename, "a/")
+        new_label = "/dev/null" if status == "removed" else _format_diff_path(filename, "b/")
         patch = file.get("patch")
         if not isinstance(patch, str):
             patch = "[patch unavailable from GitHub PR files API]"
             incomplete_patch = True
         sections.append(
-            f"diff --git a/{old_filename} b/{filename}\n"
+            f"diff --git {_format_diff_path(old_filename, 'a/')} "
+            f"{_format_diff_path(filename, 'b/')}\n"
             f"--- {old_label}\n+++ {new_label}\n{patch}"
         )
     diff = "\n".join(sections)
@@ -270,6 +271,14 @@ def fetch_diff(
     if truncated:
         diff = diff[:MAX_DIFF_CHARS]
     return diff, truncated
+
+
+def _format_diff_path(path: str, prefix: str) -> str:
+    """Return a plain or JSON-quoted diff path that round-trips safely."""
+    value = f"{prefix}{path}"
+    if any(character in '\t\n\r"\\' or not 0x20 <= ord(character) < 0x7F for character in value):
+        return json.dumps(value, ensure_ascii=True)
+    return value
 
 
 def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
@@ -321,9 +330,14 @@ def parse_diff_path(raw: str, prefix: str) -> str:
         return ""
     if value.startswith('"'):
         try:
-            decoded = ast.literal_eval(value)
-            value = decoded.encode("latin-1").decode("utf-8")
-        except (SyntaxError, ValueError, UnicodeError):
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            try:
+                decoded = ast.literal_eval(value)
+                value = decoded.encode("latin-1").decode("utf-8")
+            except (SyntaxError, ValueError, UnicodeError):
+                return ""
+        if not isinstance(value, str):
             return ""
     return value.removeprefix(prefix)
 
