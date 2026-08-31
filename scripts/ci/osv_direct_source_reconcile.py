@@ -263,6 +263,65 @@ def authoritative_affected_range(
     return candidates[0] if len(set(candidates)) == 1 and candidates else None
 
 
+def reconcile_groups_for_retained_vulnerabilities(
+    package: dict[str, Any], retained: list[dict[str, Any]]
+) -> None:
+    """Keep OSV group metadata referentially bound to retained findings.
+
+    OSV Scanner v2.3.8 dereferences one group for every vulnerability while
+    producing reporter output. Leaving a group whose IDs were removed can
+    preserve a fabricated result; retaining a vulnerability without a group
+    can panic the reporter. When group evidence is present, filter it to the
+    exact retained IDs and fail closed on malformed or incomplete bindings.
+    """
+
+    groups = package.get("groups")
+    if groups is None:
+        return
+    if not isinstance(groups, list):
+        raise TypeError("OSV package groups evidence is malformed")
+    retained_ids = {str(vulnerability.get("id") or "") for vulnerability in retained}
+    filtered_groups: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise TypeError("OSV package group entries must be objects")
+        ids = group.get("ids")
+        aliases = group.get("aliases", [])
+        analysis = group.get("experimental_analysis", {})
+        if (
+            not isinstance(ids, list)
+            or not all(isinstance(vulnerability_id, str) for vulnerability_id in ids)
+            or not isinstance(aliases, list)
+            or not all(isinstance(alias, str) for alias in aliases)
+            or not isinstance(analysis, dict)
+        ):
+            raise TypeError("OSV package group fields are malformed")
+        retained_group_ids = [
+            vulnerability_id
+            for vulnerability_id in ids
+            if vulnerability_id in retained_ids
+        ]
+        if not retained_group_ids:
+            continue
+        updated = dict(group)
+        updated["ids"] = retained_group_ids
+        updated["aliases"] = aliases
+        updated["experimental_analysis"] = {
+            vulnerability_id: value
+            for vulnerability_id, value in analysis.items()
+            if vulnerability_id in retained_ids
+        }
+        filtered_groups.append(updated)
+    grouped_ids = {
+        vulnerability_id
+        for group in filtered_groups
+        for vulnerability_id in group["ids"]
+    }
+    if retained_ids - grouped_ids:
+        raise TypeError("OSV retained vulnerability is missing group evidence")
+    package["groups"] = filtered_groups
+
+
 def audit_entry(
     *,
     label: str,
@@ -474,6 +533,7 @@ def reconcile_payload(
                 )
             )
         package["vulnerabilities"] = retained
+        reconcile_groups_for_retained_vulnerabilities(package, retained)
     return payload, audit
 
 

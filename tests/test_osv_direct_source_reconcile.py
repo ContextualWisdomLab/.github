@@ -170,6 +170,87 @@ class DirectSourceReconcileTests(unittest.TestCase):
         )
         self.assertTrue(all(entry["integrity"] == INTEGRITY for entry in audit))
 
+    def test_mixed_groups_remain_pinned_reporter_safe_after_reconciliation(self) -> None:
+        """Drop orphan groups while preserving retained aliases, analysis, and severity."""
+        removed_id = "GHSA-removed"
+        retained_id = "GHSA-retained"
+        payload = results(
+            "0.20.3",
+            [
+                vulnerability(removed_id, "< 0.20.2"),
+                vulnerability(retained_id, "< 0.20.4"),
+            ],
+        )
+        package = payload["results"][0]["packages"][0]  # type: ignore[index]
+        package["groups"] = [
+            {
+                "ids": [removed_id],
+                "aliases": [removed_id, "CVE-2026-REMOVED"],
+                "experimental_analysis": {
+                    removed_id: {"called": True, "unimportant": False}
+                },
+                "max_severity": "9.8",
+            },
+            {
+                "ids": [retained_id],
+                "aliases": [retained_id, "CVE-2026-RETAINED"],
+                "experimental_analysis": {
+                    retained_id: {"called": True, "unimportant": False},
+                    removed_id: {"called": False, "unimportant": True},
+                },
+                "max_severity": "7.5",
+            },
+        ]
+
+        reconciled, audit = self.run_case(payload, direct_lock("0.20.3"))
+
+        self.assertEqual(remaining_ids(reconciled), [retained_id])
+        retained_package = reconciled["results"][0]["packages"][0]  # type: ignore[index]
+        self.assertEqual(
+            retained_package["groups"],
+            [
+                {
+                    "ids": [retained_id],
+                    "aliases": [retained_id, "CVE-2026-RETAINED"],
+                    "experimental_analysis": {
+                        retained_id: {"called": True, "unimportant": False}
+                    },
+                    "max_severity": "7.5",
+                }
+            ],
+        )
+        # OSV Scanner v2.3.8's Flatten/getGroupInfoForVuln contract requires
+        # every vulnerability ID to resolve to a remaining group.
+        retained_ids = set(remaining_ids(reconciled))
+        grouped_ids = {
+            vuln_id
+            for group in retained_package["groups"]
+            for vuln_id in group["ids"]
+        }
+        self.assertEqual(grouped_ids, retained_ids)
+        self.assertEqual(
+            [entry["status"] for entry in audit], ["RECONCILED", "AFFECTED"]
+        )
+
+    def test_group_reconciliation_rejects_malformed_or_incomplete_bindings(self) -> None:
+        """Fail closed before a malformed group document reaches the pinned reporter."""
+        retained = [vulnerability("GHSA-retained", "< 0.20.4")]
+        malformed_groups = (
+            "bad",
+            ["bad"],
+            [{"ids": "bad"}],
+            [{"ids": [1]}],
+            [{"ids": [], "aliases": "bad"}],
+            [{"ids": [], "aliases": [1]}],
+            [{"ids": [], "experimental_analysis": []}],
+            [],
+        )
+        for groups in malformed_groups:
+            with self.subTest(groups=groups), self.assertRaises(TypeError):
+                OSV.reconcile_groups_for_retained_vulnerabilities(
+                    {"groups": groups}, retained
+                )
+
     def test_registry_finding_from_another_lockfile_cannot_borrow_direct_source_provenance(
         self,
     ) -> None:
