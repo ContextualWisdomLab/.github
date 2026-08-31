@@ -221,7 +221,8 @@ def _probe_isolation_capability(backend: str) -> None:
             "--dev",
             "/dev",
             "--tmpfs",
-            "/tmp",
+            # This is the isolated namespace's tmpfs target, not a host temp path.
+            "/tmp",  # nosec B108
             "--bind",
             probe_workspace,
             SANDBOX_MOUNT,
@@ -432,7 +433,8 @@ def isolated_command(
             "--dev",
             "/dev",
             "--tmpfs",
-            "/tmp",
+            # This is the isolated namespace's tmpfs target, not a host temp path.
+            "/tmp",  # nosec B108
             "--bind",
             str(sandbox_root),
             SANDBOX_MOUNT,

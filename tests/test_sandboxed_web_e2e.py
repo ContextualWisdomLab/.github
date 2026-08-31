@@ -489,6 +489,24 @@ def test_require_unoccupied_readiness_port_probes_explicit_port_zero(monkeypatch
     assert recorded == [("127.0.0.1", 0)]
 
 
+def test_bubblewrap_tmpfs_targets_have_only_targeted_bandit_waivers():
+    """B108 waivers cover only bubblewrap's isolated tmpfs mount targets.
+
+    These strings are command arguments naming the mount point created inside
+    the new bubblewrap namespace; they are not host temporary-file paths.  A
+    targeted waiver keeps Bandit's real host-path checks enabled everywhere
+    else while preventing these two deliberate mount targets from blocking the
+    Python security gate.
+    """
+    source = Path(sandboxed_web_e2e.__file__).read_text(encoding="utf-8")
+    waiver = '"/tmp",  # nosec B108'
+    rationale = "isolated namespace's tmpfs target, not a host temp path"
+
+    assert source.count(waiver) == 2
+    assert source.count("nosec B108") == 2
+    assert source.count(rationale) == 2
+
+
 def test_main_reports_occupied_readiness_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A readiness port already occupied by another process fails closed with exit 125."""
     repo = tmp_path / "repo"
