@@ -286,7 +286,15 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert 'getattr(model, "evidence_only", False)' in text
     # OpenRouter must stay exempt from the evidence_only exclusion, or
     # zdr_policy.is_zdr_model()'s purpose-built per-route OpenRouter ZDR-feed
-    # check goes back to never seeing an OpenRouter row at all.
+    # check goes back to never seeing an OpenRouter row at all. This
+    # fragment-presence check only pins that the comparison exists
+    # somewhere in source -- Devin Review (discussion r3891875665) correctly
+    # noted it would still pass even if the exemption were reversed (e.g.
+    # ``!=`` for ``==``) or disconnected from the rows it is meant to gate.
+    # The behavioral assertions below, against the loaded module's real
+    # ``_routable_discovered_models``, close that gap by pinning the actual
+    # boolean outcome for both a row that must be exempted and one that
+    # must not.
     assert 'getattr(model, "provider_name", None) == "openrouter"' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
@@ -300,6 +308,26 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert has_text_output(SimpleNamespace(output_modalities=("text", "image")))
     assert not has_text_output(SimpleNamespace(output_modalities=("video",)))
     assert not has_text_output(SimpleNamespace())
+
+    # Pin the exemption's real boolean outcome, not just source-text
+    # presence: an OpenRouter row carrying today's blanket evidence_only=True
+    # bug signature must still be routable, while a same-shaped row from any
+    # other provider must not -- so a reversed comparison (``!=`` instead of
+    # ``==``) or a disconnected/no-op exemption (e.g. the OpenRouter branch
+    # never actually reached, or applied unconditionally regardless of
+    # provider) fails this assertion even though the source fragment above
+    # would still be present verbatim.
+    routable_discovered_models = launcher["_routable_discovered_models"]
+    openrouter_blanket_marked = SimpleNamespace(
+        provider_name="openrouter", model_id="some/model", evidence_only=True
+    )
+    non_openrouter_evidence_only = SimpleNamespace(
+        provider_name="nvidia_nim", model_id="some/model", evidence_only=True
+    )
+    assert routable_discovered_models(
+        [openrouter_blanket_marked, non_openrouter_evidence_only]
+    ) == [openrouter_blanket_marked]
+
     report_rows = launcher["_report_rows"]
     free = SimpleNamespace(
         provider_name="openrouter",
