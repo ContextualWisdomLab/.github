@@ -5,6 +5,8 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Allow a Contextual Orchestrator-backed Noema review request to run for up to
+  two hours instead of failing every long review at a hard-coded 120 seconds.
 - Give Noema one bounded schema-repair request when Contextual Orchestrator
   returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
   if the corrected response is still invalid.

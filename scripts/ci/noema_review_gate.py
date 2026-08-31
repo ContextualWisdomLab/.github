@@ -33,6 +33,7 @@ MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 MAX_LLM_RESPONSE_LOG_CHARS = 2000
+NOEMA_LLM_TIMEOUT_SECONDS = 2 * 60 * 60
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -672,7 +673,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    with opener.open(request, timeout=NOEMA_LLM_TIMEOUT_SECONDS) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

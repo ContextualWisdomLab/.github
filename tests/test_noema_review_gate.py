@@ -314,6 +314,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     def fake_urlopen(request, timeout):
         seen["url"] = request.full_url
+        seen["timeout"] = timeout
         seen["body"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse(
             {
@@ -347,6 +348,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     verdict = noema.call_llm("owner/repo", 1, pr, "diff", True, "extra review context")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "https://llm.example.test/chat"
+    assert seen["timeout"] == 7200
     assert seen["body"]["model"] == "review-model"
     assert "extra review context" in seen["body"]["messages"][1]["content"]
 
@@ -780,7 +782,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
 
     class Opener:
         def open(self, request, timeout):
-            assert timeout == 120
+            assert timeout == noema.NOEMA_LLM_TIMEOUT_SECONDS
             payloads.append(json.loads(request.data))
             return Response(invalid if len(payloads) == 1 else valid)
 

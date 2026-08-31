@@ -1757,6 +1757,14 @@ and `test_call_llm_repairs_one_malformed_json_response` exercise the bounded rep
 paths. A clean `RuntimeError` propagates only after the corrected response is still invalid. 100% coverage
 and 100% docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507.
 
+The same gate also imposed a hard-coded 120-second HTTP read timeout. A real
+Four Pillars review reached that boundary after Contextual Orchestrator had
+successfully provisioned and selected a route, then failed with an unhandled
+`TimeoutError` before a verdict arrived. Noema review requests now allow the
+documented two-hour review window; GitHub's job boundary remains the outer
+execution limit. The transport timeout is pinned by the existing call contract
+test so a shorter accidental value cannot silently restore the failure.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
