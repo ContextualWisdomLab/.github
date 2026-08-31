@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-import dataclasses
 import json
 import os
 import re
@@ -1500,28 +1499,29 @@ def main(argv: list[str] | None = None) -> int:
     client = _build_model_client(
         ModelClient, timeout=REVIEW_SERVING_TIMEOUT_SECONDS
     )
-    # tool_retry_attempts=0: TaskOrchestrator's default (1) makes route_once's
-    # _invoke retry the SAME agent once more on a transient failure before
-    # failing over to the next candidate -- doubling worst-case per-agent
-    # wall-clock (2 x REVIEW_SERVING_TIMEOUT_SECONDS) on top of the
-    # cross-candidate failover this sidecar already relies on for
-    # reliability. Disabled here so each candidate gets exactly one bounded
-    # attempt; failover to the next preflight-verified-ready candidate still
-    # happens (see contextual-orchestrator#946's noema-review TimeoutError
-    # investigation and contextual-orchestrator#974's worst-case enumeration).
-    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=0)
-    # realtime_judge (on by default via TaskOrchestrator's internal
-    # OrchestrationPolicy) makes route_once() issue a SECOND, independent,
-    # fully-bounded provider call per candidate to judge the first call's
-    # answer before accepting it -- doubling worst-case wall-clock again on
-    # top of the retry elimination above. That judge feeds a quality ledger
-    # meant to steer *future* routing decisions inside a long-lived process;
-    # this sidecar is a fresh, ephemeral process serving exactly one review
-    # request per CI run, so that learning has no opportunity to matter here.
-    # TaskOrchestrator's constructor has no policy override parameter and
-    # OrchestrationPolicy is a frozen dataclass, so replace the instance
-    # attribute directly (TaskOrchestrator itself is a plain, unfrozen class).
-    orchestrator.policy = dataclasses.replace(orchestrator.policy, realtime_judge=False)
+    # CORRECTED (ContextualWisdomLab/.github#1415, Devin Review "Serving
+    # answers bypass quality validation"): an earlier version of this fix
+    # disabled TaskOrchestrator's tool_retry_attempts (to 0) and
+    # policy.realtime_judge (to False) to shave worst-case wall-clock. Both
+    # were wrong to touch. realtime_judge is not just a future-routing
+    # quality-ledger signal -- route_once() uses it to gate acceptance of the
+    # *current* answer and to fail over to the next measured candidate on
+    # rejection (see route_once/_realtime_route_judge in
+    # contextual_orchestrator/orchestrator.py); disabling it let a
+    # judge-rejected, low-quality answer reach Noema instead of another ready
+    # route. Separately, tool_retry_attempts=0 was doubly wrong: besides
+    # removing _invoke's legitimate same-agent retry-on-transient-failure, it
+    # also drives route_once's own OWN outer cross-candidate loop bound
+    # (`max_attempts = 1 + min(tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)`
+    # in route_once) down to 1 -- so even with realtime_judge alone reverted,
+    # a judge rejection would still have nowhere to fail over to. Both
+    # defaults are restored here unmodified (tool_retry_attempts=1,
+    # realtime_judge=True, both TaskOrchestrator's own tested constructor/
+    # OrchestrationPolicy defaults) so serving keeps its full, intended
+    # per-request quality gate and failover; see CALL_LLM_TIMEOUT_SECONDS in
+    # noema_review_gate.py for the resulting (larger, honestly re-derived)
+    # client-side read-timeout this requires.
+    orchestrator = TaskOrchestrator(agents, client=client)
     serve(
         orchestrator,
         host=args.host,

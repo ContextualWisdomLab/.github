@@ -43,6 +43,13 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-latest
+    # Explicit, not GitHub's implicit default: self-documents the ceiling
+    # scripts/ci/noema_review_gate.py's CALL_LLM_TIMEOUT_SECONDS derivation
+    # cites (GitHub-hosted runners hard-cap a single job at 360 minutes
+    # regardless of this value). Unchanged from the platform default -- this
+    # does not alter behavior, only makes the ceiling discoverable next to
+    # the step whose worst-case timeout is now sized close to it.
+    timeout-minutes: 360
     if: >-
       github.event_name == 'repository_dispatch'
       || (

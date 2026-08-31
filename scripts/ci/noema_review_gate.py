@@ -32,23 +32,54 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
-# Enumerated, not guessed: the review sidecar's serving ModelClient bounds a
-# single provider attempt to REVIEW_SERVING_TIMEOUT_SECONDS=120s (see
-# scripts/ci/contextual_orchestrator_review_launcher.py), with retries and
-# the real-time judge's own second provider call both disabled specifically
-# so the *combined* per-candidate wall-clock never exceeds that 120s. The
-# sidecar's serving candidate pool is exactly the set of routes preflight
-# verified ready, bounded by REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 (the same
-# file) -- so the true worst case, every verified-ready candidate rejecting
-# the full-size real payload after preflight accepted it on a tiny probe, is
-# 24 x 120s = 2880s. This client-side read timeout must stay comfortably
-# above that combined worst case (plus routing/JSON/GC overhead margin) so a
-# legitimate multi-candidate failover is never mistaken for a hang -- see
-# contextual-orchestrator#946's four consecutive TimeoutError failures and
-# contextual-orchestrator#974's worst-case enumeration, which first
-# identified this exact mismatch (there against the previous, un-tuned
-# defaults; here against this file's own now-matching serving timeout).
-CALL_LLM_TIMEOUT_SECONDS = 3000
+# Enumerated, not guessed, against the sidecar's *unmodified* TaskOrchestrator
+# defaults (ContextualWisdomLab/.github#1415, Devin Review "Serving answers
+# bypass quality validation" -- an earlier version of this constant was sized
+# against a serving config that had disabled tool_retry_attempts and
+# policy.realtime_judge to shave latency, which also silently broke
+# route_once's per-request quality gate and judge-rejection failover; see
+# scripts/ci/contextual_orchestrator_review_launcher.py's orchestrator
+# construction comment for that correction). With full defaults restored:
+#   - One _invoke() call (worker OR judge) tries up to
+#     REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 candidates (contextual_orchestrator
+#     _invoke's own _failover_candidates has no smaller bound of its own), each
+#     up to 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4) = 2
+#     attempts, each bounded by REVIEW_SERVING_TIMEOUT_SECONDS=120s (same
+#     file): 24 x 2 x 120 = 5760s worst case.
+#   - route_once() issues that worker _invoke() call, then (realtime_judge
+#     defaulting True) an independent judge _invoke() call of the same shape
+#     via _model_judge_verification/_FastMLSIJudgeAdapter.complete(): another
+#     5760s worst case. One outer route_once attempt: 5760 + 5760 = 11520s.
+#   - route_once's own outer cross-candidate loop retries a fresh top-level
+#     candidate on judge rejection, up to
+#     max_attempts = 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4)
+#     = 2 total candidates: 2 x 11520 = 23040s worst case for one full
+#     route_once() call (one /v1/chat/completions request this function
+#     sends).
+# This client-side read timeout is sized to that 23040s per-call worst case
+# so a legitimate multi-candidate, judge-gated failover is never mistaken for
+# a hang -- see contextual-orchestrator#946's four consecutive TimeoutError
+# failures and contextual-orchestrator#974's worst-case enumeration, which
+# first identified this class of mismatch (there against the previous,
+# un-tuned 120s default).
+#
+# call_llm() itself can still issue a second such call (the one-shot verdict
+# repair retry below, guarded by `repair_error` against further recursion),
+# so the absolute theoretical ceiling for this function is double this
+# constant. That compound case is not specially bounded here: it would
+# require BOTH the original call AND the repair call to independently hit
+# their own full 24-candidate, dual-role worst case, and the repair call only
+# fires after a FAST successful-but-rejected response, not after a timeout.
+# On this repo's noema-review.yml runner (ubuntu-latest), GitHub Actions'
+# own hosted-runner job ceiling (360 minutes; see that job's explicit
+# `timeout-minutes: 360`) is smaller than even one 23040s (384-minute) worst
+# case and is the real backstop in that vanishingly rare compound scenario --
+# this constant is still sized to the honest per-call worst case rather than
+# artificially shrunk to fit under that ceiling, because shrinking it would
+# reintroduce #946's actual bug (truncating a legitimate single-call
+# response) on the common path to guard against an already-separately-bounded
+# extreme case.
+CALL_LLM_TIMEOUT_SECONDS = 23040
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
