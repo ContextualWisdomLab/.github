@@ -78,3 +78,7 @@ identity or substantive LLM summary cannot be verified.
 Runtime acceptance requires a GitHub review whose commit and embedded head SHA
 both match the live PR head. A successful Actions job without that review body
 is not Noema review evidence.
+
+For GitHub App credentials, reviewer identity is bound to the pinned token
+mint action's app slug and numeric installation ID. PAT and OIDC credentials
+continue to resolve their actor through GitHub's authenticated API.
