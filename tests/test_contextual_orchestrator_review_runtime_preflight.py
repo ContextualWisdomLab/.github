@@ -1393,45 +1393,45 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
 
 
-def test_served_family_diversity_counts_distinct_outage_domain_families() -> None:
-    """Aliases in one outage domain count once; independent providers count."""
+def test_served_account_diversity_counts_independent_credentials() -> None:
+    """Each independently credentialed account counts once."""
     namespace = _load_launcher()
-    served_family_diversity = namespace.get("_served_family_diversity")
-    assert callable(served_family_diversity)
+    served_account_diversity = namespace.get("_served_account_diversity")
+    assert callable(served_account_diversity)
 
-    assert served_family_diversity(
+    assert served_account_diversity(
         [
             SimpleNamespace(id="a", provider_name="nvidia_nim"),
             SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
         ]
-    ) == 1
-    assert served_family_diversity(
+    ) == 2
+    assert served_account_diversity(
         [
             SimpleNamespace(id="a", provider_name="nvidia_nim"),
-            SimpleNamespace(id="b", provider_name="openrouter"),
+            SimpleNamespace(id="b", provider_name="nvidia_nim"),
         ]
-    ) == 2
-    assert served_family_diversity([]) == 0
+    ) == 1
+    assert served_account_diversity([]) == 0
 
 
 def test_require_minimum_serving_diversity_fails_closed_below_threshold() -> None:
-    """A single-family or empty post-preflight pool cannot serve."""
+    """A single-account or empty post-preflight pool cannot serve."""
     namespace = _load_launcher()
     require_minimum = namespace.get("_require_minimum_serving_diversity")
     assert callable(require_minimum)
 
-    single_family_agents = [
+    single_account_agents = [
         SimpleNamespace(id="a", provider_name="nvidia_nim"),
-        SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
+        SimpleNamespace(id="b", provider_name="nvidia_nim"),
     ]
     with pytest.raises(SystemExit, match="single-point-of-failure"):
-        require_minimum(single_family_agents)
+        require_minimum(single_account_agents)
     with pytest.raises(SystemExit, match="single-point-of-failure"):
         require_minimum([])
 
 
 def test_require_minimum_serving_diversity_passes_at_or_above_threshold() -> None:
-    """Two independent provider families preserve request-time failover."""
+    """Two independently credentialed accounts preserve request-time failover."""
     namespace = _load_launcher()
     require_minimum = namespace.get("_require_minimum_serving_diversity")
     assert callable(require_minimum)
@@ -1439,7 +1439,7 @@ def test_require_minimum_serving_diversity_passes_at_or_above_threshold() -> Non
     require_minimum(
         [
             SimpleNamespace(id="a", provider_name="nvidia_nim"),
-            SimpleNamespace(id="b", provider_name="openrouter"),
+            SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
         ]
     )
 
@@ -1550,13 +1550,13 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
         {"cost_evidence": "unknown", "provider": "bytez"},
     ]
     enriched = namespace["_with_discovery_counts"](
-        base, rows, provider_family=policy.provider_family
+        base, rows, provider_account=policy.provider_account
     )
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
-    assert enriched["free_family_diversity"] == 1
+    assert enriched["free_account_diversity"] == 1
 
 
 def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
@@ -1564,13 +1564,13 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
 
     Regression for a real bug: the ``auto``-pool primary stage only sees
     ZDR-admitted free rows, and the priced-fallback stage sees no free rows
-    at all, so either stage's internally computed ``free_family_diversity``
+    at all, so either stage's internally computed ``free_account_diversity``
     (whatever ``build_zdr_prioritized_catalog`` returned from its own
     narrower input) would undercount or read zero even when the full
-    discovery has multi-family free-route diversity.
+    discovery has multiple credential accounts with free routes.
     """
     namespace = _load_launcher()
-    stage_report_from_priced_only_rows = {"free_family_diversity": 0}
+    stage_report_from_priced_only_rows = {"free_account_diversity": 0}
     full_discovery_rows = [
         {"cost_evidence": "free", "provider": "nvidia_nim"},
         {"cost_evidence": "free", "provider": "openrouter"},
@@ -1579,9 +1579,9 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
     enriched = namespace["_with_discovery_counts"](
         stage_report_from_priced_only_rows,
         full_discovery_rows,
-        provider_family=policy.provider_family,
+        provider_account=policy.provider_account,
     )
-    assert enriched["free_family_diversity"] == 2
+    assert enriched["free_account_diversity"] == 2
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:

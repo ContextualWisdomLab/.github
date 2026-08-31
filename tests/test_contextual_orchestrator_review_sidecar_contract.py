@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "30c6d71680e659f25a0a433d4726ad0d437f9757"
+ORCH_PIN_SHA = "c107e3e52371993aa9c326fcc245e01c41fc3850"
 
 
 def _read(path: Path) -> str:
@@ -571,7 +571,7 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
-    assert "free_family_diversity" in workflow
+    assert "free_account_diversity" in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(

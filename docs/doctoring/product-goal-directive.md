@@ -92,8 +92,8 @@ never found in the first place.
 
 The corrected decision is not a further reinterpretation of section 8, nor a
 reversion to the old static split: `strix.yml` now reads
-`free_family_diversity` (added by PR #1433, merged into #1437's branch to
-give the evidence code one owner) from the sidecar's own discovery run and
+`free_account_diversity` (emitted by the protected-main policy producer)
+from the sidecar's own discovery run and
 selects `orchestrator/free` only when it is `>= 2`, falling back to
 `orchestrator/auto` — the pool this section's earlier note already
 authorized — in every other case. See

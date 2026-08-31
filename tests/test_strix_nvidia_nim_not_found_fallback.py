@@ -2,7 +2,7 @@
 
 The central Strix workflow (`strix.yml`) talks exclusively to the local
 contextual-orchestrator gateway sidecar — via `orchestrator/free` when
-`free_family_diversity >= 2`, otherwise `orchestrator/auto` (see
+`free_account_diversity >= 2`, otherwise `orchestrator/auto` (see
 docs/adr/0020-strix-orchestrator-free-pool.md) — and has no direct-provider
 model or fallback of its own (`STRIX_FALLBACK_MODELS: ""`,
 enforced by `test_workflow_routes_all_scans_through_contextual_orchestrator`

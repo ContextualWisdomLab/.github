@@ -10,13 +10,13 @@
   provider-family-diverse catalog, the sidecar contract) is unchanged and
   remains binding. `orchestrator/auto` is **not retired**: it is the
   permanent, load-bearing fallback this ADR's conditional falls back to.
-- Depends on: [`ContextualWisdomLab/.github#1433`](https://github.com/ContextualWisdomLab/.github/pull/1433),
-  which added the `free_family_diversity` evidence this ADR's gate reads.
-  This ADR is the follow-up #1433's own description named as the intended
-  next step.
-- Decision: `strix.yml`'s model-resolution step reads `free_family_diversity`
-  (the count of distinct outage-domain provider families among all
-  discovered free routes, computed on every discovery run by
+- Depends on the protected-main credential-account evidence contract, which
+  emits `free_account_diversity` from every discovery run. The earlier
+  provider-family field proposed by #1433 was superseded when #1468 made
+  credential accounts the admitted reliability boundary.
+- Decision: `strix.yml`'s model-resolution step reads `free_account_diversity`
+  (the count of independently credentialed accounts among all discovered
+  free routes, computed on every discovery run by
   `scripts/ci/contextual_orchestrator_review_policy.py`) from the sidecar's
   policy report and selects `contextual-orchestrator/orchestrator/free`
   **only when that count is `>= 2`**. In every other case — including 0, 1,
@@ -69,20 +69,17 @@ would have made Strix's required security review depend on a single
 provider's uptime, with no fallback, which is a worse outcome than the rare
 priced-fallback call `orchestrator/auto` already prefers to avoid.
 
-This reconsideration also identified a canonical evidence owner already in
-flight: [`ContextualWisdomLab/.github#1433`](https://github.com/ContextualWisdomLab/.github/pull/1433),
-which added `free_family_diversity` to
-`scripts/ci/contextual_orchestrator_review_policy.py` without changing
-`strix.yml`, explicitly naming the wiring below as its intended follow-up.
-This ADR is that follow-up, built on #1433's branch (merged into this one)
-rather than a duplicate reimplementation.
+This reconsideration also identified that the gate must consume evidence emitted by
+the canonical policy producer rather than derive it independently. Protected
+main now emits `free_account_diversity`; this ADR consumes that exact field
+instead of retaining the superseded provider-family field.
 
 ## Acceptance criteria (self-imposed on reconsideration) and how each is met
 
 1. **Protected-main discovery evidence reports at least two independently
-   credentialed/provider-family free routes** before Strix may run on
+   credentialed accounts with free routes** before Strix may run on
    `orchestrator/free`. *Met by construction*: the gate reads
-   `free_family_diversity` from this run's own sidecar discovery — never a
+   `free_account_diversity` from this run's own sidecar discovery — never a
    cached or assumed value — and requires `>= 2` before selecting the free
    pool. See "Residual risk" below for what this evidence can and cannot
    promise about future runs.
@@ -132,7 +129,7 @@ this entire gate. Booting `auto` keeps a genuine, price-attested fallback
 tier loaded and ready regardless of which model name Strix ends up
 requesting; `_require_pool_model` in the vendored `contextual_orchestrator.server`
 serves `orchestrator/free` as the free-tagged subset of that same loaded
-catalog when requested, and `free_family_diversity` is computed identically
+catalog when requested, and `free_account_diversity` is computed identically
 either way (see `build_zdr_prioritized_catalog`'s docstring).
 
 ## Decision detail
@@ -145,10 +142,10 @@ either way (see `build_zdr_prioritized_catalog`'s docstring).
 - A new "Resolve Strix model from free-route diversity evidence" step runs
   after the sidecar is provisioned (so `CONTEXTUAL_ORCHESTRATOR_EVIDENCE`,
   the sidecar's policy-report path, is available) and before the model is
-  written to the Strix input file. It reads `free_family_diversity`,
+  written to the Strix input file. It reads `free_account_diversity`,
   defaults `resolved_model` to the gate's own base model, and upgrades to
   `contextual-orchestrator/orchestrator/free` only inside a
-  `free_family_diversity >= 2` conditional. Any exception reading or parsing
+  `free_account_diversity >= 2` conditional. Any exception reading or parsing
   the evidence (missing file, invalid JSON, missing/wrong-typed field)
   degrades to diversity `0` with a `::warning::` annotation — it never
   raises the job, and it never upgrades on unproven evidence.
@@ -164,8 +161,8 @@ either way (see `build_zdr_prioritized_catalog`'s docstring).
   catalog and fail closed rather than admitting a non-ZDR route, exactly as
   strict as before this change, under either resolved pool.
 - No change to `scripts/ci/contextual_orchestrator_review_policy.py`'s
-  family-cap logic beyond #1433's additive `free_family_diversity` field;
-  the cap itself was already pool-uniform (see ADR-0003's Amendment).
+  admission or cap logic; this workflow consumes its existing
+  `free_account_diversity` output (see ADR-0003's Amendment).
 
 ## Request-time failover: current status
 
@@ -175,7 +172,7 @@ have shown `orchestrator/free` preflight succeeding but the actual
 chat-completion request against the selected route returning HTTP 502,
 consistent with the gateway not failing over to the next discovered free
 route at request time when the primary one errors. `family_cap` and
-`free_family_diversity` do not address this axis at all — they describe the
+`free_account_diversity` does not address this axis at all — it describes the
 catalog the gateway builds, not what it does when a request against an
 already-admitted route fails.
 
@@ -280,11 +277,11 @@ construction, regress below the availability ADR-0003 originally protected.
 
 - ADR-0003 (refined, not superseded; see its Amendment section).
 - [`ContextualWisdomLab/.github#1433`](https://github.com/ContextualWisdomLab/.github/pull/1433)
-  (the `free_family_diversity` evidence this ADR's gate reads).
+  (the `free_account_diversity` evidence this ADR's gate reads).
 - [`ContextualWisdomLab/.github#1437`](https://github.com/ContextualWisdomLab/.github/pull/1437)
   (this ADR's own PR; its first draft was the rejected unconditional flip
   this ADR corrects).
-- `scripts/ci/contextual_orchestrator_review_policy.py` (`free_family_diversity`
+- `scripts/ci/contextual_orchestrator_review_policy.py` (`free_account_diversity`
   computation, read in full for this ADR).
 - `.github/workflows/strix.yml` ("Resolve Strix model from free-route
   diversity evidence" step).

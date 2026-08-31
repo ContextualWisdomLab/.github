@@ -155,14 +155,14 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         This is the exact regression the human review on #1437 required:
         "a negative fixture proves diversity 0/1 retains orchestrator/auto
         rather than weakening availability." Diversity 0 (no free routes at
-        all) and 1 (the 2026-08-29 single-family finding recorded in
+        all) and 1 (the single-credential-account condition recorded in
         ADR-0003) must both resolve to orchestrator/auto, never
         orchestrator/free.
         """
         for diversity in (0, 1):
-            with self.subTest(free_family_diversity=diversity):
+            with self.subTest(free_account_diversity=diversity):
                 result = self._run_resolve_model_step(
-                    evidence={"free_family_diversity": diversity}
+                    evidence={"free_account_diversity": diversity}
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
@@ -170,16 +170,16 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                     "contextual-orchestrator/orchestrator/auto",
                 )
                 self.assertEqual(
-                    result.github_output["free_family_diversity"],  # type: ignore[attr-defined]
+                    result.github_output["free_account_diversity"],  # type: ignore[attr-defined]
                     str(diversity),
                 )
 
     def test_diversity_of_two_or_more_upgrades_to_orchestrator_free(self) -> None:
-        """At least two independent families is exactly the ADR-0020 threshold."""
+        """At least two independently credentialed accounts meets the threshold."""
         for diversity in (2, 3, 5):
-            with self.subTest(free_family_diversity=diversity):
+            with self.subTest(free_account_diversity=diversity):
                 result = self._run_resolve_model_step(
-                    evidence={"free_family_diversity": diversity}
+                    evidence={"free_account_diversity": diversity}
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
@@ -187,15 +187,26 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                     "contextual-orchestrator/orchestrator/free",
                 )
 
+    def test_resolver_consumes_current_policy_account_diversity_field(self) -> None:
+        """The workflow consumes the exact field emitted by the live policy producer."""
+        result = self._run_resolve_model_step(
+            evidence={"free_account_diversity": 2}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.github_output["strix_model"],  # type: ignore[attr-defined]
+            "contextual-orchestrator/orchestrator/free",
+        )
+
     def test_missing_or_malformed_evidence_fails_closed_to_auto(self) -> None:
         """Any uncertainty about the evidence must never upgrade to the free pool."""
         cases = {
             "missing_file": {"evidence": {}, "evidence_missing": True},
             "malformed_json": {"evidence": None},
             "missing_field": {"evidence": {"other_field": 4}},
-            "non_integer": {"evidence": {"free_family_diversity": "many"}},
-            "negative_integer": {"evidence": {"free_family_diversity": -1}},
-            "boolean": {"evidence": {"free_family_diversity": True}},
+            "non_integer": {"evidence": {"free_account_diversity": "many"}},
+            "negative_integer": {"evidence": {"free_account_diversity": -1}},
+            "boolean": {"evidence": {"free_account_diversity": True}},
         }
         for case_name, kwargs in cases.items():
             with self.subTest(case=case_name):
@@ -206,7 +217,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
                     "contextual-orchestrator/orchestrator/auto",
                 )
                 self.assertEqual(
-                    result.github_output["free_family_diversity"],  # type: ignore[attr-defined]
+                    result.github_output["free_account_diversity"],  # type: ignore[attr-defined]
                     "0",
                 )
                 self.assertIn("::warning::", result.stderr)
@@ -241,7 +252,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
             "Strix sidecar must not boot free-only",
             self.smoke,
         )
-        self.assertIn("free_family_diversity", self.smoke)
+        self.assertIn("free_account_diversity", self.smoke)
         # The exact regressions this task forbade: a bare unconditional
         # free pin, and deleting the safety net without an equivalent
         # replacement.

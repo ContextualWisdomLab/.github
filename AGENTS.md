@@ -23,8 +23,8 @@ provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 as bootstrap transport in the same process that discovers models and serves;
 OpenCode and Noema use the fail-closed zero-cost pool `orchestrator/free`
 unconditionally. **Strix is evidence-gated, not unconditional:** `strix.yml`
-reads `free_family_diversity` (the count of distinct outage-domain provider
-families among all discovered free routes, reported by
+reads `free_account_diversity` (the count of independently credentialed
+accounts among all discovered free routes, reported by
 `scripts/ci/contextual_orchestrator_review_policy.py` on every discovery run)
 from the sidecar's policy report and selects `orchestrator/free` only when
 that count is `>= 2`; otherwise — including when the evidence is missing,

@@ -156,8 +156,8 @@ if start == -1:
 next_step = workflow.find("\n      - name:", start + len(step_name))
 step_text = workflow[start : next_step if next_step != -1 else len(workflow)]
 
-if "free_family_diversity" not in step_text:
-    print("Strix model-resolution step does not reference free_family_diversity evidence.", file=sys.stderr)
+if "free_account_diversity" not in step_text:
+    print("Strix model-resolution step does not reference free_account_diversity evidence.", file=sys.stderr)
     raise SystemExit(1)
 
 # The step must default to the gate's own base model (orchestrator/auto)
@@ -175,14 +175,14 @@ if default_match is None:
 # comparison, and that comparison must come after the safe default above --
 # never unconditionally, and never before the default is set.
 free_assignment_pattern = re.compile(
-    r'if \[ "\$free_family_diversity" -ge "\$diversity_threshold" \]; then\n\s*'
+    r'if \[ "\$free_account_diversity" -ge "\$diversity_threshold" \]; then\n\s*'
     r'resolved_model="contextual-orchestrator/orchestrator/free"\n\s*fi'
 )
 free_match = free_assignment_pattern.search(step_text)
 if free_match is None:
     print(
         "Strix resolution step must select orchestrator/free only inside a "
-        "free_family_diversity >= diversity_threshold conditional.",
+        "free_account_diversity >= diversity_threshold conditional.",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -267,11 +267,11 @@ assert_file_not_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_POOL: free" "
 active_strix_models="$(sed -n -E 's/^[[:space:]]*STRIX_MODEL:[[:space:]]*([^#[:space:]]+)[[:space:]]*$/\1/p' "$workflow_file")"
 [ "$active_strix_models" = "contextual-orchestrator/orchestrator/auto" ] || record_failure "Strix gate must define exactly one static base model: the fail-closed orchestrator/auto default"
 assert_file_contains "$workflow_file" "Resolve Strix model from free-route diversity evidence" "Strix workflow gates any move to the free pool behind free-route diversity evidence"
-assert_file_contains "$workflow_file" "free_family_diversity" "Strix workflow reads free_family_diversity from the sidecar's own policy report"
+assert_file_contains "$workflow_file" "free_account_diversity" "Strix workflow reads free_account_diversity from the sidecar's own policy report"
 assert_free_pool_gated_by_diversity
 assert_file_contains "$decision_record" "ADR-0020" "The binding ADR points to the evidence-gated Strix pool decision"
 assert_file_contains "$decision_record" "Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets" "The binding ADR preserves private-target privacy"
-assert_file_contains "$agent_policy" "free_family_diversity" "Repository guidance describes the evidence-gated Strix route, not a bare pool literal"
+assert_file_contains "$agent_policy" "free_account_diversity" "Repository guidance describes the evidence-gated Strix route, not a bare pool literal"
 assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
 assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
 assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"

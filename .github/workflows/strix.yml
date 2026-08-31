@@ -585,7 +585,7 @@ jobs:
           # so a later request for "orchestrator/auto" would silently resolve
           # to the exact same single-family free catalog under a different
           # name -- a fake fallback that defeats the diversity gate below.
-          # free_family_diversity (read from this run's own policy report) is
+          # free_account_diversity (read from this run's own policy report) is
           # computed identically either way; see
           # docs/adr/0020-strix-orchestrator-free-pool.md.
           CONTEXTUAL_ORCHESTRATOR_POOL: auto
@@ -615,10 +615,10 @@ jobs:
           set -euo pipefail
           # docs/adr/0020-strix-orchestrator-free-pool.md: Strix may only select
           # the fail-closed orchestrator/free pool when this run's own sidecar
-          # discovery reports at least two independent outage-domain provider
-          # families among the discovered free routes (CONTEXTUAL_ORCHESTRATOR_EVIDENCE,
+          # discovery reports at least two independently credentialed accounts
+          # among the discovered free routes (CONTEXTUAL_ORCHESTRATOR_EVIDENCE,
           # written by scripts/ci/contextual_orchestrator_review_sidecar.sh).
-          # A single family means one provider's outage would black out
+          # A single credential account means one account outage would black out
           # required Strix security review -- exactly the 2026-08-29 finding
           # ADR-0003's original orchestrator/auto pin existed to prevent. ANY
           # uncertainty about that evidence (missing file, unreadable JSON, a
@@ -626,7 +626,7 @@ jobs:
           # model (orchestrator/auto) -- this step must never upgrade to
           # orchestrator/free on unproven evidence.
           diversity_threshold=2
-          free_family_diversity="$(
+          free_account_diversity="$(
             python3 - "${CONTEXTUAL_ORCHESTRATOR_EVIDENCE:-}" <<'PY'
           import json
           import sys
@@ -637,12 +637,12 @@ jobs:
                   raise ValueError("CONTEXTUAL_ORCHESTRATOR_EVIDENCE is unset")
               with open(path, encoding="utf-8") as handle:
                   report = json.load(handle)
-              diversity = report["free_family_diversity"]
+              diversity = report["free_account_diversity"]
               if isinstance(diversity, bool) or not isinstance(diversity, int) or diversity < 0:
-                  raise TypeError("free_family_diversity must be a non-negative integer")
+                  raise TypeError("free_account_diversity must be a non-negative integer")
           except Exception as exc:  # noqa: BLE001 - fail closed on any evidence problem
               print(
-                  f"::warning::Could not read a valid free_family_diversity from the "
+                  f"::warning::Could not read a valid free_account_diversity from the "
                   f"contextual-orchestrator policy report ({exc}); "
                   "falling back to orchestrator/auto.",
                   file=sys.stderr,
@@ -652,10 +652,10 @@ jobs:
           PY
           )"
           resolved_model="$GATE_STRIX_MODEL"
-          if [ "$free_family_diversity" -ge "$diversity_threshold" ]; then
+          if [ "$free_account_diversity" -ge "$diversity_threshold" ]; then
             resolved_model="contextual-orchestrator/orchestrator/free"
           fi
-          echo "free_family_diversity=$free_family_diversity" >> "$GITHUB_OUTPUT"
+          echo "free_account_diversity=$free_account_diversity" >> "$GITHUB_OUTPUT"
           echo "strix_model=$resolved_model" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -788,7 +788,7 @@ jobs:
         env:
           # The diversity-gated resolution, not the gate's static base model:
           # steps.resolve_model upgrades to orchestrator/free only when
-          # free_family_diversity >= 2 (see the "Resolve Strix model from
+          # free_account_diversity >= 2 (see the "Resolve Strix model from
           # free-route diversity evidence" step above and
           # docs/adr/0020-strix-orchestrator-free-pool.md), otherwise it
           # passes the gate's own orchestrator/auto straight through.

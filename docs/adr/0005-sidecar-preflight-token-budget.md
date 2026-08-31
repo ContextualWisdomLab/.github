@@ -69,7 +69,7 @@ exists:
 > "모델마다 max_tokens 허용치가 다 다른데" — each model has a genuinely different max_tokens allowance.
 
 `orchestrator/free` is a heterogeneous pool (`nvidia_nim`, `openai`, `opencode_zen`, `bytez`,
-`openrouter`, ... — see `contextual_orchestrator_review_policy.py`'s `PROVIDER_FAMILIES`), and which
+`openrouter`, ... — see `contextual_orchestrator_review_policy.py`'s credential table), and which
 candidate a given preflight run draws varies. A fixed `max_tokens` is wrong on two independent,
 evidenced axes for a pool like this:
 
