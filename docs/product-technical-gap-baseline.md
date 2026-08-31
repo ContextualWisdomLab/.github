@@ -2282,7 +2282,9 @@ PR: ContextualWisdomLab/.github#1507 (Devin review on #1507; same PR, addressed 
 The same exact-head review also identified that scanning every opening brace could recover a valid
 nested object after its malformed outer object failed to decode. Recovery now considers only top-level
 brace groups, preserving lightly wrapped and multiple-object responses while failing closed on nested
-escape. A regression test reproduces the former nested-object acceptance directly.
+escape. A regression test reproduces the former nested-object acceptance directly. An explicit,
+string-aware `MAX_JSON_NESTING_DEPTH = 100` check also runs before `raw_decode`, so the limit does not
+depend on Python-version-specific `RecursionError` behavior.
 
 The two chained required-workflow pollers were then replaced after live organization evidence showed
 53 concurrent Actions runs and a growing runner queue. The required workflow still dispatches the same
