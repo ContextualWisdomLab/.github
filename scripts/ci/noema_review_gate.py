@@ -190,6 +190,9 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
 
 def current_actor() -> str:
     """Return the verified user or GitHub App bot login for the active token."""
+    action_actor = os.environ.get("NOEMA_REVIEW_ACTOR", "").strip()
+    if action_actor:
+        return action_actor
     for args, suffix in (
         (["gh", "api", "user", "--jq", ".login"], ""),
         (["gh", "api", "/installation", "--jq", ".app_slug"], "[bot]"),

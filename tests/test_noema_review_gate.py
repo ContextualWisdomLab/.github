@@ -114,6 +114,11 @@ def test_existing_noema_review_matches_actor_and_head():
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
+    monkeypatch.setenv("NOEMA_REVIEW_ACTOR", "cwl-noema-review[bot]")
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("API not needed")))
+    assert noema.current_actor() == "cwl-noema-review[bot]"
+
+    monkeypatch.delenv("NOEMA_REVIEW_ACTOR")
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "noema\n")
     assert noema.current_actor() == "noema"
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gh")))
