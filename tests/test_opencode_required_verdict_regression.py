@@ -139,9 +139,10 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     assert "head_sha=${PR_HEAD_SHA}" not in dispatched
     assert 'select(.event == "pull_request_target")' in dispatched
     assert 'select(.workflow_url | contains("/actions/required_workflows/"))' in dispatched
-    assert "datetime.now(timezone.utc) - timedelta(hours=14)" in dispatched
-    assert '-f "created=>=${lookup_since}"' in dispatched
-    assert 'actions/runs?event=pull_request_target' not in dispatched
+    assert "github.event.client_payload.required_run_id != ''" in dispatched
+    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in dispatched
+    wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
+    assert "--paginate" not in wake_step
 
 
 def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
@@ -152,15 +153,13 @@ def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path)
     script = textwrap.dedent(run_block)
     calls = tmp_path / "calls"
     fake_gh = tmp_path / "gh"
+    run = {"id": 42, "event": "pull_request_target", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}
     fake_gh.write_text(
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"$FAKE_CALLS"
-if [[ "$*" == *"actions/runs"* && "$*" == *"created=>="* ]]; then
-  printf '%s\\n' '{json.dumps({"workflow_runs": [{"id": 42, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}, {"id": 43, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/workflows/10", "status": "completed", "conclusion": "failure"}, {"id": 44, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#8@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}, {"id": 45, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@other-head", "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}]})}'
-  exit 0
-fi
 if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
+if [[ "$*" == *"actions/runs/42"* ]]; then printf '%s\\n' '{json.dumps(run)}'; exit 0; fi
 exit 1
 """,
         encoding="utf-8",
@@ -175,6 +174,7 @@ exit 1
             "GH_REPOSITORY": "ContextualWisdomLab/example",
             "PR_HEAD_SHA": HEAD,
             "PR_NUMBER": "7",
+            "REQUIRED_RUN_ID": "42",
         },
         capture_output=True,
         text=True,
@@ -183,5 +183,4 @@ exit 1
     assert result.returncode == 0, result.stderr
     recorded = calls.read_text(encoding="utf-8")
     assert "actions/runs/42/rerun-failed-jobs" in recorded
-    assert "--method GET --paginate repos/ContextualWisdomLab/example/actions/runs" in recorded
-    assert "created=>=" in recorded
+    assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded

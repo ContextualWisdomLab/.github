@@ -7579,36 +7579,27 @@ jobs:
           && steps.formal_review_receipt.outcome == 'success'
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
+          && github.event.client_payload.required_run_id != ''
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
         run: |
           set -euo pipefail
-          # The declared end-to-end review budget is 625 minutes. Search a
-          # bounded 14-hour server-side window so setup/cleanup margin is
-          # covered without walking a repository's complete run history on
-          # each retry.
-          lookup_since="$(python3 - <<'PY'
-          from datetime import datetime, timedelta, timezone
-
-          print((datetime.now(timezone.utc) - timedelta(hours=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))
-          PY
-          )"
+          [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Required OpenCode run id is missing or non-canonical."
+            exit 1
+          }
           for attempt in $(seq 1 12); do
-            runs="$(gh api --method GET --paginate "repos/${GH_REPOSITORY}/actions/runs" \
-              -f event=pull_request_target -f "created=>=${lookup_since}" -f per_page=100)"
-            required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
-              [
-                .[].workflow_runs[]
-                | select(.event == "pull_request_target")
-                | select(.path == ".github/workflows/opencode-review.yml")
-                | select(.workflow_url | contains("/actions/required_workflows/"))
-                | select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))
-              ]
-              | sort_by(.id)
-              | last
+            run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id)
+              | select(.event == "pull_request_target")
+              | select(.path == ".github/workflows/opencode-review.yml")
+              | select(.workflow_url | contains("/actions/required_workflows/"))
+              | select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))
               | [(.id // ""), (.status // ""), (.conclusion // "")]
               | @tsv
             ')"
