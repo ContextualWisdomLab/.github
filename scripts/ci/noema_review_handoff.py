@@ -33,7 +33,23 @@ MAX_TRANSIENT_BACKOFF_MULTIPLIER = 4
 NOEMA_REVIEW_AUTHOR = "cwl-noema-review[bot]"
 NOEMA_REVIEW_MARKER = "<!-- noema-review-gate "
 NOEMA_MARKER_HEAD_RE = re.compile(r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->")
-NOEMA_BODY_HEAD_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
+# Anchored to the start of its own line (re.MULTILINE) and required to consume
+# the whole line, matching only the literal footer bullet submit_review()
+# writes ("- Head SHA: `<sha>`", one full line, nothing else). An unanchored
+# "Head SHA:`...`" search previously matched anywhere in the body, including
+# inside the LLM-generated summary/findings text that precedes the footer —
+# e.g. a review of noema_review_gate.py/noema_review_handoff.py themselves
+# discussing this exact mechanism could echo that phrase in prose, producing
+# a second match and causing noema_review_state() to wrongly reject a valid,
+# correctly-authored verdict (see the Devin finding surfaced via PR #1415).
+# findall() is also run only over the text before the trusted HTML marker
+# (see the rsplit below) so prose appearing after the marker can't count
+# either. This keeps the dual head-SHA binding #1480/#1483 added (the
+# HTML-comment marker AND this human-readable bullet must independently
+# agree with the live head, defending against a stale SHA landing in one
+# place but not the other) while no longer being fooled by incidental LLM
+# text that merely resembles the footer's shape.
+NOEMA_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 TERMINAL_NOEMA_STATES = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
 
 
@@ -107,7 +123,12 @@ def noema_review_state(reviews: list[dict[str, Any]], head_sha: str) -> str | No
             continue
         body = str(review.get("body") or "")
         marker_heads = NOEMA_MARKER_HEAD_RE.findall(body)
-        body_heads = NOEMA_BODY_HEAD_RE.findall(body)
+        # Only the text before the trusted HTML marker can hold the canonical
+        # footer submit_review() writes; rsplit on its last occurrence so an
+        # incidental copy of the bare marker prefix earlier in LLM-generated
+        # prose can't truncate the real footer out of scope.
+        footer_text = body.rsplit(NOEMA_REVIEW_MARKER, 1)[0]
+        body_heads = NOEMA_BODY_HEAD_RE.findall(footer_text)
         if len(marker_heads) != 1 or len(body_heads) != 1:
             continue
         if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():

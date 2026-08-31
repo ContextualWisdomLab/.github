@@ -142,6 +142,57 @@ def test_noema_state_rejects_missing_stale_or_duplicate_head_bindings(body):
     assert handoff.noema_review_state([value], HEAD) is None
 
 
+@pytest.mark.parametrize(
+    "prose",
+    [
+        # A prose sentence (LLM summary) echoing the exact footer phrasing —
+        # plausible when Noema reviews a PR touching this very mechanism
+        # (noema_review_gate.py / noema_review_handoff.py) or a commit
+        # message discussing a git SHA in this shape.
+        f"This PR's handoff logic previously mismatched when a stale Head SHA: `{OTHER_HEAD}` lingered in prose.",
+        # The identical SHA repeated in prose, not just a different one —
+        # the bug is about counting matches, not about which value they hold.
+        f"Note: the canonical footer below repeats Head SHA: `{HEAD}` for readability.",
+    ],
+)
+def test_noema_state_accepts_valid_review_despite_incidental_body_text(prose):
+    """A genuine verdict must survive LLM prose that merely resembles the footer.
+
+    Regression test for the false-positive rejection Devin's automated review
+    flagged on PR #1415 (root cause pre-existing on `main` since #1480/#1483):
+    the old unanchored ``NOEMA_BODY_HEAD_RE`` searched the *entire* review
+    body, so an LLM-generated summary or finding that happened to contain the
+    literal shape ``Head SHA: `<40 hex chars>``` — anywhere, not just in the
+    fixed-format footer ``submit_review()`` writes — produced a second match,
+    tripped the ``len(body_heads) != 1`` duplicate guard, and made
+    ``noema_review_state()`` wrongly return ``None`` for an otherwise valid,
+    correctly-authored Noema verdict. The negative-control tests immediately
+    above this one prove the fix did not weaken the dual-binding property
+    #1480/#1483 added (missing / stale / genuinely duplicated bindings must
+    still reject); this test proves incidental prose no longer does.
+    """
+    body = "\n".join(
+        [
+            "## Noema LLM review",
+            "",
+            prose,
+            "",
+            "### Findings",
+            "- No blocking findings.",
+            "",
+            "- Result: APPROVE",
+            f"- Head SHA: `{HEAD}`",
+            "- Reviewer credential: `NOEMA_REVIEW_TOKEN`",
+            "- Actor: `noema-bot`",
+            "",
+            f"<!-- noema-review-gate head_sha={HEAD} decision=approve -->",
+        ]
+    )
+    value = noema_review()
+    value["body"] = body
+    assert handoff.noema_review_state([value], HEAD) == "APPROVED"
+
+
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
     fake = FakeGitHub([[opencode_review()]], heads=[OTHER_HEAD])
 
