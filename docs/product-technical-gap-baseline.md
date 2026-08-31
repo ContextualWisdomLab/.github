@@ -1715,6 +1715,41 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 opencode.jsonc nvidia-nim block: follow-up to the 2026-08-30 ZDR/NIM-routing review
+
+**Supersedes, for this one item only, the 2026-08-30 "ZDR/NIM-routing architecture review" entry's call
+to leave `opencode.jsonc`'s dormant `nvidia-nim` provider block in place** (that entry's other findings —
+`select_nvidia_nim_model.py` already removed by `#1442`, `run_opencode_review_model_pool.sh`'s dead
+NIM-candidate branches, Strix's `orchestrator/free`-only narrowing — are unaffected and not revisited
+here). Per this repo's "append a dated note, don't rewrite history" convention, that entry is left
+unedited; this is the follow-up.
+
+Two independent investigation passes re-examined the same block this pass and found the 2026-08-30
+entry's stated justification ("may still serve local/interactive OpenCode use outside CI") does not
+survive a check of `enabled_providers`: `opencode.jsonc:9` lists only `["contextual-orchestrator"]`, so
+the block confers zero benefit even for a developer running `opencode` locally from repo root — they
+would need to hand-edit `enabled_providers` regardless of whether the block exists, at which point a
+gitignored local override serves the same purpose without stale in-repo scaffolding and an
+undocumented-outside-a-stale-hotfix-doc `{env:NVIDIA_API_KEY}` credential alias. More importantly, two
+assertions in `scripts/ci/test_strix_quick_gate.sh` (`opencode config enables nvidia-nim provider` /
+`opencode config points nvidia-nim at NIM API`) were pinning the block's *presence* as if it were still
+required — accurate when authored for the pre-`#1364` design, stale and misleading since. Removed the
+block, fixed the two assertions to `assert_file_not_contains` (matching the sibling assertions already
+forbidding the old NVIDIA NIM model-id defaults), and deleted `docs/nvidia-nim-opencode-hotfix.md` per
+its own Rollback section. Full trace, safety argument, and the separate `strix_quick_gate.sh`
+allowlist/`zdr_policy.py` audit (both confirmed non-bypass, left untouched) are in
+`docs/doctoring/opencode-jsonc-nvidia-nim-block-removal.md`. Net effect: no runtime behavior changes
+(the block was already unreachable in every automated review path); the contract-test suite now asserts
+the actual, current state instead of a retired one.
+
+Left for a separate follow-up, not attempted this pass (matching this org's stated preference for
+splitting unrelated dead-code cleanups into their own PRs, per the `#1437` review-thread precedent):
+`scripts/ci/run_opencode_review_model_pool.sh`'s dead `nvidia-nim/*` candidate-handling branches and
+their dedicated tests, and `docs/doctoring/hourly-nvidia-nim-autofix.md`'s stale "Provider contract"
+section (still describes the scheduled autofix worker as calling `integrate.api.nvidia.com` directly
+with a hard-coded model id — the exact pre-ADR-0003 pattern `test_pr_review_autofix_nvidia_nim_contract.py`
+already forbids in the live workflow; the doctoring record itself was never updated to match).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
