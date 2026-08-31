@@ -96,6 +96,13 @@ assert_file_not_contains() {
 	fi
 }
 
+required_workflow_bootstrap_has_if() {
+	local bootstrap_file="$1"
+
+	awk '/^  required-workflow-bootstrap:$/{p=1; print; next} p && /^  [A-Za-z0-9_-]+:/{exit} p' "$bootstrap_file" |
+		grep '^[[:space:]]*if:' >/dev/null
+}
+
 seal_opencode_test_artifacts() {
 	local runner_temp="$1"
 	local head_sha="$2"
@@ -327,6 +334,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables pnpm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["YARN_ENABLE_SCRIPTS"] = "false"' "strix gate child process disables yarn lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"' "strix gate child env narrowly filters the known third-party Pydantic serializer warning"
+	# contextual-orchestrator#925 (merged) fixed the gateway's rejection of
+	# stream_options.include_usage=true alongside tools -- the actual root
+	# cause #1448's LLM_DISABLE_STREAMING opt-in routed around. That opt-in is
+	# reverted (this PR); these guard against it silently reappearing.
+	assert_file_not_contains "$GATE_SCRIPT" 'STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming"' "strix gate no longer threads a streaming opt-in through to the child process environment"
+	assert_file_not_contains "$GATE_SCRIPT" 'child_env["LLM_DISABLE_STREAMING"] = "true"' "strix gate no longer disables Strix's own SDK streaming for the contextual-orchestrator gateway"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]' "strix gate detects nested backend Python files for PR-scoped import context"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
@@ -519,9 +532,31 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
-	if awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
+	# Match against the full awk output rather than letting `grep -q` close its
+	# end of the pipe on the first match: a large bootstrap job's piped output
+	# can exceed the OS pipe buffer, and `grep -q`'s early exit can SIGPIPE the
+	# still-writing awk producer. Under `set -o pipefail` (top of this file)
+	# that SIGPIPE (128+13=141) outranks grep's own 0 exit, so the `if`
+	# incorrectly takes the "no match" branch even though the forbidden `if:`
+	# key was found. Dropping `-q` makes grep read to completion, so it never
+	# closes the pipe early and the real exit status is preserved.
+	if required_workflow_bootstrap_has_if "$bootstrap_file"; then
 		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
 	fi
+	local large_bootstrap_fixture
+	local fixture_line
+	large_bootstrap_fixture="$(mktemp)"
+	{
+		printf '%s\n' 'jobs:' '  required-workflow-bootstrap:' '    if: forbidden'
+		for ((fixture_line = 0; fixture_line < 20000; fixture_line++)); do
+			printf '%s\n' '    # padding forces the producer past the pipe buffer'
+		done
+		printf '%s\n' '  next-job:' '    runs-on: ubuntu-latest'
+	} >"$large_bootstrap_fixture"
+	if ! required_workflow_bootstrap_has_if "$large_bootstrap_fixture"; then
+		record_failure "opencode required workflow bootstrap condition detection must survive a job block larger than the pipe buffer"
+	fi
+	rm -f "$large_bootstrap_fixture"
 	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
 	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
@@ -1497,8 +1532,12 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$workflow_file" "GitHub did not accept the inline review comments" "opencode review explains anchor failures instead of copying diffs to the PR body"
 	assert_file_contains "$workflow_file" "publish_request_changes_from_control" "opencode review REQUEST_CHANGES path publishes findings from the control JSON"
 
+	# Same SIGPIPE-under-pipefail shape as the required-workflow-bootstrap
+	# check above: read the piped awk range to completion instead of letting
+	# `grep -q` close the pipe on its first match, which could otherwise
+	# SIGPIPE a still-writing awk and flip this check's exit status.
 	if awk '/format_request_changes_body\(\)/,/build_request_changes_review_payload\(\)/ { print }' "$workflow_file" |
-		grep -Fq '```diff'; then
+		grep -F '```diff' >/dev/null; then
 		record_failure "opencode review PR-level REQUEST_CHANGES body must not contain fenced suggested diffs"
 	fi
 }
