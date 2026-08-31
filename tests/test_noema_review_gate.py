@@ -509,6 +509,68 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 
+@pytest.mark.parametrize(
+    ("findings", "error"),
+    [
+        (None, "list of objects"),
+        ([0], "list of objects"),
+        ([{"severity": "info", "file": "a.py", "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": 1, "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": " ", "line": 1, "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": "a.py", "line": "1", "message": "bad"}], "malformed finding"),
+        ([{"severity": "high", "file": "a.py", "line": 0, "message": "bad"}], "malformed finding"),
+        ([], "substantive finding"),
+    ],
+)
+def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    verdict = {"decision": "request_changes", "summary": "blocking issue", "findings": findings}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match=error):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+
+@pytest.mark.parametrize(
+    "findings",
+    [
+        [],
+        [
+            {"severity": "low", "file": "a.py", "line": 1, "message": "note"},
+            {"severity": "medium", "file": "b.py", "line": 2, "message": "check"},
+        ],
+    ],
+)
+def test_call_llm_accepts_substantive_approve(monkeypatch, findings):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    verdict = {"decision": "approve", "summary": "No blocking issues found.", "findings": findings}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    assert noema.call_llm("owner/repo", 7, make_pr(), "diff", False) == verdict
+
+
 def test_parse_args_and_main(monkeypatch):
     parsed = noema.parse_args(["--repo", "owner/repo", "--pr-number", "9"])
     assert parsed.repo == "owner/repo"
