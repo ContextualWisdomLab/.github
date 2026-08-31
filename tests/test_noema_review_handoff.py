@@ -42,12 +42,14 @@ def opencode_review(head: str = HEAD) -> dict:
 
 
 def noema_review(state: str = "APPROVED", head: str = HEAD) -> dict:
+    """Build a minimal, correctly-formed Noema review for the given head."""
     return {
         "id": 8,
         "state": state,
         "commit_id": head,
         "user": {"login": "cwl-noema-review[bot]"},
         "body": (
+            f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n"
             f"- Head SHA: `{head}`\n"
             f"<!-- noema-review-gate head_sha={head} decision={state.lower()} -->"
         ),
@@ -129,14 +131,27 @@ def test_noema_state_ignores_forged_marker_from_other_actor():
 @pytest.mark.parametrize(
     "body",
     [
+        # No footer marker and no body-side bullet at all: nothing to bind.
         f"<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{OTHER_HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={OTHER_HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        # The trusted footer marker is present but empty: still nothing to bind.
+        f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        # Body-side bullet inside the trusted footer, but the wrong value.
+        f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n- Head SHA: `{OTHER_HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        # Marker-side value wrong instead.
+        f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={OTHER_HEAD} decision=approved -->",
+        # Genuinely duplicated body-side binding, both inside the trusted footer.
+        f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n- Head SHA: `{HEAD}`\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
+        # Genuinely duplicated marker-side binding.
+        f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
     ],
 )
 def test_noema_state_rejects_missing_stale_or_duplicate_head_bindings(body):
+    """The dual head-SHA binding #1480/#1483 added must still reject a real defect.
+
+    Every case here is a genuine problem with the binding itself (missing,
+    wrong value, or truly duplicated) rather than incidental LLM text — the
+    two acceptance tests below prove the fix does not conflate the two.
+    """
     value = noema_review()
     value["body"] = body
     assert handoff.noema_review_state([value], HEAD) is None
@@ -160,16 +175,20 @@ def test_noema_state_accepts_valid_review_despite_incidental_body_text(prose):
 
     Regression test for the false-positive rejection Devin's automated review
     flagged on PR #1415 (root cause pre-existing on `main` since #1480/#1483):
-    the old unanchored ``NOEMA_BODY_HEAD_RE`` searched the *entire* review
-    body, so an LLM-generated summary or finding that happened to contain the
-    literal shape ``Head SHA: `<40 hex chars>``` — anywhere, not just in the
-    fixed-format footer ``submit_review()`` writes — produced a second match,
-    tripped the ``len(body_heads) != 1`` duplicate guard, and made
-    ``noema_review_state()`` wrongly return ``None`` for an otherwise valid,
-    correctly-authored Noema verdict. The negative-control tests immediately
-    above this one prove the fix did not weaken the dual-binding property
-    #1480/#1483 added (missing / stale / genuinely duplicated bindings must
-    still reject); this test proves incidental prose no longer does.
+    the original unanchored ``NOEMA_BODY_HEAD_RE`` searched the *entire*
+    review body, so an LLM-generated summary or finding that happened to
+    contain the literal shape ``Head SHA: `<40 hex chars>``` — anywhere, not
+    just in the fixed-format footer ``submit_review()`` writes — produced a
+    second match, tripped the ``len(body_heads) != 1`` duplicate guard, and
+    made ``noema_review_state()`` wrongly return ``None`` for an otherwise
+    valid, correctly-authored Noema verdict. The negative-control tests
+    immediately above this one prove the fix did not weaken the dual-binding
+    property #1480/#1483 added (missing / stale / genuinely duplicated
+    bindings must still reject); this test proves incidental mid-sentence
+    prose no longer does. See
+    ``test_noema_state_ignores_standalone_body_head_bullet_before_footer``
+    below for the follow-up case (a complete standalone bullet line, not
+    just a mid-sentence phrase) Devin's review of the first fix caught.
     """
     body = "\n".join(
         [
@@ -180,6 +199,60 @@ def test_noema_state_accepts_valid_review_despite_incidental_body_text(prose):
             "### Findings",
             "- No blocking findings.",
             "",
+            handoff.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{HEAD}`",
+            "- Reviewer credential: `NOEMA_REVIEW_TOKEN`",
+            "- Actor: `noema-bot`",
+            "",
+            f"<!-- noema-review-gate head_sha={HEAD} decision=approve -->",
+        ]
+    )
+    value = noema_review()
+    value["body"] = body
+    assert handoff.noema_review_state([value], HEAD) == "APPROVED"
+
+
+@pytest.mark.parametrize(
+    "rogue_head",
+    [OTHER_HEAD, HEAD],
+    ids=["different-sha", "same-sha"],
+)
+def test_noema_state_ignores_standalone_body_head_bullet_before_footer(rogue_head):
+    """A complete standalone footer-shaped bullet in LLM text must not count.
+
+    Regression test for the follow-up gap Devin's automated review found in
+    the first fix on PR #1500: anchoring ``NOEMA_BODY_HEAD_RE`` to a whole
+    line (``re.MULTILINE``) narrowed the collision surface from "anywhere in
+    the body" down to "any full line before the trusted end marker" — but an
+    LLM's own summary/findings text is free-form and unsanitized, so it can
+    still emit a complete, correctly-formatted ``- Head SHA: `<sha>``` line
+    of its own (e.g. while quoting or discussing this exact review format,
+    the same self-referential scenario that makes the underlying bug
+    likely). That line still satisfied the whole-line regex, so counting
+    matches anywhere before the end marker still produced 2 and still
+    wrongly rejected a valid verdict.
+
+    The actual fix isolates the footer by *position* instead of by content
+    pattern: only the span between ``NOEMA_REVIEW_FOOTER_MARKER`` and the
+    closing HTML comment — both machine-emitted by ``submit_review()`` and
+    never reachable by the LLM's own text — is searched. A standalone bullet
+    placed anywhere before that span is now excluded regardless of how
+    precisely it mimics the real footer line, and regardless of whether it
+    holds a different SHA or the very same one as the real binding.
+    """
+    body = "\n".join(
+        [
+            "## Noema LLM review",
+            "",
+            "Earlier attempts at this mechanism produced review bodies like:",
+            f"- Head SHA: `{rogue_head}`",
+            "which is exactly the bullet shape this fix now ignores outside the footer.",
+            "",
+            "### Findings",
+            "- No blocking findings.",
+            "",
+            handoff.NOEMA_REVIEW_FOOTER_MARKER,
             "- Result: APPROVE",
             f"- Head SHA: `{HEAD}`",
             "- Reviewer credential: `NOEMA_REVIEW_TOKEN`",

@@ -27,6 +27,14 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent",
 }
 GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
+# Wraps the start of the fixed-format footer submit_review() writes below the
+# LLM-generated summary/findings text. This lets noema_review_handoff.py
+# locate the footer by *position* (the trusted, machine-emitted span between
+# this marker and the closing "<!-- noema-review-gate head_sha=... -->"
+# comment) instead of by scanning for a content pattern that the LLM's own
+# unsanitized output could coincidentally reproduce. Keep this literal in
+# exact sync with NOEMA_REVIEW_FOOTER_MARKER in noema_review_handoff.py.
+NOEMA_REVIEW_FOOTER_MARKER = "<!-- noema-review-gate-footer -->"
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -736,6 +744,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "### Findings",
             *(findings or ["- No blocking findings."]),
             "",
+            NOEMA_REVIEW_FOOTER_MARKER,
             f"- Result: {event}",
             f"- Head SHA: `{head_sha}`",
             f"- Reviewer credential: `{source}`",
