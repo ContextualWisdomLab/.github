@@ -25,9 +25,7 @@ import argparse
 import json
 import os
 import re
-import socket
 import sys
-import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -48,24 +46,44 @@ REVIEW_TEMPERATURE = 1.0
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
-# A transient blip (rate limit, momentary connection reset) during preflight
-# should not permanently disqualify an otherwise-healthy route: this
-# repository's own probe loop previously gave each candidate exactly one
-# attempt with no retry of its own (the vendored ModelClient it uses is
-# separately configured with max_retries=0 and proxy_send_once is a
-# single-shot transport by design -- see 2026-08-30's contextual-orchestrator
-# request-time-failover investigation, which found a second, independent gap
-# here: with zero retry budget, one flaky attempt across every discovered
-# candidate in the same run could take the whole sidecar down before it ever
-# reaches healthz, regardless of how good the gateway's own routing failover
-# is). One bounded retry per candidate, gated on the same
-# retryable-vs-not distinction, keeps that single-flaky-attempt case from
-# being fatal without turning a genuinely broken route into an unbounded
-# retry loop: at most REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE - 1 extra attempts
-# per candidate, bounded exactly like this file's other transient-retry
-# constants (STRIX_TRANSIENT_RETRY_PER_MODEL in strix.yml).
-REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE = 2
-_RETRYABLE_PREFLIGHT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+# ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
+# pool -- some spend internal reasoning tokens before visible content and need
+# more, others have a real completion ceiling a large budget would exceed. The
+# base probe is deliberately cheap (16 -- the value this codebase ran with
+# before #1436, and independently the floor OpenRouter's own schema documents
+# for the deprecated max_tokens field: "some providers enforce a minimum of
+# 16"): being wrong is fine here because it is diagnosed and escalated below,
+# unlike a single guess that fails outright.
+REVIEW_PREFLIGHT_BASE_TOKENS = 16
+# Escalated budget used only when the base probe's response was empty because
+# choices[0].finish_reason == "length" (OpenAI's documented signature of
+# "budget too small", not "candidate unreachable"). Reuses the existing,
+# already-proven-working REVIEW_MAX_OUTPUT_TOKENS rather than inventing a new
+# number.
+REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
+# Shared cap on how many candidates in one preflight run may use the
+# escalation retry above, so Layer 1's PROBING worst case stays computed and
+# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
+# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
+# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
+# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
+#
+# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
+# discover_all_models() call that runs before it inside the SAME 180s
+# watchdog. Verified directly against the vendored contextual-orchestrator
+# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
+# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
+# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
+# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
+# own 160s even starts. Combined real worst case is therefore up to ~265s,
+# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
+# shared monotonic deadline, scaled-down probing, or an evidence-justified
+# watchdog extension) and #1454 for the related, separately-tracked gap that
+# a base-probe *success* never confirms the candidate at the real serving
+# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
+# findings; both are architecturally significant enough to need their own
+# design pass rather than a guessed patch here.
+REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
 class ReviewPreflightError(RuntimeError):
@@ -218,52 +236,172 @@ def _safe_http_status(exc: Exception) -> int | None:
     return None
 
 
-def _is_retryable_preflight_error(exc: BaseException) -> bool:
-    """Return whether one preflight transport failure earns a bounded retry.
+def _response_finish_reason(response: object) -> str | None:
+    """Return a bounded ``finish_reason`` string from an OpenAI-compatible response.
 
-    Judged from the exception's own type and, for an HTTP failure, its
-    status code alone -- never from a response body or message, matching
-    this module's other sanitize-at-the-boundary classifiers
-    (``_safe_http_status``, ``_log_preflight_rejections``). A retryable
-    ``urllib.error.HTTPError`` is one of the conventional transient upstream
-    statuses (408/429/500/502/503/504); a connection-level failure with no
-    HTTP status at all (timeout, DNS/connection reset) is also retryable.
-    Anything else -- including a non-transient HTTP status such as
-    401/403/404, or any exception type not recognized here -- is rejected on
-    its first attempt, unchanged from before this retry existed.
+    Returns ``None`` when no usable ``finish_reason`` is present. A value is
+    "unknown" rather than the raw provider string whenever it does not look
+    like a real, short, stable enum token (real values are e.g. ``stop``,
+    ``length``, ``tool_calls``, ``content_filter``) -- this evidence must
+    never become an unbounded copy of arbitrary provider text.
     """
-    if isinstance(exc, urllib.error.HTTPError):
-        status = _safe_http_status(exc)
-        return status is not None and status in _RETRYABLE_PREFLIGHT_HTTP_STATUSES
-    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout))
+    if not isinstance(response, dict):
+        return None
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    finish_reason = first.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        return None
+    if len(finish_reason) > 32 or not all(
+        character.isalnum() or character == "_" for character in finish_reason
+    ):
+        return "unknown"
+    return finish_reason
+
+
+def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
+    """Record one sanitized, bounded classification of a provider exception.
+
+    Never overclaims a specific root cause from an HTTP status alone: an
+    auth failure (401), rate limit (429), or server error (5xx) is not
+    evidence of a token-budget problem, and this codebase has no validated
+    signal today (evidence deliberately never carries raw provider error
+    text) that distinguishes a genuinely budget-specific rejection from any
+    other non-2xx response -- so this records the exception's own sanitized
+    type name (or a bounded placeholder when that name is unsafe to log)
+    plus an optional numeric HTTP status, identically regardless of which
+    probe attempt (base or escalated) raised it. Mutates ``row`` in place.
+
+    Also clears any ``finish_reason``/``reasoning_without_content`` already
+    on ``row`` from an EARLIER attempt on the same candidate (a no-op for
+    the base probe, which never set them yet, but essential for the
+    escalated probe: an exception here means there is no response object at
+    all for THIS attempt, so the base attempt's stale diagnostic fields must
+    not silently linger and look like they describe the outcome being
+    recorded now -- the same mixed-attempt-telemetry problem already fixed
+    for the escalated-empty and escalated-success outcomes, closed here too).
+
+    Args:
+        row: The in-progress per-route evidence row to update.
+        exc: The exception a probe attempt raised.
+    """
+    row["status"] = "rejected"
+    error_type = type(exc).__name__
+    row["error_type"] = (
+        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
+    )
+    http_status = _safe_http_status(exc)
+    if http_status is not None:
+        row["http_status"] = http_status
+    row.pop("finish_reason", None)
+    row.pop("reasoning_without_content", None)
+
+
+def _response_has_reasoning_without_content(response: object) -> bool:
+    """Return whether a response matches the vendored "reasoning, no content" signature.
+
+    Mirrors ``contextual_orchestrator.orchestrator.ModelClient._response_content``'s
+    own check exactly (a populated ``message.reasoning`` field with no string
+    ``content``) rather than inferring it from ``finish_reason`` -- a reasoning
+    model can exhaust its budget mid-reasoning under a ``finish_reason`` other
+    than ``"length"`` (provider ``finish_reason`` semantics for this case are
+    not verified as uniform across the pool), so ``finish_reason == "length"``
+    alone would miss the exact original failure mode this preflight exists to
+    diagnose (PR #1436).
+
+    True only when BOTH conditions hold: a populated ``message.reasoning``
+    field, AND ``_chat_response_has_text`` is false for this SAME response.
+    A normal, complete answer that happens to also disclose a reasoning
+    trace alongside real, non-empty content is never "starved" -- checking
+    ``reasoning`` alone, with no check that content is actually
+    absent/empty, would wrongly flag a genuinely healthy response and
+    pollute this preflight's own evidence. Reusing
+    ``_chat_response_has_text``'s existing "empty or missing" definition,
+    rather than duplicating similar-but-subtly-different logic, keeps the
+    two predicates provably consistent: this one can never be true for a
+    response the other already accepts as having usable text.
+    """
+    if not isinstance(response, dict):
+        return False
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    message = first.get("message")
+    if not isinstance(message, dict) or not message.get("reasoning"):
+        return False
+    return not _chat_response_has_text(response)
 
 
 def _preflight_review_agents(
-    agents: list[object], *, client: Any
+    agents: list[object], *, client: Any, escalations_used: int = 0
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
-    Each candidate gets up to ``REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE`` attempts:
-    a transient transport failure (see ``_is_retryable_preflight_error``)
-    earns one bounded retry of the same candidate before it is marked
-    rejected, so a single flaky attempt cannot permanently disqualify an
-    otherwise-healthy route -- or, in the worst case where every discovered
-    candidate hits the same transient blip in one run, take the whole
-    sidecar down before it ever reaches healthz. A non-retryable failure
-    (e.g. an authentication or not-found error) is rejected on its first
-    attempt, exactly as before this retry was added.
+    ADR-0005: a single fixed ``max_tokens`` cannot fit every model in a
+    heterogeneous pool. Each candidate gets one cheap base-budget probe
+    (``REVIEW_PREFLIGHT_BASE_TOKENS``); when that specific candidate's
+    response is empty for a "budget too small" reason -- either
+    ``choices[0].finish_reason == "length"`` (OpenAI's documented signature),
+    or the vendored ``ModelClient._response_content``'s own broader signature
+    (a populated ``message.reasoning`` with no string ``content``, which a
+    reasoning model can hit under a different ``finish_reason`` -- provider
+    ``finish_reason`` semantics for this case are not verified as uniform
+    across the pool, and this is the exact original failure mode PR #1436
+    responded to) -- that *same* candidate is retried once at a larger,
+    escalated budget (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``) before being
+    marked rejected -- bounded by a shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
+    counter, which the ``escalations_used`` argument carries forward across
+    calls (not per candidate, and not reset per call): a caller that probes
+    two stages of the same preflight run (e.g. ``_preflight_with_fallback``'s
+    primary and fallback stages) must pass the previous stage's ending count
+    back in here so the two stages share one budget instead of each getting
+    its own -- otherwise the computed worst-case bound this counter exists to
+    enforce silently doubles. Every other failure class (transport exception,
+    non-2xx, or empty content matching neither signature) is not retried: a
+    genuinely-down candidate never reaches the escalation path, so it cannot
+    produce a false "healthy" read.
+    An exception on the escalated attempt (transport failure, auth failure,
+    rate limit, server error, or a genuine budget rejection) is recorded via
+    ``_record_provider_exception`` -- the SAME sanitized classification the
+    base probe uses, regardless of attempt. An HTTP status alone does not
+    distinguish "this candidate's real ceiling is below the escalated
+    budget" from any other cause (401/429/5xx are not budget evidence); this
+    codebase has no validated signal today that does, so it does not invent
+    one via an over-specific label.
 
     The report deliberately records only stable route identity, a bounded
-    exception class name, and an optional numeric HTTP status. Provider response
-    bodies, exception messages, URLs, prompts, and credentials are never copied
-    into evidence.
+    exception class name, an optional numeric HTTP status, attempt count, and
+    a bounded ``finish_reason``. Provider response bodies, exception
+    messages, URLs, prompts, and credentials are never copied into evidence.
+    ``finish_reason`` and ``reasoning_without_content`` are populated on
+    every response-bearing outcome -- success included, not just
+    failure/escalation, so future tuning has a real "normal" baseline to
+    compare against -- and always describe the same, most recent attempt for
+    a route (the base attempt when only one was made; the escalated attempt
+    when a second was made) -- never a mix of the two attempts' state. When
+    the escalated attempt raises an exception instead of returning a
+    response, both fields are absent entirely (there is no response to
+    describe) rather than silently retaining the base attempt's values.
 
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
+        escalations_used: Escalations already spent earlier in this same
+            preflight run (e.g. by a prior stage), so the shared budget is
+            honored across calls rather than restarted at zero.
 
     Returns:
-        A pair of viable agents and a sanitized preflight report.
+        A pair of viable agents and a sanitized preflight report. The
+        report's ``escalations_used`` is the running total including
+        ``escalations_used``'s starting value, so a caller chaining another
+        stage can pass it straight back in.
 
     Raises:
         ReviewPreflightError: If no provider route returns usable text.
@@ -275,54 +413,129 @@ def _preflight_review_agents(
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
             "model": str(getattr(agent, "model", "")),
+            "attempts": 1,
         }
-        payload: dict[str, object] = {
+        base_payload: dict[str, object] = {
             "model": getattr(agent, "model", ""),
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Reply with just 'OK'."},
             ],
             "temperature": REVIEW_TEMPERATURE,
-            "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
+            "max_tokens": REVIEW_PREFLIGHT_BASE_TOKENS,
             "stream": False,
         }
-        response: dict[str, object] | None = None
-        last_exc: Exception | None = None
-        for attempt in range(REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE):
-            try:
-                response = client.proxy_send_once(agent, "chat/completions", payload)
-                last_exc = None
-                break
-            except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
-                last_exc = exc
-                attempts_remaining = REVIEW_PREFLIGHT_ATTEMPTS_PER_ROUTE - attempt - 1
-                if attempts_remaining <= 0 or not _is_retryable_preflight_error(exc):
-                    break
-        if last_exc is not None:
+        try:
+            response = client.proxy_send_once(agent, "chat/completions", base_payload)
+        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+            _record_provider_exception(row, exc)
+            routes.append(row)
+            continue
+        if _chat_response_has_text(response):
+            # KNOWN GAP, tracked (not yet fixed) as
+            # ContextualWisdomLab/.github#1454: this admits the candidate
+            # having only proven it works at REVIEW_PREFLIGHT_BASE_TOKENS
+            # (16), never at the real serving budget
+            # (REVIEW_MAX_OUTPUT_TOKENS, 4096) main()'s ModelClient actually
+            # requests. ADR-0005's own Research (axis 2) already documents
+            # that a provider's hard completion-token ceiling is a real,
+            # separate-from-reasoning-overhead quantity per model; a
+            # candidate whose real ceiling sits strictly between 16 and 4096
+            # would pass here and only fail later, on real review traffic.
+            # Mitigated in production (not fixed here) by
+            # contextual_orchestrator.orchestrator.TaskOrchestrator's own
+            # per-request failover/circuit-breaker, which this preflight
+            # does not replace.
+            row["status"] = "ready"
+            # Populated on every outcome, including this most-common,
+            # ordinary success path -- not just failure/escalation --  so
+            # future tuning has a real "normal" baseline to compare against,
+            # not just evidence of what went wrong.
+            row["finish_reason"] = _response_finish_reason(response) or "unknown"
+            row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
+            routes.append(row)
+            viable.append(agent)
+            continue
+        finish_reason = _response_finish_reason(response)
+        row["finish_reason"] = finish_reason or "unknown"
+        reasoning_without_content = _response_has_reasoning_without_content(response)
+        row["reasoning_without_content"] = reasoning_without_content
+        budget_signature = finish_reason == "length" or reasoning_without_content
+        # KNOWN, ACCEPTED, TRACKED LIMITATION on the escalations_used >=
+        # REVIEW_PREFLIGHT_MAX_ESCALATIONS branch below, ContextualWisdomLab/.github#1458
+        # (originally documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
+        # escalations_used is one shared, first-come-first-served counter for
+        # the whole run, consumed in catalog order
+        # (build_zdr_prioritized_catalog's (cost_evidence_rank,
+        # zdr_attested_rank, provider, model) sort, not random). A
+        # later-sorting candidate can be denied its own escalation attempt
+        # purely because REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates
+        # already claimed the shared budget -- even if it would have been the
+        # only one to succeed at REVIEW_PREFLIGHT_ESCALATED_TOKENS.
+        # Deliberately not reordered (round-robin/random): a fixed-size
+        # shared budget smaller than the candidate pool always has to deny
+        # someone an escalation, so reordering only changes who, and picking
+        # a specific policy without real telemetry on which candidates
+        # actually need escalation would itself be the kind of unjustified
+        # heuristic this design rejects elsewhere.
+        if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
             row["status"] = "rejected"
-            error_type = type(last_exc).__name__
             row["error_type"] = (
-                error_type if error_type.isidentifier() and len(error_type) <= 64 else "ProviderError"
+                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
             )
-            http_status = _safe_http_status(last_exc)
-            if http_status is not None:
-                row["http_status"] = http_status
             routes.append(row)
             continue
-        if not _chat_response_has_text(response):
-            row["status"] = "rejected"
-            row["error_type"] = "InvalidChatResponse"
+        escalations_used += 1
+        row["attempts"] = 2
+        escalated_payload = dict(base_payload)
+        escalated_payload["max_tokens"] = REVIEW_PREFLIGHT_ESCALATED_TOKENS
+        try:
+            escalated_response = client.proxy_send_once(
+                agent, "chat/completions", escalated_payload
+            )
+        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+            # An HTTP status alone (401 auth, 429 throttle, 5xx server
+            # error, ...) is not evidence the escalated *budget* specifically
+            # caused the rejection -- only that some request failed. Record
+            # the same sanitized classification the base probe uses, rather
+            # than the previous "escalated_probe_rejected" label, which
+            # over-claimed budget-specific attribution this codebase has no
+            # validated signal to actually support.
+            _record_provider_exception(row, exc)
             routes.append(row)
             continue
-        row["status"] = "ready"
+        if _chat_response_has_text(escalated_response):
+            row["status"] = "ready"
+            row["escalated"] = True
+            # Overwrite the base attempt's stale diagnostic fields with the
+            # escalated (successful, final) attempt's own state -- otherwise
+            # a ready route's evidence would still show the budget-too-small
+            # signature that triggered the escalation in the first place,
+            # describing a response this route no longer produced.
+            row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
+            row["reasoning_without_content"] = _response_has_reasoning_without_content(
+                escalated_response
+            )
+            routes.append(row)
+            viable.append(agent)
+            continue
+        row["status"] = "rejected"
+        row["error_type"] = "invalid_chat_response"
+        # Both fields now describe this escalated (2nd, final) attempt,
+        # never a mix with the base attempt's state -- see the docstring.
+        row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
+        row["reasoning_without_content"] = _response_has_reasoning_without_content(
+            escalated_response
+        )
         routes.append(row)
-        viable.append(agent)
 
     report: dict[str, object] = {
-        "contract": "strix-plain-chat-preflight-v1",
+        "contract": "strix-plain-chat-preflight-v2",
         "probed_count": len(agents),
         "ready_count": len(viable),
         "rejected_count": len(agents) - len(viable),
+        "escalations_used": escalations_used,
+        "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
     }
     if not viable:
@@ -335,15 +548,31 @@ def _preflight_review_agents(
 def _preflight_with_fallback(
     primary_agents: list[object], fallback_agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object], bool]:
-    """Use the priced catalog only after every primary route rejects."""
+    """Use the priced catalog only after every primary route rejects.
+
+    The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
+    budget for the whole preflight run, not one budget each: the primary
+    stage's ending ``escalations_used`` is passed as the fallback stage's
+    starting point, so a run that rejects all 8 primary routes and then
+    probes 4 fallback routes still spends at most 4 escalations total (12
+    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
+    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    stages' reports remain in the result: the fallback (or sole) stage's
+    report carries the run's final, cumulative ``escalations_used``, and
+    ``primary_attempt`` nests the primary stage's own report -- including its
+    own ``escalations_used`` -- whenever a fallback stage ran at all.
+    """
     try:
         viable, report = _preflight_review_agents(primary_agents, client=client)
         return viable, report, False
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
             raise
+        escalations_used = int(primary_error.report.get("escalations_used", 0))
         try:
-            viable, report = _preflight_review_agents(fallback_agents, client=client)
+            viable, report = _preflight_review_agents(
+                fallback_agents, client=client, escalations_used=escalations_used
+            )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report
             raise
@@ -409,17 +638,7 @@ MINIMUM_SERVING_FAMILY_DIVERSITY = 2
 
 
 def _served_family_diversity(agents: list[object]) -> int:
-    """Return the count of distinct outage-domain provider families being served.
-
-    Uses the exact same ``provider_family()`` grouping
-    (``scripts.ci.contextual_orchestrator_review_policy``, a repository-local
-    module with no dependency on the vendored ``contextual_orchestrator``
-    package) that ``free_family_diversity`` is computed with in the policy
-    report, so a decision-time check (a caller's own gate on a discovery
-    snapshot) and this runtime check (evaluated on the actual served pool,
-    after preflight has already narrowed it) agree on what counts as an
-    independent family.
-    """
+    """Count distinct outage-domain provider families in the served pool."""
     from scripts.ci.contextual_orchestrator_review_policy import provider_family
 
     return len(
@@ -431,34 +650,7 @@ def _served_family_diversity(agents: list[object]) -> int:
 
 
 def _require_minimum_serving_diversity(agents: list[object]) -> None:
-    """Fail closed before ``serve()`` if the post-preflight pool cannot fail over.
-
-    ``scripts/ci/contextual_orchestrator_review_policy.py``'s
-    ``build_zdr_prioritized_catalog`` builds ``pool=="free"``'s catalog from
-    free rows only -- there is no priced fallback tier at all when
-    ``pool=="free"``, and even ``pool=="auto"``'s own priced-fallback catalog
-    is only substituted in when EVERY primary route rejects preflight, not
-    when a single-family remainder survives it (see
-    ``_preflight_with_fallback``). ``_preflight_review_agents`` then narrows
-    the served agent list to only the routes that survived a bounded,
-    per-route probe. Even a perfect request-time failover implementation
-    cannot "advance to another admitted route" if this already-narrowed pool
-    contains only one outage-domain provider family by the time ``serve()``
-    is reached: there is nothing left to fail over to. This is a runtime
-    safety net independent of and in addition to any caller's own
-    decision-time diversity gate (e.g. ``strix.yml``'s
-    ``free_family_diversity`` check), which only observes a discovery
-    snapshot and cannot see preflight-time narrowing.
-
-    Args:
-        agents: The final, post-preflight (and post-fallback-substitution,
-            if applicable) agent list about to be passed to ``serve()``.
-
-    Raises:
-        SystemExit: If the served pool spans fewer than
-            ``MINIMUM_SERVING_FAMILY_DIVERSITY`` independent provider
-            families.
-    """
+    """Fail closed if post-preflight serving cannot cross a provider outage."""
     diversity = _served_family_diversity(agents)
     if diversity < MINIMUM_SERVING_FAMILY_DIVERSITY:
         raise SystemExit(
@@ -501,9 +693,23 @@ def _bounded_fallback_catalog_limit(
 
 
 def _with_discovery_counts(
-    report: dict[str, object], rows: list[dict[str, Any]]
+    report: dict[str, object],
+    rows: list[dict[str, Any]],
+    *,
+    provider_family: Any,
 ) -> dict[str, object]:
-    """Copy a stage report while restoring full discovery-tier counts."""
+    """Copy a stage report while restoring full discovery-tier counts.
+
+    ``free_family_diversity`` is recomputed here from the full discovery-wide
+    ``rows``, not trusted from the stage report: the primary ``auto``-pool
+    stage may have selected only ZDR-admitted free rows (undercounting
+    diversity whenever ``--require-zdr`` excludes some free routes) and the
+    priced-fallback stage selects only priced rows (so its own internally
+    computed diversity is always zero) -- either stage report's
+    ``free_family_diversity``, as returned by ``build_zdr_prioritized_catalog``
+    from whatever narrower row set it was given, would otherwise contradict
+    that field's documented "among *all* discovered free routes" contract.
+    """
     enriched = dict(report)
     enriched.update(
         {
@@ -511,6 +717,13 @@ def _with_discovery_counts(
             "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+            "free_family_diversity": len(
+                {
+                    provider_family(str(row["provider"]))
+                    for row in rows
+                    if row.get("cost_evidence") == "free"
+                }
+            ),
         }
     )
     return enriched
@@ -595,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
         build_zdr_prioritized_catalog,
         is_zdr_model,
         parse_discovery_report,
+        provider_family,
     )
 
     registered = register_review_credentials(os.environ)
@@ -667,7 +881,9 @@ def main(argv: list[str] | None = None) -> int:
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
-    result["report"] = _with_discovery_counts(result["report"], normalized_rows)
+    result["report"] = _with_discovery_counts(
+        result["report"], normalized_rows, provider_family=provider_family
+    )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -700,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows
+                fallback_result["report"], normalized_rows, provider_family=provider_family
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"

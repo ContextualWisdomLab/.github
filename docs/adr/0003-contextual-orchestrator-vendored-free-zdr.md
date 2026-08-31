@@ -12,12 +12,14 @@
   ~2026-08-30T10:46 UTC, with the single-outage-domain risk explicitly
   accepted rather than mitigated) that this ADR's own amendment history
   below records but does not treat as superseding authority — see
-  `docs/pr-review-and-merge-procedure.md` and the exact-head governance
-  review on `ContextualWisdomLab/.github#1437` for why an administrator
-  bypass merge is not, by itself, operational acceptance of the approach it
-  merged. The rest of this ADR (vendoring, discovery, ZDR-first policy, the
-  family-diverse catalog) remains in force unchanged. See the Amendment
-  below.
+  `docs/pr-review-and-merge-procedure.md` and `ContextualWisdomLab/.github#1437`
+  for why an administrator bypass merge is not, by itself, operational
+  acceptance of the approach it merged (that PR's own history is corrected in
+  [ADR-0020](0020-strix-orchestrator-free-pool.md): an earlier draft of this
+  section attributed the correction to a fabricated "exact-head governance
+  review" that never took place). The rest of this ADR (vendoring, discovery,
+  ZDR-first policy, the family-diverse catalog) remains in force unchanged.
+  See the Amendment below.
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema use the fail-closed zero-cost virtual model id `orchestrator/free` unconditionally. Strix uses `orchestrator/free` only when live `free_family_diversity` evidence is `>= 2`, otherwise the provider-diverse `orchestrator/auto` pool (see [ADR-0020](0020-strix-orchestrator-free-pool.md)). **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**

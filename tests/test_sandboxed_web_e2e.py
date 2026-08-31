@@ -187,13 +187,13 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert "shell" not in popen_calls[0][1]
+    assert popen_calls[0][1]["shell"] is False
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-    assert "shell" not in run_calls[0][1]
+    assert run_calls[0][1]["shell"] is False
     assert "executable" not in run_calls[0][1]
 
 
@@ -232,6 +232,51 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
     assert len(attempts) == 2
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
+
+    with pytest.raises(ValueError, match="URL cannot target external hostname: example\\.com"):
+        sandboxed_web_e2e.wait_for_url("http://example.com", 10, service)
+
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 192\\.168\\.1\\.1"):
+        sandboxed_web_e2e.wait_for_url("http://192.168.1.1", 10, service)
+
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:8000/health", 10, service) is True
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:8000/health", 10, service) is True
+
+
+@POSIX_PROCESS_GROUPS
+def test_wait_for_url_ignores_environment_proxy_configuration(monkeypatch, tmp_path):
+    """The readiness opener must reach loopback directly, never via an env-configured proxy.
+
+    ``urllib.request.build_opener`` installs its full default handler set --
+    including a ``ProxyHandler`` built from ``HTTP_PROXY``/``HTTPS_PROXY``/
+    ``ALL_PROXY`` -- alongside whatever handlers are explicitly passed to it.
+    Without an explicit no-proxy override, a URL that passes the loopback
+    allowlist in ``require_loopback_readiness_url`` could still have its real
+    TCP connection silently rerouted through an external proxy that decides
+    the actual destination, defeating the entire loopback guarantee. This
+    points the proxy env vars at a closed local port (an immediate,
+    deterministic connection refusal) and asserts the readiness check still
+    succeeds promptly by reaching the real loopback service directly.
+    """
+    closed_port = free_port()
+    for no_proxy_name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(no_proxy_name, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{closed_port}/")
+    monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{closed_port}/")
+    monkeypatch.setenv("ALL_PROXY", f"http://127.0.0.1:{closed_port}/")
+
+    real_port = free_port()
+    service = sandboxed_web_e2e.start_service(
+        "proxy-bypass-target",
+        http_server_command(real_port, "proxy-bypass-target"),
+        tmp_path,
+        dict(os.environ),
+        tmp_path,
+    )
+    try:
+        assert sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{real_port}/", 8, service) is True
+    finally:
+        sandboxed_web_e2e.stop_service(service)
 
 
 def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
