@@ -39,8 +39,60 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+      - name: Cancel queued and running Noema reviews for the closed pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cancel_runs() {
+            local status="$1"
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/noema-close-gh-error)"; then
+              echo "::warning::Noema close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
+              sed 's/^/  /' /tmp/noema-close-gh-error >&2 || true
+              return 0
+            fi
+            local run_ids
+            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
+              --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(.name == "Required Noema Review")
+                | select(
+                    .head_sha == $head_sha
+                    or any(.pull_requests[]?; ((.number | tostring) == $pr))
+                    or ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                  )
+                | .id
+              ' <<<"$runs_json")"; then
+              echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/noema-close-cancel-error; then
+                echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}."
+              else
+                echo "::warning::Noema close cleanup could not cancel run ${run_id}; it may have finished or the token lacks Actions write access."
+                sed 's/^/  /' /tmp/noema-close-cancel-error >&2 || true
+              fi
+            done <<<"$run_ids"
+          }
+
+          for active_status in queued in_progress requested waiting pending; do
+            cancel_runs "$active_status"
+          done
 
   noema-review:
     name: noema-review

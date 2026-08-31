@@ -421,27 +421,30 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
-        if filename == "strix.yml":
-            assert "Cancel queued and running scans for the closed pull request" in workflow
-            assert (
-                "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
-                "|| github.token"
-            ) in workflow
-            assert "DISPATCH_REPOSITORY" not in workflow
+        if filename in {"strix.yml", "noema-review.yml"}:
+            noun = "scans" if filename == "strix.yml" else "Noema reviews"
+            assert f"Cancel queued and running {noun} for the closed pull request" in workflow
             assert "CLOSED_PR_HEAD_SHA" in workflow
-            assert 'select(.event == "pull_request_target")' in workflow
-            assert 'select(.event == "repository_dispatch")' not in workflow
             assert "leaving runs unchanged" in workflow
             assert (
                 "for active_status in queued in_progress requested waiting pending"
                 in workflow
             )
+            next_job = "strix" if filename == "strix.yml" else "noema-review"
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
-                "  strix:", 1
+                f"  {next_job}:", 1
             )[0]
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+            if filename == "strix.yml":
+                assert (
+                    "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
+                    "|| github.token"
+                ) in workflow
+                assert "DISPATCH_REPOSITORY" not in workflow
+                assert 'select(.event == "pull_request_target")' in workflow
+                assert 'select(.event == "repository_dispatch")' not in workflow
         else:
             assert (
                 "PR closed; this run only cancels older runs through workflow concurrency."

@@ -39,6 +39,22 @@ def test_noema_concurrency_is_bound_to_the_triggering_head():
     )
 
 
+def test_noema_close_event_cancels_historical_head_runs():
+    """Close cleanup must cancel active Noema runs across prior head groups."""
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    cleanup = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
+        "  noema-review:", 1
+    )[0]
+    assert "actions: write" in cleanup
+    assert "Cancel queued and running Noema reviews for the closed pull request" in cleanup
+    assert 'select(.name == "Required Noema Review")' in cleanup
+    assert "CLOSED_PR_NUMBER" in cleanup
+    assert "CLOSED_PR_HEAD_SHA" in cleanup
+    assert "CURRENT_RUN_ID" in cleanup
+    assert "for active_status in queued in_progress requested waiting pending" in cleanup
+    assert "/actions/runs/${run_id}/cancel" in cleanup
+
+
 def fake_secret(*parts: str) -> str:
     return "".join(parts)
 

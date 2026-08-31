@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Cancel queued and running Noema reviews from every historical head group when
+  their pull request closes, preventing abandoned model calls from consuming
+  runner capacity for the two-hour review window.
 - Bind Noema workflow concurrency to the triggering PR head so a delayed
   OpenCode/Strix completion from an older head cannot cancel the current-head
   review run. The trigger head is also checked against the live PR before
