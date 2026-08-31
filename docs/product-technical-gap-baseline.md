@@ -1653,6 +1653,36 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 `ORCHESTRATOR_PIN_SHA` bumped to carry #925's stream_options/tools fix
+
+**Context**: `#1451` fixed a separate, org-wide `pingora_edge_policy.py` coverage
+gap blocking `opencode-review-dispatch.yml`'s own `coverage-evidence` job for
+every `.github`-hosted PR. Once that landed and Strix could actually complete
+scans again (via `#1448`'s scoped `LLM_DISABLE_STREAMING` workaround),
+`ContextualWisdomLab/contextual-orchestrator#925` — the real root-cause fix for
+the gateway's `stream_options.include_usage=true` + `tools` rejection — merged
+(`7944a3c`). `.github#1463` reverts `#1448`'s workaround now that the gateway
+itself no longer rejects that combination.
+
+**Devin Review correctly caught a real bug in that revert before merge**: the
+review sidecar vendors `contextual-orchestrator` at a *pinned* SHA
+(`ORCHESTRATOR_PIN_SHA`), not live `main` — and the pin in place at revert time
+(`30c6d71680e659f25a0a433d4726ad0d437f9757`) was cut *before* `#925` merged.
+Confirmed by `git merge-base --is-ancestor 30c6d716... 7944a3c` (true). Removing
+the Strix-side streaming workaround while the vendored gateway still ran the
+old, rejecting code would have restored the exact failure `#1448` existed to
+route around — every Strix scan through the sidecar would fail again.
+
+**Fix**: bumped `ORCHESTRATOR_PIN_SHA` to `7944a3cd98f7b60fba9272e7f89c3977a75af746`
+(the `#925` merge commit itself — deliberately not `contextual-orchestrator`'s
+later tip, to keep this bump minimal and scoped to exactly the fix this revert
+depends on) in the three places this repo's own convention requires kept in
+sync: `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s default,
+`tests/test_contextual_orchestrator_review_sidecar_contract.py`'s pinned-SHA
+contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+"today" reference. Landed in the same PR (`#1463`) as the streaming revert,
+not split out, since the revert is unsafe without it.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
