@@ -46,6 +46,34 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     assert 'select((.id | tostring) != $current)' in cleanup
     assert 'endswith("@" + $head)' in cleanup
     assert "| not)" in cleanup
+
+
+def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
+    """Execute the workflow's jq selector against current, sibling, and foreign runs."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup selector")
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" \'\n'
+    start = workflow.index(start_marker) + len(start_marker)
+    end = workflow.index('\n                \' <<<"$runs_json"', start)
+    selector = workflow[start:end]
+    runs = {
+        "workflow_runs": [
+            {"id": 100, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
+            {"id": 101, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 102, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
+            {"id": 103, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
+        ]
+    }
+    result = subprocess.run(
+        [jq, "-r", "--arg", "pr", "7", "--arg", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", "current", selector],
+        input=json.dumps(runs),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["101"]
     assert "github.event.workflow_run.head_sha" not in workflow
     assert "EXPECTED_HEAD:" in workflow
     assert "--expected-head \"$EXPECTED_HEAD\"" in workflow
