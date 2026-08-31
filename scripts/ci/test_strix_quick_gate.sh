@@ -522,7 +522,15 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
-	if awk '/^  required-workflow-bootstrap:$/,/^[^ ]/' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
+	# The end pattern must match the next sibling job key (workflow jobs are
+	# 2-space indented under `jobs:`, so a bare `/^[^ ]/` end pattern never
+	# matches and silently captures every remaining job in the file -- any
+	# later job's step-level `if:` then false-positives against this job).
+	if awk '
+		/^  required-workflow-bootstrap:$/ { capture=1; print; next }
+		capture && /^  [A-Za-z_][A-Za-z0-9_-]*:$/ { exit }
+		capture { print }
+	' "$bootstrap_file" | grep -q '^[[:space:]]*if:'; then
 		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
 	fi
 	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
