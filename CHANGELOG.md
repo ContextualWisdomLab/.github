@@ -5,6 +5,21 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Correct stale direct-NVIDIA-NIM documentation left over from the
+  contextual-orchestrator gateway migration (ADR-0003, 2026-08-27/30): the
+  hourly PR-review-autofix worker's own workflow
+  (`.github/workflows/pr-review-autofix.yml`) and its contract test
+  (`test_pr_review_autofix_nvidia_nim_contract.py`) already require routing
+  through the vendored `contextual-orchestrator` sidecar and the
+  `contextual-orchestrator/orchestrator/free` virtual model id, but
+  `docs/doctoring/hourly-nvidia-nim-autofix.md`,
+  `docs/automation/hourly-review-repair.md`, and `ARCHITECTURE.md`'s "Hourly
+  NVIDIA NIM repair gate" diagram still described the retired direct-NIM
+  binding (`NVIDIA_API_KEY` bound to a hard-coded
+  `mistralai/mistral-small-4-119b-2603`) as current. Corrected the
+  present-tense provider/credential claims in all three documents to match
+  the current implementation; historical TDD-evidence records (exact-head
+  RED/GREEN commit SHAs) are left as dated history, not rewritten.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
