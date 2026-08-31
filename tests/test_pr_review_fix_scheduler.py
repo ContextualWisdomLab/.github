@@ -587,6 +587,23 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     monkeypatch.setattr(fix, "run", fake_run)
     assert fix.run_json(["api", "x"]) == [{"id": 1}]
     assert fix.issue_comments("owner/repo", 7) == [{"id": 1}]
+    # `gh api` defaults to POST once any `-f`/`-F` field is present unless
+    # `-X`/`--method` explicitly overrides it -- a read-only comment fetch
+    # must pin GET explicitly, or GitHub receives a malformed POST (no
+    # `body` field) against the comment-creation endpoint and every call
+    # fails outright, defeating the whole retry mechanism this module
+    # exists for (regression for a Devin Review finding on PR #1459).
+    assert calls[-1][0] == [
+        "gh",
+        "api",
+        "repos/owner/repo/issues/7/comments",
+        "--paginate",
+        "--slurp",
+        "-X",
+        "GET",
+        "-f",
+        "per_page=100",
+    ]
 
     pr = make_pr()
     fix.create_fix_marker("owner/repo", pr, dry_run=True)
