@@ -5,6 +5,30 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Harden the review sidecar's per-account catalog cap against silent drift:
+  `contextual_orchestrator_review_launcher.py`'s two
+  `build_zdr_prioritized_catalog` call sites now source their
+  `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` fallback from
+  `contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP` through a new
+  `_catalog_account_cap()` helper, instead of a hand-typed `"4"` literal.
+  This closes the exact drift class that produced a real, observed
+  preflight-budget waste on a separate in-flight branch (a sibling
+  `_catalog_family_cap()` helper there fell back to the *total* routes
+  budget instead of the per-account cap, letting two rate-limited NVIDIA
+  NIM credentials jointly consume all 12 preflight slots, 10 of which were
+  then rejected via 429/404/timeout). New regression tests pin the default
+  to the policy module's canonical value and forbid the total-routes
+  constant from reappearing as the account-cap fallback.
+- Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
+  (flagged by Devin Review on that PR): the standing operating directive
+  still named the removed `free_family_diversity` evidence field instead of
+  its `free_account_diversity` replacement, which could send future
+  monitoring work looking for a field that no longer exists.
+- Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
+  at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
+  as an independent discovery account. Same-vendor credentials no longer
+  collapse into a provider family; only explicit model groups may share
+  routing evidence.
 - Web verification now runs backend, frontend, and E2E commands inside an
   isolated Linux bubblewrap workspace by default (`--isolation required`),
   mounting a read-only runtime root with a single writable `/workspace`
