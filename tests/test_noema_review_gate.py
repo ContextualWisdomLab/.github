@@ -929,7 +929,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     verdict = noema.call_llm("owner/repo", 1, pr, "diff", True, "extra review context")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "https://llm.example.test/chat"
-    assert seen["timeout"] == 7200
+    assert seen["timeout"] == 14400
     assert seen["body"]["model"] == "review-model"
     assert "extra review context" in seen["body"]["messages"][1]["content"]
 

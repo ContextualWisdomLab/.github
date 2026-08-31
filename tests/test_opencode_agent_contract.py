@@ -1897,7 +1897,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "7200"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "11700"'
         in workflow
     )
     assert (
@@ -1984,7 +1984,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert (
@@ -2020,7 +2020,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
@@ -2030,15 +2030,15 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
         in workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "7200"' in workflow
+    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
@@ -2342,8 +2342,8 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
     )
 
 
-def test_contextual_orchestrator_candidates_allow_two_hour_reviews() -> None:
-    """Keep every contextual-orchestrator cadence at or above two hours."""
+def test_contextual_orchestrator_uses_outer_pool_budget() -> None:
+    """Do not impose a shorter per-process cutoff on orchestration."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
         encoding="utf-8"
     )
@@ -2360,7 +2360,7 @@ def test_contextual_orchestrator_candidates_allow_two_hour_reviews() -> None:
         "OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS",
     )
     for variable in timeout_variables:
-        assert f'{variable}: "7200"' in model_pool
+        assert f'{variable}: "11700"' in model_pool
 
 
 def test_opencode_approval_gate_shell_is_parseable():

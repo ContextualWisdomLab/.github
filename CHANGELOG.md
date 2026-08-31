@@ -5,12 +5,12 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Permit contextual-orchestrator OpenCode candidates to run for two hours in
-  every review cadence and the central-review fallback, replacing the 90-minute
-  cap that left exact-head reviews without a verdict.
+- Let Contextual Orchestrator use the full 11,700-second review budget in every
+  cadence and the central-review fallback, so reviews exceeding two hours are
+  bounded only by the existing provider-pool watchdog.
 - Cancel queued and running Noema reviews from every historical head group when
   their pull request closes, preventing abandoned model calls from consuming
-  runner capacity for the two-hour review window. Selection is scoped by PR
+  runner capacity for the long-running review window. Selection is scoped by PR
   number only (the run's structured display title), never by a bare shared
   head SHA, so a different open PR that happens to share a commit is never
   swept up. The five active-status queries stay repository-scoped and
@@ -32,7 +32,7 @@ Semantic Versioning where the repository publishes a release.
   weakening the secret gate: the historical ignore is limited to the exact
   superseded commit, test path, rule, and line, with an executable contract.
 - Allow a Contextual Orchestrator-backed Noema review request to run for up to
-  two hours instead of failing every long review at a hard-coded 120 seconds.
+  four hours instead of failing long reviews at a hard-coded 120 seconds.
 - Stop logging raw (even regex-scrubbed) LLM response text in Noema's
   malformed-JSON fail-closed diagnostic (Devin Review security finding on
   PR #1507): `noema-review.yml` is a `pull_request_target` workflow with

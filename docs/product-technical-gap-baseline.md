@@ -1761,7 +1761,7 @@ The same gate also imposed a hard-coded 120-second HTTP read timeout. A real
 Four Pillars review reached that boundary after Contextual Orchestrator had
 successfully provisioned and selected a route, then failed with an unhandled
 `TimeoutError` before a verdict arrived. Noema review requests now allow the
-documented two-hour review window; GitHub's job boundary remains the outer
+documented four-hour request window; GitHub's job boundary remains the outer
 execution limit. The transport timeout is pinned by the existing call contract
 test so a shorter accidental value cannot silently restore the failure.
 
@@ -1932,9 +1932,9 @@ OpenCode job failing closed after approximately 91 minutes without a verdict.
 The central model-pool workflow still capped its contextual-orchestrator
 candidate, every changed-file cadence, the dynamic cap, and the central-review
 fallback at 5,400 seconds even though the target, pool, and retry budgets already
-had capacity for a two-hour candidate. Those seven limits are now 7,200 seconds,
-with an executable step-scoped contract preventing unrelated `7200` strings
-elsewhere in the workflow from masking a regression.
+had capacity for a long-running candidate. Those seven limits now use the full
+11,700-second review budget, with an executable step-scoped contract preventing
+unrelated numeric strings elsewhere in the workflow from masking a regression.
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
