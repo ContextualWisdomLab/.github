@@ -1676,7 +1676,7 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
-			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+			fuzz/fuzz_opencode_review_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
 				include_opencode_normalizer=1
 				;;
 			esac
