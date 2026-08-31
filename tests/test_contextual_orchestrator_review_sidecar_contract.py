@@ -78,7 +78,16 @@ def test_sidecar_and_adr_pin_the_bounded_preflight_contract() -> None:
     adr = _read(SIDECAR_ADR)
 
     assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
-    assert 'CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"' in sidecar
+    # The per-account cap default is no longer a shell literal (that was the
+    # ContextualWisdomLab/.github#1415 Devin follow-up bug: a hard-coded `8`
+    # here silently bypassed the launcher's own DEFAULT_ACCOUNT_CAP=4
+    # fallback in every real run). It must now be derived at runtime from
+    # the same single source of truth the launcher uses.
+    assert 'CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"' not in sidecar
+    assert (
+        "from scripts.ci.contextual_orchestrator_review_policy import "
+        "DEFAULT_ACCOUNT_CAP; print(DEFAULT_ACCOUNT_CAP)"
+    ) in sidecar
     assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24" in launcher
     assert "REVIEW_PREFLIGHT_BATCH_SIZE = 4" in launcher
     assert "at most 24" in adr

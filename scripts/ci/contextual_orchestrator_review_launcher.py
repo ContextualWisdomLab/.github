@@ -105,18 +105,16 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # alone -- previously the watchdog was a bare, uncoordinated 180s shell
 # constant that only happened to exceed the probing-only figure above by
 # coincidence, while the combined real worst case (see
-# REVIEW_STARTUP_WATCHDOG_SECONDS below) is larger than that. Verified
-# directly against the vendored contextual-orchestrator source at
-# ORCHESTRATOR_PIN_SHA (contextual_orchestrator_review_sidecar.sh):
-# discover_all_models() makes up to REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS
-# sequential HTTP calls (the shared models.dev fetch; one per
-# PROVIDER_MODEL_SOURCES entry with a registered credential -- of the sidecar's
-# five bootstrapped secrets, that is openai/openrouter/nvidia_nim/
-# nvidia_nim_sub/bytez, since opencode_zen's OPENCODE_ZEN_API_KEY is never one
-# of the five secrets the sidecar registers and so it always short-circuits
-# with zero calls; and the OpenRouter ZDR endpoint fetch, unconditional), each
-# up to REVIEW_DISCOVERY_TIMEOUT_SECONDS. contextual_orchestrator_review_sidecar.sh
-# imports REVIEW_STARTUP_WATCHDOG_SECONDS from this module (a stdlib-only,
+# REVIEW_STARTUP_WATCHDOG_SECONDS below) is larger than that. discover_all_models()
+# makes up to REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS sequential-call-
+# equivalents against the pinned contextual-orchestrator revision, each up to
+# REVIEW_DISCOVERY_TIMEOUT_SECONDS -- see that constant's own comment below
+# for the full, itemized enumeration (shared Models.dev fetch, per-source
+# retries, OpenRouter's extra calls, and two trailing global calls) verified
+# directly against ORCHESTRATOR_PIN_SHA; do not restate the count here, to
+# avoid a second "verified" claim silently drifting from the real one below.
+# contextual_orchestrator_review_sidecar.sh imports REVIEW_STARTUP_WATCHDOG_SECONDS
+# from this module (a stdlib-only,
 # dependency-free import) as its watchdog loop bound -- a single source of
 # truth so a future change to either phase's constants cannot silently
 # desynchronize the two budgets again. #1454 (a base-probe *success* never
@@ -179,18 +177,94 @@ REVIEW_PREFLIGHT_MAX_CONFIRMATIONS = REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES
 # (this module's top-level imports are deliberately stdlib-only). Re-verify
 # this mirror whenever ORCHESTRATOR_PIN_SHA moves.
 REVIEW_DISCOVERY_TIMEOUT_SECONDS = 15.0
-# Verified against the vendored contextual_orchestrator.model_discovery source
-# at ORCHESTRATOR_PIN_SHA: discover_all_models() calls, strictly sequentially,
-# one shared models.dev fetch (triggered once any source with a registered
-# credential declares models_dev_provider_id), then discover_provider_models()
-# once per PROVIDER_MODEL_SOURCES entry with a registered credential (skipped
-# instantly, no HTTP call, for an entry with none), then one unconditional
-# OpenRouter ZDR endpoints fetch. With every one of the sidecar's five
-# bootstrapped secrets present (openai, openrouter, nvidia_nim, nvidia_nim_sub,
-# bytez -- opencode_zen is never among them), that is 1 (models.dev) + 5
-# (providers) + 1 (ZDR) = 7 sequential calls, each independently bounded by
-# REVIEW_DISCOVERY_TIMEOUT_SECONDS.
-REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS = 7
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review finding "Discovery-
+# time budget undercounts known retries"): the previous count of 7 verified
+# only that discover_all_models() makes one call per registered source plus
+# one unconditional extra -- it never checked whether any of those calls can
+# themselves retry, or whether the pinned revision makes calls beyond that
+# simple per-source loop. Re-verified line-by-line against the vendored
+# contextual_orchestrator.model_discovery source at ORCHESTRATOR_PIN_SHA
+# (fetched and read at that exact commit, not assumed from an older or newer
+# revision), counting every sequential HTTP call discover_all_models() can
+# make in its real worst case, with every one of the sidecar's five
+# bootstrapped credentials present (openai, openrouter, nvidia_nim,
+# nvidia_nim_sub, bytez -- opencode_zen's OPENCODE_ZEN_API_KEY is never one of
+# the five secrets the sidecar registers, so it always short-circuits with
+# zero calls):
+#
+# Named sub-budgets below (rather than one opaque literal) so a test can
+# reconstruct and re-justify each piece of this enumeration independently --
+# see test_contextual_orchestrator_review_runtime_preflight.py's
+# test_startup_watchdog_covers_a_retry_heavy_discovery_reconstruction.
+#
+#   (a) Shared Models.dev fetch (_fetch_models_dev_metadata, triggered once
+#       because openai/nvidia_nim/nvidia_nim_sub declare
+#       models_dev_provider_id and are credentialed): up to
+#       _MODELS_DEV_FETCH_ATTEMPTS = 3 sequential attempts, not the 1 the old
+#       count assumed -- a lone transient failure (this endpoint is known to
+#       reject urllib's default user agent, see that constant's own
+#       docstring) is retried up to twice more.
+REVIEW_DISCOVERY_MODELS_DEV_MAX_ATTEMPTS = 3
+#   (b) Each of the five credentialed sources' own primary model-list fetch
+#       (discover_provider_models): up to 2 attempts each -- a full
+#       REVIEW_DISCOVERY_TIMEOUT_SECONDS primary attempt PLUS one
+#       _DISCOVERY_RETRY_TIMEOUT_SECONDS=5.0s retry on a transient failure
+#       (is_transient_error), not the unretried single attempt the old count
+#       assumed. Five sources: openai, openrouter, nvidia_nim,
+#       nvidia_nim_sub, bytez -- opencode_zen's OPENCODE_ZEN_API_KEY is never
+#       one of the five secrets the sidecar registers, so it always short-
+#       circuits with zero calls and is excluded from this count.
+REVIEW_DISCOVERY_CREDENTIALED_SOURCE_COUNT = 5
+REVIEW_DISCOVERY_SOURCE_MAX_ATTEMPTS = 2
+#   (c) OpenRouter-only extra calls inside discover_provider_models, beyond
+#       its own primary listing call already counted in (b): one ZDR-
+#       endpoints fetch (_OPENROUTER_ZDR_ENDPOINTS_URL, no retry -- the old
+#       count's "unconditional ZDR fetch" line item, kept here) + one
+#       provider-policies fetch (_OPENROUTER_PROVIDER_POLICIES_URL, no
+#       retry, entirely missing from the old count).
+REVIEW_DISCOVERY_OPENROUTER_SINGLE_EXTRA_CALLS = 2
+#       Plus one concurrent (ThreadPoolExecutor, <=8 workers) endpoint-feed
+#       fetch per currently zero-priced OpenRouter model
+#       (_openrouter_free_model_endpoints, also entirely missing from the
+#       old count): wall-clock bounded by ceil(free_model_count / 8) rounds,
+#       each up to REVIEW_DISCOVERY_TIMEOUT_SECONDS. Verified live against
+#       OpenRouter's public /api/v1/models catalog (2026-08-31): 21 models
+#       currently report zero prompt AND completion price (ceil(21/8) = 3
+#       rounds today). The pinned code itself does not bound this count, so
+#       rather than hand-waving it as "1 more call" (the old count's mistake
+#       for a different item) or leaving it fully unbounded, this budgets 5
+#       call-equivalent rounds -- headroom for up to 40 free models, close
+#       to double today's observed count -- as an explicit, documented
+#       assumption, not a code-enforced bound; re-verify this headroom if
+#       OpenRouter's free-tier catalog grows materially past that.
+REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP = 5
+#   (d) Two trailing global calls discover_all_models() itself makes once
+#       per run, strictly after every source's loop above, entirely absent
+#       from the old count: _openrouter_zdr_model_ids() (a SEPARATE fetch of
+#       the same _OPENROUTER_ZDR_ENDPOINTS_URL as (c) -- not a cache hit;
+#       this one runs unconditionally, even with no OpenRouter credential
+#       registered) + openrouter_paid_inference_available() (the credits
+#       check, gated on an OpenRouter credential being registered, true in
+#       this worst case). Neither has a retry.
+REVIEW_DISCOVERY_TRAILING_GLOBAL_CALLS = 2
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review finding "Discovery-
+# time budget undercounts known retries"): the previous count of 7 verified
+# only that discover_all_models() makes one call per registered source plus
+# one unconditional extra -- it never checked whether any of those calls can
+# themselves retry, or whether the pinned revision makes calls beyond that
+# simple per-source loop. Re-verified line-by-line against the vendored
+# contextual_orchestrator.model_discovery source at ORCHESTRATOR_PIN_SHA
+# (fetched and read at that exact commit, not assumed from an older or newer
+# revision) -- see (a)-(d) above for the full itemized enumeration. Total:
+# 3 + 5*2 + 2 + 5 + 2 = 22 sequential-call-equivalents, each independently
+# bounded by REVIEW_DISCOVERY_TIMEOUT_SECONDS.
+REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS = (
+    REVIEW_DISCOVERY_MODELS_DEV_MAX_ATTEMPTS
+    + REVIEW_DISCOVERY_CREDENTIALED_SOURCE_COUNT * REVIEW_DISCOVERY_SOURCE_MAX_ATTEMPTS
+    + REVIEW_DISCOVERY_OPENROUTER_SINGLE_EXTRA_CALLS
+    + REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP
+    + REVIEW_DISCOVERY_TRAILING_GLOBAL_CALLS
+)
 REVIEW_DISCOVERY_WORST_CASE_SECONDS = (
     REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS * REVIEW_DISCOVERY_TIMEOUT_SECONDS
 )

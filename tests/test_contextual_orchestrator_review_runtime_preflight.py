@@ -1809,9 +1809,10 @@ def test_startup_watchdog_covers_discovery_plus_preflight_with_headroom() -> Non
     180s shell constant that only happened to exceed the *probing-only* worst
     case (120s) by coincidence, while never accounting for discovery's own
     worst case (which runs first, in the SAME process, before ``/healthz`` can
-    respond) at all -- a fully correct, on-budget run of ~105s discovery +
-    ~120s probing = ~225s could be, and was, killed by the 180s watchdog
-    before it ever reported a result.
+    respond) at all -- a fully correct, on-budget run of ~330s discovery +
+    ~120s probing = ~450s could be, and was (at the smaller, undercounted
+    105s discovery figure this test used to pin), killed by too small a
+    watchdog before it ever reported a result.
 
     This is a purely static consistency check (no timing simulation, no real
     sleeps -- CI-safe and non-flaky) that recomputes both worst cases
@@ -1819,11 +1820,15 @@ def test_startup_watchdog_covers_discovery_plus_preflight_with_headroom() -> Non
     ``REVIEW_STARTUP_WATCHDOG_SECONDS`` -- the single source of truth the
     shell sidecar now imports rather than hard-coding its own number --
     actually covers their sum, with non-negative explicit headroom. It also
-    locks in the real, literal current numbers (not Devin's original rough
-    ~105s/~100s estimate) as a regression: any future change to a budget
-    constant that silently desynchronizes the derived watchdog fails this
-    test immediately, rather than only failing much later in a live CI run
-    that happens to hit the worst case.
+    locks in the real, literal current numbers as a regression: any future
+    change to a budget constant that silently desynchronizes the derived
+    watchdog fails this test immediately, rather than only failing much later
+    in a live CI run that happens to hit the worst case. See
+    ``test_startup_watchdog_covers_a_retry_heavy_discovery_reconstruction``
+    below for the companion test that independently reconstructs the 330s
+    discovery figure from the real, enumerated request structure rather than
+    trusting this module's own arithmetic -- exactly what Devin Review's
+    follow-up finding says a verbatim-constant test alone cannot catch.
     """
     namespace = _load_launcher()
 
@@ -1833,9 +1838,9 @@ def test_startup_watchdog_covers_discovery_plus_preflight_with_headroom() -> Non
     assert recomputed_discovery_worst_case == namespace["REVIEW_DISCOVERY_WORST_CASE_SECONDS"]
     # Verified directly against the vendored contextual_orchestrator.model_discovery
     # source at ORCHESTRATOR_PIN_SHA (see the launcher's own module-level
-    # comment for the full call-by-call derivation): 7 sequential calls at up
-    # to 15.0s each.
-    assert recomputed_discovery_worst_case == 105.0
+    # comment for the full call-by-call derivation): 22 sequential-call-
+    # equivalents at up to 15.0s each.
+    assert recomputed_discovery_worst_case == 330.0
 
     total_routes = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
     batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
@@ -1855,10 +1860,91 @@ def test_startup_watchdog_covers_discovery_plus_preflight_with_headroom() -> Non
     # The core invariant Devin Review's finding is about: the watchdog must
     # cover the full combined worst case, not just one phase of it.
     assert watchdog >= combined_worst_case
-    # Locks in the real current total (225s combined + 30s headroom), not a
+    # Locks in the real current total (450s combined + 30s headroom), not a
     # loosely-fitting range, so a future change to any input constant is a
     # deliberate, visible edit to this test rather than a silent drift.
-    assert watchdog == 255
+    assert watchdog == 480
+
+
+def test_startup_watchdog_covers_a_retry_heavy_discovery_reconstruction() -> None:
+    """Independently rebuild the worst-case call count from the real request
+    structure and assert the derived watchdog still covers its time budget.
+
+    Regression for Devin Review's exact follow-up finding on the discovery
+    budget ("Recompute the startup watchdog from the actual bounded request
+    structure ... extend tests with retry-heavy discovery timing rather than
+    asserting the current constant verbatim"): a test that only pins
+    ``REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS == 22`` (as
+    ``test_startup_watchdog_covers_discovery_plus_preflight_with_headroom``
+    above does) would pass just as happily if that constant were still wrong
+    in the same direction the original ``7`` was -- it re-encodes whatever
+    the module currently claims, it does not check the claim against the
+    real, enumerated request structure. This test instead reconstructs the
+    worst case from first principles (each sub-count independently justified
+    against the vendored ``contextual_orchestrator.model_discovery`` source
+    at ``ORCHESTRATOR_PIN_SHA`` in the launcher module's own comment) and
+    proves the *reconstructed* time budget -- not just the module's own
+    arithmetic on its own constants -- is what the watchdog actually covers.
+    """
+    namespace = _load_launcher()
+    discovery_timeout = namespace["REVIEW_DISCOVERY_TIMEOUT_SECONDS"]
+
+    # (a) The shared Models.dev fetch retries transient failures up to
+    # _MODELS_DEV_FETCH_ATTEMPTS=3 times in the pinned source -- a retry-
+    # heavy scenario is exactly a run where every one of those attempts is a
+    # transient failure (timeout/connection reset) before the caller finally
+    # gives up and returns None (still a valid, non-raising outcome).
+    models_dev_attempts = 3
+    assert models_dev_attempts == namespace["REVIEW_DISCOVERY_MODELS_DEV_MAX_ATTEMPTS"]
+
+    # (b) Every one of the sidecar's five bootstrapped credentials
+    # (openai, openrouter, nvidia_nim, nvidia_nim_sub, bytez) gets its own
+    # primary-fetch attempt plus one retry attempt in a retry-heavy run.
+    credentialed_sources = ("openai", "openrouter", "nvidia_nim", "nvidia_nim_sub", "bytez")
+    attempts_per_source = 2  # base attempt + one transient-failure retry
+    assert len(credentialed_sources) == namespace["REVIEW_DISCOVERY_CREDENTIALED_SOURCE_COUNT"]
+    assert attempts_per_source == namespace["REVIEW_DISCOVERY_SOURCE_MAX_ATTEMPTS"]
+
+    # (c) OpenRouter alone makes two further single-attempt calls (ZDR
+    # endpoints, provider policies) beyond its own primary fetch already
+    # counted in (b), plus one concurrent endpoint-feed round per <=8
+    # currently free-priced models. A retry-heavy scenario does not add
+    # retries to these three (none of them retry in the pinned source), but
+    # it does mean discovery cannot skip them by finishing early.
+    openrouter_single_extra_calls = 2
+    free_endpoint_round_cap = 5
+    assert openrouter_single_extra_calls == namespace[
+        "REVIEW_DISCOVERY_OPENROUTER_SINGLE_EXTRA_CALLS"
+    ]
+    assert free_endpoint_round_cap == namespace[
+        "REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP"
+    ]
+
+    # (d) Two trailing global calls run once, after every source above, with
+    # an OpenRouter credential registered: the (separate, non-cached)
+    # _openrouter_zdr_model_ids() fetch and the credits check.
+    trailing_global_calls = 2
+    assert trailing_global_calls == namespace["REVIEW_DISCOVERY_TRAILING_GLOBAL_CALLS"]
+
+    reconstructed_call_count = (
+        models_dev_attempts
+        + len(credentialed_sources) * attempts_per_source
+        + openrouter_single_extra_calls
+        + free_endpoint_round_cap
+        + trailing_global_calls
+    )
+    assert reconstructed_call_count == 22
+    assert reconstructed_call_count == namespace["REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS"]
+
+    reconstructed_discovery_seconds = reconstructed_call_count * discovery_timeout
+    reconstructed_combined_seconds = (
+        reconstructed_discovery_seconds + namespace["REVIEW_PREFLIGHT_WORST_CASE_SECONDS"]
+    )
+    watchdog = namespace["REVIEW_STARTUP_WATCHDOG_SECONDS"]
+    # The core assertion: the derived watchdog must cover a genuinely
+    # independently-reconstructed retry-heavy worst case, not merely the
+    # module's own (possibly still wrong) restatement of it.
+    assert watchdog >= reconstructed_combined_seconds
 
 
 def test_sidecar_derives_its_watchdog_from_the_launcher_single_source_of_truth() -> None:
@@ -2089,7 +2175,18 @@ def test_production_defaults_expose_the_complete_bounded_catalog() -> None:
     assert 'ORCHESTRATOR_CATALOG_LIMIT", "24"' in launcher
     assert 'CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"' in sidecar
     assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24" in launcher
-    assert 'CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"' in sidecar
+    # Regression for ContextualWisdomLab/.github#1415's Devin follow-up
+    # finding: the shell used to always export a hard-coded literal `8`
+    # default for ORCHESTRATOR_CATALOG_ACCOUNT_CAP, which bypassed the
+    # launcher's own _catalog_account_cap(DEFAULT_ACCOUNT_CAP)=4 fallback in
+    # every real run (os.environ.get only falls back when the key is
+    # ABSENT). The shell must no longer materialize that literal and must
+    # instead derive the same policy.DEFAULT_ACCOUNT_CAP the launcher does.
+    assert 'CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"' not in sidecar
+    assert (
+        "from scripts.ci.contextual_orchestrator_review_policy import "
+        "DEFAULT_ACCOUNT_CAP; print(DEFAULT_ACCOUNT_CAP)"
+    ) in sidecar
 
 
 def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
@@ -2160,6 +2257,110 @@ def test_catalog_account_cap_honors_an_explicit_override(
     namespace = _load_launcher()
     monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
     assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
+
+
+_CATALOG_ACCOUNT_CAP_BLOCK_START = (
+    'if [ -n "${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-}" ]; then'
+)
+
+
+def _run_catalog_account_cap_derivation(
+    *, override: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Execute the sidecar's real per-account-cap derivation block in bash.
+
+    Extracts the exact, current source of the derivation from the tracked
+    sidecar script (the same technique
+    ``test_sidecar_derives_its_watchdog_from_the_launcher_single_source_of_truth``
+    and ``_run_healthz_wait_loop`` use above) so a future edit to the block
+    is automatically exercised here instead of silently drifting from a
+    second, hand-copied duplicate. Regression for
+    ContextualWisdomLab/.github#1415's Devin follow-up finding: proves the
+    shell itself -- not just the Python ``_catalog_account_cap`` helper in
+    isolation -- resolves to ``policy.DEFAULT_ACCOUNT_CAP`` when no operator
+    override is set, and to the override's exact value when one is.
+
+    Args:
+        override: Value to set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` to before
+            running the block, or ``None`` to leave it genuinely unset.
+
+    Returns:
+        The completed harness process; ``stdout`` carries ``RESULT=<cap>``
+        on success.
+    """
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+    start = sidecar_text.index(_CATALOG_ACCOUNT_CAP_BLOCK_START)
+    end = sidecar_text.index("esac\n", start) + len("esac\n")
+    block = sidecar_text[start:end]
+    assert "CATALOG_ACCOUNT_CAP" in block
+
+    harness = (
+        "set -euo pipefail\n"
+        "log() { printf '[test-sidecar] %s\\n' \"$*\"; }\n"
+        'fail() { log "error: $*" >&2; exit 1; }\n'
+        f'ORG_REPO_ROOT="{_REPO_ROOT}"\n'
+        f'sidecar_python="{sys.executable}"\n'
+        + block
+        + '\nprintf "RESULT=%s\\n" "$CATALOG_ACCOUNT_CAP"\n'
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+    if override is None:
+        env.pop("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", None)
+    else:
+        env["ORCHESTRATOR_CATALOG_ACCOUNT_CAP"] = override
+    return subprocess.run(
+        ["bash", "-c", harness],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_sidecar_shell_derives_the_account_cap_default_from_policy_when_unset() -> None:
+    """With no operator override, the SHELL (not just the Python helper) gets 4.
+
+    This is the exact regression the just-landed
+    ``_catalog_account_cap(DEFAULT_ACCOUNT_CAP)`` fix could not close on its
+    own: that helper's env-unset fallback only runs if the shell genuinely
+    never set the env var. Before this fix the shell always exported a
+    literal ``8`` first, so this end-to-end path -- not the Python unit
+    tested above -- is what previously stayed silently broken in production.
+    """
+    result = _run_catalog_account_cap_derivation(override=None)
+    assert result.returncode == 0, result.stderr
+    assert f"RESULT={policy.DEFAULT_ACCOUNT_CAP}" in result.stdout
+
+
+def test_sidecar_shell_honors_an_explicit_account_cap_override() -> None:
+    """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still wins in the shell."""
+    result = _run_catalog_account_cap_derivation(override="6")
+    assert result.returncode == 0, result.stderr
+    assert "RESULT=6" in result.stdout
+
+
+@pytest.mark.parametrize("bad_value", ["0", "-1", "abc"])
+def test_sidecar_shell_rejects_an_invalid_account_cap_override(bad_value: str) -> None:
+    """A malformed override must fail closed, matching the file's other digit checks."""
+    result = _run_catalog_account_cap_derivation(override=bad_value)
+    assert result.returncode == 1
+    assert "ORCHESTRATOR_CATALOG_ACCOUNT_CAP must be a positive integer" in result.stderr
+
+
+def test_sidecar_shell_treats_an_empty_override_as_unset() -> None:
+    """``ORCHESTRATOR_CATALOG_ACCOUNT_CAP=""`` matches bash's own ``:-`` semantics.
+
+    An explicitly empty override is indistinguishable from unset under the
+    ``${VAR:-default}`` expansion this block (and the rest of this script)
+    already relies on elsewhere -- e.g. the provider-secret presence loop's
+    ``[ -n "${!secret_name:-}" ]`` -- so it must fall back to the derived
+    policy default rather than reaching the digit-format check with an empty
+    string.
+    """
+    result = _run_catalog_account_cap_derivation(override="")
+    assert result.returncode == 0, result.stderr
+    assert f"RESULT={policy.DEFAULT_ACCOUNT_CAP}" in result.stdout
 
 
 def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:

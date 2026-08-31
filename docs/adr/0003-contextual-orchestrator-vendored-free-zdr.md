@@ -86,7 +86,17 @@ all five, and auto-optimize routing by cost.
    — it silently disabled per-account diversification and let two
    rate-limited NVIDIA NIM credentials sharing one upstream jointly occupy an
    entire 12-slot preflight batch. `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` remains
-   an explicit operator override.
+   an explicit operator override. (2026-08-31 correction: that "defaults to
+   4" claim was true of the Python launcher's own fallback but not, until
+   this date, of the shell sidecar — `contextual_orchestrator_review_sidecar.sh`
+   still unconditionally exported a leftover literal `8` default whenever no
+   operator override was set, which meant the launcher's own env-unset
+   fallback branch could never actually run in production and every real run
+   got a cap of 8, not 4. The shell now derives its default the same way the
+   startup watchdog seconds below are derived: by reading
+   `contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP` at runtime
+   instead of hard-coding a numeric literal, so shell, Python, and this ADR
+   describe one real number.)
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
    provision the sidecar with the five secrets before OpenCode runs and point
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;

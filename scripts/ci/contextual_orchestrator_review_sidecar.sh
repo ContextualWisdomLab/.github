@@ -77,8 +77,21 @@ SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
 # leave a raw pre-merge commit unreachable in plain git once the branch is
 # deleted, while the PR itself (and its full commit history) stays
 # permanently resolvable on GitHub.
+#
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review follow-up): "raised
+# from 4 to 8" above was itself never reverted when the 24 mistake was fixed
+# -- this shell kept unconditionally exporting a literal 8 default, so the
+# real, currently-intended default (4, matching
+# contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP) never actually
+# took effect in production. CATALOG_ACCOUNT_CAP is no longer set here as a
+# shell literal; see its derivation further below, right before its export,
+# for the single-source-of-truth fix and why it must run after
+# $sidecar_python/$ORG_REPO_ROOT/fail() are defined.
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
-CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
+# CATALOG_ACCOUNT_CAP itself is derived further below (single source of truth:
+# contextual_orchestrator_review_policy.py's own DEFAULT_ACCOUNT_CAP), once
+# $sidecar_python, $ORG_REPO_ROOT, and fail() are all available -- see that
+# derivation's own comment for the incident this replaces.
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
 
@@ -346,6 +359,51 @@ case "$sidecar_startup_watchdog_seconds" in
     fail "REVIEW_STARTUP_WATCHDOG_SECONDS must be at most 999999" ;;
 esac
 log "startup watchdog: ${sidecar_startup_watchdog_seconds}s (derived from contextual_orchestrator_review_launcher.py's REVIEW_STARTUP_WATCHDOG_SECONDS)"
+
+# Single source of truth for the per-account catalog cap default, same
+# derive-from-Python pattern as the startup watchdog just above: read
+# contextual_orchestrator_review_policy.py's own DEFAULT_ACCOUNT_CAP instead
+# of hard-coding a numeric default in this shell script.
+#
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review follow-up on the
+# just-landed contextual_orchestrator_review_launcher.py fix that added
+# _catalog_account_cap(DEFAULT_ACCOUNT_CAP)): this shell used to
+# unconditionally materialize and export a concrete
+# ORCHESTRATOR_CATALOG_ACCOUNT_CAP=8 whenever no operator override was set --
+# a leftover from an earlier round's CATALOG_FAMILY_CAP=24 ->
+# CATALOG_ACCOUNT_CAP=8 rename that fixed the variable's NAME but kept the
+# WRONG default value. Because the shell always exported a concrete value of
+# 8 before the Python launcher ever ran, _catalog_account_cap's own
+# fallback-to-DEFAULT_ACCOUNT_CAP branch (os.environ.get(..., str(default)))
+# could never actually trigger in production: os.environ.get only falls back
+# to its default when the key is ABSENT, and this shell always set it. Every
+# real run therefore got a cap of 8, not the policy's intended 4, so two
+# NVIDIA credentials could still jointly occupy up to 16 of the 24 preflight
+# slots between them (4 * 2 = 8 was the actual bound intended) rather than the
+# intended 8 (4 each) -- half the diversification the just-landed fix was
+# supposed to restore. An explicit operator-set ORCHESTRATOR_CATALOG_ACCOUNT_CAP
+# env var still always wins over this derived default.
+if [ -n "${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-}" ]; then
+  CATALOG_ACCOUNT_CAP="$ORCHESTRATOR_CATALOG_ACCOUNT_CAP"
+else
+  CATALOG_ACCOUNT_CAP="$(
+    PYTHONPATH="$ORG_REPO_ROOT" "$sidecar_python" -c \
+      'from scripts.ci.contextual_orchestrator_review_policy import DEFAULT_ACCOUNT_CAP; print(DEFAULT_ACCOUNT_CAP)'
+  )" || fail "could not derive the default catalog account cap from the policy module"
+fi
+# Same digit-count defense as REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS and
+# REVIEW_STARTUP_WATCHDOG_SECONDS above: a non-numeric value would make the
+# downstream `export`+Python `int(...)` parse fail deep inside the launcher
+# instead of this script rejecting bad configuration up front, and an
+# all-digit value can still overflow shell/Python integer expectations. Four
+# digits (up to 9999) is already far beyond any realistic per-account cap.
+case "$CATALOG_ACCOUNT_CAP" in
+  ''|*[!0-9]*|0)
+    fail "ORCHESTRATOR_CATALOG_ACCOUNT_CAP must be a positive integer, got: ${CATALOG_ACCOUNT_CAP}" ;;
+  ?????*)
+    fail "ORCHESTRATOR_CATALOG_ACCOUNT_CAP must be at most 9999" ;;
+esac
+log "catalog account cap: ${CATALOG_ACCOUNT_CAP} (operator override, or contextual_orchestrator_review_policy.py's DEFAULT_ACCOUNT_CAP when unset)"
 
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"

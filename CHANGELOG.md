@@ -5,6 +5,72 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix two real bugs Devin's automated review found on this same PR
+  (ContextualWisdomLab/.github#1415) against the just-landed
+  `_catalog_account_cap(DEFAULT_ACCOUNT_CAP)` fix and the discovery-budget
+  arithmetic:
+  1. **Sidecar shell bypassed the policy account-cap default.**
+     `contextual_orchestrator_review_sidecar.sh` still unconditionally
+     exported `ORCHESTRATOR_CATALOG_ACCOUNT_CAP=8` whenever no operator
+     override was set — a leftover from an earlier round's
+     `CATALOG_FAMILY_CAP=24` → `CATALOG_ACCOUNT_CAP=8` rename that fixed the
+     variable's name but kept the wrong default value. Because the shell
+     always exported a concrete `8` before the Python launcher ever ran,
+     `_catalog_account_cap(DEFAULT_ACCOUNT_CAP)`'s own env-unset fallback to
+     `4` (`os.environ.get` only falls back when the key is absent) could
+     never actually trigger in production: every real run got a cap of 8,
+     not 4, so two NVIDIA credentials could still jointly occupy up to 16 of
+     the 24 preflight slots between them instead of the intended 8 (4 each).
+     Fixed by deriving the shell's default the same way
+     `sidecar_startup_watchdog_seconds` already derives its own default —
+     reading `contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP` at
+     runtime via a `python3 -c` one-liner — instead of hard-coding a numeric
+     literal; an explicit operator-set `ORCHESTRATOR_CATALOG_ACCOUNT_CAP`
+     still always wins. Updated the contract tests that pinned the old
+     literal (`test_contextual_orchestrator_review_sidecar_contract.py`,
+     `test_contextual_orchestrator_review_runtime_preflight.py`) and added
+     executable coverage that runs the real shell derivation block (not just
+     the Python helper in isolation) for the unset, overridden, empty, and
+     malformed-override cases. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+     amended to record the correction so shell, Python, and ADR text agree
+     on one number (4).
+  2. **Startup watchdog's discovery-time budget undercounted known
+     retries.** `REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS = 7` (feeding
+     `REVIEW_DISCOVERY_WORST_CASE_SECONDS` ≈ 105s and, in turn,
+     `REVIEW_STARTUP_WATCHDOG_SECONDS` ≈ 255s) counted only one
+     single-attempt call per registered source plus one unconditional
+     OpenRouter extra — it never accounted for retries or for calls the
+     pinned `contextual-orchestrator` revision actually makes beyond that.
+     Re-verified line-by-line against the vendored
+     `contextual_orchestrator/model_discovery.py` at the pinned
+     `ORCHESTRATOR_PIN_SHA`: the shared Models.dev fetch retries up to 3
+     times (not 1); each of the sidecar's five credentialed sources' primary
+     listing fetch gets a base attempt plus one transient-failure retry (2
+     each, not 1 — 10 total); OpenRouter alone makes two further
+     single-attempt calls (ZDR endpoints, provider policies) beyond its own
+     listing call, plus one concurrent (≤8-worker thread pool) endpoint-feed
+     round per currently free-priced model (live-verified against
+     OpenRouter's public catalog on 2026-08-31: 21 free models today, i.e. 3
+     rounds; budgeted 5 rounds as documented headroom for catalog growth);
+     and `discover_all_models()` makes two further trailing global calls
+     once per run (a second, non-cached ZDR-endpoints fetch, plus the
+     credits check) that the old count missed entirely. New total: 22
+     sequential-call-equivalents (3 + 5×2 + 2 + 5 + 2), raising
+     `REVIEW_DISCOVERY_WORST_CASE_SECONDS` to 330s and
+     `REVIEW_STARTUP_WATCHDOG_SECONDS` to 480s. The launcher now exposes
+     each sub-count as its own named constant
+     (`REVIEW_DISCOVERY_MODELS_DEV_MAX_ATTEMPTS`,
+     `REVIEW_DISCOVERY_CREDENTIALED_SOURCE_COUNT`,
+     `REVIEW_DISCOVERY_SOURCE_MAX_ATTEMPTS`,
+     `REVIEW_DISCOVERY_OPENROUTER_SINGLE_EXTRA_CALLS`,
+     `REVIEW_DISCOVERY_OPENROUTER_FREE_ENDPOINT_ROUND_CAP`,
+     `REVIEW_DISCOVERY_TRAILING_GLOBAL_CALLS`) rather than one opaque
+     literal, so a new
+     `test_startup_watchdog_covers_a_retry_heavy_discovery_reconstruction`
+     test can independently reconstruct the worst case from the enumerated
+     real request structure — not merely re-assert the module's own
+     arithmetic on its own constants, which would just re-encode the same
+     kind of undercounted assumption this fix corrects.
 - Fix a real, live-evidenced bug in the sidecar's per-account catalog cap
   (flagged in review on this same PR,
   ContextualWisdomLab/.github#1415#issuecomment-5474321491): the
