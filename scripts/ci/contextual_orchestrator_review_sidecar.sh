@@ -9,12 +9,12 @@
 # are registered into the process-local KV by the launcher in the SAME process
 # that performs live model discovery and serves requests — never read back at
 # request time. The in-process free-priced discovery evidence is turned into a
-# ZDR-prioritized, provider-family-diverse agents catalog by
+# ZDR-prioritized, credential-account-diverse agents catalog by
 # scripts/ci/contextual_orchestrator_review_policy.py for the `orchestrator/free`
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-30c6d71680e659f25a0a433d4726ad0d437f9757}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-0adca4703df67f8f31d3ea5b04a1e07ed775dd6c}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -36,51 +36,11 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
 CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
-# 2026-08-30: raised from 4. contextual_orchestrator_review_policy.py's
-# family_cap groups nvidia_nim and nvidia_nim_sub as one outage-domain family
-# and, per an exact-head evidence trail, currently that single family is the
-# *only* one populating orchestrator/free (46 free rows, 100% nvidia_nim* --
-# 23 distinct model ids shared by both keys). Candidate selection sorts
-# eligible rows alphabetically by (provider, model) with no reliability
-# awareness, so a family_cap of 4 deterministically admitted the same four
-# alphabetically-first candidates on every run -- always including two
-# NVIDIA-retired model ids (google/gemma-3-12b-it, google/gemma-3-4b-it;
-# confirmed HTTP 404 on live preflight) plus two others that timed out in the
-# same recovered run -- while never giving the other ~19 healthy free
-# nvidia_nim* models in the same run's own discovery report a chance. This is
-# not throughput tuning: it is the confirmed, reproducible root cause of
-# orchestrator/free's "no provider route passed the Strix plain-chat
-# preflight" failures (see docs/product-technical-gap-baseline.md's
-# 2026-08-30 sidecar-preflight entries for the full evidence, including the
-# exact discovery/preflight artifact this comment is based on).
-# 8 is a deliberately moderate raise, not a wholesale removal of the cap. The
-# picking loop below also stops at CATALOG_LIMIT (12) total regardless of
-# family_cap, so the absolute worst case across any number of families was
-# already REVIEW_PREFLIGHT_TIMEOUT_SECONDS (10s) x 12 = 120s before this
-# change (reached once family_cap x distinct-families >= 12, i.e. >=3
-# families at the old cap of 4) and stays 120s after it -- this raise does
-# not move that pre-existing ceiling. What it does change is when that
-# ceiling is reached and the typical case today: with the single family
-# (nvidia_nim) that currently fills 100% of orchestrator/free, worst-case
-# preflight time rises from ~40s (4 candidates) to ~80s (8 candidates); with
-# exactly two distinct families it would now also reach the 120s ceiling
-# (previously ~80s at family_cap=4). Both figures stay within the sidecar's
-# existing 180s readiness-wait budget in the common case; this was reasoned
-# from, not verified against, live provider timing, since this session has
-# no access to the five provider credentials the sidecar's KV requires. If
-# real hosted
-# runs show this is still insufficient (all 8 still failing) or the added
-# latency itself becomes the bottleneck, the more complete fix is a live
-# provider /v1/models cross-check at discovery time to drop retired model ids
-# before they ever reach preflight -- see git history's now-removed
-# select_nvidia_nim_model.py (removed in #1442) for a worked example of that
-# exact query-the-provider-catalog pattern, applied there to a different,
-# direct-provider caller -- rather than raising this further. The PR number
-# is used here, not a raw commit SHA or the removing branch's name: a squash
-# merge would leave a raw pre-merge commit unreachable in plain git once the
-# branch is deleted, while the PR itself (and its full commit history) stays
-# permanently resolvable on GitHub.
-CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-8}"
+# Each KV credential is an independent account, including two credentials for
+# the same vendor or endpoint. The account cap prevents one credential from
+# consuming the bounded twelve-route preflight catalog without inventing a
+# provider-family equivalence relation.
+CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
 
@@ -320,7 +280,7 @@ esac
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
-export ORCHESTRATOR_CATALOG_FAMILY_CAP="$CATALOG_FAMILY_CAP"
+export ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"
 # Stream stdout/stderr through the redacting sanitizer as two named, awaitable
 # processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
 # so a failure handler can wait for the sanitizer to finish flushing before it
