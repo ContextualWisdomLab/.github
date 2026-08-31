@@ -5,6 +5,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Harden the review sidecar's per-account catalog cap against silent drift:
+  `contextual_orchestrator_review_launcher.py`'s two
+  `build_zdr_prioritized_catalog` call sites now source their
+  `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` fallback from
+  `contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP` through a new
+  `_catalog_account_cap()` helper, instead of a hand-typed `"4"` literal.
+  This closes the exact drift class that produced a real, observed
+  preflight-budget waste on a separate in-flight branch (a sibling
+  `_catalog_family_cap()` helper there fell back to the *total* routes
+  budget instead of the per-account cap, letting two rate-limited NVIDIA
+  NIM credentials jointly consume all 12 preflight slots, 10 of which were
+  then rejected via 429/404/timeout). New regression tests pin the default
+  to the policy module's canonical value and forbid the total-routes
+  constant from reappearing as the account-cap fallback.
 - Fix `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s gateway-preflight
   retry loop: when every configured attempt exhausted with no usable HTTP
   response, the script always recorded generic "transport exhausted" evidence
