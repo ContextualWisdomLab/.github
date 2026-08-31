@@ -33,6 +33,9 @@ so a governed shared implementation is required.
 6. Initial migration does not use Pingora's experimental cache integration.
 7. PHP workloads move to an HTTP application server or reviewed FastCGI adapter
    behind Pingora before the public listener changes.
+8. Documentation PNG screenshots and PDF papers without a text diff are verified
+   from bounded format-magic evidence and excluded from runtime-content scanning;
+   runtime paths and malformed or unsupported binary evidence still fail closed.
 
 ## Consequences
 

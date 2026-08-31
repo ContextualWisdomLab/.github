@@ -38,7 +38,10 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
-BINARY_DOCUMENT_SUFFIXES = frozenset({".pdf"})
+BINARY_DOCUMENT_MAGIC = {
+    ".pdf": (b"%PDF-",),
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+}
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -171,7 +174,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     """Return whether *path* is prose, license text, or scanner source fixture.
 
     Textual suffixes only: a ``.pdf`` is handled separately by
-    ``_is_binary_documentation_pdf`` and gated on GitHub reporting no diff
+    ``_is_binary_documentation_asset`` and gated on GitHub reporting no diff
     ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
     (one GitHub *can* diff, meaning it could carry inspectable content) is
     never exempted here.
@@ -206,15 +209,15 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     return False
 
 
-def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
-    """Return whether *changed* is a plausibly binary documentation PDF.
+def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
+    """Return whether *changed* is a plausibly binary documentation asset.
 
     This is only the cheap, patch-presence pre-filter: GitHub's changed-files
     API never returns a diff ``patch`` for a true binary file, so a missing
     ``patch`` is *necessary* but not *sufficient* evidence -- GitHub also
     omits one for a textual diff that merely exceeds its own rendering
     limit. A caller with network access (``evaluate_pull_request``) must
-    still confirm this with ``_pdf_evidence_confirms_binary`` before
+    still confirm this with ``_binary_documentation_evidence_confirms`` before
     trusting it; a caller without one (this module's own unit tests calling
     this function directly) is only checking the necessary condition.
     """
@@ -223,8 +226,9 @@ def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
         return False
     pure = PurePosixPath(changed.path)
     return (
-        pure.suffix.lower() in BINARY_DOCUMENT_SUFFIXES
+        pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
         and _is_known_documentation_path(pure)
+        and _runtime_path_rule(changed.path) is None
     )
 
 
@@ -414,10 +418,7 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
 
 
-_PDF_MAGIC_PREFIX = b"%PDF-"
-
-
-def _pdf_evidence_confirms_binary(
+def _binary_documentation_evidence_confirms(
     changed: ChangedFile,
     *,
     api_url: str,
@@ -426,17 +427,18 @@ def _pdf_evidence_confirms_binary(
     token: str,
     opener: OpenJson,
 ) -> bool:
-    """Return whether a claimed binary documentation PDF is genuinely binary.
+    """Return whether a claimed binary documentation asset is genuine.
 
     A missing diff ``patch`` alone is not proof of binary content: GitHub
     also omits a patch for a textual diff that exceeds its own rendering
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
-    verifies the real ``%PDF-`` magic prefix instead of trusting
+    verifies the declared format's magic prefix instead of trusting
     patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_pdf``
+    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
     exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention; every other content-evidence failure (a
+    path+suffix convention for oversized PDFs only; every other
+    content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
     same as for any other file that needs scanning.
@@ -445,22 +447,22 @@ def _pdf_evidence_confirms_binary(
     try:
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     except ContentSizeExceededError:
-        return True
-    return raw.startswith(_PDF_MAGIC_PREFIX)
+        return PurePosixPath(changed.path).suffix.lower() == ".pdf"
+    return raw.startswith(BINARY_DOCUMENT_MAGIC[PurePosixPath(changed.path).suffix.lower()])
 
 
 def _needs_content_scan(changed: ChangedFile) -> bool:
     """Return whether a changed final file can carry an active edge runtime.
 
-    A claimed binary documentation PDF (``_is_binary_documentation_pdf``)
+    A claimed binary documentation asset (``_is_binary_documentation_asset``)
     exempts here on the cheap, offline pre-filter alone; ``evaluate_pull_request``
-    never actually relies on that -- it runs ``_pdf_evidence_confirms_binary``
+    never actually relies on that -- it runs ``_binary_documentation_evidence_confirms``
     for that case before this function is even consulted.
     """
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
-    if _is_binary_documentation_pdf(changed):
+    if _is_binary_documentation_asset(changed):
         return False
     if not changed.patch_available:
         return True
@@ -499,17 +501,17 @@ def evaluate_pull_request(
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
-        # A claimed binary documentation PDF gets its own network-verified
+        # A claimed binary documentation asset gets its own network-verified
         # check ahead of _needs_content_scan's patch-presence-only signal:
         # a missing patch does not by itself prove binary content (GitHub
         # also omits one for an oversized textual diff), so this confirms
-        # the real %PDF- magic prefix whenever the bytes can be fetched at
+        # the format's magic prefix whenever the bytes can be fetched at
         # all, falling back to the path+suffix convention only when the
         # content genuinely exceeds the Contents API's size ceiling. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
-        if changed.status != "removed" and _is_binary_documentation_pdf(changed):
-            if _pdf_evidence_confirms_binary(
+        if changed.status != "removed" and _is_binary_documentation_asset(changed):
+            if _binary_documentation_evidence_confirms(
                 changed,
                 api_url=api_url.rstrip("/"),
                 repository=repository,

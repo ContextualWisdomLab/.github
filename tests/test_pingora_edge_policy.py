@@ -383,10 +383,56 @@ def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> No
     assert result == ()
 
 
+def test_evaluate_pull_request_exempts_a_real_documentation_png() -> None:
+    """A screenshot is verified by PNG magic instead of decoded as UTF-8."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/15/files" in url:
+            return [{"filename": "docs/screenshots/dashboard.png", "status": "added"}]
+        assert "/contents/docs/screenshots/dashboard.png" in url
+        raw = b"\x89PNG\r\n\x1a\nsynthetic"
+        return {
+            "type": "file",
+            "encoding": "base64",
+            "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=15,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
+
+
+def test_evaluate_pull_request_rejects_a_fake_documentation_png() -> None:
+    """A PNG suffix without PNG magic remains runtime-content evidence."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/16/files" in url:
+            return [{"filename": "docs/screenshots/fake.png", "status": "added"}]
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=16,
+        head_sha="b" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
 def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     """A removed documentation PDF has no head content to fetch at all.
 
-    Regression coverage for Devin Review's finding: _is_binary_documentation_pdf
+    Regression coverage for Devin Review's finding: _is_binary_documentation_asset
     does not itself check status, so without an explicit removed-status guard
     in evaluate_pull_request's own loop, a deleted PDF would try to fetch its
     (nonexistent) head content and fail evidence collection for every such

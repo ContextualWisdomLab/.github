@@ -53,8 +53,10 @@ The organization-required `required-workflow-bootstrap` job runs trusted
 base-branch scanner code at the immutable required-workflow SHA. It reads bounded
 changed-file metadata and final UTF-8 content through GitHub's REST API. It does
 not check out or execute pull-request content and receives only read permissions.
-Malformed, truncated, binary, symlink, oversized, or unavailable evidence fails
-closed.
+Malformed, truncated, symlinked, oversized, or unavailable runtime evidence fails
+closed. Documentation PNG screenshots and PDF papers without a text diff are
+excluded only after bounded format-magic verification; other binary files remain
+unavailable evidence and fail closed.
 
 ## Exception process
 
