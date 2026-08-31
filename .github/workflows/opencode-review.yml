@@ -235,7 +235,27 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 325
+    # The poller below must outlast the *entire* upstream-plus-downstream
+    # dispatch chain, not just opencode-review-dispatch.yml's own
+    # opencode-review-target job (that job's 325-minute budget is documented
+    # at its own timeout-minutes). Before that job's clock even starts,
+    # validate-pr-metadata, coverage-source-tree, and coverage-evidence must
+    # each run (needs: chain) with no timeout-minutes of their own, so their
+    # only script-enforced bound is coverage-evidence's three sequential
+    # `timeout --kill-after=20 900` sandboxed test-measurement invocations
+    # (2700s/45m) plus realistic dispatch/runner/build/artifact overhead.
+    # GitHub-hosted runners hard-cap every job's wall-clock at 360 minutes
+    # (docs.github.com/actions/reference/limits) regardless of
+    # timeout-minutes, so the true realistic worst case (~90-105m upstream +
+    # up to 325m downstream, ~415-430m) cannot fit in one job on this
+    # runner class no matter how this value is set. 355 is the largest value
+    # that stays 5 minutes under that hard cap, maximizing patience within
+    # what this architecture can actually deliver; fully covering the
+    # realistic worst case needs an architecture change (splitting the wait
+    # across multiple short-lived dispatches) tracked as a residual gap
+    # rather than solved here (docs/product-technical-gap-baseline.md,
+    # 2026-08-31 entry).
+    timeout-minutes: 355
     permissions:
       contents: read
       pull-requests: read
@@ -291,9 +311,27 @@ jobs:
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
           fi
+          # Budget (Devin Review + CodeRabbit findings on PR #1507, 2026-08-31):
+          # 660 sleeps x 30s = 19800s = 330 minutes of pure polling patience,
+          # exceeding opencode-review-dispatch.yml's own opencode-review-target
+          # job's 325-minute budget by an explicit 5-minute margin (the
+          # largest margin available -- see the timeout-minutes comment above
+          # for why 330m/355m is the ceiling this architecture can reach).
+          # Each `gh api --paginate` call is capped at 25s (`timeout 25`) so
+          # one hung or heavily-paginated call cannot silently consume
+          # unbudgeted time; a failed/timed-out call degrades to "no verdict
+          # yet" instead of crashing the step under `set -e`, and the loop
+          # keeps polling on the next attempt. The 355-minute job timeout
+          # reserves ~25 minutes above the 330-minute sleep budget for the
+          # dispatch step, realistic cumulative gh-api latency across up to
+          # 661 attempts, and runner/shutdown overhead, so this loop's own
+          # "::error::No APPROVED or CHANGES_REQUESTED" failure fires before
+          # GitHub's job-level timeout would kill the job mid-poll.
           verdict=""
-          for attempt in $(seq 1 640); do
-            reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+          for attempt in $(seq 1 661); do
+            if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
+              reviews="[]"
+            fi
             verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
@@ -325,7 +363,7 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            if [ "$attempt" -lt 640 ]; then
+            if [ "$attempt" -lt 661 ]; then
               sleep 30
             fi
           done

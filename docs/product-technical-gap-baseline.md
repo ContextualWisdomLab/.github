@@ -2034,6 +2034,111 @@ tests. Full validation was re-run after this PR's isolated-clone protocol's pre-
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
+## 2026-08-31 opencode-review.yml required-verdict poller: budget shorter than the job it waits on,
+and a GitHub-hosted 360-minute hard cap this architecture cannot fully absorb
+
+Devin Review's pass on `opencode-review.yml`'s "Fail closed without a current-head OpenCode verdict"
+step (the poller the branch-protection-required `opencode-review-target` job uses to wait for
+`opencode-review-dispatch.yml` to post a verdict) found a real arithmetic bug: 639 `sleep 30` calls
+(the loop never sleeps after its final attempt) sum to 319.5 minutes of polling patience, which is
+*less* than `opencode-review-dispatch.yml`'s own `opencode-review-target` job's `timeout-minutes: 325`
+-- the job that actually runs the review and posts the verdict this poller is waiting for. The poller
+could give up before that job's own declared budget elapses, even before counting the
+`validate-pr-metadata` -> `coverage-source-tree` -> `coverage-evidence` chain that job's `needs:` list
+requires to finish first, or the dispatch/queueing delay before that chain even starts. Independently
+verified the arithmetic (639 x 30 = 19170s = 319.5m < 325m) against a fresh clone at the branch's then
+head before making any change. CodeRabbit's independent pass on the same step added a second, distinct
+finding: the loop's `sleep 30` calls were the *only* budgeted time -- the up to 640 sequential
+`gh api --paginate repos/{repo}/pulls/{number}/reviews` calls themselves had no timeout and no budget
+allocation, so one hung connection or a heavily-paginated PR review list could silently consume time
+the arithmetic above never accounted for.
+
+**Investigated the full pipeline before picking new numbers, and found a platform ceiling neither
+finding's suggested fix accounted for.** `opencode-review-dispatch.yml`'s own `opencode-review-target`
+job carries a job-header comment breaking its 325-minute budget into named line items (12m evidence +
+205m provider-pool + 36m publication gate + 18m Noema handoff + ~54m setup/cleanup overhead), and an
+existing test (`test_opencode_job_timeout_contains_full_sequential_review_budget` in
+`tests/test_opencode_agent_contract.py`) already asserts that composition holds -- left unchanged here.
+The three jobs upstream of it in that same workflow's `needs:` chain (`validate-pr-metadata`,
+`coverage-source-tree`, `coverage-evidence`) carry no `timeout-minutes` of their own; the only
+script-enforced bound inside them is `coverage-evidence`'s three sequential
+`timeout --kill-after=20 900` sandboxed test-measurement invocations (Python/R/a third language,
+2700s/45m worst case), on top of realistic (not pathological) dispatch-event, runner-provisioning,
+Docker-image-build, and git-fetch/artifact-transfer overhead -- a realistic worst-case estimate in the
+~90-105 minute range. Summed with the downstream job's own 325-minute budget, a fully safe poller
+budget would need to exceed roughly 415-430 minutes. But GitHub-hosted runners (`runs-on: ubuntu-latest`,
+used by both the poller job and every job in the chain it waits on) hard-cap **every** job's wall-clock
+at 360 minutes regardless of `timeout-minutes`
+(<https://docs.github.com/en/actions/reference/limits>; corroborated by
+<https://github.com/orgs/community/discussions/25700>, a report of exactly this "`timeout-minutes: 600`
+but killed at 360m anyway" gotcha) -- so no value written into this poller job's `timeout-minutes` can
+ever let it wait the full realistic worst case; the platform kills the runner first. This also explains,
+retroactively, why the downstream job's own budget was set to 325 rather than something larger: 325 is
+already only 35 minutes under that same 360-minute ceiling.
+
+**Fix: maximize patience within what a single GitHub-hosted job can actually deliver, document the
+residual gap explicitly, and treat "one call can't silently be unbounded" as a real, separate defect
+worth fixing alongside the budget numbers.** Raised the enclosing `opencode-review-target` job's
+`timeout-minutes` from 325 to 355 (5 minutes under the 360-minute hard cap -- the largest value that
+stays honored by the platform rather than silently truncated). Raised the poll loop's attempt count from
+640 to 661 (`for attempt in $(seq 1 661)`; `sleep 30` interval unchanged), giving 660 sleeps x 30s = 330
+minutes of pure-sleep patience -- now 5 minutes *more* than the downstream job's own 325-minute budget,
+closing Devin's specific inequality with an explicit margin, versus falling 5.5 minutes short before.
+Addressed CodeRabbit's per-call finding by wrapping the `gh api --paginate` call itself in
+`timeout 25`, so no single call (hung connection or an unusually deep multi-page fetch) can consume more
+than 25 seconds; a failed or timed-out call now degrades to treating that attempt as "no verdict yet"
+(`reviews="[]"`) and continues polling on the next attempt, instead of crashing the whole step under
+`set -euo pipefail` the way an unguarded `reviews="$(gh api ...)"` would have. This leaves 25 minutes of
+declared slack (355m job timeout minus 330m poll budget) for the dispatch step, cumulative per-call
+latency across up to 661 attempts, and runner/shutdown overhead, so the loop's own
+`::error::No APPROVED or CHANGES_REQUESTED...` message is the one that fires on genuine exhaustion,
+not an abrupt platform-level job-timeout kill with no actionable message.
+
+**What this fix does and does not close.** It provably fixes Devin's narrow arithmetic complaint (poll
+budget now exceeds the downstream job's own declared budget, with margin) and CodeRabbit's per-call
+budgeting gap (every `gh api` call is now individually bounded and its failure handled). It does *not*
+close the larger realistic-worst-case gap: 330 minutes of patience is still well short of the
+~415-430 minute realistic worst case once upstream chain delay is counted, because that full figure
+exceeds even the platform's own 360-minute per-job ceiling -- no `timeout-minutes` value fixes that.
+Fully closing it needs an architecture change (splitting the wait across multiple short-lived
+re-dispatched jobs, e.g. chained through `workflow_run`, rather than one job blocking end-to-end) that
+is deliberately out of scope for this budget-sizing fix and is recorded here as an explicit residual
+risk rather than silently left implicit.
+
+**Test-quality finding (addressed): the existing regression test only pinned exact literals
+(`"timeout-minutes: 325"`, `"for attempt in $(seq 1 640)"`), which would have needed a matching
+hand-edit on every future change and would not have caught a future edit that broke the underlying
+relationship while still passing its own literal check.** `tests/test_opencode_required_verdict_regression.py`
+now parses the poller's attempt count, sleep interval, per-call timeout, and enclosing job timeout
+directly out of `opencode-review.yml`, and the downstream job's `timeout-minutes` directly out of
+`opencode-review-dispatch.yml` (same regex shape already used by
+`test_opencode_job_timeout_contains_full_sequential_review_budget`), then asserts the arithmetic
+relationships rather than the literals: `test_poll_budget_exceeds_downstream_review_job_budget_with_explicit_margin`
+asserts the poll budget clears the downstream budget plus an explicit 5-minute margin;
+`test_enclosing_job_timeout_has_headroom_above_the_poll_budget` asserts the job's own timeout-minutes
+stays at or below the 360-minute GitHub-hosted hard cap and leaves at least 20 minutes of slack above the
+pure-sleep budget; `test_poller_gh_api_call_has_an_explicit_per_call_timeout` asserts the per-call
+timeout wrapper and the fail-soft `reviews="[]"` fallback are present. Verified these tests actually
+catch the original bug (not just pass vacuously) by temporarily reverting the workflow to the pre-fix
+640/325 numbers and confirming both budget tests fail with the exact original shortfall
+(`330s slack < 1200s minimum`), then restored the fix and re-confirmed all pass. Also added a small
+functional smoke test (bash, fake `gh`, tiny timeout/sleep values) exercising the modified loop's exact
+structure end-to-end: two simulated hung calls are killed by `timeout` and gracefully treated as
+"no verdict yet" without crashing the script, and the loop finds and returns the correct verdict once
+`gh` starts succeeding.
+
+Validation: `coverage run -m pytest tests -q` -- 2173 passed, 1 skipped, 21 subtests passed (up from the
+prior 2169-passed baseline by the 3 new tests plus one already landed by a concurrent commit this
+session rebased onto); `coverage report` -- 100% on `scripts/ci/` (no `.py` production files touched; the
+fix and its tests are entirely in `.github/workflows/opencode-review.yml` and `tests/`); `interrogate` --
+100% docstring coverage (minimum 100.0%, actual 100.0%). `actionlint v1.7.12` (built locally via
+`go install`, since no prebuilt binary or cached module was reachable through the outbound proxy) reports
+no findings on the modified workflow file (exit 0). `yaml.safe_load` and `bash -n` both re-confirmed
+clean on the modified step, and the existing `tests/test_opencode_workflow_shell_syntax.py` suite passes
+unchanged.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

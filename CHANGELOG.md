@@ -5,6 +5,32 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Widen the required OpenCode verdict poller's own budget past the review job
+  it waits on, and bound each poll's `gh api` call individually (Devin
+  Review + CodeRabbit findings on PR #1507): the poller's 640-attempt,
+  30-second-sleep loop totaled 319.5 minutes of patience, less than
+  `opencode-review-dispatch.yml`'s own `opencode-review-target` job's
+  325-minute `timeout-minutes` budget -- before even counting the
+  dispatch/queueing delay and the `validate-pr-metadata` /
+  `coverage-source-tree` / `coverage-evidence` chain that job's `needs:`
+  requires first. Raised the loop to 661 attempts (330 minutes of pure-sleep
+  patience, 5 minutes past the downstream job's own budget) and the
+  enclosing job's `timeout-minutes` to 355 (5 minutes under GitHub-hosted
+  runners' 360-minute hard job-execution cap
+  <https://docs.github.com/en/actions/reference/limits>, which applies
+  regardless of `timeout-minutes` and which no larger poller budget could
+  ever exceed on this runner class). Wrapped each `gh api --paginate`
+  review-list call in `timeout 25` so a hung connection or a heavily
+  paginated PR can no longer consume unbudgeted time, with a failed/timed-out
+  call now degrading to "no verdict yet" and continuing to poll instead of
+  crashing the step under `set -euo pipefail`. Replaced the regression test's
+  hard-coded literal assertions with ones that parse both workflows' live
+  numbers and assert the budget inequalities directly, so a future edit that
+  breaks the relationship fails the test instead of only a future edit that
+  changes the literal. Fully covering the realistic worst-case pipeline
+  duration (~415-430 minutes) is not achievable within one GitHub-hosted job
+  regardless of this fix and is recorded as a residual architecture gap in
+  `docs/product-technical-gap-baseline.md`, not solved here.
 - Let the required OpenCode verdict check wait up to 325 minutes for the
   authenticated review, matching the multi-hour model-pool budget instead of
   failing before reviews that legitimately exceed two hours can finish.
