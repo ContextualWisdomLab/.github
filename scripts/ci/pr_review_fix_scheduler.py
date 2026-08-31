@@ -96,7 +96,10 @@ def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
     ISSUE_COMMENTS_RETRY_ATTEMPTS times before propagating; any other error,
     or a rate-limit error past the retry budget, propagates immediately.
     ``per_page=100`` bounds the paginated request count for PRs with a long
-    review-comment history.
+    review-comment history. ``-X GET`` is explicit and required: ``gh api``
+    defaults to POST once any ``-f``/``-F`` field is present unless
+    ``-X``/``--method`` overrides it, and a POST against this endpoint with
+    no ``body`` field fails every call outright.
     """
     attempt = 0
     while True:
@@ -107,6 +110,8 @@ def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
                     f"repos/{repo}/issues/{number}/comments",
                     "--paginate",
                     "--slurp",
+                    "-X",
+                    "GET",
                     "-f",
                     "per_page=100",
                 ]

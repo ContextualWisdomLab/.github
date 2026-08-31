@@ -957,7 +957,18 @@ def rest_status_node(status: dict[str, Any]) -> dict[str, Any]:
 
 
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
-    """Convert a REST pull request payload into the GraphQL shape used by the scheduler."""
+    """Convert a REST pull request payload into the GraphQL shape used by the scheduler.
+
+    Classic commit statuses come from the *combined* status endpoint
+    (``commits/{sha}/status``), never the list endpoint
+    (``commits/{sha}/statuses``): the list endpoint returns full status
+    history in reverse-chronological order with no dedup, so a context that
+    transitioned from success to failure would surface both entries --
+    letting a stale, superseded success outlive a later real failure for
+    any caller (like ``strix_evidence_state()``) that accepts the first
+    success it finds. The combined endpoint already reports only the most
+    recent status per context, matching the GraphQL rollup's own shape.
+    """
 
     number = int(pr["number"])
     head = pr.get("head") or {}
@@ -971,7 +982,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         for suite in (check_suites.get("check_suites") or [])
         if suite.get("id") is not None
     }
-    statuses = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/statuses?per_page=100")
+    combined_status = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/status")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
@@ -1004,7 +1015,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
                 ]
                 + [
                     rest_status_node(status)
-                    for status in (statuses or [])
+                    for status in (combined_status.get("statuses") or [])
                 ]
             }
         },
