@@ -765,6 +765,23 @@ def gh_api_json(path: str) -> Any:
     return json.loads(run_github_read(["gh", "api", path]))
 
 
+def gh_api_json_via_dispatch_token(path: str) -> Any:
+    """Run a GitHub REST API GET via the central-repository dispatch credential.
+
+    The OpenCode app installation has no Actions permission (see
+    :func:`scheduler_dispatch_env`), and the target-repository read
+    credential (:func:`gh_api_json`) is not guaranteed to have it either for
+    a cross-repository dispatch. A read against ``.github``'s own Actions
+    artifacts -- which always host the central draft-review-request marker
+    regardless of which repository the PR belongs to -- must use the same
+    central-repository dispatch credential already used for creating a
+    ``repository_dispatch`` there, not the target-repository read
+    credential.
+    """
+
+    return json.loads(run_github_dispatch(["gh", "api", path]))
+
+
 def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST review payload into the GraphQL shape used by the scheduler."""
 
@@ -793,6 +810,16 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def rest_status_node(status: dict[str, Any]) -> dict[str, Any]:
+    """Convert a REST classic commit-status payload into the GraphQL status rollup shape."""
+
+    return {
+        "context": status.get("context"),
+        "state": (status.get("state") or "").upper(),
+        "targetUrl": status.get("target_url"),
+    }
+
+
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST pull request payload into the GraphQL shape used by the scheduler."""
 
@@ -802,6 +829,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head_repo = head.get("repo") or {}
     reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    statuses = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/statuses?per_page=100")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
@@ -830,6 +858,10 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
                 "nodes": [
                     rest_check_node(check)
                     for check in (checks.get("check_runs") or [])
+                ]
+                + [
+                    rest_status_node(status)
+                    for status in (statuses or [])
                 ]
             }
         },
@@ -1148,19 +1180,105 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
-def strix_evidence_state(pr: dict[str, Any]) -> str:
-    """Return missing, running, or complete for current-head Strix evidence."""
-    found = False
-    for node in context_nodes(pr):
-        if not is_strix_context(node):
+_STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
+
+
+def latest_check_run_attempts(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return each CheckRun's most recent attempt per (workflow, name) identity.
+
+    A rerun leaves every earlier attempt's CheckRun node in the rollup
+    alongside the latest one, so callers that walk ``context_nodes`` directly
+    can see a stale failed attempt outlive a later successful retry. This
+    resolves each CheckRun identity to only its most recently started
+    attempt (falling back to rollup order when ``startedAt`` is missing),
+    while passing every non-CheckRun (classic commit-status) node through
+    unchanged. The result preserves the original relative ordering.
+    """
+    latest: dict[tuple[str, str], tuple[datetime | None, int, dict[str, Any]]] = {}
+    ordered: list[tuple[int, dict[str, Any]]] = []
+    for index, node in enumerate(nodes):
+        if node.get("__typename") != "CheckRun":
+            ordered.append((index, node))
             continue
-        found = True
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        previous = latest.get(key)
+        if previous is None:
+            latest[key] = (started_at, index, node)
+            continue
+        previous_started_at, previous_index, _ = previous
+        if started_at is None and previous_started_at is not None:
+            continue
+        if previous_started_at is None and started_at is not None:
+            latest[key] = (started_at, index, node)
+            continue
+        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
+            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
+            previous_index,
+        ):
+            latest[key] = (started_at, index, node)
+    for started_at, index, node in latest.values():
+        ordered.append((index, node))
+    ordered.sort(key=lambda item: item[0])
+    return [node for _, node in ordered]
+
+
+def strix_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, failed, or complete for current-head Strix evidence.
+
+    "complete" requires authoritative success (CheckRun conclusion or classic
+    commit-status state of SUCCESS) from *any* Strix identity present -- a
+    CheckRun and a classic commit-status context are both accepted, and
+    either one succeeding is sufficient. This repo documents that a same-head
+    manual `workflow_dispatch` Strix run, which posts a classic commit
+    status, "may supply review evidence but does not replace required PR
+    checks": it can unlock this internal review-dispatch gate even when the
+    `pull_request_target` CheckRun failed or cannot correctly evaluate a
+    self-modifying `.github` PR (that CheckRun runs the *base* branch's
+    trusted scripts, which a PR editing those very scripts can legitimately
+    fail against) -- but it never substitutes for GitHub's own independently
+    enforced required CheckRun at actual merge time, which this function
+    does not touch. Symmetrically, a stale classic-status failure left over
+    from an unrelated manual run must never keep this gate "failed" forever
+    once the real, retryable CheckRun evidence succeeds -- `dispatch_strix_evidence`
+    has no way to clear a classic status, only to rerun a CheckRun's Actions
+    job, so treating a lingering classic failure as still blocking once a
+    CheckRun has already succeeded would force an endless, pointless rerun
+    loop.
+
+    Only when *no* identity reports success is this "failed" (every present
+    terminal outcome -- failure, error, cancelled, timed out, skipped,
+    neutral, action_required, stale, startup_failure -- counts as
+    non-passing) or "running" (something is still in flight and nothing has
+    succeeded yet), so callers fail closed instead of unlocking on evidence
+    that never actually passed anywhere. Only the latest attempt per Strix
+    CheckRun identity is evaluated, so a stale failed attempt cannot outlive
+    a later successful retry.
+    """
+    strix_nodes = [node for node in latest_check_run_attempts(context_nodes(pr)) if is_strix_context(node)]
+    if not strix_nodes:
+        return "missing"
+    saw_running = False
+    for node in strix_nodes:
+        is_check_run = node.get("__typename") == "CheckRun"
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
-            return "running"
-        if node.get("__typename") == "CheckRun" and status != "COMPLETED":
-            return "running"
-    return "complete" if found else "missing"
+            saw_running = True
+            continue
+        if is_check_run:
+            if status != "COMPLETED":
+                saw_running = True
+                continue
+            conclusion = (node.get("conclusion") or "").upper()
+            if conclusion in _STRIX_SUCCESS_CONCLUSIONS:
+                return "complete"
+        elif status in _STRIX_SUCCESS_CONCLUSIONS:
+            return "complete"
+    return "running" if saw_running else "failed"
 
 
 def unresolved_thread_count(pr: dict[str, Any]) -> int:
@@ -1480,43 +1598,16 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
 def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     """Return failing check or status context names from the PR rollup."""
     failed: list[str] = []
-    latest_check_runs: dict[
-        tuple[str, str],
-        tuple[datetime | None, int, dict[str, Any]],
-    ] = {}
-    status_contexts: list[dict[str, Any]] = []
-    for index, node in enumerate(context_nodes(pr)):
-        if node.get("__typename") != "CheckRun":
-            status_contexts.append(node)
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest_check_runs.get(key)
-        if previous is None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest_check_runs[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest_check_runs[key] = (started_at, index, node)
-
+    nodes = latest_check_run_attempts(context_nodes(pr))
+    status_contexts = [node for node in nodes if node.get("__typename") != "CheckRun"]
     successful_status_contexts = {
         node.get("context")
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for _, _, node in sorted(latest_check_runs.values(), key=lambda item: item[1]):
+    for node in nodes:
+        if node.get("__typename") != "CheckRun":
+            continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
             if is_strix_context(node) and "strix" in successful_status_contexts:
@@ -1842,7 +1933,7 @@ def post_update_branch_followup(
         return f"{head_note}; review dispatch limit reached, so no same-head evidence workflow was dispatched"
 
     strix_state = strix_evidence_state(updated_pr)
-    if strix_state == "missing":
+    if strix_state in {"missing", "failed"}:
         wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
         if wait_reason:
             return f"{head_note}; {wait_reason}"
@@ -2377,6 +2468,199 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     return False
 
 
+def draft_review_request_artifact_name(repo: str, pr_number: int, head_sha: str) -> str:
+    """Return one draft review-only request marker's exact artifact name."""
+    return f"cwl-draft-review-request-{repo.replace('/', '-')}-{pr_number}-{head_sha}"
+
+
+def _draft_review_request_records(value: Any, *, expected_name: str) -> tuple[dict[str, Any], ...]:
+    """Validate one exact-name repository artifact response and return live records.
+
+    The server-side ``name`` filter makes this response directly addressable by
+    PR and exact head. Any malformed, mismatched, truncated, or ambiguous
+    response fails closed rather than being interpreted as an active request.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("artifact response must be an object")
+    total_count = value.get("total_count")
+    artifacts = value.get("artifacts")
+    if type(total_count) is not int or total_count < 0:
+        raise ValueError("artifact response has an invalid total_count")
+    if not isinstance(artifacts, list):
+        raise ValueError("artifact response has an invalid artifacts collection")
+    if total_count != len(artifacts):
+        raise ValueError("artifact response is truncated or internally inconsistent")
+    live: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("artifact response contains a non-object record")
+        artifact_id = artifact.get("id")
+        name = artifact.get("name")
+        expired = artifact.get("expired")
+        if type(artifact_id) is not int or artifact_id < 1:
+            raise ValueError("artifact response contains an invalid artifact id")
+        if not isinstance(name, str) or name != expected_name:
+            raise ValueError("artifact response contains a mismatched artifact name")
+        if type(expired) is not bool:
+            raise ValueError("artifact response contains an invalid expired flag")
+        if not expired:
+            live.append(artifact)
+    return tuple(live)
+
+
+def active_draft_review_request(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether an explicit draft review-only request is active for this head.
+
+    This is the sole automatic gate for draft review dispatch. A bare
+    ``repository_dispatch`` ``client_payload`` field (an invocation key, a PR
+    number) is never trusted on its own: any dispatch-capable caller could
+    supply one for an arbitrary target, and a genuinely stale mention (the
+    draft gained a new commit after being requested) must not review a
+    commit nobody asked about. ``agent-mention-opencode-dispatch.yml``
+    instead uploads one short-lived Actions artifact per mention invocation,
+    named with the exact PR and head SHA
+    (:func:`draft_review_request_artifact_name`), only after that workflow's
+    own HMAC-style canonical-payload check has already validated the
+    invocation -- so a live artifact is itself the validated proof, bound to
+    one exact head, that this specific mention was genuine. The artifact
+    lives in the central automation repository (the same repository
+    ``repository_dispatch`` review dispatch always targets, per
+    :func:`repository_dispatch_target`), so every scheduler pass over this
+    draft PR -- the initial mention-triggered run and any later pass with no
+    ``repository_dispatch`` ``client_payload`` of its own, most commonly the
+    Strix-completion ``workflow_run`` that follows an initial
+    ``security_dispatch`` -- checks the same durable signal here rather than
+    trusting anything the triggering event itself claims. The read always
+    uses the central-repository dispatch credential
+    (:func:`gh_api_json_via_dispatch_token`), because the artifact always
+    lives in that central repository regardless of which repository ``repo``
+    names, and the target-repository read credential is not guaranteed to
+    have Actions permission there for a cross-repository dispatch. That
+    dispatch credential is itself only valid when this scheduler executes
+    inside the central repository; an ordinary required-workflow scan
+    executing directly in a sibling repository has no credential able to
+    read the central repository's artifacts at all. Rather than let that
+    ``gh`` failure -- or a malformed/tampered artifact-list response --
+    propagate and abort the whole multi-PR scan over one draft PR, any
+    failure to positively confirm a live artifact resolves to ``False``:
+    the same safe "no explicit request" outcome as a live check that
+    actually completes and finds nothing.
+    """
+    head_sha = pr.get("headRefOid")
+    if not isinstance(head_sha, str) or not head_sha:
+        return False
+    dispatch_repo = repository_dispatch_target(validate_github_repository(repo))
+    artifact_name = draft_review_request_artifact_name(repo, pr["number"], head_sha)
+    try:
+        response = gh_api_json_via_dispatch_token(
+            f"repos/{dispatch_repo}/actions/artifacts?name={artifact_name}&per_page=100"
+        )
+        return bool(_draft_review_request_records(response, expected_name=artifact_name))
+    except (RuntimeError, ValueError):
+        return False
+
+
+def dispatch_draft_review_only(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    review_dispatch_allowed: bool,
+    workflow: str,
+    security_workflow: str,
+    stale_opencode_minutes: int,
+) -> Decision:
+    """Dispatch review evidence for one draft PR, never touching merge/branch state.
+
+    An explicit review-only request (a mention invocation, never the ordinary
+    queue sweep) may reach this for a draft PR. It runs exactly the same
+    Strix-then-OpenCode dispatch gate the ready-PR pipeline uses below, so a
+    draft gets the same evidence chain -- but it returns before any of
+    ``inspect_pr``'s unresolved-thread, changes-requested, branch-update, or
+    auto-merge logic, so a draft can never be merged, auto-merged, or have its
+    branch updated by reaching this function.
+    """
+    number = pr["number"]
+    opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
+    if opencode_state == "running":
+        return Decision(number, "wait", "draft PR review-only dispatch; OpenCode review already running")
+    # opencode_state == "complete" means a matching check/status reached a
+    # terminal state -- it does not mean opencode-agent posted a review. The
+    # required-workflow gate itself fails closed (a terminal, non-running
+    # check) whenever no verdict was ever dispatched, so treating "complete"
+    # alone as a verdict would make a failed dispatch attempt permanently
+    # block every later explicit retry. Only an actual current-head formal
+    # review is a verdict.
+    if has_current_head_approval(pr) or has_current_head_changes_requested(pr):
+        return Decision(
+            number,
+            "skip",
+            "draft PR review-only dispatch; current-head OpenCode verdict already exists",
+        )
+    strix_state = strix_evidence_state(pr)
+    if strix_state in {"missing", "failed"}:
+        if not review_dispatch_allowed:
+            return Decision(
+                number,
+                "wait",
+                "draft PR review-only dispatch; current head has no completed Strix evidence; "
+                "review dispatch limit reached",
+            )
+        wait_reason = repository_dispatch_wait_reason(repo, security_workflow)
+        if wait_reason:
+            return Decision(
+                number,
+                "wait",
+                f"draft PR review-only dispatch; current head has no completed Strix evidence; {wait_reason}",
+            )
+        dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+        if dispatch_result == "already_running":
+            return Decision(
+                number, "wait", "draft PR review-only dispatch; same-head Strix evidence is still running"
+            )
+        if dispatch_result == "repository_busy":
+            return Decision(
+                number,
+                "wait",
+                "draft PR review-only dispatch; current head has no completed Strix evidence; "
+                "target repository already has active Strix evidence",
+            )
+        return Decision(
+            number,
+            "security_dispatch",
+            "draft PR review-only dispatch; current head has no completed Strix evidence; same-head Strix dispatched",
+        )
+    if strix_state == "running":
+        return Decision(number, "wait", "draft PR review-only dispatch; same-head Strix evidence is still running")
+    if not review_dispatch_allowed:
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head has completed Strix evidence; "
+            "review dispatch limit reached",
+        )
+    wait_reason = repository_dispatch_wait_reason(repo, workflow)
+    if wait_reason:
+        return Decision(
+            number,
+            "wait",
+            f"draft PR review-only dispatch; current head has completed Strix evidence; {wait_reason}",
+        )
+    dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+    if dispatch_result == "already_running":
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head has completed Strix evidence; "
+            "same-head OpenCode workflow run is already active",
+        )
+    return Decision(
+        number,
+        "review_dispatch",
+        "draft PR review-only dispatch; current head has completed Strix evidence; same-head OpenCode dispatched",
+    )
+
+
 def inspect_pr(
     repo: str,
     pr: dict[str, Any],
@@ -2393,12 +2677,25 @@ def inspect_pr(
     base_branch: str,
     merge_mode: str = "direct_or_auto",
     stale_opencode_minutes: int = DEFAULT_STALE_OPENCODE_MINUTES,
+    allow_draft_review_dispatch: bool = False,
 ) -> Decision:
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
     base_ref = pr.get("baseRefName")
 
     if pr.get("isDraft"):
+        if trigger_reviews and (
+            allow_draft_review_dispatch or active_draft_review_request(repo, pr)
+        ):
+            return dispatch_draft_review_only(
+                repo,
+                pr,
+                dry_run=dry_run,
+                review_dispatch_allowed=review_dispatch_allowed,
+                workflow=workflow,
+                security_workflow=security_workflow,
+                stale_opencode_minutes=stale_opencode_minutes,
+            )
         return Decision(number, "skip", "draft PR")
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
@@ -2862,7 +3159,7 @@ def inspect_pr(
 
     if trigger_reviews:
         strix_state = strix_evidence_state(pr)
-        if strix_state == "missing":
+        if strix_state in {"missing", "failed"}:
             if not review_dispatch_allowed:
                 return decide(
                     "wait",
@@ -3936,6 +4233,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-flow", default=os.environ.get("PROJECT_FLOW", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument("--pr-number", type=int, default=0)
+    parser.add_argument(
+        "--allow-draft-review-dispatch",
+        action="store_true",
+        help=(
+            "Allow a --pr-number draft PR to receive Strix/OpenCode review "
+            "dispatch. Structurally review-only: never merges, enables "
+            "auto-merge, or updates the branch. A manual operator override "
+            "for direct CLI use only -- no caller-supplied signal reaching "
+            "this script (repository_dispatch client_payload included) is "
+            "trusted to set this automatically, because it cannot be bound "
+            "to a specific validated request. The production automatic path "
+            "is inspect_pr()'s own active_draft_review_request() marker "
+            "check, gated on a cryptographically validated, exact-head-named "
+            "artifact that only a legitimate mention invocation can create."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trigger-reviews", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -3994,6 +4307,11 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
         raise SystemExit("--branch-update-limit must be -1 or greater")
+    if args.allow_draft_review_dispatch and not args.pr_number:
+        raise SystemExit(
+            "--allow-draft-review-dispatch requires --pr-number; it is a single-PR "
+            "review-only exception, never a default for the multi-PR queue sweep"
+        )
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
     if not args.pr_number:
         # Stacked PRs have no injected required workflow and depend exclusively
@@ -4031,6 +4349,7 @@ def main(argv: list[str]) -> int:
                 security_workflow=args.security_workflow,
                 base_branch=args.base_branch,
                 stale_opencode_minutes=args.stale_opencode_minutes,
+                allow_draft_review_dispatch=args.allow_draft_review_dispatch,
             )
         except RuntimeError as exc:
             decision = Decision(
