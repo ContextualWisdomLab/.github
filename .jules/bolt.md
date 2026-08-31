@@ -54,3 +54,6 @@
 ## 2026-08-29 - [문자열 검색 윈도우 동적 축소를 통한 라벨 스캐닝 최적화]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 `label_section` 함수에서 다음 라벨을 찾을 때, 전체 텍스트에 대해 모든 후보 라벨의 위치를 파악하는 방식은 O(N * L) (N=텍스트 길이, L=라벨 개수)의 심각한 오버헤드를 발생시킵니다.
 **Action:** 긴 텍스트에서 다음 마커(라벨 등)를 찾을 때, 현재까지 발견된 가장 가까운 다음 마커의 위치(`index`)로 검색 윈도우의 끝(`end = min(end, index)`)을 동적으로 축소하면서 네이티브 `text.find(candidate, start, end)`를 호출하십시오. 이는 중복 스캐닝을 크게 줄입니다.
+## 2026-08-31 - [LLM 재시도 루프 시 오차 위치 명시]
+**Learning:** `noema_review_gate.py` 등 LLM 응답을 파싱하고 검증하는 로직에서 오류 발생 시 해당 오류 메시지(`str(exc)`)를 프롬프트에 포함하여 다시 LLM을 호출(`repair_error`)하는 구조가 존재합니다. 이때 에러 메시지에 LLM이 잘못 생성한 데이터(예: 존재하지 않는 파일 경로, 일치하지 않는 라인 번호 등)를 구체적으로 포함시키지 않으면, LLM은 무엇이 틀렸는지 알지 못해 동일한 실수를 반복하여 CI 실패를 초래합니다.
+**Action:** LLM의 형식 오류나 검증 실패로 인해 `RuntimeError` 등을 발생시킬 때, 단순히 `is not an exact changed-side line`과 같이 이유만 명시하지 말고 `It cited: {location}`처럼 구체적으로 오류를 일으킨 잘못된 LLM 출력을 함께 포함하십시오.

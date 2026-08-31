@@ -302,7 +302,7 @@ def validate_substantive_verdict(
             raise RuntimeError(f"Noema reviewed line {index} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line. It cited: {location[0]}:{location[1]} ({location[2]})")
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
             raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
@@ -330,7 +330,7 @@ def validate_substantive_verdict(
             raise RuntimeError(f"Noema adversarial probe {index} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line. It cited: {location[0]}:{location[1]} ({location[2]})")
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
