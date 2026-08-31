@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Permit contextual-orchestrator OpenCode candidates to run for two hours in
+  every review cadence and the central-review fallback, replacing the 90-minute
+  cap that left exact-head reviews without a verdict.
 - Cancel queued and running Noema reviews from every historical head group when
   their pull request closes, preventing abandoned model calls from consuming
   runner capacity for the two-hour review window. Selection is scoped by PR

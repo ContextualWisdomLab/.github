@@ -1925,6 +1925,19 @@ docstring coverage on `scripts/ci/`.
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
+## 2026-09-01 OpenCode contextual-orchestrator runtime ceiling
+
+Exact-head evidence from four-pillars PRs #35 and #37 showed the required
+OpenCode job failing closed after approximately 91 minutes without a verdict.
+The central model-pool workflow still capped its contextual-orchestrator
+candidate, every changed-file cadence, the dynamic cap, and the central-review
+fallback at 5,400 seconds even though the target, pool, and retry budgets already
+had capacity for a two-hour candidate. Those seven limits are now 7,200 seconds,
+with an executable step-scoped contract preventing unrelated `7200` strings
+elsewhere in the workflow from masking a regression.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
 ## 2026-08-31 noema-review-gate close-cleanup job: bare head_sha match, single-pass status sweep, and a
 workflow-file-scoped endpoint that does not resolve for the sibling repositories the job exists to clean up
 
