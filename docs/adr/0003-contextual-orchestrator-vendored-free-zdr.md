@@ -176,3 +176,16 @@ all five, and auto-optimize routing by cost.
   exists in `contextual_orchestrator_review_policy.py`/the sidecar for any
   other caller that opts into it explicitly — this amendment only removes it
   as Strix's default and as an accepted Strix override value.
+- **Monitoring evidence for the accepted risk above:** `scripts/ci/contextual_orchestrator_review_policy.py`
+  now reports `free_family_diversity` in the catalog report — the count of
+  distinct outage-domain provider families (see `provider_family`) among
+  *all* discovered free routes, independent of which pool is requested. This
+  was drafted (in a now-superseded addendum proposing to gate the `free`
+  decision on this evidence rather than making it directly) before the
+  2026-08-30 amendment above settled the question outright; the owner chose
+  to accept the risk rather than wait. The evidence itself remains useful
+  regardless: it is exactly the live signal for when "the free-catalog's
+  stale-model and provider-diversity gaps documented alongside this
+  amendment" (above) are closed, without requiring a manual re-audit.
+  `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
+  records that PR's own reasoning trail.
