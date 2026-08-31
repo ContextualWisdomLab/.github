@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
+  at `0adca4703df67f8f31d3ea5b04a1e07ed775dd6c` and treat every KV credential
+  as an independent discovery account. Same-vendor credentials no longer
+  collapse into a provider family; only explicit model groups may share
+  routing evidence.
 - Web verification now runs backend, frontend, and E2E commands inside an
   isolated Linux bubblewrap workspace by default (`--isolation required`),
   mounting a read-only runtime root with a single writable `/workspace`
