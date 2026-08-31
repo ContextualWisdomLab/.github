@@ -1414,7 +1414,7 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     finding: ``_preflight_review_agents`` used to start ``escalations_used``
     fresh on every call, so ``_preflight_with_fallback`` calling it twice
     could spend the full ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` budget in EACH
-    stage -- blowing past Layer 1's 180s healthz-readiness watchdog and
+    stage -- blowing past the preflight phase's own worst-case budget and
     contradicting the ADR's own claimed worst case.
 
     This drives every primary and fallback route (the exact
@@ -1422,9 +1422,13 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     always qualifies for escalation and never resolves, so every one of them
     *would* escalate if the budget were not shared. Asserts the run spends at
     most ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations in total (not per
-    stage), and that the resulting worst case stays within the 180s
-    healthz-readiness watchdog -- both stages' escalation counts are visible
-    in the returned evidence.
+    stage), and that the resulting worst case stays within
+    ``REVIEW_PREFLIGHT_WORST_CASE_SECONDS`` -- the preflight phase's own
+    coordinated budget, which the sidecar's startup watchdog now composes
+    with discovery's own worst case rather than treating as the whole startup
+    budget (see ``test_startup_watchdog_covers_discovery_plus_preflight_with_headroom``
+    for that composition) -- both stages' escalation counts are visible in
+    the returned evidence.
 
     The worst-case *formula* (not the shared-budget invariant it measures)
     differs from this test's pre-batching original: routes are now probed in
@@ -1478,11 +1482,115 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     # at most max_escalations of the batches actually can.
     num_batches = -(-total_route_limit // batch_size)  # ceil division
     worst_case_seconds = num_batches * 2 * timeout_seconds
-    assert worst_case_seconds <= 180, (
-        f"worst-case preflight time ({worst_case_seconds}s across "
-        f"{num_batches} batches) must stay within the 180s "
-        "healthz-readiness watchdog"
+    assert worst_case_seconds == namespace["REVIEW_PREFLIGHT_WORST_CASE_SECONDS"], (
+        f"observed worst-case preflight time ({worst_case_seconds}s across "
+        f"{num_batches} batches) must match the launcher's own declared "
+        "REVIEW_PREFLIGHT_WORST_CASE_SECONDS -- a mismatch means that "
+        "constant no longer reflects this module's real batching behavior, "
+        "which would desynchronize it from the sidecar's derived startup "
+        "watchdog (REVIEW_STARTUP_WATCHDOG_SECONDS)"
     )
+
+
+def test_startup_watchdog_covers_discovery_plus_preflight_with_headroom() -> None:
+    """Regression for Devin Review's "Startup watchdog preempts valid preflight"
+    finding: the sidecar's startup watchdog used to be a bare, uncoordinated
+    180s shell constant that only happened to exceed the *probing-only* worst
+    case (120s) by coincidence, while never accounting for discovery's own
+    worst case (which runs first, in the SAME process, before ``/healthz`` can
+    respond) at all -- a fully correct, on-budget run of ~105s discovery +
+    ~120s probing = ~225s could be, and was, killed by the 180s watchdog
+    before it ever reported a result.
+
+    This is a purely static consistency check (no timing simulation, no real
+    sleeps -- CI-safe and non-flaky) that recomputes both worst cases
+    independently from the launcher's own primitive constants and asserts
+    ``REVIEW_STARTUP_WATCHDOG_SECONDS`` -- the single source of truth the
+    shell sidecar now imports rather than hard-coding its own number --
+    actually covers their sum, with non-negative explicit headroom. It also
+    locks in the real, literal current numbers (not Devin's original rough
+    ~105s/~100s estimate) as a regression: any future change to a budget
+    constant that silently desynchronizes the derived watchdog fails this
+    test immediately, rather than only failing much later in a live CI run
+    that happens to hit the worst case.
+    """
+    namespace = _load_launcher()
+
+    discovery_calls = namespace["REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS"]
+    discovery_timeout = namespace["REVIEW_DISCOVERY_TIMEOUT_SECONDS"]
+    recomputed_discovery_worst_case = discovery_calls * discovery_timeout
+    assert recomputed_discovery_worst_case == namespace["REVIEW_DISCOVERY_WORST_CASE_SECONDS"]
+    # Verified directly against the vendored contextual_orchestrator.model_discovery
+    # source at ORCHESTRATOR_PIN_SHA (see the launcher's own module-level
+    # comment for the full call-by-call derivation): 7 sequential calls at up
+    # to 15.0s each.
+    assert recomputed_discovery_worst_case == 105.0
+
+    total_routes = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
+    preflight_timeout = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
+    num_batches = -(-total_routes // batch_size)  # ceil division
+    recomputed_preflight_worst_case = num_batches * 2 * preflight_timeout
+    assert recomputed_preflight_worst_case == namespace["REVIEW_PREFLIGHT_WORST_CASE_SECONDS"]
+    assert recomputed_preflight_worst_case == 120
+
+    headroom = namespace["REVIEW_STARTUP_HEADROOM_SECONDS"]
+    assert headroom >= 0, "headroom must never be negative -- that would silently under-cover"
+
+    combined_worst_case = recomputed_discovery_worst_case + recomputed_preflight_worst_case
+    watchdog = namespace["REVIEW_STARTUP_WATCHDOG_SECONDS"]
+    assert isinstance(watchdog, int)
+    assert watchdog == int(combined_worst_case + headroom)
+    # The core invariant Devin Review's finding is about: the watchdog must
+    # cover the full combined worst case, not just one phase of it.
+    assert watchdog >= combined_worst_case
+    # Locks in the real current total (225s combined + 30s headroom), not a
+    # loosely-fitting range, so a future change to any input constant is a
+    # deliberate, visible edit to this test rather than a silent drift.
+    assert watchdog == 255
+
+
+def test_sidecar_derives_its_watchdog_from_the_launcher_single_source_of_truth() -> None:
+    """The shell watchdog must import, not hard-code, the coordinated deadline.
+
+    Guards against the exact regression class this fix addresses: a future
+    edit that changes a launcher timing constant (discovery calls, batch
+    size, escalation timeout, ...) must automatically change the sidecar's
+    watchdog too, with no second place to remember to update by hand.
+    """
+    namespace = _load_launcher()
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+
+    assert (
+        "from scripts.ci.contextual_orchestrator_review_launcher "
+        "import REVIEW_STARTUP_WATCHDOG_SECONDS" in sidecar_text
+    )
+    assert 'sidecar_startup_watchdog_seconds="$(' in sidecar_text
+    assert '[ "$i" -ge "$sidecar_startup_watchdog_seconds" ]' in sidecar_text
+    # The old, uncoordinated hard-coded bound must be gone from the watchdog
+    # comparison -- not just supplemented by the new derived one.
+    assert '[ "$i" -ge 180 ]' not in sidecar_text
+    assert "-ge 180" not in sidecar_text
+
+    # Exercise the exact derivation command the sidecar script runs, proving
+    # it truly needs no vendored dependency yet at that point in the script
+    # (the launcher module's top-level imports are deliberately stdlib-only).
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from scripts.ci.contextual_orchestrator_review_launcher import "
+                "REVIEW_STARTUP_WATCHDOG_SECONDS; print(REVIEW_STARTUP_WATCHDOG_SECONDS)"
+            ),
+        ],
+        cwd=str(_REPO_ROOT),
+        env={**os.environ, "PYTHONPATH": str(_REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == str(namespace["REVIEW_STARTUP_WATCHDOG_SECONDS"])
 
 
 def test_preflight_stage_limits_share_one_startup_budget() -> None:

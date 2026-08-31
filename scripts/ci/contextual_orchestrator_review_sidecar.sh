@@ -319,6 +319,33 @@ case "$orchestrator_pool" in
     ;;
 esac
 
+# Single source of truth for the startup watchdog below (Devin Review finding
+# "Startup watchdog preempts valid preflight", ContextualWisdomLab/.github#1415):
+# read the launcher's own coordinated worst-case constant instead of a
+# hard-coded shell timeout, so a future change to either discovery's or
+# preflight's own budget constants in contextual_orchestrator_review_launcher.py
+# cannot silently desynchronize from this watchdog again. The launcher module's
+# top-level imports are deliberately stdlib-only (see its module docstring),
+# so this works with plain "$ORG_REPO_ROOT" on PYTHONPATH -- no vendored
+# dependency needed yet at this point in the script.
+sidecar_startup_watchdog_seconds="$(
+  PYTHONPATH="$ORG_REPO_ROOT" "$sidecar_python" -c \
+    'from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_STARTUP_WATCHDOG_SECONDS; print(REVIEW_STARTUP_WATCHDOG_SECONDS)'
+)" || fail "could not derive the startup watchdog seconds from the launcher module"
+# Same digit-count defense as REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS below: a
+# non-numeric value would make the "$i" -ge "$sidecar_startup_watchdog_seconds"
+# comparison itself a bash integer-comparison error rather than a controlled
+# failure, and an all-digit value can still overflow the shell's integer
+# range the same way. Six digits (up to 999999s, over eleven days) is already
+# far beyond any realistic startup budget and stays safely representable.
+case "$sidecar_startup_watchdog_seconds" in
+  ''|*[!0-9]*|0)
+    fail "REVIEW_STARTUP_WATCHDOG_SECONDS must be a positive integer, got: ${sidecar_startup_watchdog_seconds}" ;;
+  ???????*)
+    fail "REVIEW_STARTUP_WATCHDOG_SECONDS must be at most 999999" ;;
+esac
+log "startup watchdog: ${sidecar_startup_watchdog_seconds}s (derived from contextual_orchestrator_review_launcher.py's REVIEW_STARTUP_WATCHDOG_SECONDS)"
+
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
@@ -397,17 +424,20 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
-  # KNOWN GAP, tracked as ContextualWisdomLab/.github#1455 (not yet fixed):
-  # this 180s covers the launcher's ENTIRE startup sequence -- discovery,
-  # catalog build, AND preflight probing -- not just probing. Layer 1's own
-  # "160s worst case" comment
-  # (contextual_orchestrator_review_launcher.py's REVIEW_PREFLIGHT_MAX_ESCALATIONS)
-  # accounts only for probing; discover_all_models() runs first, inside this
-  # same 180s, and can itself take up to ~105s worst case (verified against
-  # the vendored contextual_orchestrator.model_discovery source: ~7
-  # sequential HTTP calls at up to 15s each).
-  if [ "$i" -ge 180 ]; then
-    fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
+  # FIXED (ContextualWisdomLab/.github#1455, Devin Review finding "Startup
+  # watchdog preempts valid preflight"): this bound covers the launcher's
+  # ENTIRE startup sequence -- discovery, catalog build, AND preflight
+  # probing -- not just probing, because none of that work can complete
+  # (and /healthz cannot respond) until every phase before it has finished in
+  # the SAME process. $sidecar_startup_watchdog_seconds is derived above from
+  # contextual_orchestrator_review_launcher.py's own REVIEW_STARTUP_WATCHDOG_SECONDS
+  # (discovery's real worst case, ~105s, PLUS batched preflight's own real
+  # worst case, ~120s, PLUS explicit headroom) rather than a bare, previously
+  # uncoordinated shell constant that only covered probing's own budget by
+  # coincidence -- see that constant's own module-level comment for the full,
+  # numbered derivation this single source of truth keeps in sync.
+  if [ "$i" -ge "$sidecar_startup_watchdog_seconds" ]; then
+    fail "sidecar did not become healthy within ${sidecar_startup_watchdog_seconds}s; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   sleep 1
 done

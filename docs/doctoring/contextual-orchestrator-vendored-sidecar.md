@@ -46,10 +46,22 @@ preflight tries a maximum of 24 discovered routes in concurrent batches of four
 and stops after the first batch with usable text. Every route still uses the
 ten-second timeout, zero retries, the same plain-chat payload, and sanitized
 evidence; exhausting the bounded batches remains a startup failure.
-Provider discovery must also be complete. If any configured provider reports a
-discovery error, the launcher records only sanitized provider and error
-identifiers with `complete: false`, omits the partial model list, and stops
-before serving traffic. A partial catalog is not availability evidence.
+Provider discovery failures are non-fatal per provider, not a whole-run gate.
+When one configured provider's discovery call fails, the launcher logs a
+sanitized `provider_discovery_failed provider=... code=...` diagnostic to
+stderr (never partial provider response text) and continues with whatever
+models the other providers successfully returned; it does not stop startup
+and does not require the whole discovery pass to be error-free. Startup only
+fails closed if the resulting eligible-model set ends up empty -- no
+provider's discovery succeeded at all, or none of what did succeed contains a
+general-chat, text-output model matching the selected pool
+(`orchestrator/free` or `orchestrator/auto`). A partial catalog assembled from
+N-1 successful providers is real availability evidence, not an aborted run.
+An earlier "fail closed on any partial provider discovery error" design was
+considered and rejected in favor of this "log the failure, continue with
+whatever succeeded" behavior once production evidence showed single-provider
+hiccups are common and should not be fatal to the whole pool; see
+`CHANGELOG.md`'s `[Unreleased]` entry for that decision.
 The pin includes upstream `#887` (`2591b66`), which fixes the gateway's
 incorrect 1024-character rejection. The same probe sends Strix-shaped function
 tools with 1025-, 1026-, and 2000-character descriptions and verifies that

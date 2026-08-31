@@ -80,28 +80,98 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 candidates in batches of
 # REVIEW_PREFLIGHT_BATCH_SIZE=4, that is ceil(24/4)=6 batches; even the fully
 # pessimistic bound of every batch needing its worst case is
-# 6 * 2 * 10 = 120s, comfortably under the sidecar's 180s healthz-readiness
-# wait -- with real margin, since REVIEW_PREFLIGHT_MAX_ESCALATIONS=4 means at
-# most 4 of those 6 batches can actually contain an escalating candidate. See
+# 6 * 2 * 10 = 120s (REVIEW_PREFLIGHT_WORST_CASE_SECONDS below), since
+# REVIEW_PREFLIGHT_MAX_ESCALATIONS=4 means at most 4 of those 6 batches can
+# actually contain an escalating candidate. See
 # docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3 for the
 # ADR's own (pre-batching, sequential) 160s derivation of this same shared
 # cap's value; batching changes the wall-clock arithmetic, not the cap itself.
 #
-# KNOWN GAP, tracked (not yet fixed): the bound above covers only probing, not
-# the discover_all_models() call that runs before it inside the SAME 180s
-# watchdog. Verified directly against the vendored contextual-orchestrator
-# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
-# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
-# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
-# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing
-# even starts. See ContextualWisdomLab/.github#1455 for the tracked fix (a
-# shared monotonic deadline, scaled-down probing, or an evidence-justified
-# watchdog extension) and #1454 for the related, separately-tracked gap that
-# a base-probe *success* never confirms the candidate at the real serving
-# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this design; both are
-# architecturally significant enough to need their own design pass rather
-# than a guessed patch here.
+# FIXED (ContextualWisdomLab/.github#1455, Devin Review finding "Startup
+# watchdog preempts valid preflight"): the bound above covers only probing,
+# not the discover_all_models() call that runs before it, inside the SAME
+# sidecar startup watchdog (contextual_orchestrator_review_sidecar.sh). Both
+# phases run sequentially in one process before the server can start
+# accepting `/healthz`, so the watchdog must cover their SUM, not either one
+# alone -- previously the watchdog was a bare, uncoordinated 180s shell
+# constant that only happened to exceed the probing-only figure above by
+# coincidence, while the combined real worst case (see
+# REVIEW_STARTUP_WATCHDOG_SECONDS below) is larger than that. Verified
+# directly against the vendored contextual-orchestrator source at
+# ORCHESTRATOR_PIN_SHA (contextual_orchestrator_review_sidecar.sh):
+# discover_all_models() makes up to REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS
+# sequential HTTP calls (the shared models.dev fetch; one per
+# PROVIDER_MODEL_SOURCES entry with a registered credential -- of the sidecar's
+# five bootstrapped secrets, that is openai/openrouter/nvidia_nim/
+# nvidia_nim_sub/bytez, since opencode_zen's OPENCODE_ZEN_API_KEY is never one
+# of the five secrets the sidecar registers and so it always short-circuits
+# with zero calls; and the OpenRouter ZDR endpoint fetch, unconditional), each
+# up to REVIEW_DISCOVERY_TIMEOUT_SECONDS. contextual_orchestrator_review_sidecar.sh
+# imports REVIEW_STARTUP_WATCHDOG_SECONDS from this module (a stdlib-only,
+# dependency-free import) as its watchdog loop bound -- a single source of
+# truth so a future change to either phase's constants cannot silently
+# desynchronize the two budgets again. #1454 (a base-probe *success* never
+# confirms the candidate at the real serving budget, REVIEW_MAX_OUTPUT_TOKENS)
+# is a separate, still-open gap this fix does not address.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
+
+# Mirrors contextual_orchestrator.model_discovery.DISCOVERY_TIMEOUT_SECONDS at
+# ORCHESTRATOR_PIN_SHA (contextual_orchestrator_review_sidecar.sh) exactly. Not
+# imported directly: that module's own dependency tree is only installed after
+# the sidecar's vendoring step, while this constant must be readable earlier
+# (this module's top-level imports are deliberately stdlib-only). Re-verify
+# this mirror whenever ORCHESTRATOR_PIN_SHA moves.
+REVIEW_DISCOVERY_TIMEOUT_SECONDS = 15.0
+# Verified against the vendored contextual_orchestrator.model_discovery source
+# at ORCHESTRATOR_PIN_SHA: discover_all_models() calls, strictly sequentially,
+# one shared models.dev fetch (triggered once any source with a registered
+# credential declares models_dev_provider_id), then discover_provider_models()
+# once per PROVIDER_MODEL_SOURCES entry with a registered credential (skipped
+# instantly, no HTTP call, for an entry with none), then one unconditional
+# OpenRouter ZDR endpoints fetch. With every one of the sidecar's five
+# bootstrapped secrets present (openai, openrouter, nvidia_nim, nvidia_nim_sub,
+# bytez -- opencode_zen is never among them), that is 1 (models.dev) + 5
+# (providers) + 1 (ZDR) = 7 sequential calls, each independently bounded by
+# REVIEW_DISCOVERY_TIMEOUT_SECONDS.
+REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS = 7
+REVIEW_DISCOVERY_WORST_CASE_SECONDS = (
+    REVIEW_DISCOVERY_MAX_SEQUENTIAL_HTTP_CALLS * REVIEW_DISCOVERY_TIMEOUT_SECONDS
+)
+# The batched-probing worst case derived in the comment above
+# REVIEW_PREFLIGHT_MAX_ESCALATIONS: ceil(REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES /
+# REVIEW_PREFLIGHT_BATCH_SIZE) batches, each up to
+# 2 * REVIEW_PREFLIGHT_TIMEOUT_SECONDS (one base + one escalated attempt,
+# sequential within a single candidate's own thread).
+REVIEW_PREFLIGHT_WORST_CASE_SECONDS = (
+    -(-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES // REVIEW_PREFLIGHT_BATCH_SIZE)
+) * 2 * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
+# Explicit, justified slack beyond the two computed network-bound worst cases
+# above, for the parts of startup that formula does not (and should not try
+# to) model precisely: Python interpreter/module import overhead, in-memory
+# catalog construction and JSON evidence-file writes, and the sidecar shell
+# script's own 1-second `/healthz` polling granularity. None of those is
+# individually large, but the fix here is specifically about correcting a
+# previously-absent deadline, not about shaving margin as tight as possible --
+# a generous, explicit constant is preferable to a precise-looking one that
+# quietly under-covers real (non-network) startup cost. Deliberately kept
+# small relative to the two network-bound terms above so it cannot itself
+# mask a future regression in either of them.
+REVIEW_STARTUP_HEADROOM_SECONDS = 30
+# The single source of truth for the sidecar's startup watchdog. Both startup
+# phases (discovery, then batched preflight probing) run sequentially in one
+# process before `/healthz` can respond, so the watchdog covering both must be
+# their sum, not either phase's own bound alone.
+# contextual_orchestrator_review_sidecar.sh imports this exact constant
+# (rather than hard-coding its own timeout) so a future change to any input
+# constant above automatically propagates to the watchdog, instead of
+# silently reintroducing the coordination bug this fixes
+# (ContextualWisdomLab/.github#1415, Devin Review "Startup watchdog preempts
+# valid preflight").
+REVIEW_STARTUP_WATCHDOG_SECONDS = int(
+    REVIEW_DISCOVERY_WORST_CASE_SECONDS
+    + REVIEW_PREFLIGHT_WORST_CASE_SECONDS
+    + REVIEW_STARTUP_HEADROOM_SECONDS
+)
 
 
 class _EscalationBudget:
