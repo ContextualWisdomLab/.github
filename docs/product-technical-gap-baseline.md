@@ -1809,6 +1809,68 @@ job을 1회만 재실행했다(`rerun_failed_jobs`, run `33312587048`) — 재�
   스위트 동시 실행에서만 간헐적으로 실패, 단독 실행 시 통과 확인 — 이번 변경과 무관), ruff
   clean, `alembic heads` 단일 head 유지. push 완료(86f4bd9b).
 
+## 2026-08-30 PR #1347 Devin Review 6건 검증: 4건 실재 결함 수정, 2건 확인 후 해소
+
+`ContextualWisdomLab/.github#1347` (`fix/sandboxed-web-e2e-isolation-clean`,
+bubblewrap 격리 + SSRF-safe readiness-URL 검증)의 commit `7ac8298b` 기준 Devin
+Review 미해결 6건을 HEAD 코드 기준으로 개별 재검증했다. Finding 텍스트를 그대로
+신뢰하지 않고 각각 실제 동작을 재현해 확인했다.
+
+- **Finding 1 (🟡 malformed readiness port, line 423) — 실재.**
+  `require_loopback_readiness_url`는 `parsed.port`를 한 번도 읽지 않아, 비숫자
+  포트(`:abc`)는 `urllib.parse`를 그대로 통과한 뒤 `http.client.InvalidURL`을
+  발생시켰다 — 이 예외는 `ValueError`도 `urllib.error.URLError`도 아니어서
+  `main()`의 어떤 핸들러에도 잡히지 않고 스크립트가 uncaught traceback으로
+  죽는다(재현 확인). `parsed.port` 접근을 함수 안으로 추가해 동일한
+  `ValueError` 클래스로 통일했다. 백엔드/프런트엔드 readiness URL 양쪽에 대해
+  비숫자·범위초과 포트 테스트를 추가.
+- **Finding 2 (🟡 installed-but-unusable isolation, line 124) — 실재.**
+  `isolation_backend`는 `shutil.which("bwrap")`만 확인하고 실제 namespace 생성
+  가능 여부는 전혀 검증하지 않았다. `isolated_command`가 실제로 쓰는 것과 같은
+  최소 namespace/mount 구성(new PID ns, tmpfs root, 표준 read-only bind,
+  `/proc`, `/dev`, tmpfs `/tmp`)으로 현재 인터프리터의 no-op(`-c pass`)을
+  5초 timeout으로 실행하는 preflight를 추가했다. 실패 시 exit 126로 조기
+  분류.
+- **Finding 3 (📝 child-executable containment, line 163) — 정보성, 정확함.**
+  `--unshare-pid` + 암묵적 mount namespace는 wrapped 프로세스가 낳는 모든
+  자손 프로세스에도 적용되므로 추가 escape 경로가 없음을 코드로 확인. 코드
+  변경 없이 스레드에 확인 회신.
+- **Finding 4 (📝 mapped-home writability, line 135) — 정보성, 정확함.**
+  `_sandbox_environment`가 `HOME` 등을 `/workspace` 하위로 재매핑하고,
+  `sandboxed_verify.scrubbed_env`가 그 경로를 미리 생성하며, `isolated_command`가
+  동일 sandbox_root를 `--bind`(read-write)로 마운트하므로 재매핑된 홈이 실제로
+  존재하고 쓰기 가능함을 확인. 코드 변경 없이 회신.
+- **Finding 5 (🟥 workspace symlink escape, line 188) — 실재, 최우선 처리.**
+  `sandboxed_verify.copy_workspace`가 `shutil.copytree(..., symlinks=True)`를
+  써서 심볼릭 링크를 역참조 없이 그대로 보존한다는 것을 확인. 저장소에 포함된
+  심볼릭 링크가 절대경로 또는 `..` 다단 상대경로로 복사 트리 바깥을 가리키면,
+  복사 후에도 그 링크가 살아있어 `/workspace`에 bind-mount된 이후 이를
+  따라가는 명령이 sandbox 경계 밖 호스트 파일에 접근할 수 있다. 복사 직후
+  트리 전체를 순회(`rglob`, 심볼릭 디렉터리 내부로는 재귀하지 않음 — 순환
+  링크로 인한 무한 루프/과다 순회 방지)하며 모든 심볼릭 링크의 최종 resolve
+  경로가 sandbox root 하위인지 검증하고, 하나라도 벗어나면 복사 전체를
+  `ValueError`로 fail-closed 처리하도록 `_reject_escaping_symlinks`를 추가.
+  절대경로 escape, `../..` 상대경로 escape, 디렉터리 심볼릭 링크 escape,
+  풀 수 없는 순환 심볼릭 링크(RuntimeError/OSError 양쪽 Python 버전 차이
+  모두 처리) 각각에 대한 회귀 테스트와, 내부 상대 심볼릭 링크는 그대로
+  보존되는지 확인하는 회귀 테스트를 추가했다.
+- **Finding 6 (🟨 unresolved-executable bypass, line 156) — 실재.**
+  `isolated_command`는 `shutil.which(argv[0])`가 `None`을 반환하면 전체
+  검증 블록을 건너뛰고 원본 argv를 그대로 bubblewrap에 넘겼다 — 이 버그를
+  그대로 문서화하고 있던 기존 테스트
+  (`test_isolated_command_allows_unresolved_executable_for_bwrap`)를 발견,
+  fail-closed로 전환하는 테스트로 교체했다. 해석 실패 시 다른 검증과 동일한
+  `RuntimeError`(exit 126 경로)를 던지도록 수정.
+
+수정 파일: `scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`,
+`tests/test_sandboxed_web_e2e.py`, `tests/test_sandboxed_verify.py`,
+`docs/doctoring/sandboxed-web-command-isolation.md`,
+`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`, `CHANGELOG.md`.
+전체 스위트(`pytest tests`, 1924 passed) 및 대상 두 모듈 100% line/branch
+coverage, 100% docstring coverage(`interrogate`), `ruff check` 모두 통과 확인.
+GitHub 스레드 6건 각각에 회신하고, 실재 결함 4건 + 정보성 확인 2건 총 6건
+모두 resolve 처리.
+
 ## 2026-08-30 sidecar preflight `max_tokens`: explicit owner critique, ADR-0005 (revised after Devin Review)
 
 Direct owner feedback after #1436's `max_tokens` 16→4096 raise moved the sidecar's gateway preflight
@@ -2522,6 +2584,12 @@ TDD: `tests/test_contextual_orchestrator_review_sidecar_contract.py`에 구조 �
 `sidecar_alive` 기본값(`True` → 회귀 없이 기존 동작 보존)으로 고쳤다. 검증: 전체
 스위트 1935 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%, `bash -n`
 OK.
+
+**참고(main에서 독립적으로 완료된 별개 정리 작업)**: `scripts/ci/select_nvidia_nim_model.py`(호출자
+없음, 위 §5의 여러 항목이 이미 문서화)가 별도의 작은 PR(`fix/remove-orphaned-nim-model-resolver`)로
+분리 제거되어 `main`에 이미 반영되어 있다 — `#1437` 리뷰 스레드가 명시적으로 요청한 대로 direct-NIM
+cleanup을 pool-flip 논의와 분리한 것이다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은
+git history를 가리키도록 갱신되었다. 이 branch에는 코드 변경이 필요 없다(이미 `main`을 merge해 반영됨).
 
 ## 6. Compliance and data boundary
 
