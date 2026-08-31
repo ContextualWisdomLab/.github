@@ -1,6 +1,32 @@
-# NVIDIA NIM OpenCode model priority (hotfix)
+# NVIDIA NIM OpenCode model priority (hotfix) — ROLLED BACK, HISTORICAL
 
-## Why
+**Status (2026-08-31): this hotfix is no longer active.** The six-model NIM
+prefix this note describes was removed from
+`.github/workflows/opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES`
+by `f8823a54` (#1364, "route Noema review through vendored
+contextual-orchestrator"); that variable has held the single value
+`"contextual-orchestrator/orchestrator/free"` (contract-pinned by
+`tests/test_opencode_agent_contract.py`) ever since, and `opencode.jsonc`'s
+embedded config for the CI dispatch path likewise renders
+`enabled_providers: ["contextual-orchestrator"]` with no NIM entry. Per this
+note's own "Rollback" section below, it should have been deleted once
+catalog reliability was restored; it was not, and stayed factually stale for
+over a month (last touched at `c7a4bad6`, #682, 2026-07-31) before this
+correction. Left in place as a historical record rather than deleted, per
+this repo's "append a dated note, don't rewrite history" documentation
+convention (see `docs/doctoring/direct-nvidia-nim-communication-removal.md`
+for the sibling record of the *code* that implemented an unrelated,
+already-dead direct-NIM resolver). The `nvidia-nim` provider block still
+declared in root `opencode.jsonc` (unused by the CI dispatch path, which
+generates its own provider list) is a deliberate, still-tested fallback
+capability for `scripts/ci/run_opencode_review_model_pool.sh`
+(`is_nvidia_nim_candidate`, exercised by `tests/test_opencode_model_pool_runner.py`),
+not orphaned code — removing it is a separate resilience-tradeoff decision,
+not a documentation fix, and is out of scope here. See
+`docs/product-technical-gap-baseline.md`'s "Direct-NIM-communication audit"
+entry (2026-08-31) for the full investigation this correction closes out.
+
+## Why (historical — describes the hotfix as it was, not current state)
 
 OpenCode Agent failed to produce a usable review on the PR thread starting at
 ContextualWisdomLab/fast-mlsirm#290 (`opencode-review` check **skipped**, no
