@@ -252,6 +252,9 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             )
         elif filename == "opencode-review.yml":
             assert "opencode-review-bootstrap-" in concurrency_contract
+        elif filename == "noema-review.yml":
+            assert "github.event.workflow_run.pull_requests[0].number" in concurrency_contract
+            assert "github.event_name }}" not in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -486,14 +489,14 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
 
-def test_noema_workflow_run_followup_cannot_cancel_required_pr_event_review() -> None:
-    """Keep Noema workflow-run follow-ups isolated from PR-event reviews."""
+def test_noema_triggers_serialize_one_review_per_pull_request() -> None:
+    """Serialize every Noema trigger type for one pull request."""
     workflow = workflow_text("noema-review.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
-    assert "github.repository }}-${{ github.event_name }}-${{" in concurrency_contract
-    assert "github.event_name == 'workflow_run'" in concurrency_contract
-    assert "github.event_name == 'pull_request_target'" in concurrency_contract
+    assert "github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number" in concurrency_contract
+    assert "github.event.client_payload.pr_number" in concurrency_contract
+    assert "github.event_name }}" not in concurrency_contract
 
 
 def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
