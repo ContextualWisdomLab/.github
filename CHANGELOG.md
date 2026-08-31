@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Convert JSON decoder recursion failures from deeply nested Noema responses
+  into the existing bounded, fingerprinted fail-closed diagnostic instead of
+  allowing an unhandled `RecursionError` to crash the required review.
 - Keep Noema's native concurrency head-specific, then explicitly cancel the
   same PR's older-head runs only after a `pull_request_target` event proves its
   payload SHA is still live. New commits stop obsolete four-hour model calls,

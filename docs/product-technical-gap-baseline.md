@@ -2215,6 +2215,12 @@ every rebase, given the branch's ongoing concurrent commit velocity from multipl
 
 PR: ContextualWisdomLab/.github#1507 (CodeRabbit review on #1507; same PR, addressed before merge).
 
+Deeply nested wrapped JSON can make Python's decoder raise `RecursionError`
+instead of `JSONDecodeError`. The extraction boundary now converts that case
+to the same bounded length-and-SHA-256 fail-closed diagnostic, with a regression
+test that forces the decoder failure without depending on interpreter-specific
+nesting limits.
+
 ### Same-PR old-head model cancellation
 
 The repair-retry guard prevents a second stale request, but head-specific
