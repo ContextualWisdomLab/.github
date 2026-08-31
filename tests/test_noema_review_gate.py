@@ -19,6 +19,7 @@ def make_pr(**overrides):
         "title": "Noema",
         "body": "",
         "isDraft": False,
+        "state": "OPEN",
         "headRefOid": "head",
         "reviews": {"nodes": []},
         "reviewThreads": {"nodes": []},
@@ -112,6 +113,17 @@ def test_existing_noema_review_matches_actor_and_head():
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+
+
+def test_require_expected_head_rejects_invalid_closed_and_stale_targets():
+    head = "a" * 40
+    noema.require_expected_head(make_pr(headRefOid=head), head)
+    with pytest.raises(RuntimeError, match="full commit SHA"):
+        noema.require_expected_head(make_pr(headRefOid=head), "short")
+    with pytest.raises(RuntimeError, match="closed or its head changed"):
+        noema.require_expected_head(make_pr(headRefOid=head, state="CLOSED"), head)
+    with pytest.raises(RuntimeError, match="closed or its head changed"):
+        noema.require_expected_head(make_pr(headRefOid="b" * 40), head)
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
@@ -477,7 +489,8 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
-    clean_pr = make_pr()
+    head = "a" * 40
+    clean_pr = make_pr(headRefOid=head)
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
@@ -487,32 +500,34 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
-    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
 
     cases = [
-        (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+        (make_pr(headRefOid=head, isDraft=True), "noema"),
+        (make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
     ]
     for pr, actor in cases:
         calls.clear()
         monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=pr: pr)
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
-        assert noema.inspect_and_review("owner/repo", 7) == 0
+        assert noema.inspect_and_review("owner/repo", 7, head) == 0
         assert calls == []
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "")
     with pytest.raises(RuntimeError, match="identity could not be verified"):
-        noema.inspect_and_review("owner/repo", 7)
+        noema.inspect_and_review("owner/repo", 7, head)
 
     monkeypatch.setattr(noema, "current_actor", lambda: "opencode-agent")
     with pytest.raises(RuntimeError, match="independent reviewer credential"):
-        noema.inspect_and_review("owner/repo", 7)
+        noema.inspect_and_review("owner/repo", 7, head)
 
 
 def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatch):
+    head = "a" * 40
     pr = make_pr(
+        headRefOid=head,
         reviews={"nodes": [review("CHANGES_REQUESTED")]},
         reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
         statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}},
@@ -526,8 +541,26 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
-    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
+
+
+def test_inspect_and_review_rechecks_head_before_publication(monkeypatch):
+    head = "a" * 40
+    stale = make_pr(headRefOid="b" * 40)
+    responses = iter([make_pr(headRefOid=head), make_pr(headRefOid=head), stale])
+    submitted = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(responses))
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: submitted.append(args))
+
+    with pytest.raises(RuntimeError, match="head changed"):
+        noema.inspect_and_review("owner/repo", 7, head)
+    assert submitted == []
 
 
 def test_call_llm_rejects_empty_review_content(monkeypatch):
@@ -1018,14 +1051,26 @@ def test_format_review_evidence_renders_only_structured_entries():
 
 
 def test_parse_args_and_main(monkeypatch):
-    parsed = noema.parse_args(["--repo", "owner/repo", "--pr-number", "9"])
+    head = "a" * 40
+    parsed = noema.parse_args(
+        ["--repo", "owner/repo", "--pr-number", "9", "--expected-head-sha", head]
+    )
     assert parsed.repo == "owner/repo"
     assert parsed.pr_number == 9
+    assert parsed.expected_head_sha == head
 
     seen = []
-    monkeypatch.setattr(noema, "inspect_and_review", lambda repo, number: seen.append((repo, number)) or 0)
-    assert noema.main(["--repo", "owner/repo", "--pr-number", "9"]) == 0
-    assert seen == [("owner/repo", 9)]
+    monkeypatch.setattr(
+        noema,
+        "inspect_and_review",
+        lambda repo, number, expected: seen.append((repo, number, expected)) or 0,
+    )
+    assert noema.main(
+        ["--repo", "owner/repo", "--pr-number", "9", "--expected-head-sha", head]
+    ) == 0
+    assert seen == [("owner/repo", 9, head)]
 
     with pytest.raises(SystemExit, match="--pr-number must be positive"):
-        noema.main(["--repo", "owner/repo", "--pr-number", "0"])
+        noema.main(
+            ["--repo", "owner/repo", "--pr-number", "0", "--expected-head-sha", head]
+        )

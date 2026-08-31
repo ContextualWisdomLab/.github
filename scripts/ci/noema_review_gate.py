@@ -104,6 +104,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       title
       body
       isDraft
+      state
       headRefOid
       reviewDecision
       reviewThreads(first: 100) {
@@ -163,6 +164,18 @@ def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     if not pr:
         raise RuntimeError(f"PR #{number} was not found in {repo}")
     return pr
+
+
+def require_expected_head(pr: dict[str, Any], expected_head_sha: str) -> None:
+    """Fail closed unless the pull request is open at the expected commit."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
+        raise RuntimeError("Expected pull request head must be a full commit SHA")
+    live_head_sha = str(pr.get("headRefOid") or "")
+    if str(pr.get("state") or "OPEN").upper() != "OPEN" or live_head_sha != expected_head_sha:
+        raise RuntimeError(
+            "Pull request is closed or its head changed before Noema review: "
+            f"expected {expected_head_sha}, observed {live_head_sha or '<missing>'}"
+        )
 
 
 def review_author(review: dict[str, Any]) -> str:
@@ -825,9 +838,10 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int) -> int:
+def inspect_and_review(repo: str, number: int, expected_head_sha: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
+    require_expected_head(pr, expected_head_sha)
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
@@ -845,7 +859,11 @@ def inspect_and_review(repo: str, number: int) -> int:
     diff, truncated = fetch_diff(repo, number)
     changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
+    pr = fetch_pr(repo, number)
+    require_expected_head(pr, expected_head_sha)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
+    pr = fetch_pr(repo, number)
+    require_expected_head(pr, expected_head_sha)
     submit_review(repo, number, pr, actor, verdict)
     return 0
 
@@ -855,6 +873,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--expected-head-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -863,7 +882,7 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    return inspect_and_review(args.repo, args.pr_number)
+    return inspect_and_review(args.repo, args.pr_number, args.expected_head_sha)
 
 
 if __name__ == "__main__":  # pragma: no cover
