@@ -787,6 +787,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
             for status in ("waiting", "requested", "queued", "pending", "in_progress")
         ],
     ]
+    assert not any("page=2" in path for path in requested_paths)
     assert {run["status"] for run in snapshot["repositories"][0]["runs"]} == {
         "IN_PROGRESS",
         "PENDING",

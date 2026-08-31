@@ -33,7 +33,9 @@ whole run's age and does not trigger a false capacity-breach alert.
 Two bounded active-status sweeps run in opposite orders and must agree before
 the snapshot is accepted. This prevents historical completed runs from
 exhausting the bound while rejecting evidence that changes between partitioned
-reads. Requested, pending, and queued runs use run-level evidence because GitHub has
+reads. Each status read is capped at one 50-run page, limiting collection to ten
+run-list calls per repository; exceeding the cap is reported as incomplete
+evidence. Requested, pending, and queued runs use run-level evidence because GitHub has
 not assigned their jobs. Current-head `in_progress` and `waiting` runs make the
 additional jobs API read needed to distinguish concrete runner assignment from
 an environment or deployment approval wait.

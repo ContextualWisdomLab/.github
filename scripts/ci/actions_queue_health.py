@@ -28,6 +28,7 @@ SCHEMA_VERSION = "actions.queue_health.v1"
 MAX_API_PAGE_SIZE = 100
 WORKFLOW_RUN_PAGE_SIZE = 50
 MAX_API_PAGES = 20
+ACTIVE_RUN_MAX_API_PAGES = 1
 GITHUB_API_TIMEOUT_SECONDS = 30
 PULL_REQUEST_RETRY_DELAY_SECONDS = 1
 PAGINATED_PAGES_KEY = "_queue_health_pages"
@@ -122,14 +123,20 @@ def _list_payload(
     return values
 
 
-def github_json(path: str, *, paginate: bool = False, runner: Runner = subprocess.run) -> Any:
+def github_json(
+    path: str,
+    *,
+    paginate: bool = False,
+    max_pages: int = MAX_API_PAGES,
+    runner: Runner = subprocess.run,
+) -> Any:
     """Read one GitHub REST endpoint through ``gh`` without shell evaluation."""
     if not path.startswith("repos/"):
         raise QueueHealthError(f"GitHub endpoint is outside repository scope: {path}")
     pages: list[Any] = []
     page_size_match = re.search(r"(?:[?&])per_page=(\d+)(?:&|$)", path)
     page_size = int(page_size_match.group(1)) if page_size_match else MAX_API_PAGE_SIZE
-    page_numbers = range(1, MAX_API_PAGES + 1) if paginate else range(1, 2)
+    page_numbers = range(1, max_pages + 1) if paginate else range(1, 2)
     for page_number in page_numbers:
         page_path = path
         if paginate and page_number > 1:
@@ -169,7 +176,7 @@ def github_json(path: str, *, paginate: bool = False, runner: Runner = subproces
         if (type(total_count) is int and total_count <= collected) or len(values) < page_size:
             return {PAGINATED_PAGES_KEY: pages}
     raise QueueHealthError(
-        f"GitHub API pagination exceeds {MAX_API_PAGES} pages for {path}"
+        f"GitHub API pagination exceeds {max_pages} pages for {path}"
     )
 
 
@@ -378,10 +385,11 @@ def collect_snapshot(
                             f"repos/{repository}/actions/runs?status={status}"
                             f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
                             paginate=True,
+                            max_pages=ACTIVE_RUN_MAX_API_PAGES,
                             runner=runner,
                         ),
                         "workflow_runs",
-                        max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * ACTIVE_RUN_MAX_API_PAGES,
                     )
                     for run in runs:
                         run_id = run.get("id")
