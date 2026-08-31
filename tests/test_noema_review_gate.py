@@ -655,6 +655,282 @@ def test_read_response_body_within_deadline_reraises_unrelated_os_error():
         noema._read_response_body_within_deadline(_ImmediatelyBrokenResponse(), time.monotonic() + 5)
 
 
+def test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response_headers(monkeypatch):
+    """call_llm must not let a trickling response HEADER phase outlive the total budget.
+
+    Regression coverage for Devin Review's follow-up finding on
+    ContextualWisdomLab/.github#1509 (around line 810): the read-watchdog in
+    ``_read_response_body_within_deadline`` only starts protecting the
+    response once ``opener.open()`` has already returned -- i.e. once the
+    status line and headers are fully received -- so it cannot see a
+    provider that instead trickles the response HEADER bytes slowly (one
+    byte every ``header_byte_delay_seconds``, comfortably under any per-recv
+    inactivity timeout). Before the fix, that could keep ``opener.open()``
+    itself -- connect, TLS handshake, request transmission, and
+    status-line/header receipt -- blocked well past ``effective_deadline``,
+    escaping every deadline check in this module.
+
+    Mirrors ``test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response``
+    above (same real local ``http.server.HTTPServer`` fixture, routed through
+    the loopback sidecar allowlist), but trickles the raw status
+    line/header bytes one at a time instead of the body, which
+    ``http.server.BaseHTTPRequestHandler``'s own ``send_response``/
+    ``send_header``/``end_headers`` helpers do not do on their own (they
+    buffer and flush the whole header block in one write), so the response
+    is written directly onto ``self.wfile`` as raw bytes instead.
+    """
+    header_byte_delay_seconds = 0.05
+    raw_header = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: 2\r\n"
+        b"Connection: close\r\n"
+        b"\r\n"
+    )
+    # len(raw_header) (91) * 0.05s =~ 4.55s of total header-trickle time, well
+    # over the tiny total budget below, while each individual byte-to-byte gap
+    # stays far under the monkeypatched per-attempt LLM_REQUEST_TIMEOUT_SECONDS,
+    # so no single socket recv() ever times out on its own.
+
+    class SlowHeaderTrickleHandler(http.server.BaseHTTPRequestHandler):
+        """A local HTTP handler that dribbles its status line/headers out a byte at a time."""
+
+        def do_POST(self):
+            """Consume the request body, then trickle a slow, byte-at-a-time header block."""
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            try:
+                for i in range(len(raw_header)):
+                    self.wfile.write(raw_header[i : i + 1])
+                    self.wfile.flush()
+                    time.sleep(header_byte_delay_seconds)
+                self.wfile.write(b"{}")
+            except OSError:
+                pass  # The client is expected to disconnect once its deadline fires.
+
+        def log_message(self, *_args):
+            """Silence the default per-request stderr logging."""
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowHeaderTrickleHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        monkeypatch.setenv("NOEMA_LLM_API_URL", f"{origin}/v1/chat/completions")
+        monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+        # Route through the loopback sidecar allowlist (is_allowed_orchestrator_sidecar_url)
+        # so reject_private_llm_url permits this 127.0.0.1 target.
+        monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", origin)
+        monkeypatch.setattr(noema, "LLM_REQUEST_TOTAL_BUDGET_SECONDS", 1.0)
+        monkeypatch.setattr(noema, "LLM_REQUEST_TIMEOUT_SECONDS", 10)
+
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="before the response headers could be read"):
+            noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        elapsed = time.monotonic() - start
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+    # Must abort close to the 1.0s budget, not after the full ~4.55s header trickle
+    # and not after the (monkeypatched to 10s) per-attempt LLM_REQUEST_TIMEOUT_SECONDS.
+    assert elapsed < len(raw_header) * header_byte_delay_seconds
+
+
+def test_open_response_within_deadline_returns_response_when_not_timed_out():
+    """A response opened before the deadline fires must be returned unchanged."""
+
+    class _FakeOpener:
+        def open(self, request, timeout=None):
+            return "the response"
+
+    watchdog_state: dict = {"timed_out": threading.Event()}
+    result = noema._open_response_within_deadline(
+        _FakeOpener(), "request", 5.0, time.monotonic() + 5, watchdog_state
+    )
+    assert result == "the response"
+
+
+def test_open_response_within_deadline_cancels_the_watchdog_once_open_returns():
+    """A still-armed watchdog must be canceled once opener.open() returns."""
+
+    class _FakeWatchdog:
+        def __init__(self):
+            self.canceled = False
+
+        def cancel(self):
+            self.canceled = True
+
+    class _FakeOpener:
+        def open(self, request, timeout=None):
+            return "the response"
+
+    watchdog = _FakeWatchdog()
+    watchdog_state: dict = {"watchdog": watchdog, "timed_out": threading.Event()}
+    noema._open_response_within_deadline(
+        _FakeOpener(), "request", 5.0, time.monotonic() + 5, watchdog_state
+    )
+    assert watchdog.canceled is True
+
+
+def test_open_response_within_deadline_converts_os_error_after_watchdog_fires():
+    """An OSError raised once the header-phase watchdog has fired must fail closed."""
+
+    class _FakeOpener:
+        def open(self, request, timeout=None):
+            raise OSError("connection reset by the watchdog's shutdown()")
+
+    timed_out = threading.Event()
+    timed_out.set()
+    watchdog_state: dict = {"timed_out": timed_out}
+    with pytest.raises(RuntimeError, match="before the response headers could be read"):
+        noema._open_response_within_deadline(
+            _FakeOpener(), "request", 5.0, time.monotonic() + 5, watchdog_state
+        )
+
+
+def test_open_response_within_deadline_reraises_unrelated_os_error():
+    """An OSError raised before the watchdog ever fires (or before connect() even ran,
+    e.g. a DNS failure -- watchdog_state stays empty) must propagate unchanged."""
+
+    class _FakeOpener:
+        def open(self, request, timeout=None):
+            raise OSError("connection refused, unrelated to the deadline")
+
+    with pytest.raises(OSError, match="unrelated to the deadline"):
+        noema._open_response_within_deadline(
+            _FakeOpener(), "request", 5.0, time.monotonic() + 5, {}
+        )
+
+
+def test_open_response_within_deadline_rejects_response_when_watchdog_fired_despite_success():
+    """A response handed back despite the watchdog having already fired must be rejected.
+
+    Mirrors ``test_read_response_body_within_deadline_tolerates_a_failing_shutdown``:
+    if the watchdog's own ``shutdown()`` call failed to actually interrupt the
+    socket, ``opener.open()`` can still return what looks like a normal
+    response even though the deadline was already exceeded. That must not be
+    silently trusted.
+    """
+
+    class _FakeOpener:
+        def open(self, request, timeout=None):
+            return "a response received despite the expired deadline"
+
+    timed_out = threading.Event()
+    timed_out.set()
+    watchdog_state: dict = {"timed_out": timed_out}
+    with pytest.raises(RuntimeError, match="before the response headers could be read"):
+        noema._open_response_within_deadline(
+            _FakeOpener(), "request", 5.0, time.monotonic() + 5, watchdog_state
+        )
+
+
+def test_deadline_guarded_connection_arms_watchdog_state_on_connect():
+    """The guarded connection's connect() must arm the shared watchdog on its own socket.
+
+    Isolated unit coverage for ``_deadline_guarded_connection`` alongside the
+    real end-to-end coverage from the header-trickle test above: a minimal
+    fake base class stands in for ``http.client.HTTPConnection`` so this can
+    assert the watchdog-arming side effect deterministically, without a real
+    socket or network call.
+    """
+
+    class _FakeSocket:
+        def __init__(self):
+            self.shutdown_calls = []
+
+        def shutdown(self, how):
+            self.shutdown_calls.append(how)
+
+    class _FakeBaseConnection:
+        def __init__(self):
+            self.sock = None
+
+        def connect(self):
+            self.sock = _FakeSocket()
+
+    state: dict = {}
+    guarded_class = noema._deadline_guarded_connection(
+        _FakeBaseConnection, time.monotonic() + 5, state
+    )
+    connection = guarded_class()
+    connection.connect()
+
+    assert isinstance(connection, _FakeBaseConnection)
+    assert connection.sock is not None
+    assert "watchdog" in state and "timed_out" in state
+    assert isinstance(state["timed_out"], threading.Event)
+    assert state["timed_out"].is_set() is False
+    state["watchdog"].cancel()
+
+
+def test_deadline_guarded_connection_still_arms_a_watchdog_for_an_already_expired_deadline():
+    """A deadline that has already passed by connect() time must still be enforced.
+
+    ``_arm_deadline_watchdog`` clamps a negative remaining time to zero
+    rather than skipping the watchdog, so a connection that connects after
+    its deadline has technically already elapsed still gets its read side
+    force-closed almost immediately, instead of being left unprotected.
+    """
+
+    class _FakeSocket:
+        def __init__(self):
+            self.shutdown_called = threading.Event()
+
+        def shutdown(self, how):
+            self.shutdown_called.set()
+
+    class _FakeBaseConnection:
+        def __init__(self):
+            self.sock = None
+
+        def connect(self):
+            self.sock = _FakeSocket()
+
+    state: dict = {}
+    guarded_class = noema._deadline_guarded_connection(
+        _FakeBaseConnection, time.monotonic() - 1, state
+    )
+    connection = guarded_class()
+    connection.connect()
+
+    assert connection.sock.shutdown_called.wait(timeout=5)
+    assert state["timed_out"].is_set() is True
+
+
+def test_deadline_https_handler_opens_via_the_guarded_connection_class_and_tls_context():
+    """https_open must route through do_open with the guarded class and TLS context.
+
+    ``_DeadlineHTTPHandler.http_open`` already gets real end-to-end coverage
+    from the trickling-headers test above (that test targets a plain
+    ``http://`` origin). This directly exercises the ``https://`` sibling's
+    ``https_open`` the same way ``test_noema_redirect_handler_rejects_redirects``
+    exercises ``NoRedirectHandler`` directly, without needing a real TLS
+    server: ``https_open`` is a plain method, callable with any object able
+    to stand in for ``self``.
+    """
+
+    calls = []
+
+    class _FakeSelf:
+        _connection_class = object()
+        _context = "the-tls-context"
+        _check_hostname = None
+
+        def do_open(self, connection_class, req, **kwargs):
+            calls.append((connection_class, req, kwargs))
+            return "the response"
+
+    fake_self = _FakeSelf()
+    result = noema._DeadlineHTTPSHandler.https_open(fake_self, "the request")
+
+    assert result == "the response"
+    assert calls == [
+        (_FakeSelf._connection_class, "the request", {"context": "the-tls-context", "check_hostname": None})
+    ]
+
+
 def test_call_llm_rejects_an_already_expired_deadline_before_any_request(monkeypatch):
     """call_llm's own top-of-function budget check must fail closed pre-request.
 

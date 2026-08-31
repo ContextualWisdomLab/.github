@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import http.client
 import ipaddress
 import json
 import os
@@ -637,6 +638,50 @@ def _response_raw_socket(response: Any) -> Any | None:
         return None
 
 
+def _arm_deadline_watchdog(raw_socket: Any, remaining: float) -> tuple[threading.Timer | None, threading.Event]:
+    """Arm a watchdog that force-closes ``raw_socket``'s read side once ``remaining`` elapses.
+
+    Shared by every phase of a ``call_llm`` HTTP attempt that can block past
+    its ``effective_deadline`` on the same underlying socket: ``connect()``
+    (request transmission and status-line/header receipt happen on the same
+    socket afterward, still inside the same ``opener.open()`` call -- see
+    ``_deadline_guarded_connection`` below) and ``response.read()`` (see
+    ``_read_response_body_within_deadline``). A socket ``timeout=`` only
+    bounds each individual blocking operation (``connect()``, or one
+    ``recv()``) against inactivity; a peer that keeps sending small amounts
+    of data at intervals shorter than that per-op timeout can keep the whole
+    call blocked far past an absolute deadline even though no single
+    operation ever times out on its own.
+
+    Uses ``shutdown(SHUT_RDWR)`` rather than ``close()`` because only the
+    former reliably unblocks a concurrent blocking read on the same socket
+    from another thread. ``remaining`` is clamped to zero so an
+    already-elapsed deadline still arms an (immediately-firing) timer instead
+    of silently skipping protection. Returns the started ``threading.Timer``
+    (``None`` if ``raw_socket`` is ``None`` -- a socket-like object that
+    doesn't exist yet or doesn't expose one, e.g. test doubles) and the
+    ``threading.Event`` the timer sets when it fires, so the caller can
+    distinguish "the deadline is why this call raised" from any other
+    failure once the guarded operation returns or raises.
+    """
+    timed_out = threading.Event()
+    watchdog: threading.Timer | None = None
+    if raw_socket is not None:
+
+        def _expire() -> None:
+            """Mark the deadline as passed and force-close the read side."""
+            timed_out.set()
+            try:
+                raw_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        watchdog = threading.Timer(max(remaining, 0.0), _expire)
+        watchdog.daemon = True
+        watchdog.start()
+    return watchdog, timed_out
+
+
 def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes:
     """Read an HTTP response body without exceeding a monotonic deadline.
 
@@ -655,13 +700,12 @@ def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes
     not, so re-checking the deadline only *between* whole ``read()`` calls
     would never see the pathological case in time.
 
-    Instead, arm a watchdog timer for the remaining budget that force-closes
-    the read side of the socket (``shutdown(SHUT_RDWR)``, which reliably
-    unblocks a concurrent blocking read on the same socket, unlike
-    ``close()``) if it fires before ``response.read()`` returns on its own,
-    then read the body in one call exactly as before. If the watchdog fired,
-    raise the same bounded, fail-closed ``RuntimeError`` this module already
-    uses elsewhere, whether the interrupted read raised an ``OSError`` or
+    Instead, arm a watchdog timer (``_arm_deadline_watchdog``) for the
+    remaining budget that force-closes the read side of the socket if it
+    fires before ``response.read()`` returns on its own, then read the body
+    in one call exactly as before. If the watchdog fired, raise the same
+    bounded, fail-closed ``RuntimeError`` this module already uses
+    elsewhere, whether the interrupted read raised an ``OSError`` or
     returned a truncated body without one.
     """
     remaining = deadline - time.monotonic()
@@ -671,21 +715,7 @@ def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes
             "before the response body could be read"
         )
     raw_socket = _response_raw_socket(response)
-    timed_out = threading.Event()
-    watchdog: threading.Timer | None = None
-    if raw_socket is not None:
-
-        def _expire() -> None:
-            """Mark the deadline as passed and force-close the read side."""
-            timed_out.set()
-            try:
-                raw_socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-
-        watchdog = threading.Timer(remaining, _expire)
-        watchdog.daemon = True
-        watchdog.start()
+    watchdog, timed_out = _arm_deadline_watchdog(raw_socket, remaining)
     try:
         body = response.read()
     except OSError as exc:
@@ -704,6 +734,153 @@ def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes
             "while reading the response body"
         )
     return body
+
+
+def _deadline_guarded_connection(base: type, deadline: float, state: dict[str, Any]) -> type:
+    """Build an ``http.client`` connection subclass that watchdog-guards ``connect()``.
+
+    ``opener.open(request, timeout=...)`` -- covering TCP connect, TLS
+    handshake, request transmission, and status-line/header receipt -- can
+    itself be kept blocked well past ``effective_deadline`` by a peer that
+    trickles response HEADER bytes slowly (one byte every ``timeout -
+    epsilon`` seconds), for exactly the reason ``_arm_deadline_watchdog``'s
+    docstring gives: ``timeout=`` bounds only each individual blocking
+    socket operation, not the call's total wall time. This is the same
+    vulnerability class ``_read_response_body_within_deadline`` already
+    fixes for the body, one phase earlier (ContextualWisdomLab/.github#1509,
+    Devin Review): that watchdog only starts once ``opener.open()`` has
+    already returned, i.e. once headers are fully received, so it cannot
+    protect anything that happens before then.
+
+    ``urllib.request`` gives no way to guard ``opener.open()`` from the
+    outside -- the socket it blocks on does not exist until a connection
+    object is constructed deep inside it, and by the time ``opener.open()``
+    returns or raises it is too late to have protected the call. So this
+    subclasses the connection itself instead: the instant ``connect()``
+    hands back a live socket, arm the same shared watchdog
+    ``_read_response_body_within_deadline`` uses via
+    ``_arm_deadline_watchdog``, on that exact socket. Request transmission
+    and status-line/header receipt (``h.request()``/``h.getresponse()`` in
+    ``AbstractHTTPHandler.do_open``) happen on that same socket immediately
+    afterward, still inside this same ``connect()`` caller's
+    ``opener.open()`` frame, so one watchdog covers both.
+
+    ``state`` is a plain ``dict`` the caller owns and can always inspect
+    afterward, whether ``opener.open()`` returns or raises, since the
+    connection object itself is never handed back on either path -- see
+    ``_open_response_within_deadline``, which interprets it.
+
+    This does not, and cannot cheaply, extend the same guarantee to the TLS
+    handshake that happens *inside* ``connect()`` for an HTTPS base class:
+    the ``ssl`` module detaches the plain socket's file descriptor into a
+    new ``SSLSocket`` partway through wrapping it, so a watchdog armed on
+    the pre-wrap socket object would be shutting down an already-invalidated
+    descriptor by the time a slow handshake is actually blocked, and a
+    watchdog armed on the post-wrap ``SSLSocket`` cannot exist until the
+    (synchronous, on-connect) handshake has already finished. See
+    ``call_llm``'s docstring for why this is accepted as a known, reported
+    residual gap rather than chased here.
+    """
+
+    class _DeadlineGuardedConnection(base):  # type: ignore[misc]
+        """``base`` whose socket is watchdog-armed the instant ``connect()`` returns."""
+
+        def connect(self) -> None:
+            """Connect via the base class, then arm the shared deadline watchdog."""
+            super().connect()
+            state["watchdog"], state["timed_out"] = _arm_deadline_watchdog(
+                self.sock, deadline - time.monotonic()
+            )
+
+    return _DeadlineGuardedConnection
+
+
+class _DeadlineHTTPHandler(urllib.request.HTTPHandler):
+    """HTTPHandler that opens connections via a caller-supplied connection class.
+
+    Used by ``call_llm`` to swap in a ``_deadline_guarded_connection`` result
+    without otherwise changing how ``urllib.request`` builds and issues the
+    request (see ``_deadline_guarded_connection``'s docstring for why).
+    """
+
+    def __init__(self, connection_class: type) -> None:
+        """Store the watchdog-guarded connection class to use for every request."""
+        super().__init__()
+        self._connection_class = connection_class
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        """Open the request using the watchdog-guarded HTTP connection class."""
+        return self.do_open(self._connection_class, req)
+
+
+class _DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
+    """HTTPSHandler that opens connections via a caller-supplied connection class.
+
+    Mirrors ``_DeadlineHTTPHandler`` for ``https://`` targets, forwarding the
+    same ``context``/``check_hostname`` a stock ``HTTPSHandler`` would so TLS
+    verification behavior is unchanged.
+    """
+
+    def __init__(self, connection_class: type) -> None:
+        """Store the watchdog-guarded connection class to use for every request."""
+        super().__init__()
+        self._connection_class = connection_class
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open the request using the watchdog-guarded HTTPS connection class."""
+        return self.do_open(
+            self._connection_class,
+            req,
+            context=self._context,
+            check_hostname=self._check_hostname,
+        )
+
+
+def _open_response_within_deadline(
+    opener: urllib.request.OpenerDirector,
+    request: urllib.request.Request,
+    attempt_timeout: float,
+    deadline: float,
+    watchdog_state: dict[str, Any],
+) -> Any:
+    """Open ``request`` through ``opener``, failing closed if the header-phase deadline fires.
+
+    ``opener`` must already be built with connection classes
+    (``_deadline_guarded_connection`` via ``_DeadlineHTTPHandler`` /
+    ``_DeadlineHTTPSHandler``) that populate ``watchdog_state["watchdog"]``
+    and ``watchdog_state["timed_out"]`` the instant their socket connects --
+    this function only interprets that state around the call, exactly as
+    ``_read_response_body_within_deadline`` interprets its own watchdog's
+    state around ``response.read()``. Mirrors that function's outcomes: an
+    ``OSError`` raised after the watchdog fired becomes the module's
+    bounded, fail-closed ``RuntimeError``; an ``OSError`` raised for an
+    unrelated reason (including one raised before ``connect()`` ever ran,
+    e.g. a DNS failure, when ``watchdog_state`` is still empty) propagates
+    unchanged; and a response handed back despite the watchdog having
+    already fired -- for example because its own ``shutdown()`` call failed
+    -- is rejected rather than trusted.
+    """
+    try:
+        response = opener.open(request, timeout=attempt_timeout)  # nosec B310
+    except OSError as exc:
+        timed_out = watchdog_state.get("timed_out")
+        if timed_out is not None and timed_out.is_set():
+            raise RuntimeError(
+                "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS "
+                "before the response headers could be read"
+            ) from exc
+        raise
+    finally:
+        watchdog = watchdog_state.get("watchdog")
+        if watchdog is not None:
+            watchdog.cancel()
+    timed_out = watchdog_state.get("timed_out")
+    if timed_out is not None and timed_out.is_set():
+        raise RuntimeError(
+            "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS "
+            "before the response headers could be read"
+        )
+    return response
 
 
 def call_llm(
@@ -735,12 +912,30 @@ def call_llm(
     two-hour share (ContextualWisdomLab/.github#1509, Devin Review).
     ``effective_deadline`` below -- the earlier of this attempt's own bound
     and the outer backstop -- is what is actually enforced against this
-    attempt's connection and response read; ``deadline`` itself is only
-    re-checked, unchanged, as the outer backstop each time this function (or
-    its repair-retry recursion) starts. Callers should leave ``deadline``
-    unset; it is set once here on the first (non-retry) call and threaded
-    through the recursive repair-retry call below unchanged, so both attempts
-    share the same outer backstop.
+    attempt's connection, response headers, and response body; ``deadline``
+    itself is only re-checked, unchanged, as the outer backstop each time
+    this function (or its repair-retry recursion) starts. Callers should
+    leave ``deadline`` unset; it is set once here on the first (non-retry)
+    call and threaded through the recursive repair-retry call below
+    unchanged, so both attempts share the same outer backstop.
+
+    ``opener.open(request, timeout=attempt_timeout)`` itself -- not just the
+    subsequent ``response.read()`` -- is also watchdog-guarded against
+    ``effective_deadline`` (``_open_response_within_deadline``, backed by
+    ``_deadline_guarded_connection``): a peer that trickles response HEADER
+    bytes slowly can otherwise keep ``opener.open()`` blocked well past
+    ``effective_deadline`` for the same reason a trickled body could keep
+    ``response.read()`` blocked, since ``timeout=`` bounds only individual
+    blocking socket operations, not either call's total wall time
+    (ContextualWisdomLab/.github#1509, Devin Review). Together, the two
+    watchdogs bound every phase of one HTTP attempt that can block on this
+    module's own socket: connect, request transmission, status-line/header
+    receipt, and body receipt (including any chunked-transfer trailers,
+    which are consumed inside the same guarded ``response.read()`` call).
+    The one phase neither watchdog reaches is the TLS handshake performed
+    *inside* ``connect()`` for an ``https://`` target -- seeing why is
+    ``_deadline_guarded_connection``'s docstring; this is a known, reported
+    residual gap, not silently accepted.
     """
     attempt_start_time = time.monotonic()
     if deadline is None:
@@ -805,9 +1000,16 @@ def call_llm(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    watchdog_state: dict[str, Any] = {}
+    opener = urllib.request.build_opener(
+        NoRedirectHandler(),
+        _DeadlineHTTPHandler(_deadline_guarded_connection(http.client.HTTPConnection, effective_deadline, watchdog_state)),
+        _DeadlineHTTPSHandler(_deadline_guarded_connection(http.client.HTTPSConnection, effective_deadline, watchdog_state)),
+    )
     attempt_timeout = effective_deadline - attempt_start_time
-    with opener.open(request, timeout=attempt_timeout) as response:  # nosec B310
+    with _open_response_within_deadline(
+        opener, request, attempt_timeout, effective_deadline, watchdog_state
+    ) as response:
         raw = _read_response_body_within_deadline(response, effective_deadline).decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

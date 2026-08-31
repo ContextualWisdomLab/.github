@@ -2045,6 +2045,114 @@ the prior entry's 2141 total -- the net of this one new regression test); 100% c
 docstring coverage on `scripts/ci/` (`coverage run -m pytest tests && coverage report --show-missing`,
 `interrogate`).
 
+## 2026-08-31 PR #1509 Devin Review follow-up, round two: response HEADERS bypassed the deadline too
+
+Devin Review posted a further "bug"-severity finding on `ContextualWisdomLab/.github#1509` (same PR
+as the four entries above), on `call_llm` around line 810. Read the current `call_llm` implementation
+in full, plus `opener.open`/`http.client` receive-side semantics, before touching anything.
+
+**Finding -- `opener.open()` itself was unguarded, only `response.read()` was.** The prior round of
+fixes (entry directly above) added `_read_response_body_within_deadline`, a watchdog that force-closes
+the socket if `response.read()` runs past `effective_deadline`. That watchdog starts only once
+`opener.open(request, timeout=attempt_timeout)` has already returned -- i.e. only once the status line
+and headers are already fully received. `timeout=` on a socket bounds each individual blocking
+operation (connect, or one `recv()`) against inactivity, not the call's total wall time, exactly as the
+Finding-3/Finding-4 entries above already established for the body. A provider that instead trickles
+the response HEADER bytes slowly -- one byte every `timeout - epsilon` seconds, each individual `recv()`
+comfortably satisfying the per-op timeout -- can keep `opener.open()` blocked (covering TCP connect, TLS
+handshake, request transmission, and status-line/header receipt) well past `effective_deadline`, with
+no watchdog anywhere in that path. Confirmed real by direct empirical reproduction: a local
+`http.server.HTTPServer` writing its raw status line and headers one byte at a time, with the fix
+absent, blocks `opener.open()` for the full trickle duration regardless of a tiny monkeypatched
+`LLM_REQUEST_TOTAL_BUDGET_SECONDS`.
+
+**Fix.** Applied Devin's own suggested approach (option (b), a custom `http.client.HTTPConnection`/
+`HTTPSConnection`), reusing the existing body-read watchdog's mechanism rather than inventing a
+parallel one. The watchdog-arming logic itself was extracted unchanged from
+`_read_response_body_within_deadline` into a new shared `_arm_deadline_watchdog(raw_socket, remaining)`
+helper (same `threading.Timer` + `shutdown(SHUT_RDWR)` + `threading.Event` pattern as before;
+`_read_response_body_within_deadline`'s own behavior, including its already-tested branches, is
+unchanged). A new `_deadline_guarded_connection(base, deadline, state)` builds an `HTTPConnection`/
+`HTTPSConnection` subclass whose `connect()` calls `super().connect()` and then immediately arms the
+shared watchdog on `self.sock` -- the earliest point a real socket exists. Because request transmission
+and status-line/header receipt (`h.request()`/`h.getresponse()` inside
+`urllib.request.AbstractHTTPHandler.do_open`) run on that same socket immediately afterward, still
+inside the same `connect()` caller's `opener.open()` call frame, one watchdog armed at `connect()`-return
+covers both phases. Two new thin handler classes, `_DeadlineHTTPHandler`/`_DeadlineHTTPSHandler`, swap
+this guarded connection class into `urllib.request.build_opener(...)` in place of the stock
+`HTTPHandler`/`HTTPSHandler` `call_llm` implicitly got before (`build_opener` skips its own defaults
+for any handler class passed that subclasses them); `NoRedirectHandler` and all other request
+construction are untouched. A new `_open_response_within_deadline(opener, request, attempt_timeout,
+deadline, watchdog_state)` wraps the actual `opener.open(...)` call, mirroring
+`_read_response_body_within_deadline`'s three outcomes for the header phase: an `OSError` raised after
+the watchdog fired becomes the module's bounded `RuntimeError` ("...before the response headers could
+be read"); an `OSError` raised for an unrelated reason (including before `connect()` ever ran, e.g. a
+DNS failure) propagates unchanged; and a response handed back despite the watchdog having already fired
+(its own `shutdown()` call failing, mirroring the already-tested body-read case) is rejected rather than
+trusted. `call_llm` cancels the header-phase watchdog once `opener.open()` returns or raises, before the
+unchanged body-read watchdog takes over for `response.read()`.
+
+**Vulnerability-class closure assessment (explicitly requested, not assumed).** Traced every remaining
+blocking phase of one `call_llm` HTTP attempt against this module's own socket:
+- TCP connect: a single blocking syscall bounded absolutely by `timeout=` (not decomposable into
+  repeated small reads each individually resetting an inactivity clock), so it was never trickle-able
+  the way headers/body are, with or without this fix.
+- Request transmission and status-line/header receipt: now covered by the new watchdog above.
+- Response body, including any chunked-transfer-encoding trailers: `_read_response_body_within_deadline`
+  wraps the entire `response.read()` call as one unit regardless of whether the internal path is
+  content-length- or chunk-bounded, so trailer processing was already inside the guarded region --
+  not a separate gap.
+- Connection pooling: not applicable -- `call_llm` builds one connection per attempt
+  (`Connection: close`, no keep-alive/pool reuse), so no pool-wait phase exists here to bypass anything.
+
+One phase remains genuinely outside both watchdogs: **the TLS handshake performed *inside* `connect()`
+for an `https://` target.** A watchdog armed on the pre-TLS-wrap plain socket cannot protect the
+handshake either, because the `ssl` module's `SSLContext.wrap_socket()` calls the plain socket's
+`detach()` early in constructing the new `SSLSocket` (moving the live file descriptor onto the new
+object and invalidating the old one) before performing the (synchronous, on-connect) handshake I/O --
+so a watchdog holding the pre-wrap socket object would be shutting down an already-invalid descriptor
+by the time a slow handshake is actually blocked, and no watchdog can be armed on the post-wrap
+`SSLSocket` earlier than that, since `wrap_socket()` does not return until the handshake it performs
+has already finished. A malicious or compromised HTTPS `NOEMA_LLM_API_URL` endpoint could in principle
+trickle TLS handshake message bytes the same way headers were trickled here, stalling `connect()` --
+and therefore `opener.open()` -- past `effective_deadline` with neither watchdog able to see it. This is
+reported per this round's explicit instruction to identify rather than chase a further gap: closing it
+would need either driving the TLS handshake manually with `do_handshake_on_connect=False` on a socket
+whose descriptor is controlled from before the wrap, or a deadline mechanism above the socket layer
+entirely (e.g. running `opener.open()` in a bounded worker and abandoning/interrupting it structurally
+rather than via `shutdown()`), and is left for a follow-up PR to scope and decide rather than folded into
+this one. `docs/CWL-MASTER-CONTEXT.md`'s Gap register and Project #1 should track it if the org wants it
+hardened further. `NOEMA_LLM_API_URL`'s DNS resolution (inside `socket.create_connection`, itself inside
+`connect()`) is a related but distinct, pre-existing stdlib limitation noted for completeness rather than
+as a new finding: `socket.getaddrinfo()` takes no timeout argument at all and is bounded only by the
+system resolver, unprotected by this fix or its predecessor equally.
+
+Regression coverage (`tests/test_noema_review_gate.py`):
+`test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response_headers` mirrors the existing
+`test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response` (same real local
+`http.server.HTTPServer` fixture and loopback sidecar allowlist routing, same monkeypatched tiny
+`LLM_REQUEST_TOTAL_BUDGET_SECONDS`/generous `LLM_REQUEST_TIMEOUT_SECONDS` pattern), but writes the raw
+HTTP status line and headers directly onto `self.wfile` one byte at a time with a small delay between
+each (`http.server.BaseHTTPRequestHandler`'s own `send_response`/`send_header`/`end_headers` helpers
+buffer and flush the whole header block in one write, so they cannot produce this trickle on their own).
+It asserts `call_llm` fails closed with `RuntimeError` naming "before the response headers could be
+read" well before the full ~4.55s header trickle would have completed. Eight further isolated unit
+tests cover the new helpers directly with fake opener/connection/socket doubles, following the existing
+`_read_response_body_within_deadline` unit-test pattern (`_UnreadableResponse`, `_SlowResponse`, etc.):
+both `_open_response_within_deadline` outcomes on top of the already-covered success path (OSError after
+the watchdog fired -> bounded `RuntimeError`; unrelated/pre-connect OSError -> unchanged re-raise; a
+response returned despite the watchdog having already fired -> rejected), watchdog cancellation on a
+successful open, `_deadline_guarded_connection`'s `connect()` override arming `state["watchdog"]`/
+`state["timed_out"]` on a fake base connection (including the already-expired-deadline case, which
+still arms an immediately-firing timer rather than skipping protection), and `_DeadlineHTTPSHandler
+.https_open` routing through `do_open` with the guarded connection class and the stock TLS
+`context`/`check_hostname`. All prior `call_llm`/`_read_response_body_within_deadline` tests were
+re-verified unchanged and still pass, including both existing trickling-body tests (now additionally
+exercised through the new connection classes on their real local-server HTTP path, with no behavior
+change). 2151 tests total (2150 passing plus the one pre-existing skip; up from the prior entry's 2142
+total -- the net of these nine new regression tests); 100% coverage and 100% docstring coverage on
+`scripts/ci/` (`coverage run -m pytest tests && coverage report --show-missing`, `interrogate`).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
