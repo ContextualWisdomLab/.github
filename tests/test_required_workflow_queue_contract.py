@@ -241,13 +241,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename == "noema-review.yml":
-            assert (
-                "cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}"
-                in concurrency_contract
-            )
-        else:
-            assert "cancel-in-progress: true" in workflow
+        assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
             "security-scan.yml",
@@ -260,16 +254,16 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "opencode-review-bootstrap-" in concurrency_contract
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run.pull_requests[0].number" in concurrency_contract
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
-            assert "github.event.workflow_run.pull_requests[0].head.sha" not in concurrency_contract
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+            assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency_contract
             assert "github.event.workflow_run.head_sha" not in concurrency_contract
-            assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+            assert "github.event.client_payload.pr_head_sha" in concurrency_contract
             assert "github.event_name }}" not in concurrency_contract
             procedure = (
                 REPO_ROOT / "docs" / "pr-review-and-merge-procedure.md"
             ).read_text(encoding="utf-8")
-            assert "Only a live `pull_request_target` event may cancel" in procedure
-            assert "PR-scoped concurrency key omits the head SHA" in procedure
+            assert "head-specific native concurrency" in procedure
+            assert "live-head validation explicitly cancels" in procedure
             for source in (
                 "`pull_request_target` uses `pull_request.head.sha`",
                 "`workflow_run` uses `workflow_run.pull_requests[0].head.sha`",

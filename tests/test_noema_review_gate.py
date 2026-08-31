@@ -28,14 +28,24 @@ def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     assert sum("tests/test_noema_review_gate.py" in entry for entry in entries) == 1
 
 
-def test_noema_concurrency_cancels_only_new_live_pr_head_events():
+def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
-    assert "github.event.client_payload.pr_head_sha" not in concurrency
-    assert "github.event.pull_request.head.sha" not in concurrency
-    assert "github.event.workflow_run.pull_requests[0].head.sha" not in concurrency
+    assert "github.event.client_payload.pr_head_sha" in concurrency
+    assert "github.event.pull_request.head.sha" in concurrency
+    assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency
     assert "github.event.workflow_run.head_sha" not in concurrency
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}" in concurrency
+    assert "cancel-in-progress: true" in concurrency
+    assert "Cancel superseded Noema runs after live-head validation" in workflow
+    assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
+        "Cancel superseded Noema runs after live-head validation"
+    )
+    cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
+    job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
+    assert "actions: write" in job_header
+    assert 'select((.id | tostring) != $current)' in cleanup
+    assert 'endswith("@" + $head)' in cleanup
+    assert "| not)" in cleanup
     assert "github.event.workflow_run.head_sha" not in workflow
     assert "EXPECTED_HEAD:" in workflow
     assert "--expected-head \"$EXPECTED_HEAD\"" in workflow

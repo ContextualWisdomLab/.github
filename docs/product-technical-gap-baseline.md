@@ -2219,12 +2219,12 @@ PR: ContextualWisdomLab/.github#1507 (CodeRabbit review on #1507; same PR, addre
 
 The repair-retry guard prevents a second stale request, but head-specific
 workflow concurrency still allowed the first request to occupy a runner for up
-to four hours after a new commit. Noema concurrency is now PR-scoped. A live
-`pull_request_target` event cancels the same PR's older execution, while
-delayed `workflow_run` and `repository_dispatch` events cannot cancel the
-current execution and must pass the existing live-head check before model
-setup. This closes the stale-compute gap without weakening exact-head review
-publication.
+to four hours after a new commit. Head-specific native concurrency remains so
+a delayed event or manual rerun of an older attempt cannot cancel the current
+head. After a live `pull_request_target` event passes the existing live-head
+check, it explicitly cancels active runs for the same PR's other heads before
+model setup. This closes the stale-compute gap without weakening exact-head
+review publication.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

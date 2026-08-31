@@ -154,14 +154,14 @@ Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
 force-push, but PR-scoped concurrency includes the head SHA so an obsolete
 scan does not serialize newer current-head evidence.
 
-Noema's PR-scoped concurrency key omits the head SHA so a live
-`pull_request_target` synchronize event cancels the same PR's older model call.
-Only a live `pull_request_target` event may cancel; delayed OpenCode or Strix
-`workflow_run` and `repository_dispatch` events queue without cancelling the
-current-head review, then fail the live-head check before model setup. Each run
-also compares its immutable trigger head with the live PR before model work,
-before a repair retry, and immediately before publication; a stale run cannot
-review or publish against a newer head.
+Noema keeps head-specific native concurrency so a delayed workflow event or a
+manual rerun of an older attempt cannot cancel the current head. After a
+`pull_request_target` run proves its payload SHA still equals the live PR head,
+live-head validation explicitly cancels active Noema runs for the same PR's
+other heads before credential or model setup. Each run also compares its
+immutable trigger head with the live PR before model work, before a repair
+retry, and immediately before publication; a stale run cannot review or
+publish against a newer head.
 
 The trigger mapping is explicit: `pull_request_target` uses `pull_request.head.sha`,
 `workflow_run` uses `workflow_run.pull_requests[0].head.sha`, and
