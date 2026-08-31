@@ -18,6 +18,8 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
+from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+
 
 PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
@@ -29,6 +31,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -221,6 +224,116 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     if truncated:
         diff = diff[:MAX_DIFF_CHARS]
     return diff, truncated
+
+
+def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
+    """Return exact LEFT/RIGHT changed-line locations from a unified diff."""
+    locations: set[tuple[str, int, str]] = set()
+    old_path = new_path = ""
+    old_line = new_line = 0
+    in_hunk = False
+    for raw_line in diff.splitlines():
+        if raw_line.startswith("--- "):
+            value = raw_line[4:].split("\t", 1)[0]
+            old_path = "" if value == "/dev/null" else value.removeprefix("a/")
+            in_hunk = False
+            continue
+        if raw_line.startswith("+++ "):
+            value = raw_line[4:].split("\t", 1)[0]
+            new_path = "" if value == "/dev/null" else value.removeprefix("b/")
+            in_hunk = False
+            continue
+        match = DIFF_HUNK_RE.match(raw_line)
+        if match:
+            old_line, new_line = map(int, match.groups())
+            in_hunk = True
+            continue
+        if not in_hunk or raw_line.startswith("\\ No newline"):
+            continue
+        if raw_line.startswith("+"):
+            if new_path:
+                locations.add((new_path, new_line, "RIGHT"))
+            new_line += 1
+        elif raw_line.startswith("-"):
+            if old_path:
+                locations.add((old_path, old_line, "LEFT"))
+            old_line += 1
+        else:
+            old_line += 1
+            new_line += 1
+    return locations
+
+
+def validate_substantive_verdict(verdict: dict[str, Any], diff: str) -> None:
+    """Reject formal verdicts without changed-line and adversarial evidence."""
+    decision = str(verdict.get("decision") or "").lower()
+    if decision == "comment":
+        return
+    locations = changed_diff_locations(diff)
+    if not locations:
+        raise RuntimeError("Noema formal verdict requires parseable changed-line evidence")
+
+    reviewed_lines = verdict.get("reviewed_lines")
+    if not isinstance(reviewed_lines, list) or not reviewed_lines:
+        raise RuntimeError("Noema formal verdict requires at least one reviewed changed line")
+    for index, reviewed in enumerate(reviewed_lines, start=1):
+        if not isinstance(reviewed, dict):
+            raise RuntimeError(f"Noema reviewed line {index} must be an object")
+        location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
+        if location not in locations:
+            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+        analysis = reviewed.get("analysis")
+        if not isinstance(analysis, str) or not analysis.strip():
+            raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
+
+    validation = verdict.get("adversarial_validation")
+    if not isinstance(validation, dict):
+        raise RuntimeError("Noema formal verdict requires adversarial_validation")
+    status = validation.get("status")
+    expected_status = "passed" if decision == "approve" else "failed"
+    if status != expected_status:
+        raise RuntimeError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
+    residual_risk = validation.get("residual_risk")
+    if not isinstance(residual_risk, str) or not residual_risk.strip():
+        raise RuntimeError("Noema adversarial validation requires residual_risk")
+    probes = validation.get("probes")
+    changed_paths = {path for path, _line, _side in locations}
+    required_probes = 2 if any(changed_file_is_material(path) for path in changed_paths) else 1
+    if not isinstance(probes, list) or len(probes) < required_probes:
+        raise RuntimeError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
+
+    confirmed: set[tuple[str, int]] = set()
+    identities: set[tuple[Any, ...]] = set()
+    for index, probe in enumerate(probes, start=1):
+        if not isinstance(probe, dict):
+            raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+        location = (probe.get("path"), probe.get("line"), probe.get("side"))
+        if location not in locations:
+            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+        for field in ("hypothesis", "attack_or_counterexample", "evidence"):
+            value = probe.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RuntimeError(f"Noema adversarial probe {index} requires {field}")
+        outcome = probe.get("outcome")
+        if outcome not in {"falsified", "confirmed"}:
+            raise RuntimeError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
+        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
+        if identity in identities:
+            raise RuntimeError(f"Noema adversarial probe {index} duplicates an earlier probe")
+        identities.add(identity)
+        if outcome == "confirmed":
+            confirmed.add((str(probe["path"]), int(probe["line"])))
+
+    if decision == "approve" and confirmed:
+        raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+    if decision == "request_changes":
+        finding_locations = {
+            (str(finding.get("file") or ""), finding.get("line"))
+            for finding in verdict.get("findings") or []
+            if isinstance(finding, dict)
+        }
+        if not confirmed or not confirmed.intersection(finding_locations):
+            raise RuntimeError("Noema request_changes requires a confirmed probe on a published finding")
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -476,8 +589,9 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
-                "Use request_changes only for blocking, concrete issues. Use approve when no blocking issue is found.",
+                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
+                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -535,6 +649,7 @@ def call_llm(
             raise RuntimeError("Noema LLM response contained a malformed finding")
     if decision == "request_changes" and not findings:
         raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
+    validate_substantive_verdict(verdict, diff)
     return verdict
 
 
@@ -556,6 +671,28 @@ def format_findings(findings: Any) -> list[str]:
     return lines
 
 
+def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
+    """Render the bounded changed-line analyses and adversarial probes."""
+    lines = ["### Reviewed changed lines"]
+    for reviewed in (verdict.get("reviewed_lines") or [])[:20]:
+        if isinstance(reviewed, dict):
+            lines.append(
+                f"- `{reviewed.get('path')}:{reviewed.get('line')} ({reviewed.get('side')})`: "
+                f"{str(reviewed.get('analysis') or '').strip()}"
+            )
+    validation = verdict.get("adversarial_validation") or {}
+    lines.extend(["", "### Adversarial validation"])
+    for probe in (validation.get("probes") or [])[:20]:
+        if isinstance(probe, dict):
+            lines.append(
+                f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
+                f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
+                f"{str(probe.get('evidence') or '').strip()}"
+            )
+    lines.append(f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}")
+    return lines
+
+
 def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]) -> None:
     """Submit the Noema review verdict to the pull request."""
     head_sha = str(pr.get("headRefOid") or "")
@@ -569,6 +706,8 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "## Noema LLM review",
             "",
             summary,
+            "",
+            *format_review_evidence(verdict),
             "",
             "### Findings",
             *(findings or ["- No blocking findings."]),
