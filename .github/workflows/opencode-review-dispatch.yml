@@ -2303,7 +2303,6 @@ jobs:
       && needs.coverage-evidence.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the

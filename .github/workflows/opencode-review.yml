@@ -235,7 +235,6 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 95
     permissions:
       contents: read
       pull-requests: read

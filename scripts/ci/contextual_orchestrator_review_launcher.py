@@ -532,7 +532,7 @@ def _preflight_with_fallback(
     starting point, so a run that rejects all 8 primary routes and then
     probes 4 fallback routes still spends at most 4 escalations total (12
     base attempts + 4 escalations). This bounds request count, not individual
-    model response time; the sidecar independently bounds readiness. Both
+    model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its

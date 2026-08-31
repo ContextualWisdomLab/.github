@@ -397,13 +397,10 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_poll_seconds idle_timeout_seconds idle_seconds output_size last_output_size
+	local opencode_pid fatal_poll_seconds
 
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
-	idle_timeout_seconds="${OPENCODE_IDLE_TIMEOUT_SECONDS:-600}"
-	idle_seconds=0
-	last_output_size=0
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
@@ -423,13 +420,6 @@ run_one_model_attempt() {
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
-		output_size="$(wc -c <"$opencode_json_file")"
-		if [ "$output_size" -gt "$last_output_size" ]; then
-			last_output_size="$output_size"
-			idle_seconds=0
-		else
-			idle_seconds=$((idle_seconds + fatal_poll_seconds))
-		fi
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; cancelling that failed process.\n' \
 				"$model_candidate" "$attempt" "$attempts"
@@ -439,12 +429,6 @@ run_one_model_attempt() {
 				sleep 1
 			done
 			kill -9 "$opencode_pid" 2>/dev/null
-			break
-		fi
-		if [ "$idle_seconds" -ge "$idle_timeout_seconds" ]; then
-			printf 'OpenCode %s attempt %s/%s produced no progress for %ss; cancelling the stalled process.\n' \
-				"$model_candidate" "$attempt" "$attempts" "$idle_timeout_seconds"
-			kill "$opencode_pid" 2>/dev/null || true
 			break
 		fi
 		sleep "$fatal_poll_seconds"
