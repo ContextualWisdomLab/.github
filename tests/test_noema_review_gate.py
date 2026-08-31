@@ -396,14 +396,22 @@ def test_call_llm_selects_direct_route_for_the_process_local_sidecar(monkeypatch
 
     def fake_urlopen(request, timeout):
         seen["body"] = json.loads(request.data.decode("utf-8"))
-        return FakeResponse({"choices": [{"message": {"content": '{"decision":"approve","summary":"ok","findings":[]}'}}]})
+        return FakeResponse({"choices": [{"message": {"content": '{"decision":"comment","summary":"ok","findings":[]}'}}]})
 
     class FakeOpener:
         def open(self, request, timeout=None):
             return fake_urlopen(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
-    assert noema.call_llm("owner/repo", 1, pr, "diff", False)["decision"] == "approve"
+    # decision="comment" short-circuits validate_substantive_verdict's
+    # changed-line/adversarial-evidence requirements (see
+    # test_call_llm_rejects_generic_approve_without_changed_line_evidence
+    # below, which expects the placeholder "diff" fixture used here to
+    # raise for a formal approve/request_changes decision) -- this test's
+    # actual subject is the sidecar direct-route orchestration mode, not
+    # verdict-schema validation, so a real "approve"/"request_changes"
+    # verdict satisfying that unrelated validation is deliberately avoided.
+    assert noema.call_llm("owner/repo", 1, pr, "diff", False)["decision"] == "comment"
     assert seen["body"]["orchestration"] == "route"
 
 
