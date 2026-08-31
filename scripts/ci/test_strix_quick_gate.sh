@@ -100,7 +100,7 @@ required_workflow_bootstrap_has_if() {
 	local bootstrap_file="$1"
 
 	awk '/^  required-workflow-bootstrap:$/{p=1; print; next} p && /^  [A-Za-z0-9_-]+:/{exit} p' "$bootstrap_file" |
-		grep '^[[:space:]]*if:' >/dev/null
+		grep '^    if:' >/dev/null
 }
 
 seal_opencode_test_artifacts() {
