@@ -69,20 +69,29 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's PROBING worst case stays computed and
-# bounded. Merged with the batched concurrent preflight below
+# escalation RESCUE retry below (a FAILED base probe with a "budget too
+# small" signature). This budget's purpose is deliberately narrow and
+# scarce: rescuing an atypical failure, not confirming an already-successful
+# candidate -- see REVIEW_PREFLIGHT_MAX_CONFIRMATIONS below for that
+# separate, much more common concern, and why it needs its own budget.
+# Merged with the batched concurrent preflight below
 # (REVIEW_PREFLIGHT_BATCH_SIZE): candidates within one batch of up to
 # REVIEW_PREFLIGHT_BATCH_SIZE run concurrently, so a batch's own wall time is
 # its slowest candidate, not the sum of all of them -- worst case, a batch
-# containing an escalating candidate costs 2 * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# (base + escalated attempt, sequential within that one candidate's thread),
-# not REVIEW_PREFLIGHT_TIMEOUT_SECONDS. With
-# REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 candidates in batches of
-# REVIEW_PREFLIGHT_BATCH_SIZE=4, that is ceil(24/4)=6 batches; even the fully
-# pessimistic bound of every batch needing its worst case is
-# 6 * 2 * 10 = 120s (REVIEW_PREFLIGHT_WORST_CASE_SECONDS below), since
-# REVIEW_PREFLIGHT_MAX_ESCALATIONS=4 means at most 4 of those 6 batches can
-# actually contain an escalating candidate. See
+# containing a candidate that makes a second attempt (rescue OR confirmation)
+# costs 2 * REVIEW_PREFLIGHT_TIMEOUT_SECONDS (base + second attempt,
+# sequential within that one candidate's own thread), not
+# REVIEW_PREFLIGHT_TIMEOUT_SECONDS. Crucially, this per-batch bound holds
+# regardless of HOW MANY candidates in that one batch make a second attempt
+# (concurrency means the batch's wall time is its slowest member, never a
+# sum of every member), and therefore holds regardless of either second-
+# attempt budget's specific cap -- REVIEW_PREFLIGHT_MAX_CONFIRMATIONS below
+# deliberately has a much larger cap than this one without changing this
+# arithmetic at all. With REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 candidates in
+# batches of REVIEW_PREFLIGHT_BATCH_SIZE=4, that is ceil(24/4)=6 batches, so
+# the worst case is 6 * 2 * 10 = 120s (REVIEW_PREFLIGHT_WORST_CASE_SECONDS
+# below) -- already the fully pessimistic case of every batch needing its
+# worst case, true independent of either budget's cap value. See
 # docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3 for the
 # ADR's own (pre-batching, sequential) 160s derivation of this same shared
 # cap's value; batching changes the wall-clock arithmetic, not the cap itself.
@@ -112,15 +121,56 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # truth so a future change to either phase's constants cannot silently
 # desynchronize the two budgets again. #1454 (a base-probe *success* never
 # confirms the candidate at the real serving budget, REVIEW_MAX_OUTPUT_TOKENS)
-# is FIXED (Devin Review, "Serving-incompatible routes pass startup"): a
+# was FIXED (Devin Review, "Serving-incompatible routes pass startup"): a
 # base-probe success now always draws one confirming attempt at
-# REVIEW_PREFLIGHT_ESCALATED_TOKENS from this SAME shared counter before
-# being admitted, exactly like a base-probe failure's existing escalation
-# attempt -- see _preflight_review_agents's docstring. Per-candidate worst
-# case stays at most one base + one second attempt either way, so the
+# REVIEW_PREFLIGHT_ESCALATED_TOKENS before being admitted, exactly like a
+# base-probe failure's existing rescue attempt.
+#
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review finding "Later
+# healthy routes cannot start"): that #1454 fix originally drew the
+# confirmation attempt from this SAME counter, exactly like a base-probe
+# failure's rescue attempt. That was wrong: this counter is sized (4) for
+# the RARE rescue case, but every single successful base probe now needs a
+# confirmation -- the COMMON case, not the rare one. As few as
+# REVIEW_PREFLIGHT_MAX_ESCALATIONS candidates in the very first batch(es)
+# each succeeding their base probe could reserve every slot for their own
+# confirmations, permanently denying every later candidate's confirmation
+# regardless of merit -- defeating the entire point of batching up to
+# REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES candidates to find one usable route.
+# Confirmation now draws from its own separate
+# REVIEW_PREFLIGHT_MAX_CONFIRMATIONS budget (see below); this counter keeps
+# its original, narrower rescue-only purpose and its original cap. Per-
+# candidate worst case stays at most one base + one second attempt either
+# way (confirmation OR rescue, never both on the same candidate), so the
 # REVIEW_PREFLIGHT_WORST_CASE_SECONDS/REVIEW_STARTUP_WATCHDOG_SECONDS
-# arithmetic derived below is unchanged by this fix.
+# arithmetic derived below is unchanged by either fix -- see this comment's
+# opening paragraph for why the formula never depended on either budget's
+# specific cap value in the first place.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
+
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review "Later healthy
+# routes cannot start"): the mandatory serving-budget CONFIRMATION of an
+# already-successful base probe (see REVIEW_PREFLIGHT_MAX_ESCALATIONS above
+# for the full incident) needs its own budget, separate from that counter's
+# original, narrow "rescue a failed base probe" purpose. Since confirmation
+# runs for EVERY successful base probe -- the common case, not a rare one --
+# this budget is sized to REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES: the maximum
+# number of candidates this preflight run can ever probe across BOTH stages
+# combined (the primary catalog and, when it runs, the priced-fallback
+# catalog -- see _preflight_with_fallback, which shares one instance of this
+# budget across both stages exactly like it already does for
+# REVIEW_PREFLIGHT_MAX_ESCALATIONS). That size guarantees even the fully
+# pessimistic case -- every candidate ever probed in this run succeeds its
+# base probe -- still gets its required confirmation shot; this is not an
+# unbounded allowance, it is bounded by the same total-route cap this
+# preflight can never exceed regardless of how this constant is set. As
+# reasoned above, sizing this budget larger than
+# REVIEW_PREFLIGHT_MAX_ESCALATIONS does not change
+# REVIEW_PREFLIGHT_WORST_CASE_SECONDS: each batch's wall time is bounded by
+# its slowest candidate (at most one base + one second attempt), regardless
+# of how many candidates in that batch actually make a second attempt or
+# which of the two budgets backs it.
+REVIEW_PREFLIGHT_MAX_CONFIRMATIONS = REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES
 
 # Mirrors contextual_orchestrator.model_discovery.DISCOVERY_TIMEOUT_SECONDS at
 # ORCHESTRATOR_PIN_SHA (contextual_orchestrator_review_sidecar.sh) exactly. Not
@@ -496,6 +546,8 @@ def _preflight_review_agents(
     client: Any,
     escalations_used: int = 0,
     escalation_budget: "_EscalationBudget | None" = None,
+    confirmations_used: int = 0,
+    confirmation_budget: "_EscalationBudget | None" = None,
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
@@ -511,14 +563,20 @@ def _preflight_review_agents(
     ``REVIEW_PREFLIGHT_BASE_TOKENS``, so a candidate whose real completion
     ceiling sat strictly between the base and serving budgets passed startup
     and only failed once real review traffic began. There are exactly two
-    ways a candidate reaches that confirming probe:
+    ways a candidate reaches that confirming probe, and each draws from its
+    OWN, separately-purposed budget (`ContextualWisdomLab/.github#1415`,
+    Devin Review "Later healthy routes cannot start" -- see the two
+    constants' own module-level comments for the full incident and sizing
+    rationale):
 
     1. **The base probe already returned usable text.** This is the
        ordinary, most common case; the second probe exists purely to CONFIRM
        that same candidate also serves the real budget, not to diagnose a
-       failure. Success marks ``confirmed_at_serving_budget`` (not
-       ``escalated``) on the row -- the base attempt already worked, this
-       second attempt only re-proves it at the real budget.
+       failure. This draws from ``confirmation_budget``
+       (``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS``). Success marks
+       ``confirmed_at_serving_budget`` (not ``escalated``) on the row -- the
+       base attempt already worked, this second attempt only re-proves it at
+       the real budget.
     2. **The base probe's response was empty for a "budget too small" reason**
        -- either ``choices[0].finish_reason == "length"`` (OpenAI's
        documented signature), or the vendored
@@ -527,36 +585,39 @@ def _preflight_review_agents(
        model can hit under a different ``finish_reason`` -- provider
        ``finish_reason`` semantics for this case are not verified as uniform
        across the pool, and this is the exact original failure mode PR #1436
-       responded to). Success marks ``escalated`` on the row -- the base
-       attempt failed and this second attempt is what actually rescued it.
+       responded to). This draws from ``escalation_budget``
+       (``REVIEW_PREFLIGHT_MAX_ESCALATIONS``). Success marks ``escalated`` on
+       the row -- the base attempt failed and this second attempt is what
+       actually rescued it.
 
     Either way, the SAME candidate gets at most one additional attempt (never
-    a third), and that attempt is bounded by one shared
-    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` counter -- there is no separate
-    counter for "confirming a success" versus "escalating a failure", since
-    both are the identical "one more attempt at the larger budget" action for
-    worst-case-timing purposes. The counter's ``escalations_used`` argument
-    carries forward across calls (not per candidate, and not reset per
-    call): a caller that probes two stages of the same preflight run (e.g.
-    ``_preflight_with_fallback``'s primary and fallback stages) must pass the
-    previous stage's ending count back in here so the two stages share one
-    budget instead of each getting its own -- otherwise the computed
-    worst-case bound this counter exists to enforce silently doubles. A base
-    response that is empty for any OTHER reason (no budget-too-small
-    signature) is not retried at all: a genuinely-down candidate never
-    reaches the second-attempt path, so it cannot produce a false "healthy"
-    read, and a candidate denied its second attempt by the shared budget
-    (whichever of the two reasons brought it there) is recorded
-    ``escalation_budget_exhausted`` and not admitted -- fails closed, exactly
-    like a base failure that never got its own escalation slot.
-    An exception on the escalated attempt (transport failure, auth failure,
+    a third, and never both a confirmation AND an escalation). Each of the
+    two budgets' ``*_used`` argument carries forward across calls (not per
+    candidate, and not reset per call): a caller that probes two stages of
+    the same preflight run (e.g. ``_preflight_with_fallback``'s primary and
+    fallback stages) must pass each previous stage's ending count back in
+    here so the two stages share one pair of budgets instead of each getting
+    its own -- otherwise the computed worst-case bound these counters exist
+    to enforce silently doubles. A base response that is empty for any OTHER
+    reason (no budget-too-small signature) is not retried at all: a
+    genuinely-down candidate never reaches the second-attempt path, so it
+    cannot produce a false "healthy" read, and a candidate denied its second
+    attempt by its own (exhausted) budget is recorded
+    ``confirmation_budget_exhausted`` or ``escalation_budget_exhausted``
+    (matching which of the two paths it took) and not admitted -- fails
+    closed, exactly like a base failure that never got its own second-attempt
+    slot. Exhaustion of ONE budget never blocks a candidate whose path draws
+    from the OTHER budget -- the exact cross-purpose interaction that made a
+    confirmation-only path spend a rescue-only allowance is the bug this
+    separation fixes.
+    An exception on the second attempt (transport failure, auth failure,
     rate limit, server error, or a genuine budget rejection) is recorded via
     ``_record_provider_exception`` -- the SAME sanitized classification the
-    base probe uses, regardless of attempt. An HTTP status alone does not
-    distinguish "this candidate's real ceiling is below the escalated
-    budget" from any other cause (401/429/5xx are not budget evidence); this
-    codebase has no validated signal today that does, so it does not invent
-    one via an over-specific label.
+    base probe uses, regardless of attempt or which path it came from. An
+    HTTP status alone does not distinguish "this candidate's real ceiling is
+    below the escalated budget" from any other cause (401/429/5xx are not
+    budget evidence); this codebase has no validated signal today that does,
+    so it does not invent one via an over-specific label.
 
     The report deliberately records only stable route identity, a bounded
     exception class name, an optional numeric HTTP status, attempt count, and
@@ -566,46 +627,61 @@ def _preflight_review_agents(
     every response-bearing outcome -- success included, not just
     failure/escalation, so future tuning has a real "normal" baseline to
     compare against -- and always describe the same, most recent attempt for
-    a route (the base attempt when only one was made; the escalated attempt
-    when a second was made) -- never a mix of the two attempts' state. When
-    the escalated attempt raises an exception instead of returning a
+    a route (the base attempt when only one was made; the second attempt
+    when one was made) -- never a mix of the two attempts' state. When
+    the second attempt raises an exception instead of returning a
     response, both fields are absent entirely (there is no response to
     describe) rather than silently retaining the base attempt's values.
 
     Batched concurrent probing (``_preflight_review_agent_batches``) calls
     this function once per candidate, concurrently, from several threads at
-    once within one batch. A plain ``escalations_used`` int passed by value
-    cannot coordinate admission safely once multiple threads can observe and
-    spend the same budget concurrently, so callers that need cross-thread
-    coordination pass a shared ``escalation_budget`` instead; a caller that
-    only ever probes sequentially (every direct call in this module's own
-    test suite, and any single, unbatched invocation) can keep passing a
-    plain ``escalations_used`` int, which is wrapped in a private,
-    single-owner budget for the duration of this one call -- identical
-    external behavior to before this thread-safety addition.
+    once within one batch. A plain ``escalations_used``/``confirmations_used``
+    int passed by value cannot coordinate admission safely once multiple
+    threads can observe and spend the same budget concurrently, so callers
+    that need cross-thread coordination pass a shared ``escalation_budget``/
+    ``confirmation_budget`` instead; a caller that only ever probes
+    sequentially (every direct call in this module's own test suite, and any
+    single, unbatched invocation) can keep passing plain
+    ``escalations_used``/``confirmations_used`` ints, each wrapped in a
+    private, single-owner budget for the duration of this one call --
+    identical external behavior to before this thread-safety addition.
 
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
-        escalations_used: Escalations already spent earlier in this same
-            preflight run (e.g. by a prior stage), so the shared budget is
-            honored across calls rather than restarted at zero. Ignored when
-            ``escalation_budget`` is given.
-        escalation_budget: A shared, thread-safe budget to coordinate
-            admission across concurrent callers. When omitted, a private
-            budget seeded from ``escalations_used`` is used instead.
+        escalations_used: Rescue escalations already spent earlier in this
+            same preflight run (e.g. by a prior stage), so the shared rescue
+            budget is honored across calls rather than restarted at zero.
+            Ignored when ``escalation_budget`` is given.
+        escalation_budget: A shared, thread-safe budget bounding rescue
+            attempts (a FAILED base probe) to coordinate admission across
+            concurrent callers. When omitted, a private budget seeded from
+            ``escalations_used`` is used instead.
+        confirmations_used: Confirmations already spent earlier in this same
+            preflight run, mirroring ``escalations_used`` for the separate
+            confirmation budget. Ignored when ``confirmation_budget`` is
+            given.
+        confirmation_budget: A shared, thread-safe budget bounding
+            confirmation attempts (a SUCCESSFUL base probe) -- deliberately
+            separate from ``escalation_budget`` (see
+            ``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS``'s module-level comment for
+            why). When omitted, a private budget seeded from
+            ``confirmations_used`` is used instead.
 
     Returns:
         A pair of viable agents and a sanitized preflight report. The
-        report's ``escalations_used`` is the running total including
-        ``escalations_used``'s starting value, so a caller chaining another
-        stage can pass it straight back in.
+        report's ``escalations_used``/``confirmations_used`` are each the
+        running total including that argument's starting value, so a caller
+        chaining another stage can pass them straight back in.
 
     Raises:
         ReviewPreflightError: If no provider route returns usable text.
     """
     budget = escalation_budget or _EscalationBudget(
         REVIEW_PREFLIGHT_MAX_ESCALATIONS, escalations_used
+    )
+    confirm_budget = confirmation_budget or _EscalationBudget(
+        REVIEW_PREFLIGHT_MAX_CONFIRMATIONS, confirmations_used
     )
     viable: list[object] = []
     routes: list[dict[str, object]] = []
@@ -660,30 +736,46 @@ def _preflight_review_agents(
         # ContextualWisdomLab/.github#1454: admission still requires
         # confirming that text holds at the real serving budget, not just
         # REVIEW_PREFLIGHT_BASE_TOKENS) or it matched a "budget too small"
-        # signature above and needs the existing escalation retry. Both
-        # reach the SAME shared, bounded second-attempt path below.
+        # signature above and needs the existing escalation retry.
         #
-        # KNOWN, ACCEPTED, TRACKED LIMITATION on the budget.try_reserve()
-        # branch below, ContextualWisdomLab/.github#1458 (originally
-        # documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
-        # the shared counter is first-come-first-served in catalog order
+        # FIXED (ContextualWisdomLab/.github#1415, Devin Review "Later
+        # healthy routes cannot start"): these two cases now draw from TWO
+        # SEPARATE budgets, not one shared one -- see
+        # REVIEW_PREFLIGHT_MAX_ESCALATIONS/REVIEW_PREFLIGHT_MAX_CONFIRMATIONS'
+        # module-level comments for the full incident. Confirming an
+        # already-successful base probe is the common case (every successful
+        # candidate needs it); rescuing a failed one is the rare case. A
+        # scarce rescue budget consumed by a burst of ordinary confirmations
+        # (or vice versa) must never deny a DIFFERENT candidate's unrelated
+        # second attempt.
+        second_attempt_budget = confirm_budget if base_has_text else budget
+        second_attempt_exhausted_error = (
+            "confirmation_budget_exhausted" if base_has_text else "escalation_budget_exhausted"
+        )
+        #
+        # KNOWN, ACCEPTED, TRACKED LIMITATION on the try_reserve() branch
+        # below, ContextualWisdomLab/.github#1458 (originally documented on
+        # ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md): each
+        # budget is still first-come-first-served in catalog order
         # (build_zdr_prioritized_catalog's (cost_evidence_rank,
-        # zdr_attested_rank, provider, model) sort, not random), for BOTH the
-        # confirmation and escalation uses added by this fix. A
-        # later-sorting candidate -- whether it needs confirmation of an
-        # already-successful base probe, or escalation of a failed one -- can
-        # be denied its own second attempt purely because
-        # REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates already claimed
-        # the shared budget, even if it would have succeeded at
-        # REVIEW_PREFLIGHT_ESCALATED_TOKENS. Deliberately not reordered
+        # zdr_attested_rank, provider, model) sort, not random). A
+        # later-sorting candidate needing a rescue can still be denied its
+        # own escalation attempt purely because
+        # REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier-sorting candidates already
+        # claimed that (deliberately scarce) rescue budget, even if it would
+        # have succeeded at REVIEW_PREFLIGHT_ESCALATED_TOKENS -- unchanged by
+        # this fix, and unrelated to it: REVIEW_PREFLIGHT_MAX_CONFIRMATIONS
+        # is sized to REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES precisely so the same
+        # exhaustion can never happen on the confirmation path (see that
+        # constant's own comment). Deliberately not reordered
         # (round-robin/random): a fixed-size shared budget smaller than the
         # candidate pool always has to deny someone a second attempt, so
         # reordering only changes who, and picking a specific policy without
         # real telemetry on which candidates actually need it would itself be
         # the kind of unjustified heuristic this design rejects elsewhere.
-        if not budget.try_reserve():
+        if not second_attempt_budget.try_reserve():
             row["status"] = "rejected"
-            row["error_type"] = "escalation_budget_exhausted"
+            row["error_type"] = second_attempt_exhausted_error
             routes.append(row)
             continue
         row["attempts"] = 2
@@ -752,6 +844,8 @@ def _preflight_review_agents(
         "rejected_count": len(agents) - len(viable),
         "escalations_used": budget.used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
+        "confirmations_used": confirm_budget.used,
+        "confirmation_budget": REVIEW_PREFLIGHT_MAX_CONFIRMATIONS,
         "routes": routes,
     }
     if not viable:
@@ -766,6 +860,7 @@ def _preflight_review_agent_batches(
     *,
     client: Any,
     escalation_budget: "_EscalationBudget | None" = None,
+    confirmation_budget: "_EscalationBudget | None" = None,
 ) -> tuple[list[object], dict[str, object]]:
     """Probe bounded concurrent batches until one batch contains a ready route.
 
@@ -777,25 +872,35 @@ def _preflight_review_agent_batches(
     batch yields at least one ready route -- a later, unprobed batch can
     never "hide" a route this run already found usable.
 
-    ADR-0005's escalation budget (``REVIEW_PREFLIGHT_MAX_ESCALATIONS``) is
-    still one shared, run-wide count, not one per batch or per candidate;
-    since several candidates in the same batch can reach the escalation
-    decision concurrently, admission is coordinated through
-    ``_EscalationBudget``'s lock rather than a plain int, so the cap is never
-    exceeded even under concurrency. One consequence of that concurrency:
+    Two separate run-wide budgets bound the two distinct second-attempt
+    purposes (``ContextualWisdomLab/.github#1415``, Devin Review "Later
+    healthy routes cannot start" -- see ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``/
+    ``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS``'s own module-level comments for
+    the full incident and sizing rationale): ``escalation_budget`` for
+    rescuing a FAILED base probe (deliberately scarce), and
+    ``confirmation_budget`` for confirming a SUCCESSFUL one (sized to never
+    starve a genuinely healthy candidate). Neither is one-per-batch or
+    one-per-candidate; since several candidates in the same batch can reach
+    either decision concurrently, admission is coordinated through each
+    ``_EscalationBudget``'s own lock rather than a plain int, so neither cap
+    is ever exceeded under concurrency. One consequence of that concurrency:
     ADR-0005's "first-come-first-served in catalog order" framing holds
     strictly only ACROSS batches (which stay sequential); WITHIN one batch,
-    whichever candidate's thread reaches the reservation first wins it. This
-    changes at most which candidate among a few concurrently-probed ones
-    claims a scarce slot -- the shared cap itself is a hard, lock-enforced
+    whichever candidate's thread reaches a given reservation first wins it.
+    This changes at most which candidate among a few concurrently-probed
+    ones claims a scarce slot -- each cap itself is a hard, lock-enforced
     invariant regardless of scheduling.
 
     Args:
         agents: Selected zero-cost model agents, probed in catalog order.
         client: Vendored ``ModelClient``-compatible transport.
-        escalation_budget: A shared budget to coordinate escalation
+        escalation_budget: A shared budget to coordinate rescue-attempt
             admission with another stage (see ``_preflight_with_fallback``).
             A fresh, run-local budget is created when omitted.
+        confirmation_budget: A shared budget to coordinate confirmation-
+            attempt admission with another stage, separate from
+            ``escalation_budget``. A fresh, run-local budget is created when
+            omitted.
 
     Returns:
         A pair of viable agents (from the first batch with any) and a
@@ -806,6 +911,9 @@ def _preflight_review_agent_batches(
             route.
     """
     budget = escalation_budget or _EscalationBudget(REVIEW_PREFLIGHT_MAX_ESCALATIONS)
+    confirm_budget = confirmation_budget or _EscalationBudget(
+        REVIEW_PREFLIGHT_MAX_CONFIRMATIONS
+    )
     attempted_routes: list[dict[str, object]] = []
     attempted_count = 0
     for offset in range(0, len(agents), REVIEW_PREFLIGHT_BATCH_SIZE):
@@ -817,6 +925,7 @@ def _preflight_review_agent_batches(
                     [agent],
                     client=client,
                     escalation_budget=budget,
+                    confirmation_budget=confirm_budget,
                 )
                 for agent in batch
             ]
@@ -838,6 +947,8 @@ def _preflight_review_agent_batches(
                 "rejected_count": attempted_count - len(viable),
                 "escalations_used": budget.used,
                 "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
+                "confirmations_used": confirm_budget.used,
+                "confirmation_budget": REVIEW_PREFLIGHT_MAX_CONFIRMATIONS,
                 "routes": attempted_routes,
                 "batch_size": REVIEW_PREFLIGHT_BATCH_SIZE,
             }
@@ -848,6 +959,8 @@ def _preflight_review_agent_batches(
         "rejected_count": attempted_count,
         "escalations_used": budget.used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
+        "confirmations_used": confirm_budget.used,
+        "confirmation_budget": REVIEW_PREFLIGHT_MAX_CONFIRMATIONS,
         "routes": attempted_routes,
         "batch_size": REVIEW_PREFLIGHT_BATCH_SIZE,
     }
@@ -863,22 +976,29 @@ def _preflight_with_fallback(
 
     The two stages -- each itself run through
     ``_preflight_review_agent_batches``'s bounded concurrent batching -- share
-    ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` budget for the whole
-    preflight run, not one budget each: one ``_EscalationBudget`` is created
-    here and passed into both stages, so a run that rejects all primary
-    routes and then probes the fallback catalog still spends at most
-    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations in total across both
-    stages combined -- otherwise the computed worst-case bound this counter
-    exists to enforce would silently double. Both stages' reports remain in
-    the result: the fallback (or sole) stage's report carries the run's
-    final, cumulative ``escalations_used``, and ``primary_attempt`` nests the
-    primary stage's own report -- including its own ``escalations_used`` --
-    whenever a fallback stage ran at all.
+    ONE pair of run-wide budgets for the whole preflight run, not one pair
+    each: one ``_EscalationBudget`` for rescue attempts
+    (``REVIEW_PREFLIGHT_MAX_ESCALATIONS``) and a separate one for confirmation
+    attempts (``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS``,
+    ``ContextualWisdomLab/.github#1415``) are each created here and passed
+    into both stages, so a run that rejects all primary routes and then
+    probes the fallback catalog still spends at most each budget's own cap
+    in total across both stages combined -- otherwise the computed worst-case
+    bound these counters exist to enforce would silently double. Both
+    stages' reports remain in the result: the fallback (or sole) stage's
+    report carries the run's final, cumulative ``escalations_used``/
+    ``confirmations_used``, and ``primary_attempt`` nests the primary
+    stage's own report -- including its own ``escalations_used``/
+    ``confirmations_used`` -- whenever a fallback stage ran at all.
     """
     budget = _EscalationBudget(REVIEW_PREFLIGHT_MAX_ESCALATIONS)
+    confirm_budget = _EscalationBudget(REVIEW_PREFLIGHT_MAX_CONFIRMATIONS)
     try:
         viable, report = _preflight_review_agent_batches(
-            primary_agents, client=client, escalation_budget=budget
+            primary_agents,
+            client=client,
+            escalation_budget=budget,
+            confirmation_budget=confirm_budget,
         )
         return viable, report, False
     except ReviewPreflightError as primary_error:
@@ -886,7 +1006,10 @@ def _preflight_with_fallback(
             raise
         try:
             viable, report = _preflight_review_agent_batches(
-                fallback_agents, client=client, escalation_budget=budget
+                fallback_agents,
+                client=client,
+                escalation_budget=budget,
+                confirmation_budget=confirm_budget,
             )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report

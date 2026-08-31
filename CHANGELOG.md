@@ -45,6 +45,44 @@ Semantic Versioning where the repository publishes a release.
   for a mocked route that succeeds at the base probe but fails/rejects at the
   serving budget (must not be admitted) and for the shared budget bounding
   confirmations the same way it already bounded escalations.
+- Fix a real, high-severity regression Devin Review found minutes after the
+  confirmation fix directly above landed on this same PR ("Later healthy
+  routes cannot start", `ContextualWisdomLab/.github#1415`): making
+  confirmation mandatory for every successful base probe, while still
+  spending the SAME shared `REVIEW_PREFLIGHT_MAX_ESCALATIONS` counter that
+  fix reused from rescue escalation, meant as few as
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS` (4) candidates in the very first
+  batch(es) — each simply succeeding its base probe, the ordinary case —
+  could each reserve one of the counter's four slots for their own
+  confirmation, permanently exhausting it. Every later candidate's
+  confirmation request was then denied by `_EscalationBudget.try_reserve()`
+  regardless of merit, so a batch 2+ candidate that would have passed both
+  its base probe and its confirmation could never even attempt the second
+  one — defeating batching's entire purpose of evaluating up to
+  `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES` (24) routes to find one usable one.
+  Confirmation now draws from its own dedicated `REVIEW_PREFLIGHT_MAX_CONFIRMATIONS`
+  budget (sized to `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES` so even the fully
+  pessimistic case — every candidate ever probed in a run succeeds its base
+  probe — still gets its confirmation shot), while
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS` keeps its original, narrower, smaller
+  rescue-only purpose and cap, unrelated and untouched. `_preflight_with_fallback`
+  shares one instance of each of the two budgets across its primary and
+  fallback stages, exactly as it already did for the one budget before this
+  fix. `REVIEW_PREFLIGHT_WORST_CASE_SECONDS`/`REVIEW_STARTUP_WATCHDOG_SECONDS`
+  are unchanged (120s/255s): each batch's wall-clock worst case was already
+  computed as its slowest candidate making at most one base plus one second
+  attempt, independent of either budget's specific cap — see
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS`'s and `REVIEW_PREFLIGHT_MAX_CONFIRMATIONS`'s
+  own module-level comments for the full arithmetic. Rejections now
+  distinguish `confirmation_budget_exhausted` from `escalation_budget_exhausted`
+  in evidence. Added a red-then-green regression
+  (`test_batched_preflight_first_batch_confirmations_do_not_starve_a_later_healthy_route`)
+  reproducing the exact reported scenario against `_preflight_review_agent_batches`:
+  four batch-1 candidates each succeed their base probe and then genuinely
+  fail confirmation (consuming, under the old code, the entire shared
+  budget), while a fifth, batch-2 candidate that would succeed both its base
+  probe and its confirmation is wrongly denied under the pre-fix code and
+  correctly admitted after the fix.
 - Keep startup route probes on a ten-second timeout while giving serving-time
   model calls the Noema gate's 120-second transport budget; both retain a
   zero-retry transport policy at the client level (ADR-0005's own,

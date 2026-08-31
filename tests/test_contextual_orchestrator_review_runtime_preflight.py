@@ -11,6 +11,7 @@ import runpy
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -1169,20 +1170,78 @@ def test_base_probe_success_not_admitted_when_serving_budget_probe_raises() -> N
     assert "confirmed_at_serving_budget" not in row
 
 
-def test_base_probe_success_confirmation_shares_the_escalation_budget() -> None:
-    """A base-probe success's mandatory confirmation draws from the SAME
-    shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` counter a budget-too-small
-    escalation would -- there is no separate, unbounded allowance for
-    confirming successes, which would silently reintroduce an unbounded
-    worst case this fix must not create.
+def test_base_probe_success_confirmation_has_its_own_dedicated_budget() -> None:
+    """Regression for Devin Review's "Later healthy routes cannot start"
+    finding (`ContextualWisdomLab/.github#1415`): a base-probe success's
+    mandatory confirmation used to draw from the SAME shared
+    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` counter a budget-too-small
+    escalation would -- a counter sized (4) for the RARE rescue case, not
+    the common "confirm every success" case. Confirmation now draws from its
+    own separate ``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS`` budget, so
+    exhausting the (still small, still bounded) escalation budget on
+    genuinely failed candidates must never deny a later, unrelated
+    candidate's confirmation.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
     max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
+    max_confirmations = namespace["REVIEW_PREFLIGHT_MAX_CONFIRMATIONS"]
+    assert max_confirmations > max_escalations, (
+        "the confirmation budget must be dedicated and large enough to cover "
+        "every candidate this preflight run can ever probe -- not merely "
+        "equal to the small, deliberately scarce rescue budget"
+    )
+
+    # Exhaust the ESCALATION (rescue) budget entirely on candidates that
+    # fail their base probe with a "budget too small" signature and then
+    # (deliberately, in this test) fail their rescue attempt too, the same
+    # way every time -- these never touch the confirmation budget at all,
+    # they only need to fully spend the escalation budget's slots.
+    length_response = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+    escalation_budget_users = [
+        SimpleNamespace(id=f"escalation_user_{index}", provider_name="openrouter", model="x/free")
+        for index in range(max_escalations)
+    ]
+    # A base-probe SUCCESS needing only confirmation -- must not be blocked
+    # by the escalation budget above being fully spent.
+    confirmed = SimpleNamespace(
+        id="confirmed_despite_escalation_exhaustion",
+        provider_name="openrouter",
+        model="x/free",
+    )
+    client = _ProbeClient(
+        {agent.id: dict(length_response) for agent in escalation_budget_users}
+        | {confirmed.id: _openai_text("OK")}
+    )
+
+    viable, report = preflight([*escalation_budget_users, confirmed], client=client)
+
+    assert viable == [confirmed]
+    assert report["escalations_used"] == max_escalations
+    assert report["confirmations_used"] == 1
+    for row in report["routes"][:-1]:
+        assert row["status"] == "rejected"
+        assert row["error_type"] == "invalid_chat_response"
+    confirmed_row = report["routes"][-1]
+    assert confirmed_row["status"] == "ready"
+    assert confirmed_row["confirmed_at_serving_budget"] is True
+
+
+def test_confirmation_budget_is_bounded_not_unbounded() -> None:
+    """The confirmation budget is dedicated, not shared -- but it is still a
+    real, finite cap (``REVIEW_PREFLIGHT_MAX_CONFIRMATIONS``), never an
+    unbounded allowance that would reintroduce an uncomputed worst case.
+    Exhausting it is recorded with its own distinct
+    ``confirmation_budget_exhausted`` classification, never conflated with
+    the separate ``escalation_budget_exhausted`` outcome.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    max_confirmations = namespace["REVIEW_PREFLIGHT_MAX_CONFIRMATIONS"]
 
     agents = [
         SimpleNamespace(id=f"confirmed_{index}", provider_name="openrouter", model="x/free")
-        for index in range(max_escalations)
+        for index in range(max_confirmations)
     ]
     exhausted = SimpleNamespace(
         id="confirmation_exhausted", provider_name="openrouter", model="x/free"
@@ -1197,10 +1256,11 @@ def test_base_probe_success_confirmation_shares_the_escalation_budget() -> None:
     assert viable == agents
     exhausted_row = report["routes"][-1]
     assert exhausted_row["status"] == "rejected"
-    assert exhausted_row["error_type"] == "escalation_budget_exhausted"
+    assert exhausted_row["error_type"] == "confirmation_budget_exhausted"
     assert exhausted_row["attempts"] == 1
-    assert report["escalations_used"] == max_escalations
-    assert len(client.calls) == max_escalations * 2 + 1
+    assert report["confirmations_used"] == max_confirmations
+    assert report["escalations_used"] == 0
+    assert len(client.calls) == max_confirmations * 2 + 1
 
 
 def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
@@ -1537,6 +1597,126 @@ def test_preflight_advances_to_next_bounded_batch() -> None:
         agent.id for agent in agents[:batch_size]
     }
     assert client.calls[-1][0] == agents[-1]
+
+
+class _PerAgentSequencedClient:
+    """Return each agent's OWN configured attempt sequence, thread-safely.
+
+    Unlike ``_SequencedClient`` (a single global sequence consumed strictly
+    in call order -- unsuitable once several agents' calls can interleave
+    unpredictably across concurrent batch threads), this looks up the next
+    outcome by (agent id, that agent's own call count), tracked per agent id
+    under a lock, so each candidate's own base-then-second-attempt sequence
+    stays deterministic regardless of how batch threads happen to interleave.
+    """
+
+    def __init__(self, outcomes: dict[str, list[object]]) -> None:
+        self._outcomes = outcomes
+        self._counts: dict[str, int] = {}
+        self._lock = threading.Lock()
+        self.calls: list[tuple[object, str, dict[str, object]]] = []
+
+    def proxy_send_once(
+        self, agent: object, endpoint: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        """Capture one request and return that agent's next configured outcome."""
+        agent_id = str(getattr(agent, "id"))
+        with self._lock:
+            index = self._counts.get(agent_id, 0)
+            self._counts[agent_id] = index + 1
+        self.calls.append((agent, endpoint, payload))
+        outcome = self._outcomes[agent_id][index]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert isinstance(outcome, dict)
+        return outcome
+
+
+def test_batched_preflight_first_batch_confirmations_do_not_starve_a_later_healthy_route() -> None:
+    """Regression for Devin Review's "Later healthy routes cannot start"
+    finding (`ContextualWisdomLab/.github#1415`) on the batched preflight
+    entry point ``_preflight_review_agent_batches`` -- the exact scenario
+    described in the finding, reproduced end to end.
+
+    The first ``REVIEW_PREFLIGHT_BATCH_SIZE`` candidates (batch 1) each
+    succeed their cheap base probe -- so each needs a mandatory confirmation
+    at the real serving budget -- but each then genuinely FAILS that
+    confirmation (a real "usable at 16 tokens, unusable at 4096" route,
+    correctly not admitted). A fifth candidate (batch 2) also succeeds its
+    base probe AND would succeed its confirmation too, if it ever got the
+    chance.
+
+    Under the pre-fix code, all four batch-1 candidates' confirmations drew
+    from the SAME shared ``_EscalationBudget`` capped at
+    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` (4) -- exactly enough for four
+    candidates to each reserve one slot before failing confirmation on
+    their own merits, permanently exhausting that shared counter. The fifth
+    candidate's later, unrelated confirmation request was then denied
+    purely by ``_EscalationBudget.try_reserve()`` returning ``False`` --
+    ``escalation_budget_exhausted`` -- never even making its confirmation
+    call, regardless of the fact that it would have passed. With a budget
+    dedicated to confirmations specifically (this fix), the fifth candidate
+    is unaffected by batch 1's unrelated confirmation attempts and is
+    correctly admitted.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agent_batches"]
+    batch_size = namespace["REVIEW_PREFLIGHT_BATCH_SIZE"]
+    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
+    assert batch_size == max_escalations, (
+        "this regression specifically needs one batch's worth of candidates "
+        "to exactly exhaust the (old, shared) escalation budget"
+    )
+
+    ok = _openai_text("OK")
+    # Genuinely fails its confirmation: usable at the base budget, empty (no
+    # budget-too-small signature) at the real serving budget -- correctly
+    # never admitted, regardless of which budget backed the attempt.
+    fails_confirmation = {"choices": [{"message": {"content": ""}}]}
+
+    batch_one_serving_incompatible = [
+        SimpleNamespace(id=f"batch1_narrow_{index}", provider_name="openrouter", model="x/free")
+        for index in range(batch_size)
+    ]
+    later_healthy_route = SimpleNamespace(
+        id="batch2_genuinely_healthy", provider_name="nvidia_nim", model="healthy/free"
+    )
+    client = _PerAgentSequencedClient(
+        {agent.id: [ok, fails_confirmation] for agent in batch_one_serving_incompatible}
+        | {later_healthy_route.id: [ok, ok]}
+    )
+
+    viable, report = preflight(
+        [*batch_one_serving_incompatible, later_healthy_route], client=client
+    )
+
+    # The fifth candidate -- genuinely healthy at both budgets -- must be
+    # admitted. It must NOT be recorded as denied by escalation-budget
+    # exhaustion caused by four entirely different candidates' confirmations.
+    assert viable == [later_healthy_route]
+    later_route_row = next(
+        row for row in report["routes"] if row["agent_id"] == later_healthy_route.id
+    )
+    assert later_route_row["status"] == "ready"
+    assert later_route_row["confirmed_at_serving_budget"] is True
+    assert "error_type" not in later_route_row
+
+    # The four batch-1 candidates are correctly NOT admitted -- on their own
+    # merits (a real confirmation failure), never on budget exhaustion.
+    batch_one_rows = [
+        row for row in report["routes"] if row["agent_id"] != later_healthy_route.id
+    ]
+    assert len(batch_one_rows) == batch_size
+    for row in batch_one_rows:
+        assert row["status"] == "rejected"
+        assert row["error_type"] == "invalid_chat_response"
+
+    # The escalation (rescue) budget was never touched at all -- none of
+    # these candidates ever failed their base probe.
+    assert report["escalations_used"] == 0
+    # Confirmation budget evidence: five candidates each made exactly one
+    # confirmation attempt.
+    assert report["confirmations_used"] == batch_size + 1
 
 
 def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case() -> None:

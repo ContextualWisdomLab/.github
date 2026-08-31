@@ -43,7 +43,9 @@ all five, and auto-optimize routing by cost.
    price-attested; a partial price vector, malformed numeric value, conflicting
    free marker, or missing currency for a published vector fails closed. The gateway's
    `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
-   enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
+   enabled zero-cost agent exists. Strix originally used `orchestrator/auto`
+   (superseded by the 2026-08-30 amendment below: Strix now uses
+   `orchestrator/free`, like OpenCode and Noema); the `auto` pool's catalog
    may admit priced routes only through this evidence-bearing
    policy, never through a direct-provider model identifier.
    The auto pool probes the free catalog first. Only when every selected free
@@ -84,14 +86,16 @@ all five, and auto-optimize routing by cost.
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
    `noema-review.yml` retains `orchestrator/free`. `strix.yml` provisions the
-   same sidecar and uses the loopback chat-completions/API-compatible URL with
-   `orchestrator/auto`: the 2026-08-29 exact-head DiskSage scan proved that four
+   same sidecar and originally used the loopback chat-completions/API-compatible
+   URL with `orchestrator/auto` (superseded by the 2026-08-30 amendment below:
+   `strix.yml` now defaults to `orchestrator/free`, like OpenCode and Noema):
+   the 2026-08-29 exact-head DiskSage scan proved that four
    discovered free routes all shared the OpenRouter outage domain, which the
-   gateway correctly collapsed to one provider attempt. Strix therefore uses
+   gateway correctly collapsed to one provider attempt. Strix therefore used
    the provider-diverse pool supplied by all five configured credentials.
    Provider diversity and cost-evidence classification remain delegated to the
    gateway rather than embedding a second routing policy in GitHub Actions.
-   Strix has no external fallback and private targets pass visibility through
+   Strix had no external fallback under `auto` and private targets pass visibility through
    to the gateway's ZDR requirement. Noema reviewer identity remains
    `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never `github.token`;
    Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
@@ -135,13 +139,17 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery under the zero-cost pool. Strix uses the separately governed auto
-  pool without treating absent price metadata as either free or paid-route
-  evidence.
-- Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
-  remains distinct from the zero-cost OpenCode/Noema pool, while private-target
-  ZDR admission remains fail-closed. Unknown-cost routes remain auditable but
-  ineligible; free and fully price-attested routes are the only review routes.
+  discovery under the zero-cost pool. Strix originally used the separately
+  governed auto pool (superseded by the 2026-08-30 amendment below: Strix now
+  uses the same zero-cost pool as OpenCode/Noema) without treating absent
+  price metadata as either free or paid-route evidence.
+- Under `orchestrator/auto`, selection is delegated to the gateway's
+  correctness-first pool, distinct from the zero-cost OpenCode/Noema pool,
+  while private-target ZDR admission remains fail-closed. Unknown-cost routes
+  remain auditable but ineligible; free and fully price-attested routes are
+  the only review routes. (This paragraph describes the `auto` pool mode
+  itself, which still exists for any caller that opts into it explicitly —
+  see the 2026-08-30 amendment below for why Strix no longer does.)
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
