@@ -234,11 +234,15 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
     old_line = new_line = 0
     in_hunk = False
     for raw_line in diff.splitlines():
-        if raw_line.startswith("--- "):
+        if raw_line.startswith("diff --git "):
+            old_path = new_path = ""
+            in_hunk = False
+            continue
+        if not in_hunk and raw_line.startswith("--- "):
             old_path = parse_diff_path(raw_line[4:], "a/")
             in_hunk = False
             continue
-        if raw_line.startswith("+++ "):
+        if not in_hunk and raw_line.startswith("+++ "):
             new_path = parse_diff_path(raw_line[4:], "b/")
             in_hunk = False
             continue
@@ -250,12 +254,14 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
         if not in_hunk or raw_line.startswith("\\ No newline"):
             continue
         if raw_line.startswith("+"):
-            if new_path:
-                locations.add((new_path, new_line, "RIGHT"))
+            if not new_path:
+                return set()
+            locations.add((new_path, new_line, "RIGHT"))
             new_line += 1
         elif raw_line.startswith("-"):
-            if old_path:
-                locations.add((old_path, old_line, "LEFT"))
+            if not old_path:
+                return set()
+            locations.add((old_path, old_line, "LEFT"))
             old_line += 1
         else:
             old_line += 1

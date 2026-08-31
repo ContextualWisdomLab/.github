@@ -731,6 +731,12 @@ def test_changed_diff_locations_handles_new_files_and_no_newline_marker():
 +impossible addition
 """
     assert noema.changed_diff_locations(malformed_side_lines) == set()
+    impossible_addition = """--- a/old.py
++++ /dev/null
+@@ -1 +0,0 @@
++impossible addition
+"""
+    assert noema.changed_diff_locations(impossible_addition) == set()
 
 
 def test_changed_diff_locations_decodes_git_quoted_utf8_paths():
@@ -746,6 +752,24 @@ def test_changed_diff_locations_decodes_git_quoted_utf8_paths():
         ("café.py", 1, "RIGHT"),
     }
     assert noema.parse_diff_path('"unterminated', "a/") == ""
+
+
+def test_changed_diff_locations_keeps_diff_like_hunk_content():
+    diff = """diff --git a/tool.py b/tool.py
+--- a/tool.py
++++ b/tool.py
+@@ -1,2 +1,2 @@
+---deleted content
+-old tail
++++added content
++new tail
+"""
+    assert noema.changed_diff_locations(diff) == {
+        ("tool.py", 1, "LEFT"),
+        ("tool.py", 2, "LEFT"),
+        ("tool.py", 1, "RIGHT"),
+        ("tool.py", 2, "RIGHT"),
+    }
 
 
 def test_complete_changed_paths_preserve_material_probe_requirement():
