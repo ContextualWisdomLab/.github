@@ -1,8 +1,10 @@
 name: Required OpenCode Review
 run-name: >-
   Required OpenCode Review ${{ github.event.pull_request.base.repo.full_name ||
-  github.repository }}#${{ github.event.pull_request.number || 'event' }}@${{
-  github.event.pull_request.head.sha || github.sha }}
+  github.repository }}#${{ github.event.pull_request.number ||
+  github.event.workflow_run.pull_requests[0].number || 'event' }}@${{
+  github.event.pull_request.head.sha ||
+  github.event.workflow_run.pull_requests[0].head.sha || github.sha }}
 
 on:
   # This required-workflow entrypoint never checks out or executes pull-request
@@ -10,12 +12,29 @@ on:
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
+  # opencode-review-dispatch.yml (the workflow that actually posts the real
+  # opencode-agent review) is default-branch-only and, unlike this file, is
+  # not distributed by the required-workflow ruleset into sibling repositories
+  # -- it always runs inside ContextualWisdomLab/.github, so its completion
+  # can never reach a sibling repository's copy of this file through
+  # workflow_run (workflow_run cannot cross repositories). "Required PR
+  # Review Merge Scheduler" IS ruleset-distributed into every target
+  # repository, already reacts to pull_request_review (submitted/dismissed --
+  # the exact event GitHub fires the instant the real review posts) plus its
+  # own periodic sweep, so listening to its completion gives this required
+  # check a same-repository second chance once real evidence can exist,
+  # without checking out or executing any pull-request content. See
+  # ContextualWisdomLab/.github#1485.
+  workflow_run:
+    workflows: ["Required PR Review Merge Scheduler"]
+    types: [completed]
 
 concurrency:
   group: >-
     opencode-review-bootstrap-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event.pull_request.number || github.run_id }}
+    github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
+    github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -26,6 +45,12 @@ jobs:
   required-workflow-bootstrap:
     name: required-workflow-bootstrap
     runs-on: ubuntu-latest
+    # Pingora edge-policy enforcement below only has meaningful inputs (PR
+    # number, head SHA, event action) on the pull_request_target path; a
+    # workflow_run second-chance re-entry skips this whole sentinel chain
+    # (coverage-source-tree and coverage-evidence cascade-skip the same way)
+    # and opencode-review-target below runs standalone instead.
+    if: github.event_name == 'pull_request_target'
     steps:
       - name: Materialize the required review workflow
         run: >-
@@ -234,6 +259,17 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
+    # pull_request_target still requires the coverage-evidence sentinel chain
+    # above to have completed successfully, exactly as before. A workflow_run
+    # second-chance re-entry has no such chain (required-workflow-bootstrap is
+    # skipped for that event, cascade-skipping coverage-source-tree and
+    # coverage-evidence too) and evaluates independently instead; a cancelled
+    # source workflow_run carries no new evidence and is skipped rather than
+    # re-evaluated.
+    if: >-
+      always() &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      (github.event_name == 'workflow_run' || needs.coverage-evidence.result == 'success')
     permissions:
       contents: read
       pull-requests: read
@@ -242,12 +278,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.workflow_run.pull_requests[0].head.sha }}
         run: |
           set -euo pipefail
           if [ "${{ github.event.action }}" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ -z "${PR_NUMBER:-}" ]; then
+            echo "No pull request is associated with this workflow_run event; nothing to verify."
             exit 0
           fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
