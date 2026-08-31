@@ -1738,10 +1738,10 @@ why the review didn't complete. Every PR org-wide that hit this same LLM-output 
 identical unhandled crash, since the same materialized file runs in every target repo.
 
 Fixed by catching `json.JSONDecodeError` in `extract_json_object` and converting it into the same
-fail-closed `RuntimeError` this file already raises for its other "no usable verdict" cases in `call_llm`
-(unsupported decision, missing summary, malformed finding) — reusing the existing failure path rather
-than inventing a new one; the module's existing top-level handler already turns any `RuntimeError` into a
-clean, non-zero exit. The error message embeds the raw model response, scrubbed of secrets via
+`RuntimeError` this file already raises for its other "no usable verdict" cases in `call_llm`
+(unsupported decision, missing summary, malformed finding). `call_llm` now gives every invalid verdict
+one bounded correction request through its existing repair path; a second invalid response fails closed
+through the module's top-level non-zero exit. The error message embeds the raw model response, scrubbed of secrets via
 `scrub_sensitive_data` and bounded to a new `MAX_LLM_RESPONSE_LOG_CHARS` (2000 chars), so the job log
 still shows *why* the verdict was unusable. (The candidate substring `extract_json_object` extracts is
 guaranteed to start with `{`, so per JSON grammar a successful parse can only ever yield an object — a
@@ -1752,9 +1752,9 @@ and was deliberately not added.) The top-level `__main__` handler was also chang
 
 Regression tests reproduce the exact reported crash signature at both layers —
 `test_extract_json_object_fails_closed_on_malformed_json` (brace-wrapped invalid JSON, mid-object
-truncation, secret-scrubbing, length-bounding) and `test_call_llm_fails_closed_on_malformed_json_response`
-(an end-to-end `call_llm` call with a mocked malformed response) — both asserting a clean `RuntimeError`
-propagates, never the raw `json.JSONDecodeError`. 2128 tests pass (1 skipped, 21 subtests); 100% coverage
+truncation, secret-scrubbing, length-bounding), `test_call_llm_fails_closed_on_malformed_json_response`,
+and `test_call_llm_repairs_one_malformed_json_response` exercise the bounded repair and exhausted-repair
+paths. A clean `RuntimeError` propagates only after the corrected response is still invalid. 100% coverage
 and 100% docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507.
 
 ## 5. 실행 루프와 고객의 다음 행동

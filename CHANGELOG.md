@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Give Noema one bounded schema-repair request when Contextual Orchestrator
+  returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
+  if the corrected response is still invalid.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their

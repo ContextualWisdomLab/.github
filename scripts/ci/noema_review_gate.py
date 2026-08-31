@@ -676,31 +676,31 @@ def call_llm(
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-    verdict = extract_json_object(content)
-    decision = str(verdict.get("decision") or "").strip().lower()
-    if decision not in {"approve", "request_changes", "comment"}:
-        raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
-    summary = verdict.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        raise RuntimeError("Noema LLM response did not contain a substantive summary")
-    findings = verdict.get("findings")
-    if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-        raise RuntimeError("Noema LLM response findings must be a list of objects")
-    for finding in findings:
-        if (
-            finding.get("severity") not in {"high", "medium", "low"}
-            or not isinstance(finding.get("file"), str)
-            or not finding["file"].strip()
-            or type(finding.get("line")) is not int
-            or finding["line"] <= 0
-            or finding.get("side") not in {"RIGHT", "LEFT"}
-            or not isinstance(finding.get("message"), str)
-            or not finding["message"].strip()
-        ):
-            raise RuntimeError("Noema LLM response contained a malformed finding")
-    if decision == "request_changes" and not findings:
-        raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
     try:
+        verdict = extract_json_object(content)
+        decision = str(verdict.get("decision") or "").strip().lower()
+        if decision not in {"approve", "request_changes", "comment"}:
+            raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
+        summary = verdict.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise RuntimeError("Noema LLM response did not contain a substantive summary")
+        findings = verdict.get("findings")
+        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+            raise RuntimeError("Noema LLM response findings must be a list of objects")
+        for finding in findings:
+            if (
+                finding.get("severity") not in {"high", "medium", "low"}
+                or not isinstance(finding.get("file"), str)
+                or not finding["file"].strip()
+                or type(finding.get("line")) is not int
+                or finding["line"] <= 0
+                or finding.get("side") not in {"RIGHT", "LEFT"}
+                or not isinstance(finding.get("message"), str)
+                or not finding["message"].strip()
+            ):
+                raise RuntimeError("Noema LLM response contained a malformed finding")
+        if decision == "request_changes" and not findings:
+            raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
     except RuntimeError as exc:
         if repair_error:

@@ -595,6 +595,42 @@ def test_call_llm_fails_closed_on_malformed_json_response(monkeypatch):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 
+def test_call_llm_repairs_one_malformed_json_response(monkeypatch):
+    """Ask once for corrected JSON before failing the required review closed."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    contents = iter(
+        (
+            '{"decision":"approve", trailing garbage not: "quoted}',
+            json.dumps({"decision": "comment", "summary": "Repaired JSON", "findings": []}),
+        )
+    )
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            content = next(contents)
+            return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+    assert verdict["summary"] == "Repaired JSON"
+    assert len(requests) == 2
+    assert "prior verdict was rejected" in requests[1]["messages"][1]["content"]
+
+
 @pytest.mark.parametrize("message", [[], {}, 0, "   "])
 def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
