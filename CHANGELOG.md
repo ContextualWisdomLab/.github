@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Re-pin the reviewed-blob contract test's SHA to the current
+  `opencode-review-dispatch.yml` content after the review run timeout change,
+  restoring `test_review_dispatch_blob_sha_stays_paired_with_trusted_workflow`.
 - Let Contextual Orchestrator use the full 11,700-second review budget in every
   cadence and the central-review fallback, so reviews exceeding two hours are
   bounded only by the existing provider-pool watchdog.
