@@ -490,20 +490,21 @@ def test_require_unoccupied_readiness_port_probes_explicit_port_zero(monkeypatch
 
 
 def test_bubblewrap_tmpfs_targets_have_only_targeted_bandit_waivers():
-    """B108 waivers cover only bubblewrap's isolated tmpfs mount targets.
+    """B108/S108 waivers cover only bubblewrap's isolated tmpfs mount targets.
 
     These strings are command arguments naming the mount point created inside
-    the new bubblewrap namespace; they are not host temporary-file paths.  A
-    targeted waiver keeps Bandit's real host-path checks enabled everywhere
-    else while preventing these two deliberate mount targets from blocking the
-    Python security gate.
+    the new bubblewrap namespace; they are not host temporary-file paths. A
+    targeted waiver keeps Bandit's and Ruff's real host-path checks enabled
+    everywhere else while preventing these two deliberate mount targets from
+    blocking the Python security gate or the lint gate.
     """
     source = Path(sandboxed_web_e2e.__file__).read_text(encoding="utf-8")
-    waiver = '"/tmp",  # nosec B108'
+    waiver = '"/tmp",  # nosec B108  # noqa: S108'
     rationale = "isolated namespace's tmpfs target, not a host temp path"
 
     assert source.count(waiver) == 2
     assert source.count("nosec B108") == 2
+    assert source.count("noqa: S108") == 2
     assert source.count(rationale) == 2
 
 
