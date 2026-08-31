@@ -595,6 +595,7 @@ def call_llm(
     truncated: bool,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
+    repair_error: str = "",
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
@@ -614,6 +615,14 @@ def call_llm(
                 '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+                *(
+                    [
+                        f"Your prior verdict was rejected by the trusted validator: {repair_error}",
+                        "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
+                    ]
+                    if repair_error
+                    else []
+                ),
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -672,7 +681,21 @@ def call_llm(
             raise RuntimeError("Noema LLM response contained a malformed finding")
     if decision == "request_changes" and not findings:
         raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
-    validate_substantive_verdict(verdict, diff, changed_paths)
+    try:
+        validate_substantive_verdict(verdict, diff, changed_paths)
+    except RuntimeError as exc:
+        if repair_error:
+            raise
+        return call_llm(
+            repo,
+            number,
+            pr,
+            diff,
+            truncated,
+            review_context,
+            changed_paths,
+            str(exc),
+        )
     return verdict
 
 

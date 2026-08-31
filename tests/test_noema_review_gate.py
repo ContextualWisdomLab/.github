@@ -617,6 +617,88 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 
+def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    diff = """--- a/tool.py
++++ b/tool.py
+@@ -1 +1 @@
+-old = True
++new = True
+"""
+    invalid = {
+        "decision": "approve",
+        "summary": "Checked the replacement.",
+        "findings": [],
+        "reviewed_lines": [
+            {"path": "tool.py", "line": 2, "side": "RIGHT", "analysis": "Checked."}
+        ],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "Callers were not executed.",
+            "probes": [],
+        },
+    }
+    valid = {
+        **invalid,
+        "reviewed_lines": [
+            {"path": "tool.py", "line": 1, "side": "RIGHT", "analysis": "Checked."}
+        ],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "Callers were not executed.",
+            "probes": [
+                {
+                    "path": "tool.py",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "hypothesis": "The assignment was removed.",
+                    "attack_or_counterexample": "Inspect the added hunk line.",
+                    "evidence": "The RIGHT-side assignment remains present.",
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "tool.py",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "hypothesis": "The value became false.",
+                    "attack_or_counterexample": "Read the replacement literal.",
+                    "evidence": "The literal is True.",
+                    "outcome": "falsified",
+                },
+            ],
+        },
+    }
+    payloads = []
+
+    class Response:
+        def __init__(self, verdict):
+            self.verdict = verdict
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(self.verdict)}}]}
+            ).encode()
+
+    class Opener:
+        def open(self, request, timeout):
+            assert timeout == 120
+            payloads.append(json.loads(request.data))
+            return Response(invalid if len(payloads) == 1 else valid)
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    assert noema.call_llm("owner/repo", 7, make_pr(), diff, False)["decision"] == "approve"
+    assert len(payloads) == 2
+    assert "trusted validator" in payloads[1]["messages"][1]["content"]
+
+
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():
     diff = """diff --git a/tool.py b/tool.py
 --- a/tool.py
