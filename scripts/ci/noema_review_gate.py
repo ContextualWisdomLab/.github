@@ -528,11 +528,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         except json.JSONDecodeError as exc:
             decode_error = exc
             continue
-        if isinstance(candidate, dict):  # pragma: no branch — a raw_decode
-            # success starting at "{" is always a JSON object by grammar; see
-            # this function's docstring. The False arm is unreachable, not
-            # untested.
-            return candidate
+        return candidate
 
     if "{" not in stripped:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
