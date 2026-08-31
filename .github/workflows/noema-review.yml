@@ -352,6 +352,6 @@ jobs:
           export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
-          python3 scripts/ci/noema_review_gate.py \
+          python3 -m scripts.ci.noema_review_gate \
             --repo "$TARGET_REPOSITORY" \
             --pr-number "$PR_NUMBER"
