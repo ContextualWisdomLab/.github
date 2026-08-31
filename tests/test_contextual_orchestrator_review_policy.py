@@ -68,11 +68,22 @@ def _report() -> dict[str, object]:
     }
 
 
-def test_provider_family_groups_nvidia_keys() -> None:
-    """The primary and secondary NVIDIA keys share one outage-domain family."""
+def test_provider_family_treats_nvidia_credentials_as_independent() -> None:
+    """The primary and secondary NVIDIA keys are independent outage domains.
+
+    Regression coverage for a real bug: an earlier revision of
+    ``PROVIDER_FAMILIES`` collapsed ``nvidia_nim``/``nvidia_nim_sub`` into
+    one family, wrongly assuming the two independent NVIDIA NIM API key
+    accounts share one model catalog/outage domain -- an assumption
+    ``contextual-orchestrator``'s ``docs/planning/adrs/0015-durable-provider-
+    catalog.md`` already contradicted, and which that repo's own PR #941/
+    #945 corrected in ``model_discovery.py``. This is the matching, until-now
+    independent copy of that same wrong assumption in this repo.
+    """
     assert policy.provider_family("nvidia_nim") == "nvidia_nim"
-    assert policy.provider_family("nvidia_nim_sub") == "nvidia_nim"
+    assert policy.provider_family("nvidia_nim_sub") == "nvidia_nim_sub"
     assert policy.provider_family("openai") == "openai"
+    assert policy.PROVIDER_FAMILIES == {}
 
 
 @pytest.mark.parametrize(
@@ -282,20 +293,27 @@ def test_build_catalog_reports_free_family_diversity() -> None:
         family_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
-    # openrouter, nvidia_nim (+ its nvidia_nim_sub sibling), openai, bytez.
-    assert result["report"]["free_family_diversity"] == 4
+    # openrouter, nvidia_nim, nvidia_nim_sub, openai, bytez -- five
+    # independent credential accounts, none collapsed.
+    assert result["report"]["free_family_diversity"] == 5
 
 
-def test_build_catalog_reports_single_family_free_concentration() -> None:
-    """A free catalog sharing one outage domain reports diversity of one.
+def test_build_catalog_treats_nvidia_credentials_as_independent_families() -> None:
+    """The two NVIDIA NIM credentials count as two independent families.
 
-    Regression coverage for the 2026-08-29 Strix finding recorded in
-    ADR-0003: every discovered free route sharing one upstream provider
-    means that provider's outage takes down the whole free catalog, which
-    is why Strix cannot safely run on a strict ``orchestrator/free`` pool
-    without this evidence showing at least two independent families.
+    Regression coverage for a real bug: an earlier revision of
+    ``PROVIDER_FAMILIES`` collapsed ``nvidia_nim``/``nvidia_nim_sub`` into
+    one outage-domain family, wrongly assuming the two independent NVIDIA
+    NIM API key accounts share one model catalog/outage domain -- an
+    assumption ``contextual-orchestrator``'s ``docs/planning/adrs/0015-
+    durable-provider-catalog.md`` already contradicted, and which that
+    repo's own PR #941/#945 corrected in ``model_discovery.py``. Before that
+    fix, a discovery report whose only free routes were these two NVIDIA
+    credentials undercounted ``free_family_diversity`` as 1, which could
+    keep a caller gating on ``free_family_diversity >= 2`` (see PR #1437) on
+    a paid pool even though the two credentials are, in fact, independent.
     """
-    single_family_report = {
+    two_nvidia_credentials_report = {
         "models": [
             {
                 "provider": "nvidia_nim",
@@ -308,6 +326,47 @@ def test_build_catalog_reports_single_family_free_concentration() -> None:
                 "provider": "nvidia_nim_sub",
                 "model": "meta/llama-3.3-70b-instruct",
                 "agent_id": "nimsec_70b",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(two_nvidia_credentials_report),
+        limit=12,
+        family_cap=4,
+    )
+    assert result["report"]["free_family_diversity"] == 2
+
+
+def test_build_catalog_reports_single_family_free_concentration() -> None:
+    """A free catalog sharing one outage domain reports diversity of one.
+
+    Regression coverage for the 2026-08-29 Strix finding recorded in
+    ADR-0003: every discovered free route sharing one upstream provider
+    means that provider's outage takes down the whole free catalog, which
+    is why Strix cannot safely run on a strict ``orchestrator/free`` pool
+    without this evidence showing at least two independent families. Uses
+    two models under the *same* credential (``openrouter`` twice) so the
+    single-family premise holds regardless of any per-provider family
+    mapping -- unlike an earlier revision of this test, which relied on
+    ``nvidia_nim``/``nvidia_nim_sub`` wrongly collapsing to one family (see
+    ``test_build_catalog_treats_nvidia_credentials_as_independent_families``
+    for that corrected, dedicated regression).
+    """
+    single_family_report = {
+        "models": [
+            {
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-r1:free",
+                "agent_id": "or_ds_r1",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+            {
+                "provider": "openrouter",
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "agent_id": "or_llama_70b",
                 "is_free": True,
                 **FREE_PRICE,
             },
@@ -345,7 +404,13 @@ def test_build_catalog_assigns_unique_priorities() -> None:
 
 
 def test_build_catalog_applies_family_cap() -> None:
-    """A family cap keeps one outage domain from absorbing the pool."""
+    """A family cap keeps one outage domain from absorbing the pool.
+
+    ``nvidia_nim`` and ``nvidia_nim_sub`` are independent credential
+    accounts/families (see ``test_build_catalog_treats_nvidia_credentials_
+    as_independent_families``), so each gets its own cap here rather than
+    sharing one combined cap of ``family_cap`` between them.
+    """
     report = {
         "models": [
                 {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
@@ -374,6 +439,7 @@ def test_build_catalog_applies_family_cap() -> None:
         family = policy.provider_family(agent["provider_name"])
         family_counts[family] = family_counts.get(family, 0) + 1
     assert family_counts["nvidia_nim"] == 2
+    assert family_counts["nvidia_nim_sub"] == 2
     assert family_counts["openai"] == 2
 
 

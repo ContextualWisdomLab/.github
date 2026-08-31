@@ -1715,6 +1715,70 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 `scripts/ci/contextual_orchestrator_review_policy.py`'s own `PROVIDER_FAMILIES` copy of the NVIDIA-independence bug
+
+**What this is a duplicate of.** `contextual-orchestrator` PR #941 (`fix(discovery): keep credential
+accounts independent`, merged) removed a wrong assumption from that repo's `model_discovery.py`: that
+the two independent `nvidia_nim`/`nvidia_nim_sub` KV credentials share one model catalog/outage domain.
+`docs/planning/adrs/0015-durable-provider-catalog.md` (accepted 2026-08-22, in `contextual-orchestrator`)
+already contradicted that assumption. This session's investigation, verifying that #941/#945's fix
+actually reaches production (see the sidecar-pin entry above), found a **second, completely independent
+copy of the identical wrong assumption** living in this repo: `scripts/ci/contextual_orchestrator_review_
+policy.py`'s hardcoded `PROVIDER_FAMILIES` mapping —
+
+```python
+PROVIDER_FAMILIES: Mapping[str, str] = {
+    "nvidia_nim": "nvidia_nim",
+    "nvidia_nim_sub": "nvidia_nim",
+}
+```
+
+— used by `provider_family(provider_name)`, which in turn feeds two things: the `per_family` admission
+cap inside `build_zdr_prioritized_catalog` (so the two credentials shared one combined
+`DEFAULT_FAMILY_CAP` slot count instead of each getting its own), and — more consequentially — the
+`free_family_diversity` evidence field PR #1433 added to that same function's report. `#941` never
+touched this file, since #941 only fixed `contextual-orchestrator` itself; this copy was never wired to
+that fix and has been undercounting independently the whole time.
+
+**Why this matters beyond internal consistency.** Open PR #1437 (draft, "gate Strix's `orchestrator/free`
+access on live diversity evidence") reads `free_family_diversity` and gates Strix's move off
+`orchestrator/auto` onto the free pool on `free_family_diversity >= 2`. With the bug in place, a
+discovery report whose only free routes happen to be `nvidia_nim` + `nvidia_nim_sub` reported diversity
+of 1 (one shared family) instead of 2 (two independent credential accounts) — undercounting exactly the
+scenario that evidence exists to detect, and potentially keeping Strix on the paid `orchestrator/auto`
+pool when the underlying catalog was, in fact, diverse enough to qualify for `orchestrator/free`.
+
+**Fix.** `PROVIDER_FAMILIES` is now empty (`{}`), not deleted outright: `provider_family()`'s existing
+fallback (`PROVIDER_FAMILIES.get(provider_name, provider_name)`) already treats any unregistered
+provider name as its own independent family, so an empty map means every KV-registered provider
+credential defaults to its own family unless a *future* provider is verified to genuinely share
+infrastructure and catalog fate across two credential names — the map stays as that registration point,
+rather than removing the `provider_family`/`free_family_diversity` concept `contextual_orchestrator_
+review_launcher.py` and two other test files already depend on. No other legitimate entries existed in
+`PROVIDER_FAMILIES` to preserve — it held only the two wrong NVIDIA rows.
+
+**Tests.** `tests/test_contextual_orchestrator_review_policy.py`: renamed/corrected
+`test_provider_family_groups_nvidia_keys` (asserted the wrong collapsing) to
+`test_provider_family_treats_nvidia_credentials_as_independent`; corrected
+`test_build_catalog_reports_free_family_diversity`'s expectation from 4 to 5 (the fixture's five
+providers, including both NVIDIA credentials, are now all independent); added a dedicated regression,
+`test_build_catalog_treats_nvidia_credentials_as_independent_families`, reproducing the exact PR #1437
+undercount shape (only the two NVIDIA credentials as free routes) and asserting diversity is now
+correctly 2, not 1; rebuilt `test_build_catalog_reports_single_family_free_concentration` on a fixture
+that is genuinely single-family (two models under one `openrouter` credential) rather than relying on
+the wrong NVIDIA collapsing to make its point; and updated `test_build_catalog_applies_family_cap`'s
+assertions to expect `nvidia_nim` and `nvidia_nim_sub` each capped independently rather than sharing one
+combined cap. Full suite green; 100% coverage and 100% docstring coverage on `scripts/ci/` (see this PR's
+own test-plan checklist for the exact run).
+
+**Sequencing with the sidecar-pin fix above.** This fix and the `ORCHESTRATOR_PIN_SHA` bump above are
+deliberately two separate PRs (a hardcoded-assumption bug here vs. a stale-vendoring-pin bug there) but
+are causally linked: the pin bump is what lets `contextual-orchestrator`'s own #941/#945 fix reach
+production at all, while this fix corrects this repo's own independent copy of the same bug. Both need
+to land for `free_family_diversity` to be trustworthy end-to-end. Neither PR modifies PR #1437's own
+gating logic; #1437's reviewer should read this entry as confirmation that the evidence it depends on was
+previously undercounted for exactly the two-NVIDIA-credential case, now corrected.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

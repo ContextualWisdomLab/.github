@@ -27,10 +27,23 @@ from scripts.ci.zdr_policy import (
     route_key,
 )
 
-PROVIDER_FAMILIES: Mapping[str, str] = {
-    "nvidia_nim": "nvidia_nim",
-    "nvidia_nim_sub": "nvidia_nim",
-}
+# Each KV-registered provider credential is its own independent outage domain
+# and catalog by default: nothing here collapses two credential names into one
+# family unless a provider genuinely shares infrastructure and catalog fate
+# across separate credentials. This was NOT true of ``nvidia_nim``/
+# ``nvidia_nim_sub``: they are two independent NVIDIA NIM API key accounts
+# that may be entitled to different models and may fail independently of each
+# other, per `contextual-orchestrator`'s own
+# ``docs/planning/adrs/0015-durable-provider-catalog.md`` (accepted
+# 2026-08-22) and its PR #941/#945 fix to ``model_discovery.py``'s matching
+# assumption. Collapsing them here silently undercounted
+# ``free_family_diversity`` (see ``build_zdr_prioritized_catalog``) and let
+# one family's cap in ``build_zdr_prioritized_catalog`` absorb capacity meant
+# for two independent accounts. Left empty, not deleted outright, so a
+# provider with a *verified* shared outage domain across credential names can
+# still be registered here later with evidence, without redesigning every
+# caller of ``provider_family``.
+PROVIDER_FAMILIES: Mapping[str, str] = {}
 
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_FAMILY_CAP = 4
@@ -52,7 +65,15 @@ class PolicyError(ValueError):
 
 
 def provider_family(provider_name: str) -> str:
-    """Return the outage-domain family for a provider."""
+    """Return the outage-domain family for a provider.
+
+    Defaults to the provider name itself: with ``PROVIDER_FAMILIES`` empty,
+    every KV-registered provider credential is treated as its own
+    independent family unless explicitly registered otherwise above. This
+    is a deliberately conservative default -- sharing a vendor or endpoint
+    is not evidence that two credential accounts share catalog or outage
+    fate.
+    """
     return PROVIDER_FAMILIES.get(provider_name, provider_name)
 
 

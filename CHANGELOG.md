@@ -5,6 +5,17 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- `scripts/ci/contextual_orchestrator_review_policy.py`'s `PROVIDER_FAMILIES`
+  no longer collapses the independent `nvidia_nim`/`nvidia_nim_sub`
+  credentials into one outage-domain family -- a duplicate, independently
+  introduced copy of the assumption `contextual-orchestrator` PR #941/#945
+  already corrected upstream in `model_discovery.py`. This directly
+  increases `free_family_diversity` (PR #1433) whenever both NVIDIA
+  credentials are present, which open PR #1437's Strix `orchestrator/free`
+  gating logic depends on. `PROVIDER_FAMILIES` is now empty rather than
+  removed, since `contextual_orchestrator_review_launcher.py` and two test
+  files still depend on the `provider_family()`/`free_family_diversity`
+  contract.
 - Web verification now runs backend, frontend, and E2E commands inside an
   isolated Linux bubblewrap workspace by default (`--isolation required`),
   mounting a read-only runtime root with a single writable `/workspace`
