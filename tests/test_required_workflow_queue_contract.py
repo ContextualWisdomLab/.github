@@ -497,6 +497,7 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
     assert "noema-review-${{ github.event_name }}" in concurrency_contract
+    assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
 def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
