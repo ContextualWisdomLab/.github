@@ -489,11 +489,14 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
         assert "GITHUB_CONTEXT_JSON: ${{ toJSON(github) }}" in workflow
 
 
-def test_noema_triggers_serialize_one_review_per_pull_request() -> None:
-    """Serialize every Noema trigger type for one pull request."""
+def test_noema_triggers_serialize_actionable_reviews_per_pull_request() -> None:
+    """Serialize actionable Noema triggers without letting cancelled runs evict them."""
     workflow = workflow_text("noema-review.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
+    assert "github.event_name == 'workflow_run'" in concurrency_contract
+    assert "github.event.workflow_run.conclusion == 'cancelled'" in concurrency_contract
+    assert "&& github.run_id" in concurrency_contract
     assert "github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
     assert "github.event_name }}" not in concurrency_contract

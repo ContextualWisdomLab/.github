@@ -143,6 +143,36 @@ sequenceDiagram
 - Downloaded SBOM and distribution bytes are inert. The signing job does
   not import, install, or unpack them.
 
+## Figma Cloud Agent REST fallback
+
+```mermaid
+flowchart TD
+  Need["Cloud Agent needs Figma"]
+  Mcp{"Figma MCP OAuth available?"}
+  Desktop["Desktop / CLI: Settings → Tools and MCP → Figma → Connect"]
+  Token{"FIGMA_ACCESS_TOKEN set?"}
+  Whoami["python3 scripts/ci/figma_rest_auth.py"]
+  File["python3 scripts/ci/figma_rest_file.py file-key-or-url"]
+  Mint["Mint a Figma PAT with file_content:read and store the secret"]
+
+  Need --> Mcp
+  Mcp -->|"yes, Desktop or CLI"| Desktop
+  Mcp -->|"no, Cloud or Automation"| Token
+  Token -->|"no"| Mint
+  Mint --> Whoami
+  Token -->|"yes"| Whoami
+  Whoami --> File
+```
+
+Cloud Agents never complete Figma MCP OAuth. Whoami alone is not file
+read. The file helper allowlists the file or branch key and node ids,
+opens a pinned `HTTPSConnection("api.figma.com")`, and prints a
+token-free JSON outline with geometry, solid fills, text, auto-layout,
+component sets, style metadata, and node style references. `--images` returns
+expiring PNG URLs. Desktop/CLI Figma
+MCP remains the `get_design_context` path. See
+[`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md).
+
 ## Quality gates
 
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
@@ -179,6 +209,8 @@ resolver conflict.
   — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+- [`docs/doctoring/figma-cloud-agent-mcp-auth.md`](docs/doctoring/figma-cloud-agent-mcp-auth.md)
+  — Cloud Agent Figma MCP boundary and REST file-read fallback.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
