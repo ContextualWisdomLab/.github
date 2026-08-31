@@ -13,7 +13,15 @@ Semantic Versioning where the repository publishes a release.
   payload SHA is still live. New commits stop obsolete four-hour model calls,
   while delayed workflow events and manual reruns of old attempts cannot
   cancel the current-head review; cleanup rejects newer run ids and rechecks
-  the live head before each cancellation.
+  the live head before each cancellation. Guard that per-cancellation
+  live-head re-check against a transient `gh api` failure (Devin review on
+  #1507): it was an unguarded command substitution under `set -euo
+  pipefail`, so a rate limit or network blip on that one ancillary call
+  would exit the whole cleanup step non-zero and fail the job, blocking a
+  perfectly valid, live-head Noema review over a housekeeping hiccup
+  unrelated to the review itself. Treat "cannot verify" the same as
+  "verified stale": stop cancelling further runs, but exit 0 so the job --
+  and the actual review later in it -- proceeds.
 - Let the required OpenCode verdict check wait for the complete bounded review
   path: it now dispatches the authenticated review directly, bounds validation
   and coverage prerequisites, permits five hours of coverage evidence plus the

@@ -300,7 +300,18 @@ jobs:
                 [ -n "$run_id" ] || continue
                 [ -z "${seen[$run_id]:-}" ] || continue
                 seen[$run_id]=1
-                live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+                # A transient failure here (rate limit, network blip) must
+                # never crash this step under set -e: this is a housekeeping
+                # cleanup, and letting an ancillary API hiccup fail the whole
+                # job would block a perfectly valid, live-head review over
+                # something unrelated to it. Treat "cannot verify" the same
+                # as "verified stale": stop cancelling rather than risk a
+                # wrong cancellation, but let the job continue.
+                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/noema-supersede-live-head-error)"; then
+                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
+                  sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
+                  exit 0
+                fi
                 if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
                   echo "::notice::Noema cleanup stopped because the PR head advanced."
                   exit 0

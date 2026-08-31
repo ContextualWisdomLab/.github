@@ -29,6 +29,37 @@ def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
 
 
 def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
+    """Pin the invariants this cancellation mechanism must hold together.
+
+    Several Devin Review rounds landed on this same cancellation mechanism in
+    one day (see the matching ``docs/product-technical-gap-baseline.md``
+    entry for the full narrative), each closing a gap the previous fix left
+    open:
+
+    1. A live new-head trigger must cancel a still-running older-head run of
+       the same PR (proven end to end by
+       ``test_superseded_cleanup_preserves_current_and_newer_run_ids``,
+       executing the real production jq selector).
+    2. A delayed ``workflow_run``/``repository_dispatch`` completion for an
+       OLDER head must never cancel a genuinely current run -- pinned here by
+       the head-inclusive concurrency group assertions below (native
+       protection, independent of this step) AND by the step-level ``if:``
+       gate restricting this explicit cancellation entirely to live
+       ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
+       execution never even reaches this step.
+    3. A cancellation step whose OWN trigger was confirmed live at the start
+       of the job must still never cancel a run dispatched AFTER its own
+       dispatch, even though its own multi-pass scan can take long enough in
+       wall-clock time for such a run to appear in the active-runs listing:
+       proven by ``test_superseded_cleanup_preserves_current_and_newer_run_ids``
+       (a higher run id survives) and pinned structurally here via the
+       ``.id < $current`` ordering guard plus the per-cancellation live-head
+       re-check.
+    4. That live-head re-check is a housekeeping safeguard, not the review
+       itself: a transient failure reading it must stop cleanup without
+       crashing the step (and thus the whole job) -- proven by
+       ``test_superseded_cleanup_survives_a_transient_live_head_lookup_failure``.
+    """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
     assert "github.event.client_payload.pr_head_sha" in concurrency
@@ -43,7 +74,25 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
     job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
     assert "actions: write" in job_header
+    # Invariant 2 (step-level half): only a live pull_request_target trigger
+    # may even attempt this cancellation -- workflow_run and
+    # repository_dispatch executions (which can legitimately be delayed by
+    # hours) skip this step entirely and rely solely on the head-inclusive
+    # concurrency group above.
+    assert (
+        "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''"
+        in cleanup
+    )
     assert 'select(.id < $current)' in cleanup
+    # The live-head re-check must be error-guarded (an `if !` command
+    # substitution), never a bare assignment under set -euo pipefail -- a
+    # transient failure here must stop cleanup, not crash the whole job.
+    assert cleanup.count('live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+    assert (
+        'if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.head.sha\''
+        in cleanup
+    )
+    assert "could not re-verify the live PR head before cancelling" in cleanup
     assert '"${live_head,,}" != "${EXPECTED_HEAD,,}"' in cleanup
     assert 'endswith("@" + $head)' in cleanup
     assert "| not)" in cleanup
@@ -206,6 +255,62 @@ if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
     assert "/actions/runs/199/cancel" not in recorded
     assert "/actions/runs/201/cancel" not in recorded
     assert "/actions/runs/99/cancel" not in recorded
+
+
+def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
+    tmp_path: Path,
+) -> None:
+    """A transient live-head re-check failure must stop cleanup, not crash the step.
+
+    The live-head re-check this step performs before every single
+    cancellation is a housekeeping safeguard, not the review itself. Before
+    this fix, `live_head="$(gh api ...)"` was an unguarded command
+    substitution under `set -euo pipefail`: a transient `gh api` failure
+    (rate limit, network blip) on that one call would exit the whole step
+    non-zero, failing this job and blocking a perfectly valid, live-head
+    Noema review over an ancillary API hiccup unrelated to the review
+    itself (Devin Review finding on PR #1507). The fix treats "cannot
+    verify" the same as "verified stale": stop cancelling further runs, but
+    exit 0 so the job -- and the actual review later in it -- proceeds.
+    """
+    current_head = "b" * 40
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 100,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40,
+            },
+        ]
+    }
+    fixture = tmp_path / "runs.json"
+    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    calls = tmp_path / "calls.txt"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"/pulls/7"* ]]; then echo "gh: transient error" >&2; exit 1; fi
+if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", _superseded_cleanup_script()],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+             "TARGET_REPOSITORY": "ContextualWisdomLab/example", "PR_NUMBER": "7",
+             "EXPECTED_HEAD": current_head, "CURRENT_RUN_ID": "200",
+             "FAKE_RUNS": str(fixture), "FAKE_CALLS": str(calls)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, (
+        f"a transient live-head lookup failure must not crash this step "
+        f"(it would fail the whole job); stderr={result.stderr!r}"
+    )
+    assert "/actions/runs/100/cancel" not in calls.read_text(encoding="utf-8")
+    assert "could not re-verify the live PR head" in result.stderr
 
 
 def _write_fake_gh(tmp_path: Path, *, body: str) -> dict[str, str]:

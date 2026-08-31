@@ -2234,6 +2234,52 @@ directional condition prevents an older cleanup racing a push from cancelling
 the newer run and closes the stale-compute gap without weakening exact-head
 review publication.
 
+## 2026-08-31 noema-review-gate: the live-head re-check added to close the above gap was itself an unguarded API call
+
+Auditing the directional cancellation guard immediately above (run IDs smaller than the current run, plus
+a fresh live-head re-check performed again right before each individual cancellation) for robustness --
+not disputing its correctness -- found
+`live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"` was a bare
+assignment under this step's own `set -euo pipefail`, unlike every other `gh api` call in this same step
+and in the sibling `cancel-closed-pr-runs` job, which are all wrapped in `if ! ... ; then warn;
+continue/return; fi`. Reproduced concretely: a fake `gh` that fails only this one call (simulating a
+transient rate limit or network blip) makes the whole step exit 1, which -- since no later step in this
+job declares `continue-on-error` or `if: always()` -- fails the entire `noema-review` job, blocking a
+perfectly valid, live-head Noema review over a housekeeping API hiccup unrelated to the review itself
+(Devin review on #1507).
+
+**Fix**: wrap the re-check the same way every other `gh api` call in this file already is -- on failure,
+log a `::warning::` and `exit 0` (treat "cannot verify" the same as "verified stale": stop cancelling
+further runs, but let the job, and the actual review later in it, proceed). Reproduced the crash against
+the pre-fix step with a hand-rolled fake `gh`, confirmed `exit 0` post-fix with the identical fake-failure
+fixture, and confirmed the normal (non-failure) cancellation path is unchanged, before folding both
+scenarios into `tests/test_noema_review_gate.py` as
+`test_superseded_cleanup_survives_a_transient_live_head_lookup_failure`, executing the real, unmodified
+production bash (not a reimplementation) via `subprocess.run`, in the same fake-`gh`-fixture idiom
+`test_superseded_cleanup_preserves_current_and_newer_run_ids` already established for this step.
+`test_noema_concurrency_and_live_head_cleanup_preserve_current_review` was also extended with a docstring
+enumerating the four invariants this mechanism now holds together across every review round it took to get
+here (new-head cancels old-head; a delayed workflow_run/repository_dispatch trigger never reaches this
+step at all; a directional ordering guard stops an older cleanup from racing a newer run; and this
+live-head re-check itself fails safe) plus structural assertions for the step's `pull_request_target`-only
+gate and the now-guarded (non-bare) live-head re-check -- so a future edit that reintroduces any of these
+regressions fails a test immediately rather than requiring another bot-finds-it/human-fixes-it round.
+
+Validation: `coverage run -m pytest tests -q` -- 2179 passed, 1 skipped, 21 subtests passed (1 new test
+plus one extended existing test); `coverage report` -- 100% on `scripts/ci/` (no `.py` production file
+touched by this specific fix; the fix and its tests are entirely in `.github/workflows/noema-review.yml`,
+`docs/`, and `tests/` -- separately, this session also restored the coverage gate itself to 100% after a
+concurrent, unrelated commit introduced one genuinely unreachable branch in `extract_json_object`, marking
+it `# pragma: no branch` with an inline explanation before a second concurrent commit landed the identical
+fix independently); `interrogate` -- 100% docstring coverage (minimum 100.0%, actual 100.0%); `actionlint`
+on the modified workflow -- clean. The touched `run:` block parses with `bash -n` and was exercised
+interactively against hand-rolled fake `gh` fixtures for both the crash-reproduction and the fixed
+behavior before being folded into the pytest suite. Full validation was re-run after every rebase, given
+the branch's ongoing, very high commit velocity from multiple simultaneous sessions converging on this
+same ~15-line mechanism throughout the day.
+
+PR: ContextualWisdomLab/.github#1507 (Devin review on #1507; same PR, addressed before merge).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
