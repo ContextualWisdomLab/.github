@@ -137,10 +137,11 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", app_identity)
     assert noema.current_actor() == "cwl-noema-review[bot]"
 
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5))
+    source = "complete\n" + "x" * (noema.MAX_DIFF_CHARS + 5)
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated
-    assert len(diff) == noema.MAX_DIFF_CHARS
+    assert diff == "complete"
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
