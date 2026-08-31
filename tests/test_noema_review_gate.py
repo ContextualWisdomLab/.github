@@ -441,7 +441,7 @@ def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
     noema.call_llm("owner/repo", 1, make_pr(), "diff", False)
-    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 23040
+    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 9600
 
 
 def test_noema_redirect_handler_rejects_redirects():

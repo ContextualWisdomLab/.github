@@ -38,10 +38,28 @@ Semantic Versioning where the repository publishes a release.
   rejection (2×11520=23040s) — not guessed. `noema-review.yml`'s
   `noema-review` job now also declares an explicit `timeout-minutes: 360`
   (GitHub-hosted runners' own hard ceiling, unchanged from the implicit
-  default) so that ceiling — smaller than even one 23040s worst case, and
-  the real backstop for the vanishingly rare compound case where
-  `call_llm`'s one-shot verdict-repair retry also hits its own full worst
-  case — is discoverable next to the step it bounds.
+  default) so that ceiling is discoverable next to the step it bounds.
+
+  Devin's next review round on this same PR ("Valid reviews exceed job
+  deadline") then caught that this was still wrong: `23040`s (384 minutes)
+  already exceeds that same `timeout-minutes: 360` (21600s) ceiling for a
+  *single* call, before even considering the second, one-shot repair call —
+  a client-side timeout the job can never actually honor is not a safety
+  margin, it is a false promise. Rather than shrink the timeout below what a
+  legitimate multi-candidate, judge-gated failover can need (reintroducing
+  #946's original bug), `scripts/ci/contextual_orchestrator_review_launcher.py`
+  now caps how many preflight-verified-ready candidates the *serving*
+  orchestrator draws from to a new `REVIEW_SERVING_MAX_CANDIDATES=10`, a
+  smaller number than preflight's own 24-route admission-testing depth
+  (every one of the 10 has already independently passed preflight's base
+  probe and serving-budget confirmation). Solved backwards from the job's
+  own ceiling (360 minutes, minus ~15 minutes of generously-rounded headroom
+  for the job's other steps, halved so a second repair call independently
+  fits too): `CALL_LLM_TIMEOUT_SECONDS` is now `9600` (10 candidates × 2
+  attempts × 2 roles × 2 outer attempts × `REVIEW_SERVING_TIMEOUT_SECONDS`=
+  120s), so the function's absolute worst case (two calls, 19200s) now
+  actually fits inside the 21600s job that enforces it, with real margin,
+  instead of relying on that job's own kill as an unacknowledged backstop.
 - Fix two real bugs Devin's automated review found on this same PR
   (ContextualWisdomLab/.github#1415) against the just-landed
   `_catalog_account_cap(DEFAULT_ACCOUNT_CAP)` fix and the discovery-budget

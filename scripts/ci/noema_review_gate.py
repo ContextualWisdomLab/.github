@@ -39,47 +39,58 @@ MAX_THREAD_BODY_CHARS = 1200
 # policy.realtime_judge to shave latency, which also silently broke
 # route_once's per-request quality gate and judge-rejection failover; see
 # scripts/ci/contextual_orchestrator_review_launcher.py's orchestrator
-# construction comment for that correction). With full defaults restored:
+# construction comment for that correction).
+#
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review "Valid reviews exceed
+# job deadline"): a next-earlier version of this constant (23040s = 384
+# minutes) was derived against the FULL preflight-admitted candidate pool
+# (REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24) and already exceeded
+# noema-review.yml's own `timeout-minutes: 360` (21600s) job ceiling for a
+# SINGLE call -- a client-side timeout the enclosing job could never actually
+# honor is not a safety margin, it is a false promise. Rather than shrink
+# this constant below what a real multi-candidate, judge-gated failover can
+# legitimately need (reintroducing contextual-orchestrator#946's original
+# bug), scripts/ci/contextual_orchestrator_review_launcher.py now caps how
+# many preflight-verified-ready candidates the SERVING orchestrator draws
+# from to REVIEW_SERVING_MAX_CANDIDATES=10 (see that constant's own comment
+# for the full backward derivation from the job's 360-minute ceiling) instead
+# of the full 24-route preflight-admission pool. With that cap and full
+# TaskOrchestrator defaults (tool_retry_attempts=1, realtime_judge=True):
 #   - One _invoke() call (worker OR judge) tries up to
-#     REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 candidates (contextual_orchestrator
+#     REVIEW_SERVING_MAX_CANDIDATES=10 candidates (contextual_orchestrator
 #     _invoke's own _failover_candidates has no smaller bound of its own), each
 #     up to 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4) = 2
 #     attempts, each bounded by REVIEW_SERVING_TIMEOUT_SECONDS=120s (same
-#     file): 24 x 2 x 120 = 5760s worst case.
+#     file): 10 x 2 x 120 = 2400s worst case.
 #   - route_once() issues that worker _invoke() call, then (realtime_judge
 #     defaulting True) an independent judge _invoke() call of the same shape
 #     via _model_judge_verification/_FastMLSIJudgeAdapter.complete(): another
-#     5760s worst case. One outer route_once attempt: 5760 + 5760 = 11520s.
+#     2400s worst case. One outer route_once attempt: 2400 + 2400 = 4800s.
 #   - route_once's own outer cross-candidate loop retries a fresh top-level
 #     candidate on judge rejection, up to
 #     max_attempts = 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4)
-#     = 2 total candidates: 2 x 11520 = 23040s worst case for one full
+#     = 2 total candidates: 2 x 4800 = 9600s worst case for one full
 #     route_once() call (one /v1/chat/completions request this function
 #     sends).
-# This client-side read timeout is sized to that 23040s per-call worst case
-# so a legitimate multi-candidate, judge-gated failover is never mistaken for
-# a hang -- see contextual-orchestrator#946's four consecutive TimeoutError
+# This client-side read timeout is sized to that 9600s per-call worst case so
+# a legitimate multi-candidate, judge-gated failover is never mistaken for a
+# hang -- see contextual-orchestrator#946's four consecutive TimeoutError
 # failures and contextual-orchestrator#974's worst-case enumeration, which
 # first identified this class of mismatch (there against the previous,
 # un-tuned 120s default).
 #
 # call_llm() itself can still issue a second such call (the one-shot verdict
 # repair retry below, guarded by `repair_error` against further recursion),
-# so the absolute theoretical ceiling for this function is double this
-# constant. That compound case is not specially bounded here: it would
-# require BOTH the original call AND the repair call to independently hit
-# their own full 24-candidate, dual-role worst case, and the repair call only
-# fires after a FAST successful-but-rejected response, not after a timeout.
-# On this repo's noema-review.yml runner (ubuntu-latest), GitHub Actions'
-# own hosted-runner job ceiling (360 minutes; see that job's explicit
-# `timeout-minutes: 360`) is smaller than even one 23040s (384-minute) worst
-# case and is the real backstop in that vanishingly rare compound scenario --
-# this constant is still sized to the honest per-call worst case rather than
-# artificially shrunk to fit under that ceiling, because shrinking it would
-# reintroduce #946's actual bug (truncating a legitimate single-call
-# response) on the common path to guard against an already-separately-bounded
-# extreme case.
-CALL_LLM_TIMEOUT_SECONDS = 23040
+# for an absolute worst case of 2 x 9600 = 19200s across the whole function.
+# noema-review.yml's `timeout-minutes: 360` (21600s) job leaves that full
+# 19200s pair comfortable, generously-rounded headroom (900s/15min) for the
+# job's other, non-serving steps (materialize the trusted archive,
+# credential/token resolution, visibility lookup, and this repo's own
+# REVIEW_STARTUP_WATCHDOG_SECONDS-bounded sidecar provisioning) -- unlike the
+# prior 23040s constant, this one's absolute worst case now actually fits
+# inside the job that enforces it, with margin, instead of relying on that
+# job's own kill as an unacknowledged backstop.
+CALL_LLM_TIMEOUT_SECONDS = 9600
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})

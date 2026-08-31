@@ -53,6 +53,49 @@ REVIEW_SERVING_TIMEOUT_SECONDS = 120
 REVIEW_PREFLIGHT_BATCH_SIZE = 4
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# FIXED (ContextualWisdomLab/.github#1415, Devin Review "Valid reviews exceed
+# job deadline"): the serving TaskOrchestrator previously received the FULL
+# preflight-admitted pool (up to REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24), and
+# noema_review_gate.py's CALL_LLM_TIMEOUT_SECONDS was sized to that pool's
+# honest worst case (23040s = 384 minutes) -- which already exceeds
+# noema-review.yml's own explicit `timeout-minutes: 360` (21600s) job
+# ceiling for a SINGLE call, before even considering that call_llm can issue
+# a second, one-shot verdict-repair call in the same job. A client-side
+# timeout the enclosing job can never actually honor is not a safety margin,
+# it is a false promise. Rather than shrink the promised worst case below
+# what a real multi-candidate, judge-gated failover can legitimately need
+# (reintroducing contextual-orchestrator#946's original bug), this caps how
+# many preflight-verified-ready candidates the SERVING orchestrator draws
+# from -- a separate, smaller number than preflight's own admission-testing
+# depth above, which exists to find *some* ready route, not to bound serving
+# wall-clock.
+#
+# Solved backwards from the job's own ceiling: noema-review.yml's
+# `timeout-minutes: 360` (21600s) minus this job's other, non-serving steps
+# (materialize the trusted archive, credential/token resolution, visibility
+# lookup, and this file's own REVIEW_STARTUP_WATCHDOG_SECONDS-bounded sidecar
+# provisioning -- generously rounded to 900s/15min of headroom) leaves 20700s
+# for the "Run Noema LLM review" step. That step can invoke call_llm up to
+# twice (the original request plus one one-shot verdict-repair retry;
+# see noema_review_gate.py's call_llm), so each call's own worst case must
+# independently fit in half of that, 10350s, for the pair to always fit.
+# One route_once() call's orchestrator-level worst case is
+# outer_route_once_attempts(2, from route_once's own
+# `max_attempts = 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4)`)
+# x roles(2: a worker _invoke() call, then an independent judge _invoke()
+# call via _realtime_route_judge/_model_judge_verification) x
+# per-agent-attempts(2, the same `1 + min(1,4)` expression bounding
+# _invoke's own same-agent retry) x REVIEW_SERVING_TIMEOUT_SECONDS(120) x
+# this candidate cap: 2 x 2 x 2 x 120 x N = 960N seconds. Solving
+# 960N <= 10350 gives N <= 10.78, so N=10 -- see
+# CALL_LLM_TIMEOUT_SECONDS in noema_review_gate.py for the resulting exact
+# 960 x 10 = 9600s per-call value this produces. Every one of these 10
+# candidates has already independently PASSED preflight's own base probe and
+# serving-budget confirmation (see REVIEW_PREFLIGHT_MAX_ESCALATIONS above),
+# so this is a reduction in serving-time failover depth among
+# already-proven-healthy routes, not a reduction in how thoroughly preflight
+# searches for a usable one.
+REVIEW_SERVING_MAX_CANDIDATES = 10
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -1521,7 +1564,16 @@ def main(argv: list[str] | None = None) -> int:
     # per-request quality gate and failover; see CALL_LLM_TIMEOUT_SECONDS in
     # noema_review_gate.py for the resulting (larger, honestly re-derived)
     # client-side read-timeout this requires.
-    orchestrator = TaskOrchestrator(agents, client=client)
+    #
+    # Sliced to REVIEW_SERVING_MAX_CANDIDATES (see that constant's own
+    # comment): serving the full preflight-admitted pool made the honest
+    # worst case exceed this job's own timeout-minutes ceiling. `agents` is
+    # already preflight's own ranked, verified-ready ordering, so this keeps
+    # the top-ranked candidates and only trims serving-time failover depth
+    # among routes preflight already proved could serve a real request.
+    orchestrator = TaskOrchestrator(
+        agents[:REVIEW_SERVING_MAX_CANDIDATES], client=client
+    )
     serve(
         orchestrator,
         host=args.host,
