@@ -22,8 +22,12 @@ import re
 import ssl
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, TextIO
 from urllib.parse import parse_qs, unquote, urlparse
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci.figma_rest_auth import (
     EXIT_OK,
@@ -249,7 +253,8 @@ def safe_label(value: object) -> str | None:
     label = identity_field(value)
     if label is None:
         return None
-    if "figd_" in label or TOKEN_ENV_NAME in label:
+    folded = label.casefold()
+    if any(marker.casefold() in folded for marker in ("figd_", TOKEN_ENV_NAME, TOKEN_HEADER)):
         return None
     return label
 

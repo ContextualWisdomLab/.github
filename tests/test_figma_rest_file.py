@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 import ssl
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -23,6 +25,22 @@ CLAUDE = ROOT / "CLAUDE.md"
 TOKEN = "figd_test_token_must_never_appear"
 FILE_KEY = "TestFileKey0123456789"
 FILE_URL = f"https://www.figma.com/design/{FILE_KEY}/Checkout?node-id=12-34"
+
+
+def test_documented_cli_runs_from_an_arbitrary_working_directory(tmp_path: Path) -> None:
+    """The documented direct script invocation imports before checking its token."""
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/ci/figma_rest_file.py"), FILE_KEY],
+        cwd=tmp_path,
+        env={},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == auth.EXIT_MISSING_TOKEN
+    assert auth.TOKEN_ENV_NAME in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
 
 
 def _file_body(**fields: object) -> bytes:
@@ -645,7 +663,8 @@ def test_doctoring_and_entry_docs_pin_file_read_fallback() -> None:
 def test_design_field_helpers_stay_bounded_and_token_free() -> None:
     """Geometry, fill, type, and catalog helpers refuse junk and tokens."""
     assert files.safe_label(f"keep {TOKEN}") is None
-    assert files.safe_label(auth.TOKEN_ENV_NAME) is None
+    for marker in ("FIGD_secret", "figma_access_token", "X-FIGMA-TOKEN"):
+        assert files.safe_label(marker) is None
     assert files.finite_number(True) is None
     assert files.finite_number("8") is None
     assert files.finite_number(float("nan")) is None
