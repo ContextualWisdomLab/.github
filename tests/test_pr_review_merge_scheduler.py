@@ -1008,6 +1008,13 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                 {"id": 555, "created_at": "2026-06-30T00:00:00Z"},
             ]
         },
+        "repos/owner/repo/commits/abc123/statuses?per_page=100": [
+            {
+                "context": "strix",
+                "state": "success",
+                "target_url": "https://github.com/owner/repo/actions/runs/3",
+            }
+        ],
         "repos/owner/repo/pulls/42/files?per_page=20": [
             {"filename": "scripts/ci/pr_review_merge_scheduler.py"},
         ],
@@ -1041,6 +1048,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         "repos/owner/repo/pulls/42/reviews?per_page=100&page=1",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
         "repos/owner/repo/commits/abc123/check-suites?per_page=100",
+        "repos/owner/repo/commits/abc123/statuses?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]
     assert node["number"] == 42
@@ -1057,6 +1065,20 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         node["statusCheckRollup"]["contexts"]["nodes"][0]["checkSuite"]["createdAt"]
         == "2026-06-30T00:00:00Z"
     )
+    # A classic commit status (e.g. a same-head manual `workflow_dispatch`
+    # Strix run's evidence) must survive the REST fallback too -- omitting
+    # it here would silently erase that evidence for every caller, since
+    # `check-runs` alone never includes classic statuses (regression for a
+    # Devin Review finding: "REST fallback loses manual evidence").
+    classic_nodes = [n for n in node["statusCheckRollup"]["contexts"]["nodes"] if "context" in n]
+    assert classic_nodes == [
+        {
+            "context": "strix",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/owner/repo/actions/runs/3",
+        }
+    ]
+    assert sched.strix_evidence_state(node) == "complete"
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
@@ -1489,10 +1511,117 @@ def test_context_review_and_check_helpers(monkeypatch):
     )
     assert sched.strix_evidence_state(unknown_running) == "running"
     assert sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})) == "complete"
-    assert (
-        sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}))
-        == "complete"
+    for terminal_conclusion in (
+        "FAILURE",
+        "ERROR",
+        "CANCELLED",
+        "TIMED_OUT",
+        "SKIPPED",
+        "NEUTRAL",
+        "ACTION_REQUIRED",
+        "STALE",
+        "STARTUP_FAILURE",
+    ):
+        non_passing = make_pr(
+            statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion=terminal_conclusion)]}}
+        )
+        assert sched.strix_evidence_state(non_passing) == "failed", terminal_conclusion
+    classic_failure = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "FAILURE"}]}})
+    assert sched.strix_evidence_state(classic_failure) == "failed"
+    classic_error = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "ERROR"}]}})
+    assert sched.strix_evidence_state(classic_error) == "failed"
+    classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
+    assert sched.strix_evidence_state(classic_success) == "complete"
+
+    # Either Strix identity succeeding is sufficient: a stale classic-status
+    # failure left over from an unrelated same-head manual `workflow_dispatch`
+    # Strix run must not keep the gate "failed" forever once the real
+    # CheckRun evidence succeeds -- `dispatch_strix_evidence` can only rerun
+    # a CheckRun's Actions job, so a classic status it cannot touch must
+    # never be what perpetually blocks this gate (regression for the
+    # endless-rerun loop this would otherwise cause).
+    checkrun_success_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(),
+                ]
+            }
+        }
     )
+    assert sched.strix_evidence_state(checkrun_success_classic_failure) == "complete"
+    # The reverse direction is also "complete": a same-head manual
+    # `workflow_dispatch` Strix run's classic-status success may supply
+    # review evidence even when the `pull_request_target` CheckRun failed --
+    # e.g. a self-modifying `.github` PR whose CheckRun runs the *base*
+    # branch's trusted scripts and can legitimately fail against a PR
+    # editing those very scripts, while a trusted same-head manual dispatch
+    # correctly evaluates the new code. This never substitutes for GitHub's
+    # own independently enforced required CheckRun at actual merge time,
+    # which this function does not touch.
+    checkrun_failure_classic_success = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "SUCCESS"},
+                    strix_check(conclusion="FAILURE"),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_failure_classic_success) == "complete"
+    # A CheckRun still in progress and no success anywhere yet correctly
+    # stays "running" rather than prematurely "failed", even beside a stale
+    # classic failure.
+    checkrun_running_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(status="IN_PROGRESS", conclusion=""),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_running_classic_failure) == "running"
+    # Only when *no* identity ever succeeds is the gate genuinely "failed".
+    checkrun_failure_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(conclusion="FAILURE"),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_failure_classic_failure) == "failed"
+
+    # A stale failed attempt must not outlive a later successful retry, and a
+    # later failed attempt must override an earlier success -- only the
+    # latest attempt per Strix CheckRun identity counts (regression for a
+    # rerun leaving every earlier attempt's CheckRun node in the rollup).
+    older_failed_then_newer_success = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [strix_check(conclusion="FAILURE"), strix_check()]}
+        }
+    )
+    assert sched.strix_evidence_state(older_failed_then_newer_success) == "complete"
+    newer_failed_after_older_success = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [strix_check(), strix_check(conclusion="FAILURE")]}
+        }
+    )
+    assert sched.strix_evidence_state(newer_failed_after_older_success) == "failed"
+    running_retry_after_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [strix_check(conclusion="FAILURE"), strix_check(status="IN_PROGRESS", conclusion="")]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(running_retry_after_failure) == "running"
 
     threaded = make_pr(
         reviewThreads={
@@ -3168,6 +3297,63 @@ def test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritati
     assert len(check_runs) == 1
     assert check_runs[0]["conclusion"] == "CANCELLED"
     assert sched.failed_status_checks(pr) == ["scan-pr-queue"]
+
+
+def test_strix_evidence_state_treats_cancelled_before_start_rerun_as_authoritative():
+    """A newer Strix rerun cancelled before starting outranks an older stale success.
+
+    Sibling regression to
+    ``test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative``,
+    but through ``latest_check_run_attempts``/``strix_evidence_state`` rather
+    than ``latest_check_runs``/``failed_status_checks``. Before
+    ``latest_check_run_attempts`` was refactored to share
+    ``check_run_recency_key`` with ``latest_check_runs``, it ranked same-identity
+    CheckRun reruns with its own inline ``startedAt``-only comparison: a
+    completed-with-no-``startedAt`` row (GitHub's shape for "cancelled before
+    it ever started") could never outrank an older row that does carry a
+    ``startedAt``, purely because the older row has a timestamp and the newer
+    one does not -- the exact bug class ``check_run_recency_key`` fixed for
+    ``latest_check_runs``. Both runs here carry a ``checkSuite.createdAt``, as
+    real GitHub responses always do; the newer cancellation must win, and
+    ``strix_evidence_state`` must report the genuinely current "failed"
+    (a cancellation is a terminal non-success), not the stale "complete" a
+    lingering older success would otherwise leave in place.
+    """
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-08-24T01:00:00Z",
+                        "checkSuite": {
+                            "createdAt": "2026-08-24T00:59:00Z",
+                            "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "strix",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": None,
+                        "checkSuite": {
+                            "createdAt": "2026-08-24T02:00:00Z",
+                            "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
+                        },
+                    },
+                ]
+            }
+        }
+    )
+
+    attempts = sched.latest_check_run_attempts(sched.context_nodes(pr))
+    assert len(attempts) == 1
+    assert attempts[0]["conclusion"] == "CANCELLED"
+    assert sched.strix_evidence_state(pr) == "failed"
 
 
 def test_coverage_evidence_state_prefers_newest_rerun():
@@ -5017,6 +5203,18 @@ def test_inspect_pr_reports_stale_approval_cleanup_in_final_decision():
     )
 
 
+def test_inspect_pr_treats_failed_strix_like_missing_and_never_dispatches_opencode():
+    """A terminal but non-passing Strix conclusion must fail closed: a fresh
+    Strix attempt is dispatched, exactly as for missing evidence, and
+    OpenCode is never reached on that non-authoritative evidence."""
+    failed_strix = make_pr(
+        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
+    )
+    decision = inspect(failed_strix)
+    assert decision.action == "security_dispatch"
+    assert decision.reason == "current head has no completed Strix evidence; same-head Strix dispatched"
+
+
 def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
     def fail(_args, stdin=None):
         raise RuntimeError("Resource not accessible by integration")
@@ -5234,6 +5432,7 @@ def test_summary_section_helpers_handle_empty_and_action_error_cases():
 
 
 def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
+    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
     assert inspect(make_pr(isDraft=True)).action == "skip"
     stacked = inspect(make_pr(baseRefName="develop"))
     assert stacked.action == "review_dispatch"
@@ -5899,6 +6098,406 @@ def test_approved_unknown_mergeability_disarms_auto_merge_pending_evaluation():
     assert "mergeability is still being calculated" in decision.reason
 
 
+def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews(monkeypatch):
+    """The ordinary multi-PR queue sweep never sets allow_draft_review_dispatch
+    and has no active request marker, so a draft PR keeps being skipped
+    exactly as before this feature existed."""
+    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
+    assert inspect(make_pr(isDraft=True)).action == "skip"
+    assert inspect(make_pr(isDraft=True)).reason == "draft PR"
+    allowed_without_trigger = inspect(
+        make_pr(isDraft=True), allow_draft_review_dispatch=True, trigger_reviews=False
+    )
+    assert allowed_without_trigger.action == "skip"
+    assert allowed_without_trigger.reason == "draft PR"
+
+
+def test_draft_pr_review_request_marker_continues_dispatch_without_the_cli_flag(monkeypatch):
+    """A later scheduler pass with no repository_dispatch client_payload of its
+    own (the Strix-completion workflow_run that follows an initial
+    security_dispatch) still continues the same explicit request when a live
+    marker exists for this exact head, without --allow-draft-review-dispatch."""
+    seen = []
+    monkeypatch.setattr(
+        sched,
+        "active_draft_review_request",
+        lambda repo, pr: seen.append((repo, pr["number"])) or True,
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft)
+    assert decision.action == "review_dispatch"
+    assert seen == [("owner/repo", 1)]
+
+
+def test_draft_pr_review_request_marker_not_checked_when_flag_already_allows(monkeypatch):
+    """The CLI flag short-circuits the marker lookup entirely -- no live call
+    is needed when the caller already explicitly allowed draft dispatch."""
+    monkeypatch.setattr(
+        sched,
+        "active_draft_review_request",
+        lambda repo, pr: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+
+
+def test_draft_review_request_artifact_name_is_exact_and_stable():
+    assert sched.draft_review_request_artifact_name("owner/repo", 42, "a" * 40) == (
+        f"cwl-draft-review-request-owner-repo-42-{'a' * 40}"
+    )
+
+
+def test_active_draft_review_request_queries_the_central_dispatch_repository(monkeypatch):
+    calls = []
+
+    def fake_gh_api_json(path):
+        calls.append(path)
+        return {"total_count": 0, "artifacts": []}
+
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
+
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+    assert len(calls) == 1
+    assert calls[0].startswith("repos/ContextualWisdomLab/.github/actions/artifacts?name=")
+    expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+    assert expected_name in calls[0]
+
+
+def test_active_draft_review_request_true_when_a_live_artifact_matches(monkeypatch):
+    def fake_gh_api_json(path):
+        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+        return {
+            "total_count": 1,
+            "artifacts": [{"id": 7, "name": expected_name, "expired": False}],
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is True
+
+
+def test_active_draft_review_request_false_when_the_artifact_expired(monkeypatch):
+    def fake_gh_api_json(path):
+        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
+        return {
+            "total_count": 1,
+            "artifacts": [{"id": 7, "name": expected_name, "expired": True}],
+        }
+
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
+def test_active_draft_review_request_false_without_a_head_sha():
+    assert sched.active_draft_review_request("owner/repo", make_pr(headRefOid=None)) is False
+
+
+def test_active_draft_review_request_fails_closed_when_the_read_cannot_be_performed(monkeypatch):
+    """Regression: an ordinary required-workflow scan executing directly in a
+    sibling repository has no credential able to read the central .github
+    repository's Actions artifacts at all -- neither the target-repository
+    read credential nor the central dispatch credential is valid there. The
+    resulting gh failure must resolve to False (no confirmed active
+    request, same as a completed check that finds nothing), never propagate
+    and abort the whole multi-PR scan over one draft PR."""
+
+    def raise_runtime_error(path):
+        raise RuntimeError("Command failed (1): gh api ...\nHTTP 403: Resource not accessible")
+
+    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", raise_runtime_error)
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
+def test_active_draft_review_request_fails_closed_on_a_malformed_artifact_response(monkeypatch):
+    """A malformed or internally inconsistent artifact-list response must
+    never be treated as a confirmed live request; it resolves to False
+    exactly like any other inability to positively confirm one."""
+
+    monkeypatch.setattr(
+        sched, "gh_api_json_via_dispatch_token", lambda path: {"total_count": 1, "artifacts": []}
+    )
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+
+
+def test_active_draft_review_request_uses_dispatch_token_not_opencode_app_token(monkeypatch):
+    """Regression: the OpenCode app installation has no Actions permission, so
+    reading the draft-review-request artifact must use the same
+    central-repository dispatch credential as creating a repository
+    dispatch there, never the target-repository read credential -- which,
+    for a cross-repository dispatch with only the OpenCode app credential
+    configured, resolves to a token with no Actions permission."""
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_READ_TOKEN", "opencode-app-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+
+    read_calls = []
+    dispatch_calls = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda args, stdin=None: read_calls.append(args) or "{}",
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_with_env",
+        lambda args, stdin=None, env=None: dispatch_calls.append((args, env["GH_TOKEN"]))
+        or '{"total_count": 0, "artifacts": []}',
+    )
+
+    pr = make_pr(headRefOid="b" * 40)
+    assert sched.active_draft_review_request("owner/repo", pr) is False
+    assert read_calls == []
+    assert len(dispatch_calls) == 1
+    assert dispatch_calls[0][1] == "runner-token"
+
+
+def test_draft_review_request_records_fail_closed_on_malformed_responses():
+    name = "cwl-draft-review-request-owner-repo-1-" + "a" * 40
+    with pytest.raises(ValueError, match="must be an object"):
+        sched._draft_review_request_records([], expected_name=name)
+    with pytest.raises(ValueError, match="invalid total_count"):
+        sched._draft_review_request_records({"total_count": -1, "artifacts": []}, expected_name=name)
+    with pytest.raises(ValueError, match="invalid artifacts collection"):
+        sched._draft_review_request_records({"total_count": 0, "artifacts": None}, expected_name=name)
+    with pytest.raises(ValueError, match="truncated or internally inconsistent"):
+        sched._draft_review_request_records({"total_count": 1, "artifacts": []}, expected_name=name)
+    with pytest.raises(ValueError, match="non-object record"):
+        sched._draft_review_request_records({"total_count": 1, "artifacts": [None]}, expected_name=name)
+    with pytest.raises(ValueError, match="invalid artifact id"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 0, "name": name, "expired": False}]},
+            expected_name=name,
+        )
+    with pytest.raises(ValueError, match="mismatched artifact name"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 1, "name": "other", "expired": False}]},
+            expected_name=name,
+        )
+    with pytest.raises(ValueError, match="invalid expired flag"):
+        sched._draft_review_request_records(
+            {"total_count": 1, "artifacts": [{"id": 1, "name": name, "expired": "no"}]},
+            expected_name=name,
+        )
+
+
+def test_draft_pr_review_only_dispatch_never_reaches_merge_or_branch_logic(monkeypatch):
+    """An explicit review-only draft request must never merge, auto-merge, or
+    update the branch, no matter how merge-ready-looking the fixture is."""
+    mutating_calls = []
+    for name in ("update_branch", "enable_auto_merge", "merge_pr", "disable_auto_merge_decision"):
+        if hasattr(sched, name):
+            monkeypatch.setattr(
+                sched, name, lambda *args, _name=name, **kwargs: mutating_calls.append(_name)
+            )
+
+    draft_pr = make_pr(
+        isDraft=True,
+        mergeStateStatus="CLEAN",
+        restMergeableState="CLEAN",
+        reviewDecision="APPROVED",
+        autoMergeRequest={"enabledAt": "now"},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    decision = inspect(draft_pr, allow_draft_review_dispatch=True)
+    assert decision.action == "skip"
+    assert mutating_calls == []
+
+    unreviewed_draft_pr = make_pr(
+        isDraft=True,
+        mergeStateStatus="CLEAN",
+        restMergeableState="CLEAN",
+        reviewDecision="APPROVED",
+        autoMergeRequest={"enabledAt": "now"},
+    )
+    unreviewed_decision = inspect(unreviewed_draft_pr, allow_draft_review_dispatch=True)
+    assert unreviewed_decision.action == "security_dispatch"
+    assert mutating_calls == []
+
+
+def test_draft_pr_review_only_dispatch_strix_missing_then_opencode_chain():
+    fresh_draft = make_pr(isDraft=True)
+    security_dispatch = inspect(fresh_draft, allow_draft_review_dispatch=True)
+    assert security_dispatch.action == "security_dispatch"
+    assert security_dispatch.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "same-head Strix dispatched"
+    )
+
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    review_dispatch = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert review_dispatch.action == "review_dispatch"
+    assert review_dispatch.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; same-head OpenCode dispatched"
+    )
+
+
+def test_draft_pr_review_only_dispatch_treats_failed_strix_like_missing():
+    """A terminal but non-passing Strix conclusion on a draft review-only
+    request must fail closed the same as missing evidence: a fresh Strix
+    attempt is dispatched and OpenCode is never reached."""
+    failed_strix_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
+    )
+    decision = inspect(failed_strix_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "same-head Strix dispatched"
+    )
+
+
+def test_draft_pr_review_only_dispatch_strix_running_waits():
+    running_strix_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS")]}},
+    )
+    decision = inspect(running_strix_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
+
+
+def test_draft_pr_review_only_dispatch_strix_missing_dispatch_budget_exhausted():
+    decision = inspect(
+        make_pr(isDraft=True), allow_draft_review_dispatch=True, review_dispatch_allowed=False
+    )
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "review dispatch limit reached"
+    )
+
+
+def test_draft_pr_review_only_dispatch_opencode_dispatch_budget_exhausted():
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(
+        strix_complete_draft, allow_draft_review_dispatch=True, review_dispatch_allowed=False
+    )
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; "
+        "review dispatch limit reached"
+    )
+
+
+def test_draft_pr_review_only_dispatch_waits_for_central_required_workflow(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
+    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
+
+    missing_strix = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert missing_strix.action == "wait"
+    assert "current head has no completed Strix evidence" in missing_strix.reason
+    assert "no cross-repository repository-dispatch credential" in missing_strix.reason
+
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    strix_complete = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert strix_complete.action == "wait"
+    assert "current head has completed Strix evidence" in strix_complete.reason
+    assert "OpenCode Review dispatch waits" in strix_complete.reason
+
+
+def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
+
+
+def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "repository_busy",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has no completed Strix evidence; "
+        "target repository already has active Strix evidence"
+    )
+
+
+def test_draft_pr_review_only_dispatch_waits_when_opencode_already_running(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "already_running",
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current head has completed Strix evidence; "
+        "same-head OpenCode workflow run is already active"
+    )
+
+
+def test_draft_pr_review_only_dispatch_opencode_already_running_skips():
+    running_opencode_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}},
+    )
+    decision = inspect(running_opencode_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; OpenCode review already running"
+
+
+def test_draft_pr_review_only_dispatch_skips_when_a_current_head_verdict_exists():
+    approved_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
+        reviews={"nodes": [opencode_review("APPROVED", "head")]},
+    )
+    decision = inspect(approved_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "skip"
+    assert decision.reason == (
+        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+    changes_requested_draft = make_pr(
+        isDraft=True,
+        reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
+    )
+    changes_requested_decision = inspect(changes_requested_draft, allow_draft_review_dispatch=True)
+    assert changes_requested_decision.action == "skip"
+    assert changes_requested_decision.reason == (
+        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
+    )
+
+
+def test_draft_pr_review_only_dispatch_retries_a_failed_required_check_with_no_verdict():
+    """A completed-but-failed required-workflow check is not a posted review:
+    the explicit request must still be able to redispatch (the exact defect
+    this feature exists to fix -- a required-check-only failure must never
+    look like a satisfied verdict)."""
+    failed_gate_draft = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
+    )
+    decision = inspect(failed_gate_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "security_dispatch"
+
+
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
     runs = [
         {"name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
@@ -6267,6 +6866,46 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
         )
     )
+
+
+def test_post_update_branch_followup_treats_failed_strix_like_missing(monkeypatch):
+    """A terminal but non-passing Strix conclusion after a branch update must
+    fail closed the same as missing evidence: a fresh Strix attempt is
+    dispatched, and OpenCode is never reached on that non-authoritative
+    evidence."""
+    original = make_pr(headRefOid="old-head")
+    updated = make_pr(
+        headRefOid="new-head",
+        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}},
+    )
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
+    strix_dispatched = []
+    opencode_dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: strix_dispatched.append(pr["headRefOid"]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: opencode_dispatched.append(pr["headRefOid"]),
+    )
+
+    note = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+
+    assert "same-head Strix evidence dispatched" in note
+    assert strix_dispatched == ["new-head"]
+    assert opencode_dispatched == []
 
 
 def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(monkeypatch):
@@ -7056,6 +7695,21 @@ def test_main_rejects_invalid_branch_update_limit():
                 "github-flow",
                 "--branch-update-limit",
                 "-2",
+            ]
+        )
+
+
+def test_main_rejects_allow_draft_review_dispatch_without_pr_number():
+    with pytest.raises(SystemExit, match="--allow-draft-review-dispatch requires --pr-number"):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                "--allow-draft-review-dispatch",
             ]
         )
 
