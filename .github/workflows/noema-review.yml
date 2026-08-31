@@ -24,10 +24,11 @@ concurrency:
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
     github.event.client_payload.pr_number ||
-    github.run_id }}-${{
-    github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
-    github.event.workflow_run.pull_requests[0].head.sha || github.sha }}
-  cancel-in-progress: true
+    github.run_id }}
+  # A live PR event is authoritative and supersedes the same PR's older head.
+  # Delayed workflow_run/repository_dispatch events queue instead of cancelling
+  # the current head, then fail the live-head check before model setup.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 permissions:
   contents: read

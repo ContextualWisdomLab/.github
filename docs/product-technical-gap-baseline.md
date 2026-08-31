@@ -2215,6 +2215,17 @@ every rebase, given the branch's ongoing concurrent commit velocity from multipl
 
 PR: ContextualWisdomLab/.github#1507 (CodeRabbit review on #1507; same PR, addressed before merge).
 
+### Same-PR old-head model cancellation
+
+The repair-retry guard prevents a second stale request, but head-specific
+workflow concurrency still allowed the first request to occupy a runner for up
+to four hours after a new commit. Noema concurrency is now PR-scoped. A live
+`pull_request_target` event cancels the same PR's older execution, while
+delayed `workflow_run` and `repository_dispatch` events cannot cancel the
+current execution and must pass the existing live-head check before model
+setup. This closes the stale-compute gap without weakening exact-head review
+publication.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

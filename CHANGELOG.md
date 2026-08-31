@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Make Noema concurrency PR-scoped while allowing cancellation only from live
+  `pull_request_target` events. A new commit now cancels the same PR's older
+  four-hour model call, while delayed workflow-run or repository-dispatch
+  events cannot cancel the current head and must pass the live-head guard
+  before model setup.
 - Let the required OpenCode verdict check wait for the complete bounded review
   path: it now dispatches the authenticated review directly, bounds validation
   and coverage prerequisites, permits five hours of coverage evidence plus the
