@@ -2044,7 +2044,10 @@ the downstream validation, source, coverage, and review jobs have explicit
 8-, 12-, 300-, and 305-minute bounds. This covers the full 625-minute
 downstream path inside roughly 650 minutes of polling without shortening the
 205-minute model-pool budget. Each Reviews API call is capped at 25 seconds and
-counts inside a fixed 30-second polling cadence.
+counts inside a fixed 30-second polling cadence. Fork PRs fail closed during
+the short bootstrap job, so untrusted contributors cannot allocate either
+long-running wait window; a maintainer must materialize an accepted external
+contribution on a base-repository branch first.
 
 Devin Review's pass on `opencode-review.yml`'s "Fail closed without a current-head OpenCode verdict"
 step (the poller the branch-protection-required `opencode-review-target` job uses to wait for

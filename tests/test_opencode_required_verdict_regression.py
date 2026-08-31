@@ -104,6 +104,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Request current-head OpenCode review execution" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     assert "exchange_github_app_token" in workflow
+    assert "Reject untrusted fork review resource consumption" in workflow
+    assert "github.event.pull_request.head.repo.full_name" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
     assert "timeout-minutes: 360" in target_job.split("    steps:\n", 1)[0]
     assert workflow.count("for attempt in $(seq 1 650)") == 2

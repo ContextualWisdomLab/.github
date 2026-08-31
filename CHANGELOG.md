@@ -12,7 +12,10 @@ Semantic Versioning where the repository publishes a release.
   325-minute polling windows with cleanup margin instead of assuming one
   GitHub-hosted job can cover the complete multi-hour path. Reviews API calls
   have a 25-second cap inside the fixed 30-second cadence, so slow calls cannot
-  silently consume time outside the declared budget.
+  silently consume time outside the declared budget. Long-running waits fail
+  closed for fork PRs at bootstrap, preventing untrusted external contributors
+  from exhausting runner slots; maintainers must first materialize those
+  contributions on a trusted base-repository branch.
 - Re-pin the reviewed-blob contract test's SHA to the current
   `opencode-review-dispatch.yml` content after the review run timeout change,
   restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.
