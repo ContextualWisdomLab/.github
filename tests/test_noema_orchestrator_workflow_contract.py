@@ -92,6 +92,20 @@ def test_peer_workflow_completion_does_not_cancel_long_noema_review() -> None:
     ) in workflow
 
 
+def test_noema_normalizes_github_app_identity_in_both_phases() -> None:
+    """Preparation and finalization must satisfy current_actor's source contract."""
+    workflow = workflow_text("noema-review.yml")
+
+    assert (
+        "steps.noema_credential.outputs.source == 'github-app' && "
+        "'noema-review-github-app'"
+    ) in workflow
+    assert (
+        "steps.credential.outputs.source == 'github-app' && "
+        "'noema-review-github-app'"
+    ) in workflow
+
+
 def test_noema_noop_events_do_not_download_missing_handoffs() -> None:
     workflow = workflow_text("noema-review.yml")
     assert "review_ready: ${{ steps.seal.outputs.review_ready }}" in workflow

@@ -301,7 +301,7 @@ jobs:
         id: seal
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
-          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
         run: |
@@ -551,7 +551,7 @@ jobs:
       - name: Submit sealed exact-head verdict
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.app_token.outputs.token || steps.oidc_token.outputs.token }}
-          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.credential.outputs.source }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.credential.outputs.source == 'github-app' && 'noema-review-github-app' || steps.credential.outputs.source == 'pat' && 'noema-review-pat' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.app_token.outputs['app-slug'] && format('{0}[bot]', steps.app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.app_token.outputs['installation-id'] }}
         run: |
