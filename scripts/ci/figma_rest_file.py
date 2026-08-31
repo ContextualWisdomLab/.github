@@ -63,7 +63,7 @@ MAX_SOLID_FILLS = 8
 MAX_CATALOG_ITEMS = 32
 MAX_LAYOUT_ABS = 10_000_000
 S3_IMAGE_HOST = re.compile(
-    r"^figma-[a-z0-9-]+\.s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$"
+    r"^figma-[a-z0-9-]+\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$"
 )
 FileOpener = Callable[[str, Mapping[str, str]], tuple[int, bytes]]
 

@@ -677,6 +677,7 @@ def test_design_field_helpers_stay_bounded_and_token_free() -> None:
     catalog = {str(index): {"name": f"C{index}"} for index in range(files.MAX_CATALOG_ITEMS + 3)}
     assert len(files.named_catalog(catalog, "component_name", None)) == files.MAX_CATALOG_ITEMS
     assert files.allowed_image_host("figma.com") is True
+    assert files.allowed_image_host("figma-alpha-api.s3-us-west-2.amazonaws.com") is True
     assert files.allowed_image_host("evil.amazonaws.com") is False
     assert files.allowed_image_host("figma-x.attacker.amazonaws.com") is False
     assert files.encode_node_id_query("I1:2;3:4") == "I1:2%3B3:4"

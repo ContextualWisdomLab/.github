@@ -247,6 +247,17 @@ jobs:
           python3 "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/pr_review_autofix_context.py" \
             "${context_args[@]}"
 
+      - name: Provision contextual-orchestrator review sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
       - name: Prepare isolated OpenCode autofix workspace
         env:
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
@@ -279,9 +290,9 @@ jobs:
           EOF
           jq -n --arg workspace "$TARGET_WORKSPACE" '{
             "$schema": "https://opencode.ai/config.json",
-            "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
-            "small_model": "nvidia-nim/nvidia/nemotron-3-nano-30b-a3b",
-            "enabled_providers": ["nvidia-nim"],
+            "model": "contextual-orchestrator/orchestrator/free",
+            "small_model": "contextual-orchestrator/orchestrator/free",
+            "enabled_providers": ["contextual-orchestrator"],
             "permission": {
               "edit": {
                 "*": "allow",
@@ -306,7 +317,7 @@ jobs:
               "ci-autofix": {
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
-                "model": "nvidia-nim/mistralai/mistral-small-4-119b-2603",
+                "model": "contextual-orchestrator/orchestrator/free",
                 "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
                 "steps": 12,
@@ -333,32 +344,20 @@ jobs:
               }
             },
             "provider": {
-              "nvidia-nim": {
+              "contextual-orchestrator": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "NVIDIA NIM",
+                "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "https://integrate.api.nvidia.com/v1",
-                  "apiKey": "{env:NVIDIA_API_KEY}"
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
-                  "mistralai/mistral-small-4-119b-2603": {
-                    "name": "Mistral Small 4 119B 2603",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "options": {
-                      "reasoningEffort": "high"
-                    },
-                    "limit": {
-                      "context": 128000,
-                      "output": 4096
-                    }
-                  },
-                  "nvidia/nemotron-3-nano-30b-a3b": {
-                    "name": "Nemotron 3 Nano 30B A3B",
+                  "orchestrator/free": {
+                    "name": "Orchestrator Free (ZDR-first zero-cost pool)",
                     "tool_call": true,
                     "reasoning": true,
                     "limit": {
-                      "context": 128000,
+                      "context": 200000,
                       "output": 32768
                     }
                   }
@@ -370,18 +369,18 @@ jobs:
       - name: Run OpenCode review autofix
         if: env.RESOLVE_CONFLICT != 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/orchestrator/free
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
           OPENCODE_AUTOFIX_WORKDIR: ${{ runner.temp }}/opencode-autofix-project
         run: |
           set -euo pipefail
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
+            echo "::error::contextual-orchestrator review sidecar must be provisioned before scheduled OpenCode autofix."
             exit 1
           fi
+          source "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/load_contextual_orchestrator_token.sh"
           prompt_file="${RUNNER_TEMP}/opencode-autofix-prompt.md"
           allowed_paths_zlist="${RUNNER_TEMP}/pr-review-autofix-allowed-paths.zlist"
           allowed_paths_context="$(
@@ -463,6 +462,32 @@ jobs:
             --snapshot "$ordinary_scope_snapshot" \
             --allowed-paths "$allowed_paths_zlist"
 
+      - name: Reject protected security-contract deletions and renames
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+          # Security-contract files may be edited only when a review explicitly
+          # names them, but an autofix must never delete or rename them. This
+          # keeps an unrelated optimization from removing origin validation,
+          # its regression evidence, or the standards record.
+          protected_security_paths=(
+            "backend/core/local_http.py"
+            "backend/core/url_validation.py"
+            "backend/tests/test_local_http.py"
+            "backend/tests/test_url_validation.py"
+            "docs/doctoring/local-http-origin-port-validation.md"
+          )
+          for protected_path in "${protected_security_paths[@]}"; do
+            while IFS=$'\t' read -r status _; do
+              case "$status" in
+                D|R*)
+                  echo "::error::Autofix cannot delete or rename protected security-contract path: $protected_path"
+                  exit 1
+                  ;;
+              esac
+            done < <(git diff HEAD --name-status -- "$protected_path")
+          done
+
       - name: Validate changed files
         if: env.RESOLVE_CONFLICT != 'true'
         run: |
@@ -494,6 +519,7 @@ jobs:
               exit 1
             fi
           done
+
           changed_python_files=()
           changed_workflows=()
           for changed_file in "${changed_files[@]}"; do
@@ -542,11 +568,10 @@ jobs:
       - name: Merge base branch and resolve conflicts with OpenCode
         if: env.RESOLVE_CONFLICT == 'true'
         env:
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.target_app_token.outputs.token }}
           MUTATION_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' || steps.target_app_token.outputs.available == 'true' }}
-          MODEL: nvidia-nim/mistralai/mistral-small-4-119b-2603
+          MODEL: contextual-orchestrator/orchestrator/free
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NO_COLOR: "1"
@@ -557,10 +582,11 @@ jobs:
             echo "::error::Conflict-resolution mutation requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the exchanged OpenCode app token; github.token remains read-only."
             exit 1
           fi
-          if [ -z "${NVIDIA_API_KEY:-}" ]; then
-            echo "::error::NVIDIA_NIM_API_KEY is required for scheduled OpenCode autofix."
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
+            echo "::error::contextual-orchestrator review sidecar must be provisioned before scheduled OpenCode conflict resolution."
             exit 1
           fi
+          source "$GITHUB_WORKSPACE/trusted-autofix-source/scripts/ci/load_contextual_orchestrator_token.sh"
           cd "$TARGET_WORKSPACE"
 
           # Merge the base branch into the detached head. A clean merge stays
@@ -639,6 +665,27 @@ jobs:
               --snapshot "$conflict_scope_snapshot" \
               --allowed-paths "$conflicted_paths_file"
           fi
+
+          # Conflict resolution edits happen after the ordinary autofix guard;
+          # re-check the protected security contract immediately before staging
+          # so conflict-mode deletion and rename attempts also fail closed.
+          protected_security_paths=(
+            "backend/core/local_http.py"
+            "backend/core/url_validation.py"
+            "backend/tests/test_local_http.py"
+            "backend/tests/test_url_validation.py"
+            "docs/doctoring/local-http-origin-port-validation.md"
+          )
+          for protected_path in "${protected_security_paths[@]}"; do
+            while IFS=$'\t' read -r status _; do
+              case "$status" in
+                D|R*)
+                  echo "::error::Conflict resolution cannot delete or rename protected security-contract path: $protected_path"
+                  exit 1
+                  ;;
+              esac
+            done < <(git diff HEAD --name-status -- "$protected_path")
+          done
 
           # Fail closed: never push unresolved conflict markers.
           git add -A

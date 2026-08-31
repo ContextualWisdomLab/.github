@@ -8,7 +8,7 @@ fails and no Figma tools are available. Re-running Connect / OAuth from the
 Cloud Agent cannot repair it. Desktop Cursor and the Cursor CLI remain able to
 complete the same OAuth flow.
 
-## Live evidence (2026-08-16)
+## Live evidence (refreshed 2026-09-01)
 
 Unauthenticated `initialize` against the remote MCP endpoint:
 
@@ -21,8 +21,9 @@ WWW-Authenticate: Bearer resource_metadata="https://mcp.figma.com/.well-known/oa
 Body: `Unauthorized`.
 
 The same environment can reach Figma (`HEAD`/`POST` complete; no egress block).
-`GET https://api.figma.com/v1/me` without a token returns
-`{"status":403,"err":"Invalid token"}`. No `FIGMA_*` environment variables are
+`GET https://api.figma.com/v1/me` without a token currently returns HTTP 401
+with `{"status":401,"err":"Missing credentials"}` (the 2026-08-16 observation
+was HTTP 403 with `Invalid token`). No `FIGMA_*` environment variables are
 present on the Cloud Agent VM.
 
 Figma's remote MCP is OAuth 2.1 with PKCE and an allowlisted MCP client

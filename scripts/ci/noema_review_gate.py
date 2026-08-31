@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import ipaddress
 import json
@@ -18,29 +19,23 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
+from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+
 
 PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
 }
-PRIMARY_REVIEW_MARKERS = (
-    "OpenCode reviewed the current-head bounded evidence and found no blocking issues.",
-    "Result: APPROVE",
-    "opencode-review-control-v1",
-)
-REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
-IGNORED_RUNNING_CHECKS = {
-    "approve-after-primary-review",
-    "noema-review",
-    "Required Noema Review",
-}
-FAILED_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-RUNNING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED"}
+GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -180,83 +175,6 @@ def review_commit(review: dict[str, Any]) -> str:
     return ((review.get("commit") or {}).get("oid") or "").strip()
 
 
-def review_body_head_sha(review: dict[str, Any]) -> str | None:
-    """Return the last explicit current-head SHA recorded in a review body."""
-    matches = REVIEW_BODY_HEAD_SHA_RE.findall(str(review.get("body") or ""))
-    return matches[-1] if matches else None
-
-
-def review_matches_current_head(review: dict[str, Any], head_sha: str) -> bool:
-    """Return whether commit and explicit review-body evidence match the live head."""
-    if not head_sha or review_commit(review) != head_sha:
-        return False
-    body_head = review_body_head_sha(review)
-    return body_head is None or body_head.lower() == head_sha.lower()
-
-
-def current_primary_approval(pr: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the current-head OpenCode approval when it matches the contract."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
-    for review in reversed(reviews):
-        if not review_matches_current_head(review, head_sha):
-            continue
-        if str(review.get("state") or "").upper() != "APPROVED":
-            continue
-        body = str(review.get("body") or "")
-        author = review_author(review)
-        if author in PRIMARY_REVIEW_AUTHORS and any(marker in body for marker in PRIMARY_REVIEW_MARKERS):
-            return review
-    return None
-
-
-def has_current_changes_requested(pr: dict[str, Any]) -> bool:
-    """Return whether the current head has any changes-requested review."""
-    head_sha = str(pr.get("headRefOid") or "")
-    reviews = (((pr.get("reviews") or {}).get("nodes")) or [])
-    for review in reversed(reviews):
-        if review_matches_current_head(review, head_sha) and str(review.get("state") or "").upper() == "CHANGES_REQUESTED":
-            return True
-    return False
-
-
-def has_unresolved_threads(pr: dict[str, Any]) -> bool:
-    """Return whether any non-outdated review thread is unresolved."""
-    threads = (((pr.get("reviewThreads") or {}).get("nodes")) or [])
-    return any(not thread.get("isResolved") and not thread.get("isOutdated") for thread in threads)
-
-
-def check_label(node: dict[str, Any]) -> str:
-    """Return a human-readable label for a status context or check run."""
-    if node.get("__typename") == "StatusContext":
-        return str(node.get("context") or "")
-    workflow = ((((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name") or "")
-    name = str(node.get("name") or "")
-    return f"{workflow} / {name}" if workflow else name
-
-
-def blocking_checks(pr: dict[str, Any]) -> list[str]:
-    """Return check contexts that should block Noema review."""
-    contexts = ((((pr.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")) or [])
-    blockers: list[str] = []
-    for node in contexts:
-        label = check_label(node)
-        if label in IGNORED_RUNNING_CHECKS or str(node.get("name") or "") in IGNORED_RUNNING_CHECKS:
-            continue
-        if node.get("__typename") == "StatusContext":
-            state = str(node.get("state") or "").upper()
-            if state not in {"SUCCESS", "NEUTRAL"}:
-                blockers.append(f"{label}: {state}")
-            continue
-        status = str(node.get("status") or "").upper()
-        conclusion = str(node.get("conclusion") or "").upper()
-        if conclusion in FAILED_CONCLUSIONS:
-            blockers.append(f"{label}: {conclusion}")
-        elif status in RUNNING_STATES and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
-            blockers.append(f"{label}: {status}")
-    return blockers
-
-
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     """Return whether Noema already reviewed the current head."""
     head_sha = str(pr.get("headRefOid") or "")
@@ -276,11 +194,28 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
 
 
 def current_actor() -> str:
-    """Return the login for the active gh token, or empty string on failure."""
-    try:
-        return run(["gh", "api", "user", "--jq", ".login"]).strip()
-    except Exception:
-        return ""
+    """Return the verified user or GitHub App bot login for the active token."""
+    action_actor = os.environ.get("NOEMA_REVIEW_ACTOR", "").strip()
+    installation_id = os.environ.get("NOEMA_REVIEW_INSTALLATION_ID", "").strip()
+    if action_actor or installation_id:
+        if (
+            os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") != "noema-review-github-app"
+            or not GITHUB_APP_BOT_RE.fullmatch(action_actor)
+            or not installation_id.isdigit()
+        ):
+            raise RuntimeError("Noema GitHub App identity binding is invalid")
+        return action_actor
+    for args, suffix in (
+        (["gh", "api", "user", "--jq", ".login"], ""),
+        (["gh", "api", "/installation", "--jq", ".app_slug"], "[bot]"),
+    ):
+        try:
+            identity = run(args).strip()
+        except Exception:
+            continue
+        if identity:
+            return f"{identity}{suffix}"
+    return ""
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
@@ -290,6 +225,136 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     if truncated:
         diff = diff[:MAX_DIFF_CHARS]
     return diff, truncated
+
+
+def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
+    """Return exact LEFT/RIGHT changed-line locations from a unified diff."""
+    locations: set[tuple[str, int, str]] = set()
+    old_path = new_path = ""
+    old_line = new_line = 0
+    in_hunk = False
+    for raw_line in diff.splitlines():
+        if raw_line.startswith("diff --git "):
+            old_path = new_path = ""
+            in_hunk = False
+            continue
+        if not in_hunk and raw_line.startswith("--- "):
+            old_path = parse_diff_path(raw_line[4:], "a/")
+            in_hunk = False
+            continue
+        if not in_hunk and raw_line.startswith("+++ "):
+            new_path = parse_diff_path(raw_line[4:], "b/")
+            in_hunk = False
+            continue
+        match = DIFF_HUNK_RE.match(raw_line)
+        if match:
+            old_line, new_line = map(int, match.groups())
+            in_hunk = True
+            continue
+        if not in_hunk or raw_line.startswith("\\ No newline"):
+            continue
+        if raw_line.startswith("+"):
+            if not new_path:
+                return set()
+            locations.add((new_path, new_line, "RIGHT"))
+            new_line += 1
+        elif raw_line.startswith("-"):
+            if not old_path:
+                return set()
+            locations.add((old_path, old_line, "LEFT"))
+            old_line += 1
+        else:
+            old_line += 1
+            new_line += 1
+    return locations
+
+
+def parse_diff_path(raw: str, prefix: str) -> str:
+    """Decode a Git unified-diff path, including C-quoted UTF-8 paths."""
+    value = raw.split("\t", 1)[0]
+    if value == "/dev/null":
+        return ""
+    if value.startswith('"'):
+        try:
+            decoded = ast.literal_eval(value)
+            value = decoded.encode("latin-1").decode("utf-8")
+        except (SyntaxError, ValueError, UnicodeError):
+            return ""
+    return value.removeprefix(prefix)
+
+
+def validate_substantive_verdict(
+    verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
+) -> None:
+    """Reject formal verdicts without changed-line and adversarial evidence."""
+    decision = str(verdict.get("decision") or "").lower()
+    if decision == "comment":
+        return
+    locations = changed_diff_locations(diff)
+    if not locations:
+        raise RuntimeError("Noema formal verdict requires parseable changed-line evidence")
+
+    reviewed_lines = verdict.get("reviewed_lines")
+    if not isinstance(reviewed_lines, list) or not reviewed_lines:
+        raise RuntimeError("Noema formal verdict requires at least one reviewed changed line")
+    for index, reviewed in enumerate(reviewed_lines, start=1):
+        if not isinstance(reviewed, dict):
+            raise RuntimeError(f"Noema reviewed line {index} must be an object")
+        location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
+        if location not in locations:
+            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+        analysis = reviewed.get("analysis")
+        if not isinstance(analysis, str) or not analysis.strip():
+            raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
+
+    validation = verdict.get("adversarial_validation")
+    if not isinstance(validation, dict):
+        raise RuntimeError("Noema formal verdict requires adversarial_validation")
+    status = validation.get("status")
+    expected_status = "passed" if decision == "approve" else "failed"
+    if status != expected_status:
+        raise RuntimeError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
+    residual_risk = validation.get("residual_risk")
+    if not isinstance(residual_risk, str) or not residual_risk.strip():
+        raise RuntimeError("Noema adversarial validation requires residual_risk")
+    probes = validation.get("probes")
+    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
+    required_probes = 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
+    if not isinstance(probes, list) or len(probes) < required_probes:
+        raise RuntimeError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
+
+    confirmed: set[tuple[str, int, str]] = set()
+    identities: set[tuple[Any, ...]] = set()
+    for index, probe in enumerate(probes, start=1):
+        if not isinstance(probe, dict):
+            raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+        location = (probe.get("path"), probe.get("line"), probe.get("side"))
+        if location not in locations:
+            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+        for field in ("hypothesis", "attack_or_counterexample", "evidence"):
+            value = probe.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RuntimeError(f"Noema adversarial probe {index} requires {field}")
+        outcome = probe.get("outcome")
+        if outcome not in {"falsified", "confirmed"}:
+            raise RuntimeError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
+        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
+        if identity in identities:
+            raise RuntimeError(f"Noema adversarial probe {index} duplicates an earlier probe")
+        identities.add(identity)
+        if outcome == "confirmed":
+            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
+
+    if decision == "approve" and confirmed:
+        raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+    if decision == "request_changes":
+        finding_locations = {
+            (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
+            for finding in verdict.get("findings") or []
+            if isinstance(finding, dict)
+        }
+        if not confirmed or not confirmed.intersection(finding_locations):
+            raise RuntimeError("Noema request_changes requires a confirmed probe on a published finding")
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -435,20 +500,61 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return json.loads(stripped[start : end + 1])
 
 
-def call_llm(
-    repo: str,
-    number: int,
-    pr: dict[str, Any],
-    diff: str,
-    truncated: bool,
-    review_context: str = "",
-) -> dict[str, Any]:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
-    api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
-    api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
-    if not api_url or not api_key:
-        raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+def _truthy_env(name: str) -> bool:
+    """Return whether a process environment flag is an explicit truthy value."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_literal_host(hostname: str) -> bool:
+    """Return whether hostname is the sidecar loopback literal 127.0.0.1 or ::1."""
+    return hostname in ORCHESTRATOR_LOOPBACK_HOSTS
+
+
+def _http_origin(parsed: urllib.parse.ParseResult) -> tuple[str, str, int] | None:
+    """Return scheme, hostname, and port for a credential-free http(s) URL."""
+    scheme = (parsed.scheme or "").lower()
+    hostname = (parsed.hostname or "").lower()
+    if scheme not in {"http", "https"} or not hostname:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return (scheme, hostname, port)
+
+
+def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
+    """Return True only for the process-local orchestrator sidecar loopback origin.
+
+    ``localhost`` and other private hosts stay rejected. A loopback literal
+    (``127.0.0.1`` / ``::1``) is allowed only when it matches the exact
+    ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin. The via-orchestrator marker is
+    metadata only and never widens this allowlist.
+    """
+    origin = _http_origin(urllib.parse.urlparse(api_url))
+    if origin is None:
+        return False
+    scheme, hostname, port = origin
+    if not _is_loopback_literal_host(hostname):
+        return False
+    sidecar = os.environ.get(ORCHESTRATOR_BASE_ENV, "").strip()
+    if not sidecar:
+        return False
+    sidecar_origin = _http_origin(urllib.parse.urlparse(sidecar))
+    if sidecar_origin is None:
+        return False
+    sidecar_scheme, sidecar_host, sidecar_port = sidecar_origin
+    if not _is_loopback_literal_host(sidecar_host):
+        return False
+    return (scheme, hostname, port) == (sidecar_scheme, sidecar_host, sidecar_port)
+
+
+def reject_private_llm_url(api_url: str) -> None:
+    """Reject non-sidecar localhost, private, and non-http(s) LLM targets."""
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
             "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
@@ -456,25 +562,48 @@ def call_llm(
         )
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("URL scheme must be http or https; NOEMA_LLM_API_URL must start with http:// or https://")
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https://"
+        )
     hostname = (parsed.hostname or "").lower()
     if not hostname:
         raise ValueError("URL must have a valid hostname")
+    if is_allowed_orchestrator_sidecar_url(api_url):
+        return
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
-        pass
-    else:
-        for result in addrinfo:
-            ip_str = result[4][0]
-            try:
-                ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                raise ValueError("URL cannot target internal IP addresses")
+        return
+    for result in addrinfo:
+        ip_str = result[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise ValueError("URL cannot target internal IP addresses")
+
+
+def call_llm(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    diff: str,
+    truncated: bool,
+    review_context: str = "",
+    changed_paths: Sequence[str] = (),
+    repair_error: str = "",
+) -> dict[str, Any]:
+    """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
+    api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
+    api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
+    if not api_url or not api_key:
+        raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+    reject_private_llm_url(api_url)
 
     prompt = {
         "role": "user",
@@ -483,8 +612,17 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
-                "Use request_changes only for blocking, concrete issues. Use approve when no blocking issue is found.",
+                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
+                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+                *(
+                    [
+                        f"Your prior verdict was rejected by the trusted validator: {repair_error}",
+                        "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
+                    ]
+                    if repair_error
+                    else []
+                ),
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -523,6 +661,41 @@ def call_llm(
     decision = str(verdict.get("decision") or "").strip().lower()
     if decision not in {"approve", "request_changes", "comment"}:
         raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
+    summary = verdict.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise RuntimeError("Noema LLM response did not contain a substantive summary")
+    findings = verdict.get("findings")
+    if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+        raise RuntimeError("Noema LLM response findings must be a list of objects")
+    for finding in findings:
+        if (
+            finding.get("severity") not in {"high", "medium", "low"}
+            or not isinstance(finding.get("file"), str)
+            or not finding["file"].strip()
+            or type(finding.get("line")) is not int
+            or finding["line"] <= 0
+            or finding.get("side") not in {"RIGHT", "LEFT"}
+            or not isinstance(finding.get("message"), str)
+            or not finding["message"].strip()
+        ):
+            raise RuntimeError("Noema LLM response contained a malformed finding")
+    if decision == "request_changes" and not findings:
+        raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
+    try:
+        validate_substantive_verdict(verdict, diff, changed_paths)
+    except RuntimeError as exc:
+        if repair_error:
+            raise
+        return call_llm(
+            repo,
+            number,
+            pr,
+            diff,
+            truncated,
+            review_context,
+            changed_paths,
+            str(exc),
+        )
     return verdict
 
 
@@ -537,10 +710,33 @@ def format_findings(findings: Any) -> list[str]:
         severity = str(finding.get("severity") or "info")
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
-        location = f"{file_name}:{line}" if isinstance(line, int) and line > 0 else file_name
+        side = str(finding.get("side") or "")
+        location = f"{file_name}:{line} ({side})" if isinstance(line, int) and line > 0 else file_name
         message = str(finding.get("message") or "").strip()
         if message:
             lines.append(f"- [{severity}] {location}: {message}")
+    return lines
+
+
+def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
+    """Render the bounded changed-line analyses and adversarial probes."""
+    lines = ["### Reviewed changed lines"]
+    for reviewed in (verdict.get("reviewed_lines") or [])[:20]:
+        if isinstance(reviewed, dict):
+            lines.append(
+                f"- `{reviewed.get('path')}:{reviewed.get('line')} ({reviewed.get('side')})`: "
+                f"{str(reviewed.get('analysis') or '').strip()}"
+            )
+    validation = verdict.get("adversarial_validation") or {}
+    lines.extend(["", "### Adversarial validation"])
+    for probe in (validation.get("probes") or [])[:20]:
+        if isinstance(probe, dict):
+            lines.append(
+                f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
+                f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
+                f"{str(probe.get('evidence') or '').strip()}"
+            )
+    lines.append(f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}")
     return lines
 
 
@@ -557,6 +753,8 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "## Noema LLM review",
             "",
             summary,
+            "",
+            *format_review_evidence(verdict),
             "",
             "### Findings",
             *(findings or ["- No blocking findings."]),
@@ -582,39 +780,26 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 
 def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's LLM review when gates are clean."""
+    """Inspect PR state and submit Noema's independent LLM review."""
     pr = fetch_pr(repo, number)
     actor = current_actor()
+    if not actor:
+        raise RuntimeError("Noema reviewer identity could not be verified")
     if actor in PRIMARY_REVIEW_AUTHORS:
-        print(
+        raise RuntimeError(
             f"Current token actor {actor!r} is already a primary review actor; "
-            "Noema review skipped so GitHub receives an independent reviewer."
+            "Noema requires an independent reviewer credential."
         )
-        return 0
     if pr.get("isDraft"):
         print("PR is draft; Noema review skipped.")
         return 0
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
-    if not current_primary_approval(pr):
-        print("Current head does not have a primary OpenCode approval; Noema review skipped.")
-        return 0
-    if has_current_changes_requested(pr):
-        print("Current head has requested changes; Noema review skipped.")
-        return 0
-    if has_unresolved_threads(pr):
-        print("PR has unresolved review threads; Noema review skipped.")
-        return 0
-    blockers = blocking_checks(pr)
-    if blockers:
-        print("Blocking checks remain; Noema review skipped:")
-        for blocker in blockers:
-            print(f"- {blocker}")
-        return 0
     diff, truncated = fetch_diff(repo, number)
+    changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
-    verdict = call_llm(repo, number, pr, diff, truncated, review_context)
+    verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
     submit_review(repo, number, pr, actor, verdict)
     return 0
 

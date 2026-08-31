@@ -339,7 +339,10 @@ def test_live_unauthenticated_whoami_is_rejected_by_figma() -> None:
     assert status in {401, 403}
     assert TOKEN not in body.decode("utf-8", errors="replace")
     lowered = body.lower()
-    assert b"token" in lowered or b"unauthorized" in lowered or b"invalid" in lowered
+    assert any(
+        marker in lowered
+        for marker in (b"token", b"unauthorized", b"invalid", b"credentials")
+    )
 
 
 def test_helper_pins_https_origin_instead_of_dynamic_urllib() -> None:
