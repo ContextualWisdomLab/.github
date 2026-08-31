@@ -645,9 +645,12 @@ def _read_response_body_within_deadline(response: Any, deadline: float) -> bytes
     ``urllib.request``/``socket`` timeout semantics) -- it does not bound the
     total time spent in ``response.read()``. A server that keeps trickling
     small amounts of data at intervals shorter than that per-read timeout
-    could otherwise keep ``response.read()`` blocked well past
-    ``LLM_REQUEST_TOTAL_BUDGET_SECONDS``: ``io.BufferedReader.read()`` issues
-    as many underlying socket reads as it takes to reach EOF, and each one
+    could otherwise keep ``response.read()`` blocked well past the caller's
+    ``deadline`` -- ``call_llm`` passes the earlier of this attempt's own
+    ``LLM_REQUEST_TIMEOUT_SECONDS`` bound and the outer
+    ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` backstop, so this helper enforces
+    whichever of the two is closer: ``io.BufferedReader.read()`` issues as
+    many underlying socket reads as it takes to reach EOF, and each one
     individually satisfies the per-read timeout even though their sum does
     not, so re-checking the deadline only *between* whole ``read()`` calls
     would never see the pathological case in time.
@@ -716,20 +719,38 @@ def call_llm(
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
 
-    ``deadline`` is a ``time.monotonic()`` timestamp shared across the
-    original attempt and its at-most-one repair retry, so the two together
-    are held to ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` end-to-end rather than
-    each independently getting a fresh full timeout. Callers should leave it
+    ``deadline`` is the outer ``call_start_time + LLM_REQUEST_TOTAL_BUDGET_SECONDS``
+    ``time.monotonic()`` bound shared across the original attempt and its
+    at-most-one repair retry -- a defense-in-depth backstop on the *pair*
+    together, not a budget either attempt draws down from individually. Each
+    attempt (the original call, and the repair retry if the model's response
+    fails validation) instead gets its own fresh ``attempt_start_time`` here
+    and its own full ``LLM_REQUEST_TIMEOUT_SECONDS`` from that point, per this
+    org's per-model-call policy (see the comment above
+    ``LLM_REQUEST_TIMEOUT_SECONDS``). An earlier version of this function
+    reused the shared ``deadline`` directly as the response-read watchdog's
+    deadline for both attempts, so a slow-but-healthy original attempt could
+    run for up to the *entire* ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` before
+    being cut off, silently starving a subsequent repair retry of its fair
+    two-hour share (ContextualWisdomLab/.github#1509, Devin Review).
+    ``effective_deadline`` below -- the earlier of this attempt's own bound
+    and the outer backstop -- is what is actually enforced against this
+    attempt's connection and response read; ``deadline`` itself is only
+    re-checked, unchanged, as the outer backstop each time this function (or
+    its repair-retry recursion) starts. Callers should leave ``deadline``
     unset; it is set once here on the first (non-retry) call and threaded
-    through the recursive repair-retry call below.
+    through the recursive repair-retry call below unchanged, so both attempts
+    share the same outer backstop.
     """
+    attempt_start_time = time.monotonic()
     if deadline is None:
-        deadline = time.monotonic() + LLM_REQUEST_TOTAL_BUDGET_SECONDS
-    remaining_budget = deadline - time.monotonic()
-    if remaining_budget <= 0:
+        deadline = attempt_start_time + LLM_REQUEST_TOTAL_BUDGET_SECONDS
+    if deadline - attempt_start_time <= 0:
         raise RuntimeError(
             "Noema LLM request exceeded LLM_REQUEST_TOTAL_BUDGET_SECONDS before this attempt could start"
         )
+    attempt_deadline = attempt_start_time + LLM_REQUEST_TIMEOUT_SECONDS
+    effective_deadline = min(attempt_deadline, deadline)
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
@@ -785,9 +806,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    attempt_timeout = min(LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)
+    attempt_timeout = effective_deadline - attempt_start_time
     with opener.open(request, timeout=attempt_timeout) as response:  # nosec B310
-        raw = _read_response_body_within_deadline(response, deadline).decode("utf-8")
+        raw = _read_response_body_within_deadline(response, effective_deadline).decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)

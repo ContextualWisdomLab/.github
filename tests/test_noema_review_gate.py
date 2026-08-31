@@ -491,6 +491,87 @@ def test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response(monke
     assert elapsed < chunk_count * chunk_delay_seconds
 
 
+def test_call_llm_caps_a_slow_trickling_original_attempt_at_its_own_per_attempt_bound(monkeypatch):
+    """The original attempt must be cut off at its own bound, not the shared total budget.
+
+    Regression coverage for Devin Review's finding on ContextualWisdomLab/.github#1509,
+    round two: ``call_llm`` used the shared ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` deadline
+    directly as the response-read watchdog's deadline for *both* the original attempt and
+    the repair retry, instead of giving each attempt its own fresh
+    ``attempt_start_time + LLM_REQUEST_TIMEOUT_SECONDS`` bound. A slow-but-healthy original
+    attempt could therefore run for up to the entire total budget before being cut off,
+    silently starving a subsequent repair retry of the fair per-model share the org's policy
+    promises it.
+
+    This is the mirror image of
+    ``test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response`` above (same
+    real local ``http.server`` trickling-chunks fixture), but with the two monkeypatched
+    constants swapped: here ``LLM_REQUEST_TIMEOUT_SECONDS`` (the per-attempt bound) is the
+    tiny one and ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` (the shared backstop) is generously
+    large, so the response trickles for longer than the per-attempt bound but comfortably
+    under the total budget. Before the fix this would run for the full ~3.6s trickle (or
+    until the generous total budget); after the fix it must abort at close to the tiny
+    per-attempt bound, proving the attempt is capped by its own fair share rather than by
+    the shared backstop, and leaving most of the total budget unconsumed for a hypothetical
+    repair retry.
+    """
+    chunk_delay_seconds = 0.3
+    chunk_count = 12  # 3.6s of total trickle time, well over the per-attempt bound below
+
+    class SlowTrickleHandler(http.server.BaseHTTPRequestHandler):
+        """A local HTTP handler that dribbles its body out in small pieces."""
+
+        def do_POST(self):
+            """Consume the request body, then trickle a slow, chunked reply."""
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                for _ in range(chunk_count):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(chunk_delay_seconds)
+            except OSError:
+                pass  # The client is expected to disconnect once its deadline fires.
+
+        def log_message(self, *_args):
+            """Silence the default per-request stderr logging."""
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), SlowTrickleHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
+        monkeypatch.setenv("NOEMA_LLM_API_URL", f"{origin}/v1/chat/completions")
+        monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+        # Route through the loopback sidecar allowlist (is_allowed_orchestrator_sidecar_url)
+        # so reject_private_llm_url permits this 127.0.0.1 target.
+        monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", origin)
+        # Per-attempt bound is the tiny one here; the shared total budget is generous --
+        # the opposite of the sibling test above -- so it is the per-attempt bound, not
+        # the total budget, that must be what actually cuts this attempt off.
+        monkeypatch.setattr(noema, "LLM_REQUEST_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(noema, "LLM_REQUEST_TOTAL_BUDGET_SECONDS", 10.0)
+
+        start = time.monotonic()
+        with pytest.raises(RuntimeError, match="while reading the response body"):
+            noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+        elapsed = time.monotonic() - start
+    finally:
+        server.shutdown()
+        server_thread.join(timeout=5)
+
+    # Must abort close to the 1.0s per-attempt bound, not after the full ~3.6s trickle.
+    assert elapsed < chunk_count * chunk_delay_seconds
+    # And it must not have silently burned through time that a hypothetical repair retry
+    # is entitled to: after this attempt fails, a full LLM_REQUEST_TIMEOUT_SECONDS-sized
+    # share of the total budget must still remain unconsumed.
+    assert elapsed < noema.LLM_REQUEST_TOTAL_BUDGET_SECONDS - noema.LLM_REQUEST_TIMEOUT_SECONDS
+
+
 def test_read_response_body_within_deadline_rejects_already_expired_deadline():
     """An already-passed deadline must fail before any read is attempted."""
 

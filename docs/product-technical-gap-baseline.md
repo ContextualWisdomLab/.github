@@ -1978,6 +1978,73 @@ coverage on `scripts/ci/` (`coverage run -m pytest tests && coverage report --sh
 `bash -n`; the workflow still parses under PyYAML with the same 12 steps and `timeout-minutes: 300`
 (only two `run:` step bodies gained lines; no step was added, removed, or renamed).
 
+## 2026-08-31 PR #1509 Devin Review follow-up: shared total-budget deadline was reused as each attempt's own read watchdog, starving the repair retry
+
+Devin Review posted a further round on `ContextualWisdomLab/.github#1509` (the same PR as the three
+entries above) with one "bug"-severity finding on `call_llm` around line 790, plus one "analysis"-kind
+note on `write_review_state` atomicity. Investigated the bug finding directly against the current
+`call_llm` and `_read_response_body_within_deadline` implementation rather than trusting the bot's
+framing. **Confirmed real.** The atomicity note is informational/forward-looking (current step
+ordering is safe for today's single-writer usage; only a future concurrent-reuse change would need
+atomic replacement) and was left as-is per the PR's own scope discipline.
+
+**Finding — the shared total-budget deadline was passed directly to the per-attempt read watchdog.**
+Read `call_llm` in full. `deadline` is computed once, on the first (non-retry) call, as
+`time.monotonic() + LLM_REQUEST_TOTAL_BUDGET_SECONDS` (4h) and threaded unchanged through the
+recursive repair-retry call, which is correct as an *outer* backstop on the pair together. The bug:
+that same shared `deadline` value was passed straight into `_read_response_body_within_deadline` as
+*each* attempt's own read-watchdog deadline, instead of each attempt getting its own fresh
+`attempt_start_time + LLM_REQUEST_TIMEOUT_SECONDS` (2h) bound. Concretely, a slow-but-healthy original
+attempt whose response trickled for, say, 3 hours -- well past its own fair 2-hour allowance in
+practice, since nothing was actually enforcing that allowance on the read -- would not be cut off
+until the shared 4-hour deadline, leaving as little as ~1 hour for a subsequent repair retry even
+though this org's own policy (`docs/product-goal-directive.md`) grants each model call, including a
+repair retry, its own full two-hour allowance. The `attempt_timeout` passed to `opener.open(...)` was
+already correctly computed as `min(LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)` (algebraically the
+same per-attempt-vs-outer-backstop minimum the fix below makes explicit), so only the read-watchdog
+deadline itself was wrong -- but since `opener.open`'s `timeout=` bounds only the connection phase and
+each individual blocking socket read (not the cumulative time in `response.read()`, per the Finding-3
+entry above), a trickling response could still ride the read watchdog's shared deadline well past its
+own attempt's fair share while never tripping the correctly-bounded connection timeout.
+
+**Fix.** `call_llm` now captures `attempt_start_time = time.monotonic()` fresh on every call
+(including the repair-retry recursion), computes `attempt_deadline = attempt_start_time +
+LLM_REQUEST_TIMEOUT_SECONDS`, and derives `effective_deadline = min(attempt_deadline, deadline)` --
+the earlier of this attempt's own two-hour bound and the outer four-hour backstop threaded in via the
+unchanged `deadline` parameter. Both the connection-level `attempt_timeout` (`effective_deadline -
+attempt_start_time`, replacing the old `remaining_budget`-based expression with an equivalent but more
+legible one) and the read watchdog (`_read_response_body_within_deadline(response, effective_deadline)`,
+replacing the old direct `deadline` pass-through) now derive from the same per-attempt math, so neither
+attempt can individually exceed its two-hour allowance while the original-plus-retry pair still cannot
+exceed the four-hour backstop. With each attempt capped at 7200s and at most two attempts, the natural
+worst-case total is already 14400s, so the outer backstop is now primarily defense-in-depth rather than
+the load-bearing bound -- matching Devin's own suggested fix, which this PR verified before applying.
+The top-of-function pre-attempt budget check (`deadline - attempt_start_time <= 0` -> fail closed
+"before this attempt could start") is preserved unchanged. `_read_response_body_within_deadline`'s
+docstring was updated to describe the deadline it receives as the caller's per-attempt-or-backstop
+`effective_deadline` rather than assuming it is always the total budget; its `RuntimeError` message text
+was intentionally left unchanged (still names `LLM_REQUEST_TOTAL_BUDGET_SECONDS`) since the helper
+cannot know which of the two bounds actually fired and re-deriving that label was out of scope for this
+fix.
+
+Regression coverage (`tests/test_noema_review_gate.py`):
+`test_call_llm_caps_a_slow_trickling_original_attempt_at_its_own_per_attempt_bound` is the mirror image
+of the existing `test_call_llm_enforces_monotonic_deadline_on_a_slow_trickling_response` (same real
+local `http.server.HTTPServer` trickling-chunks fixture, routed through the loopback sidecar
+allowlist), but with the two monkeypatched constants swapped: a tiny `LLM_REQUEST_TIMEOUT_SECONDS`
+(1.0s) and a generous `LLM_REQUEST_TOTAL_BUDGET_SECONDS` (10.0s), with the response trickling for 3.6s
+-- longer than the per-attempt bound but comfortably under the total budget. It asserts the original
+attempt is stopped well before the full trickle (proving it is not riding out the generous total
+budget) and that a full `LLM_REQUEST_TIMEOUT_SECONDS`-sized share of the total budget remains
+unconsumed afterward (proving a hypothetical repair retry would not have been starved). All prior
+`call_llm`/`_read_response_body_within_deadline` tests were re-verified unchanged and still pass,
+including the existing total-budget-binding trickle test (where the per-attempt bound is deliberately
+set larger than the total budget, so `effective_deadline` still resolves to the total-budget deadline
+and that test's behavior is unaffected). 2142 tests pass (2141 plus the one pre-existing skip; up from
+the prior entry's 2141 total -- the net of this one new regression test); 100% coverage and 100%
+docstring coverage on `scripts/ci/` (`coverage run -m pytest tests && coverage report --show-missing`,
+`interrogate`).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
