@@ -1754,9 +1754,14 @@ the retry cascade above.
   values that need to change are constructed entirely inside this org's `.github` repo.
 - `ContextualWisdomLab/.github#1415` is the companion change to
   `scripts/ci/contextual_orchestrator_review_launcher.py`'s serving-client construction (bounding
-  `ModelClient`'s serving timeout/retries and `TaskOrchestrator`'s `tool_retry_attempts`) plus a small
-  margin added to `noema_review_gate.py`'s own 120s socket timeout so a legitimate near-the-limit
-  single attempt does not fail closed with zero margin for TLS/JSON/GC overhead.
+  `ModelClient`'s serving timeout/retries and `TaskOrchestrator`'s `tool_retry_attempts`).
+  **Correction (owner direction, 2026-08-31, on this entry's own PR #1530):** a small 130-150s margin
+  on `noema_review_gate.py`'s socket timeout, as originally proposed here, is too tight — raise it to
+  a 3-hour budget instead. This matches the standing directive's own accepted tolerance (§8: "중앙
+  OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다") for central review taking
+  multiple hours per model, and gives the free-tier failover path (still bounded per-agent by #974's
+  `deadline_seconds` once wired through) room to actually converge on a working candidate instead of
+  racing a budget sized for a single fast attempt.
 - A secondary, unrelated diagnosability gap noted alongside this fix (not yet fixed): `main()`'s
   top-level handler in `noema_review_gate.py` only catches `RuntimeError`; `TimeoutError` is an
   `OSError` subtype, so this failure surfaces as a raw uncaught Python traceback instead of the gate's
