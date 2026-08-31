@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a `find | head -1 | grep -q .` SIGPIPE race across three central
+  workflows (`codeql-pr.yml`, `python-security.yml`,
+  `scheduled-security-scan.yml`) that silently skipped language/manifest
+  detection under `set -o pipefail`: when `find` still had buffered matches
+  to write after `head -1` read its one line and closed the pipe, `find`'s
+  next `write()` failed with SIGPIPE and exited non-zero, and `pipefail`
+  propagated that through `head`/`grep`'s own zero exits -- so the `if`
+  evaluated false even though matches existed, whenever there was enough
+  output to overflow the pipe buffer (readily reproducible with a few
+  thousand matching files, and directly reproduced in the new regression
+  test). Concretely, this could silently drop Python (and JS/TS, Java/Kotlin)
+  from CodeQL's PR/scheduled-scan language matrix, and skip Bandit and the
+  pip-audit project-manifest check entirely, on any Python-heavy repository
+  in the org -- with no error surfaced anywhere. Replaced all 8 occurrences
+  with `find ... -print -quit | grep -q .` (find stops itself after the
+  first match, so nothing external can cut off its output mid-write) --
+  already this repo's own established idiom for the same check, per
+  `test_opencode_agent_contract.py`'s `find "$destination" -type l -print
+  -quit`. New test file `tests/test_workflow_file_detection_pipefail_regression.py`
+  extracts the live `python-security.yml` step body and runs it against a
+  directory with 5,000 `.py`/`requirements*.txt` files, confirmed failing
+  (`has_python=false`/`has_manifest=false`) against the pre-fix workflow
+  content and passing against the fix.
 - Fix two live-on-`main` regressions Devin Review found immediately after
   PRs #1456 and #1459 merged (both bypass-merged past the org-wide
   `opencode-review` outage; these hotfixes correct real defects the local
