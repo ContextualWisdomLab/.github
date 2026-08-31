@@ -11,12 +11,34 @@ _REQUEST_FAILED = re.compile(
     r"request_failed status=(?P<status>[1-5][0-9]{2}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
 )
+_PROVIDER_DISCOVERY_FAILED = re.compile(
+    r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
+)
+_PREFLIGHT_ROUTE_REJECTED = re.compile(
+    r"preflight_route_rejected provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"error_type=(?P<error_type>[A-Za-z_][A-Za-z0-9_]{0,63})"
+    r"(?: http_status=(?P<http_status>[1-5][0-9]{2}))?"
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
     (
-        "review sidecar discovered no zero-cost models;",
-        "review sidecar discovered no zero-cost models",
+        # Matches contextual_orchestrator_review_launcher.py's actual
+        # SystemExit text ("no eligible models", not "no zero-cost models" --
+        # that stale prefix never matched the launcher's real message, so
+        # this fail-closed diagnostic was silently dropped to
+        # omitted_unstructured_lines instead of reaching CI operators).
+        "review sidecar discovered no eligible models;",
+        "review sidecar discovered no eligible models",
+    ),
+    (
+        "review sidecar requires an explicit --auth-token or the KV credential",
+        "review sidecar auth token unavailable",
+    ),
+    (
+        "review sidecar requires at least one provider credential in the KV",
+        "review sidecar requires at least one provider credential in the KV",
     ),
 )
 
@@ -30,7 +52,23 @@ def sanitize_line(line: str) -> str | None:
             f"request_failed status={request_failed.group('status')} "
             f"code={request_failed.group('code')}"
         )
-    if stripped == "client_disconnected":
+    provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
+    if provider_discovery_failed is not None:
+        return (
+            f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
+            f"code={provider_discovery_failed.group('code')}"
+        )
+    preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
+    if preflight_route_rejected is not None:
+        summary = (
+            f"preflight_route_rejected provider={preflight_route_rejected.group('provider')} "
+            f"error_type={preflight_route_rejected.group('error_type')}"
+        )
+        http_status = preflight_route_rejected.group("http_status")
+        if http_status is not None:
+            summary += f" http_status={http_status}"
+        return summary
+    if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
     for prefix, summary in _PREFIX_SUMMARIES:
         if stripped.startswith(prefix):
