@@ -43,7 +43,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
     job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
     assert "actions: write" in job_header
-    assert 'select((.id | tostring) != $current)' in cleanup
+    assert 'select(.id < $current)' in cleanup
+    assert '"${live_head,,}" != "${EXPECTED_HEAD,,}"' in cleanup
     assert 'endswith("@" + $head)' in cleanup
     assert "| not)" in cleanup
 
@@ -158,6 +159,53 @@ def _close_cleanup_script() -> str:
     return _extract_run_block(
         workflow, "Cancel queued and running Noema reviews for the closed pull request"
     )
+
+
+def _superseded_cleanup_script() -> str:
+    """Extract the live-head supersession step's real bash body."""
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    return _extract_run_block(
+        workflow, "Cancel superseded Noema runs after live-head validation"
+    )
+
+
+def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) -> None:
+    """Execute cleanup and cancel only the same PR's older, different-head run."""
+    current_head = "b" * 40
+    runs = {"workflow_runs": [
+        {"id": 100, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
+        {"id": 199, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
+        {"id": 201, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
+        {"id": 99, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
+    ]}
+    fixture = tmp_path / "runs.json"
+    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    calls = tmp_path / "calls.txt"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"/pulls/7"* ]]; then printf '%s\n' "$EXPECTED_HEAD"; exit 0; fi
+if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", _superseded_cleanup_script()],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+             "TARGET_REPOSITORY": "ContextualWisdomLab/example", "PR_NUMBER": "7",
+             "EXPECTED_HEAD": current_head, "CURRENT_RUN_ID": "200",
+             "FAKE_RUNS": str(fixture), "FAKE_CALLS": str(calls)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = calls.read_text(encoding="utf-8")
+    assert "/actions/runs/100/cancel" in recorded
+    assert "/actions/runs/199/cancel" not in recorded
+    assert "/actions/runs/201/cancel" not in recorded
+    assert "/actions/runs/99/cancel" not in recorded
 
 
 def _write_fake_gh(tmp_path: Path, *, body: str) -> dict[str, str]:

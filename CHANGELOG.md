@@ -9,7 +9,8 @@ Semantic Versioning where the repository publishes a release.
   same PR's older-head runs only after a `pull_request_target` event proves its
   payload SHA is still live. New commits stop obsolete four-hour model calls,
   while delayed workflow events and manual reruns of old attempts cannot
-  cancel the current-head review.
+  cancel the current-head review; cleanup rejects newer run ids and rechecks
+  the live head before each cancellation.
 - Let the required OpenCode verdict check wait for the complete bounded review
   path: it now dispatches the authenticated review directly, bounds validation
   and coverage prerequisites, permits five hours of coverage evidence plus the

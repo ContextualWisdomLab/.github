@@ -284,10 +284,10 @@ jobs:
                 echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
                 continue
               fi
-              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --arg current "$CURRENT_RUN_ID" \
+              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
                 --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" '
                   .workflow_runs[]
-                  | select((.id | tostring) != $current)
+                  | select(.id < $current)
                   | select(.name == "Required Noema Review")
                   | select((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
                   | select(((.display_title // "") | endswith("@" + $head)) | not)
@@ -300,6 +300,11 @@ jobs:
                 [ -n "$run_id" ] || continue
                 [ -z "${seen[$run_id]:-}" ] || continue
                 seen[$run_id]=1
+                live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+                if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+                  echo "::notice::Noema cleanup stopped because the PR head advanced."
+                  exit 0
+                fi
                 if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
                   cancelled=$((cancelled + 1))
                   echo "Cancelled superseded Noema run ${run_id} for PR #${PR_NUMBER}."

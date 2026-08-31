@@ -158,7 +158,8 @@ Noema keeps head-specific native concurrency so a delayed workflow event or a
 manual rerun of an older attempt cannot cancel the current head. After a
 `pull_request_target` run proves its payload SHA still equals the live PR head,
 live-head validation explicitly cancels active Noema runs for the same PR's
-other heads before credential or model setup. Each run also compares its
+other heads before credential or model setup, limited to older run ids and a
+fresh live-head check before each cancellation. Each run also compares its
 immutable trigger head with the live PR before model work, before a repair
 retry, and immediately before publication; a stale run cannot review or
 publish against a newer head.
