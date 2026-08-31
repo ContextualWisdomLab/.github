@@ -19,7 +19,10 @@ import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
-from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+if __package__:
+    from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+else:  # pragma: no cover - exercised by the standalone CLI regression test
+    from opencode_review_normalize_output import changed_file_is_material
 
 
 PRIMARY_REVIEW_AUTHORS = {

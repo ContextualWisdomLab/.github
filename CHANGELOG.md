@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a critical org-wide Noema review outage: PR #1497 added an
+  unconditional `from scripts.ci.opencode_review_normalize_output import
+  changed_file_is_material` at module scope in `noema_review_gate.py`, but
+  the central `noema-review.yml` workflow invokes this script as a bare
+  script (`python3 scripts/ci/noema_review_gate.py ...`) with no
+  `PYTHONPATH` set, so `sys.path[0]` is the script's own directory
+  (`scripts/ci/`), not the repository root, and the absolute import always
+  raised `ModuleNotFoundError: No module named 'scripts'`. This crashed
+  every Noema review, in every repository the org runs the central
+  `pull_request_target` review workflow against, since #1497 merged
+  (confirmed live in `contextual-orchestrator` PR #946, run
+  `33370760438`, job `noema-review`). Applied the same
+  `if __package__: ... else: ...` conditional-import fallback already used
+  by `noema_review_handoff.py` for the identical bare-script-vs-package
+  problem, and added a regression test that runs
+  `python3 scripts/ci/noema_review_gate.py --help` as a subprocess from the
+  repository root with `PYTHONPATH` cleared, reproducing the exact
+  production invocation shape and proving the fix.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their

@@ -1,10 +1,45 @@
 import base64
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from scripts.ci import noema_review_gate as noema
+
+
+def test_standalone_cli_runs_from_repo_root_without_pythonpath():
+    """Reproduce the production workflow invocation shape and prove it works.
+
+    The central ``noema-review.yml`` workflow runs this script as a bare
+    script (``python3 scripts/ci/noema_review_gate.py ...``) from the
+    repository root with no ``PYTHONPATH`` set. PR #1497 added an
+    unconditional ``from scripts.ci.opencode_review_normalize_output import
+    ...`` at module scope, which crashes with ``ModuleNotFoundError: No
+    module named 'scripts'`` under that exact invocation because
+    ``sys.path[0]`` is the script's own directory (``scripts/ci``), not the
+    repository root. This test drives the real production shape end to end.
+    """
+    repo_root = Path(noema.__file__).resolve().parent.parent.parent
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/ci/noema_review_gate.py", "--help"],
+        cwd=repo_root,
+        env=env,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0
+    assert "noema_review_gate.py" in completed.stdout
+    assert "ModuleNotFoundError" not in completed.stderr
 
 
 def fake_secret(*parts: str) -> str:
