@@ -223,7 +223,14 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
-        diff = diff[:MAX_DIFF_CHARS].rsplit("\n", 1)[0]
+        marker = "[overlong changed line content omitted]"
+        bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
+        complete, separator, partial = bounded.rpartition("\n")
+        if not separator:
+            return diff[:MAX_DIFF_CHARS], truncated
+        if partial.startswith(("+", "-")) and not partial.startswith(("+++", "---")):
+            complete += f"\n{partial[0]}{marker}"
+        diff = complete
     return diff, truncated
 
 

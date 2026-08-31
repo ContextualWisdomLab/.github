@@ -253,7 +253,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         elif filename == "opencode-review.yml":
             assert "opencode-review-bootstrap-" in concurrency_contract
         elif filename == "noema-review.yml":
-            assert "github.event.workflow_run.pull_requests[0].number" in concurrency_contract
+            assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{ github.event_name }}" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
@@ -456,10 +456,8 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
 
 def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
     """Prevent cancelled review runs from creating follow-up queue work."""
-    for filename in ("noema-review.yml", "pr-review-merge-scheduler.yml"):
-        workflow = workflow_text(filename)
-
-        assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
@@ -490,11 +488,13 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 
 
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
-    """Do not let workflow-run notifications cancel standalone Noema review."""
+    """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
     concurrency_contract = workflow.split("permissions:", 1)[0]
 
-    assert "github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number" in concurrency_contract
+    assert "workflow_run:" not in concurrency_contract
+    assert "github.event.workflow_run" not in workflow
+    assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
     assert "noema-review-${{ github.event_name }}" in concurrency_contract
 
