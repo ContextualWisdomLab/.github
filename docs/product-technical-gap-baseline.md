@@ -2679,6 +2679,47 @@ bash scripts/ci/test_strix_quick_gate.sh` 전체 실행 → 정확히 이 assert
 위반은 계속 잡음). (b) 수정된 스크립트를 `.github#1438` 워크트리 전체에 대해 재실행 →
 `test_strix_quick_gate: PASS`로 회귀 없이 통과.
 
+## 2026-08-31 시간별 재개: naruon#1486 CodeRabbit 배치 3건 수정(project-graph workspace mismatch, 중복검사 workspace 누락, bootstrap_db.py legacy constraint 2번째 이름)
+
+이전 항목(head `1b85703c`) 이후 CodeRabbit이 head `a1027af6`를 재분석하며 새로 지적한 결함 4건
+중 3건을 실제 RED 확인 후 고쳤다(head `786d1544`). 4번째는 이미 조사·해소된 gap의 반복.
+
+1. **🟠 major: `_persist_project_graph_projection`이 호출자의 이미 해석된 workspace를 무시하고
+   자체 재계산.** `email_import_service.py`의 이 함수가 여전히
+   `workspace_id = f"workspace-{organization_id}" if organization_id else f"workspace-{user_id}"`를
+   내부에서 재계산하고 있어, non-default import workspace를 쓰면 이메일 본체와 그 이메일에서
+   파생된 project-graph 객체가 서로 다른 workspace에 저장될 수 있었다. `workspace_id`를 필수
+   keyword-only 파라미터로 바꾸고 `_import_single_eml`의 `resolved_workspace_id`를 그대로 전달하도록
+   수정(커밋 `786d1544`). 새 테스트로 진짜 RED 확인(`TypeError: unexpected keyword argument
+   'workspace_id'`) 후 GREEN. 이 수정으로 이 함수를 구 시그니처로 호출하며 구 fallback 동작 자체를
+   단언하던 `test_project_graph_import_wiring.py`의 기존 테스트 5개가 깨졌다 — 변경 대상 파일만이
+   아니라 전체 스위트를 돌려야 잡히는 회귀였고, 5개 전부 새 계약(명시적 `workspace_id` 인자)에
+   맞게 갱신했다.
+2. **🟡 minor: `import_fixtures.py`의 중복 임포트 검사가 workspace로 스코프되지 않음.** 기존
+   메일 존재 확인 쿼리가 `message_id`/`user_id`/`organization_id`만 필터링해, 같은 owner가 서로 다른
+   workspace로 같은 메일을 임포트하면 두 번째 워크스페이스에서 잘못 "이미 존재"로 스킵될 수 있었다.
+   `Email.workspace_id == IMPORT_WORKSPACE_ID` 조건 추가(커밋 `786d1544`). **주의**: 이 수정을
+   증명하는 첫 테스트 시도(`assert "email_records.workspace_id" in query_text`)는 수정 없이도
+   PASS하는 false negative였다 — `select(Email)`은 WHERE 절과 무관하게 항상 모든 ORM 컬럼을 SELECT
+   목록에 포함하기 때문. `query_text.partition("where ")[2]`로 WHERE 절만 분리해 정확한
+   `email_records.workspace_id = :bind_name` 프래그먼트를 확인하도록 재작성한 뒤에야 진짜 증명이
+   됐다.
+3. **🟡 minor: `bootstrap_db.py`가 legacy unique constraint 이름을 하나만 drop.** 기존 코드는
+   자신이 직접 만들었던 이름(`uq_email_records_owner_message_id`)만 drop했는데, workspace scoping
+   이전 `Base.metadata.create_all()`로 부트스트랩된 DB는 Alembic ORM 메타데이터가 실제로 쓰던 또
+   다른 이름(`uq_emails_owner_message_id`, `0020_email_workspace_scope.py`의
+   `_OLD_EMAIL_IDENTITY`)을 갖고 있어 그 경로만 영구히 예전 3-column identity에 갇혔다. 두 이름
+   모두(constraint + index 형태) drop하도록 추가(커밋 `786d1544`).
+4. **🔍 repeat: `IMPORT_WORKSPACE_ID`를 registry-backed config로 옮기라는 지적** — 이 코드베이스에는
+   동작하는 KV/credential registry가 없다는, 앞선 Devin 지적과 동일한 gap. `import_fixtures.py`는
+   런타임 요청 경로가 아닌 dev-only fixture 스크립트이므로 새 아키텍처 의존성을 추가하지 않고 기존
+   `IMPORT_USER_ID`/`IMPORT_ORGANIZATION_ID`와 같은 env-var-with-default 패턴을 유지하기로 결정.
+
+전체 백엔드 스위트 1900 passed / 36 skipped, ruff clean(head `786d1544`). CodeRabbit 스레드 2개
+(registry 지적, bootstrap_db.py 지적)에 답글·resolve했고, 별도 discussion thread가 없는 "outside
+diff range" 지적 2건(project-graph mismatch, 중복검사 workspace 누락)은 일반 PR issue comment로
+답변했다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
