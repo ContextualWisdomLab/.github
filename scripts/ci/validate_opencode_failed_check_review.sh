@@ -231,8 +231,8 @@ location_re = re.compile(
     r"(?:Code\s+)?Locations?(?:\s+[0-9]+)?\s*:\s*(.+?:[0-9]+(?:-[0-9]+)?)",
     re.IGNORECASE,
 )
-clean_prefix_pipe_re = re.compile(r"^.*?│\s*")
-clean_suffix_pipe_re = re.compile(r"\s*│.*$")
+# ⚡ Bolt: Combine regexes into a single pattern using | to avoid redundant string scans and optimize performance
+clean_pipe_re = re.compile(r"^.*?│\s*|\s*│.*$")
 clean_prefix_z_re = re.compile(r"^.*?[0-9]Z\s+")
 clean_whitespace_re = re.compile(r"\s+")
 new_field_re = re.compile(r"^(Title|Severity|CVSS Score|CVSS Vector|Target|Endpoint|Method|Description|Impact|Technical Analysis|PoC Description|PoC Code|Code Locations|Remediation)\b", re.IGNORECASE)
@@ -248,8 +248,7 @@ field_target_re = re.compile(r"^Target:\s+(.+)", re.IGNORECASE)
 def clean(raw_line: str) -> str:
     line = ansi_re.sub("", raw_line).replace("\r", "")
     if "│" in line:
-        line = clean_prefix_pipe_re.sub("", line)
-        line = clean_suffix_pipe_re.sub("", line)
+        line = clean_pipe_re.sub("", line)
     else:
         line = clean_prefix_z_re.sub("", line)
     line = clean_whitespace_re.sub(" ", line).strip()
