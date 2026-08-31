@@ -1765,6 +1765,105 @@ documented two-hour review window; GitHub's job boundary remains the outer
 execution limit. The transport timeout is pinned by the existing call contract
 test so a shorter accidental value cannot silently restore the failure.
 
+## 2026-08-31 noema-review-gate follow-up: fail-closed fix itself still had a public-log secret-leak
+edge and an unhandled envelope-crash edge
+
+Devin Review on PR #1507 found two gaps in the malformed-JSON fail-closed fix above, before that PR
+finished its own review cycle — both genuine, not duplicates of the round-4 pattern already recorded.
+
+**Security (priority): raw model output could still leak an unrecognized-shape credential to a public
+log.** The fix above logged the LLM's raw response text through `scrub_sensitive_data` — a finite,
+pattern-based regex scrubber (known token/key prefixes, `Bearer`/`token`/`key=` shapes) — into the
+`RuntimeError` message that `__main__` prints as `::error::{exc}` on stderr. `noema-review.yml` is a
+`pull_request_target` workflow, so that Actions log is public on this org's public repos. A regex
+allowlist of known secret *shapes* cannot bound what an LLM might echo back or hallucinate in an
+unrecognized shape (mid-sentence, base64-wrapped, or simply a shape nobody anticipated) — no amount of
+pattern-list tuning closes that gap, so the fix does not try to. `extract_json_object`'s decode-failure
+diagnostic no longer embeds the raw or scrubbed response at all; it logs only a length and a truncated
+SHA-256 fingerprint of the (unlogged) content, enough to correlate repeat failures for the same
+underlying response without ever exposing its bytes. `MAX_LLM_RESPONSE_LOG_CHARS` (the old
+truncate-and-embed bound) was removed as unused. Regression test
+`test_extract_json_object_fails_closed_on_malformed_json` was extended to assert this directly: a
+credential in a shape none of the `SENSITIVE_DATA_SCRUB_PATTERNS` recognize (a bare UUID-shaped value
+mid-sentence, no `token`/`key`/`bearer` marker) is confirmed to survive the old scrubber unmasked, then
+confirmed absent from the new diagnostic entirely — as is a known-shape secret, and the raw response text
+in general, regardless of input size.
+
+**Bug: a malformed gateway envelope still crashed before the repair boundary.** `call_llm` only wrapped
+`extract_json_object(content)` — parsing the nested verdict string — in the `try` that feeds the #1504
+one-time repair-retry. The lines building `content` from the raw HTTP body (`json.loads(raw)` then four
+chained `.get()`/`[0]` accesses) sat *before* that `try`, unguarded: a non-JSON raw body raised an
+unhandled `json.JSONDecodeError`, and a syntactically valid but wrong-shaped envelope (top-level JSON
+that is a list/`null`/string/number, a non-list `choices`, a non-object `choices[0]` or `message`, or
+non-string `content`) raised an unhandled `AttributeError`/`TypeError`/`KeyError` — exactly the class of
+crash the malformed-JSON fix above was meant to close, just one layer higher. Fixed with a new
+`extract_llm_message_content(raw)` that validates the envelope shape explicitly with `isinstance` checks
+at each step (never a broad `except AttributeError`/`TypeError`, so a genuine unrelated bug still
+surfaces as itself) and raises the same bounded `RuntimeError` `call_llm` already converts everywhere
+else; the call now sits inside the existing repair-retry `try` block, so a malformed envelope gets the
+same one repair-retry request a malformed verdict gets before failing closed with a clean diagnostic. A
+missing (not malformed) `choices`/`message`/`content` still falls through to an empty string, matching
+the original code's leniency for an absent field — `extract_json_object` already fails closed on empty
+content. None of the raised messages embed any response bytes, only JSON-value type names.
+
+Regression tests: direct unit coverage of every `extract_llm_message_content` branch (malformed raw
+body, non-object top level, non-list `choices`, non-object `choices[0]`/`message`, non-string `content`,
+and the lenient missing-field paths), plus `call_llm` integration tests reproducing the repair-once and
+exhausted-repair paths end-to-end (`test_call_llm_repairs_one_malformed_envelope_before_failing_closed`,
+`test_call_llm_fails_closed_after_repeated_malformed_envelope`). 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507 (same PR; addressed before
+merge).
+
+## 2026-08-31 noema-review-gate follow-up round 3: non-UTF-8 gateway replies still crashed before the
+repair boundary
+
+Devin Review's third pass on PR #1507 found one more instance of the same crash-before-repair-boundary
+class the round-2 fix above closed for a malformed JSON envelope, plus two informational confirmations
+that needed verifying rather than fixing.
+
+**Bug: a non-UTF-8 response body still crashed before the repair boundary.** `call_llm` decoded the raw
+HTTP response with a plain `response.read().decode("utf-8")` sitting *before* the `try` that feeds the
+repair-retry — the same unguarded-preamble shape the round-2 envelope fix closed for `json.loads` and the
+chained `.get()`/`[0]` accesses, just one step earlier. A gateway reply containing invalid UTF-8 bytes
+raised an unhandled `UnicodeDecodeError` before `extract_llm_message_content` or the JSON repair boundary
+ever ran, crashing the required review check with a traceback instead of getting the same one-time
+schema-repair attempt every other malformed-envelope shape already gets. Fixed with a new
+`decode_llm_response_body(raw_bytes)` that converts a `UnicodeDecodeError` into the same bounded
+`RuntimeError` `call_llm` already uses elsewhere, called from inside the existing repair-retry `try`
+block (`raw = decode_llm_response_body(raw_bytes)`, ahead of `extract_llm_message_content(raw)`). Per the
+round-2 security fix, the raised diagnostic never embeds the raw response bytes — not even the
+undecodable fragment, since a body containing invalid UTF-8 could still contain a credential-adjacent
+byte sequence — only a length and a truncated SHA-256 fingerprint, matching `extract_json_object`'s
+no-raw-content pattern exactly.
+
+Regression tests: `test_decode_llm_response_body_happy_path` and
+`test_decode_llm_response_body_fails_closed_on_invalid_utf8` give direct unit coverage of the new
+function (including that a secret-shaped prefix and an unrecoverable tail around the bad byte never
+appear in the raised message), and `test_call_llm_fails_closed_after_repeated_invalid_utf8_response`
+integrates it end-to-end: one repair-retry request, then a clean top-level `RuntimeError` when the retry
+response is *also* invalid UTF-8 — never an unhandled traceback. 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`.
+
+**Confirmed correct, no change needed — repair recursion remains bounded.** `call_llm`'s `except
+RuntimeError` handler only recurses once: `if repair_error: raise` re-raises immediately on a second
+failure instead of recursing again, so total gateway calls per review are capped at two regardless of
+which layer (decode, envelope, or verdict JSON) keeps failing. Already covered by
+`test_call_llm_fails_closed_after_repeated_malformed_envelope` and the new
+`test_call_llm_fails_closed_after_repeated_invalid_utf8_response`, both of which assert exactly two
+requests were made.
+
+**Confirmed correct, no change needed — falsey envelope values still fail closed.** A `choices`,
+`message`, or `content` field that is present but falsey-and-wrong-shaped for the lenient branch (e.g.
+`choices: false`, `choices: 0`, `choices: ""`, `choices: []`) is treated by `extract_llm_message_content`
+the same as an absent field — deliberately lenient, per that function's existing docstring — and resolves
+to empty `content`. That empty string is not silently accepted: `extract_json_object` requires content
+starting with `{` and raises its own bounded `RuntimeError` ("did not contain a JSON object") for an
+empty string, so the falsey-envelope path still fails closed one layer down. Verified directly against
+`extract_llm_message_content` + `extract_json_object` for `choices` in `{False, 0, "", []}`.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge). Devin's own framing marked this
+the last expected finding in this decode/parse vein for this PR.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

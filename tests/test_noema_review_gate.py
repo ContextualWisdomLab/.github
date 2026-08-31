@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import sys
 
@@ -150,32 +151,321 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
 def test_extract_json_object_fails_closed_on_malformed_json():
     """A brace-wrapped but syntactically invalid LLM response must raise the
     same fail-closed RuntimeError this module uses for other unusable-verdict
-    cases, never an unhandled json.JSONDecodeError (the reported CI crash)."""
+    cases, never an unhandled json.JSONDecodeError (the reported CI crash).
+
+    Devin Review security finding on PR #1507: the raised diagnostic must
+    never embed the raw (even scrubbed) model response, because this is a
+    public ``pull_request_target`` job and the finite scrub-pattern list
+    cannot guarantee an LLM-echoed or hallucinated credential in an
+    unrecognized shape is caught. Only a length and a content fingerprint
+    are logged."""
     # Reproduces "Expecting property name enclosed in double quotes": an
     # unquoted/truncated key inside an otherwise brace-wrapped object.
     malformed = '{"decision":"approve", trailing garbage not: "quoted}'
     with pytest.raises(RuntimeError, match="was not valid JSON") as excinfo:
         noema.extract_json_object(malformed)
     assert not isinstance(excinfo.value, json.JSONDecodeError)
-    assert "approve" in str(excinfo.value)
+    message = str(excinfo.value)
+    # The raw response text must never appear in the diagnostic.
+    assert "approve" not in message
+    assert "trailing garbage" not in message
+    # A bounded, non-secret correlation diagnostic replaces it instead.
+    assert f"response length={len(malformed)} chars" in message
+    assert "sha256=" in message
+    fingerprint = hashlib.sha256(malformed.encode("utf-8")).hexdigest()[:16]
+    assert fingerprint in message
 
     # A response truncated mid-object hits the same decode failure.
     truncated = '{"decision":"approve","summary":"looks fine so far,'
     with pytest.raises(RuntimeError, match="was not valid JSON"):
         noema.extract_json_object(truncated)
 
-    # Secrets embedded in the raw response must stay scrubbed in the
-    # bounded diagnostic message.
-    leaky = '{"decision":"approve","summary":"token ghp_' + "a" * 36 + '", bad'
+    # A credential in a shape the finite scrub-pattern list does NOT
+    # recognize (no "token"/"key"/"bearer" marker, no known provider prefix
+    # — just a bare UUID-shaped value mid-sentence) must still never reach
+    # the raised message, because raw content is never embedded at all.
+    unrecognized_shape_secret = "3f29e1a7-8b44-4c1d-9e77-2a5f9c001234"
+    leaky = (
+        '{"decision":"approve","summary":"use internal id '
+        f"{unrecognized_shape_secret} to correlate, trailing garbage"
+    )
+    # Confirm this test is not vacuous: the existing finite regex scrubber
+    # really does miss this shape.
+    assert unrecognized_shape_secret in (noema.scrub_sensitive_data(leaky) or "")
     with pytest.raises(RuntimeError) as leaky_excinfo:
         noema.extract_json_object(leaky)
-    assert "ghp_" not in str(leaky_excinfo.value)
-    assert "***" in str(leaky_excinfo.value)
+    leaky_message = str(leaky_excinfo.value)
+    assert unrecognized_shape_secret not in leaky_message
+    assert "approve" not in leaky_message
+    assert "ghp_" not in leaky_message
 
-    # Long malformed content is bounded rather than logged in full.
-    huge = '{"decision":"approve", ' + ("x" * (noema.MAX_LLM_RESPONSE_LOG_CHARS + 500)) + " bad"
-    with pytest.raises(RuntimeError, match="truncated"):
+    # A known-shape secret (would have matched the old finite scrubber too)
+    # must also never appear, now that raw content is omitted outright.
+    known_shape_leaky = '{"decision":"approve","summary":"token ghp_' + "a" * 36 + '", bad'
+    with pytest.raises(RuntimeError) as known_excinfo:
+        noema.extract_json_object(known_shape_leaky)
+    assert "ghp_" not in str(known_excinfo.value)
+
+    # Long malformed content produces a bounded diagnostic regardless of
+    # input size — never logged in full, and never truncated-and-embedded
+    # either; the diagnostic length does not grow with the input.
+    huge = '{"decision":"approve", ' + ("x" * 5000) + " bad"
+    with pytest.raises(RuntimeError) as huge_excinfo:
         noema.extract_json_object(huge)
+    huge_message = str(huge_excinfo.value)
+    assert "x" * 100 not in huge_message
+    assert len(huge_message) < 500
+    assert f"response length={len(huge)} chars" in huge_message
+
+    # Devin Review follow-up finding: a malformed verdict containing an
+    # escaped lone surrogate (valid inside a Python/JSON string, but not
+    # representable in strict UTF-8) must not crash the fingerprint
+    # computation itself with an unhandled UnicodeEncodeError -- it must
+    # still fail closed with the same bounded RuntimeError.
+    surrogate_bearing = '{"decision":"approve", "note": "\ud800", trailing bad'
+    with pytest.raises(RuntimeError, match="was not valid JSON") as surrogate_excinfo:
+        noema.extract_json_object(surrogate_bearing)
+    assert not isinstance(surrogate_excinfo.value, UnicodeEncodeError)
+    surrogate_message = str(surrogate_excinfo.value)
+    assert "sha256=" in surrogate_message
+    assert f"response length={len(surrogate_bearing)} chars" in surrogate_message
+
+
+def test_extract_llm_message_content_happy_paths():
+    """A well-formed envelope returns its stripped content; a missing (not
+    malformed) choices/message/content field is treated leniently, matching
+    the pre-fix code's behavior for an absent field."""
+    envelope = json.dumps({"choices": [{"message": {"content": "  {\"decision\":\"approve\"}  "}}]})
+    assert noema.extract_llm_message_content(envelope) == '{"decision":"approve"}'
+
+    assert noema.extract_llm_message_content(json.dumps({})) == ""
+    assert noema.extract_llm_message_content(json.dumps({"choices": []})) == ""
+    assert noema.extract_llm_message_content(json.dumps({"choices": [{}]})) == ""
+    assert noema.extract_llm_message_content(json.dumps({"choices": [{"message": None}]})) == ""
+    assert (
+        noema.extract_llm_message_content(json.dumps({"choices": [{"message": {"content": None}}]}))
+        == ""
+    )
+
+
+def test_extract_llm_message_content_fails_closed_on_malformed_raw_body():
+    """Devin Review bug finding on PR #1507: a malformed raw HTTP body must
+    raise the same bounded RuntimeError call_llm's repair path already uses
+    for a malformed verdict, never an unhandled json.JSONDecodeError."""
+    with pytest.raises(RuntimeError, match="response body was not valid JSON"):
+        noema.extract_llm_message_content("not json at all")
+
+
+@pytest.mark.parametrize("body", ["[]", "null", '"just a string"', "5"])
+def test_extract_llm_message_content_fails_closed_on_non_object_top_level(body):
+    """A syntactically valid but non-object top-level JSON value (array,
+    null, bare string, bare number) must fail closed instead of crashing on
+    the next `.get(...)` call, exactly as Devin's finding described."""
+    with pytest.raises(RuntimeError, match="response body was not a JSON object"):
+        noema.extract_llm_message_content(body)
+
+
+@pytest.mark.parametrize("choices", [{"a": 1}, "choices-as-string", 5])
+def test_extract_llm_message_content_fails_closed_on_wrong_shaped_choices(choices):
+    """A present-but-wrong-shaped (non-list) 'choices' field must fail
+    closed instead of crashing on `choices[0]`."""
+    with pytest.raises(RuntimeError, match="'choices' was not a list"):
+        noema.extract_llm_message_content(json.dumps({"choices": choices}))
+
+
+@pytest.mark.parametrize("first_choice", [None, 1, "text"])
+def test_extract_llm_message_content_fails_closed_on_wrong_shaped_choice_element(first_choice):
+    """A choices[0] that is not a JSON object must fail closed instead of
+    crashing on `.get("message")`."""
+    with pytest.raises(RuntimeError, match=r"choices\[0\] was not a JSON object"):
+        noema.extract_llm_message_content(json.dumps({"choices": [first_choice]}))
+
+
+@pytest.mark.parametrize("message", [[1, 2], "text", 5])
+def test_extract_llm_message_content_fails_closed_on_wrong_shaped_message(message):
+    """A present-but-wrong-shaped (non-object) 'message' field must fail
+    closed instead of crashing on `.get("content")`."""
+    with pytest.raises(RuntimeError, match="'message' was not a JSON object"):
+        noema.extract_llm_message_content(json.dumps({"choices": [{"message": message}]}))
+
+
+@pytest.mark.parametrize("content", [5, [1, 2], {"a": 1}])
+def test_extract_llm_message_content_fails_closed_on_non_string_content(content):
+    """A present-but-non-string 'content' field must fail closed instead of
+    crashing on `.strip()`."""
+    with pytest.raises(RuntimeError, match="'content' was not a string"):
+        noema.extract_llm_message_content(
+            json.dumps({"choices": [{"message": {"content": content}}]})
+        )
+
+
+def test_decode_llm_response_body_happy_path():
+    """A well-formed UTF-8 response body decodes normally."""
+    assert noema.decode_llm_response_body("hello world".encode("utf-8")) == "hello world"
+
+
+def test_decode_llm_response_body_fails_closed_on_invalid_utf8():
+    """Devin Review bug finding on PR #1507 round 3: a gateway reply
+    containing invalid UTF-8 must raise the same bounded RuntimeError
+    call_llm's repair path already uses for a malformed envelope, never an
+    unhandled UnicodeDecodeError. The raised message must never embed the
+    raw response bytes — even an attempted-decode fragment near the bad
+    byte — matching extract_json_object's no-raw-content pattern, since a
+    body containing invalid UTF-8 could still contain a credential-adjacent
+    byte sequence."""
+    secret_like_prefix = b"token=ghp_deadbeef1234567890"
+    raw_bytes = secret_like_prefix + bytes([0xFF]) + b"unrecoverable tail bytes"
+    with pytest.raises(RuntimeError) as excinfo:
+        noema.decode_llm_response_body(raw_bytes)
+    message = str(excinfo.value)
+    assert "not valid UTF-8" in message
+    assert "ghp_" not in message
+    assert "unrecoverable tail" not in message
+    fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
+    assert f"response length={len(raw_bytes)} bytes" in message
+    assert f"sha256={fingerprint}" in message
+
+
+def test_call_llm_repairs_one_malformed_envelope_before_failing_closed(monkeypatch):
+    """The envelope-level fail-closed path integrates with the existing
+    verdict-repair boundary: a malformed gateway reply gets one repair-retry
+    request before failing closed, exactly like a malformed verdict JSON
+    already does."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    bodies = iter(
+        (
+            "not-json-at-all",
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+    )
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return next(bodies).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        requests.append(json.loads(request.data))
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+    assert verdict["summary"] == "Recovered"
+    assert len(requests) == 2
+    assert "prior verdict was rejected" in requests[1]["messages"][1]["content"]
+
+
+def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):
+    """Two consecutive malformed envelopes must produce a single clean
+    top-level RuntimeError diagnostic, never an unhandled traceback — but
+    the first still gets a repair-retry request like a malformed verdict
+    would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Top-level JSON is a bare list — no "choices" object to speak of.
+            return b"[]"
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="response body was not a JSON object"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+    assert len(open_calls) == 2
+
+
+def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch):
+    """Devin Review bug finding on PR #1507 round 3: a gateway reply
+    containing invalid UTF-8 bytes used to raise UnicodeDecodeError before
+    extract_llm_message_content or the verdict-JSON repair boundary ever
+    ran, crashing the required review check with an unhandled traceback.
+    It must instead integrate with the existing repair-retry boundary
+    exactly like a malformed JSON envelope already does: one repair-retry
+    request, then a single clean top-level RuntimeError when the retry
+    response is *also* invalid UTF-8 — never an unhandled traceback."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Invalid UTF-8: a lone continuation byte with no lead byte.
+            return b"not utf-8 at all: \x80\x81\xfe"
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="response body was not valid UTF-8"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+    # One initial request plus exactly one repair-retry request — not an
+    # unbounded retry loop, and not a crash on the first attempt.
+    assert len(open_calls) == 2
+    assert "prior verdict was rejected" in json.loads(open_calls[1].data)["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("choices", [{"a": 1}, 5])
+def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choices):
+    """A malformed (non-list) choices field surfaces through call_llm's
+    fail-closed path rather than crashing the required review job."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps({"choices": choices}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="'choices' was not a list"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 
 @pytest.mark.parametrize(

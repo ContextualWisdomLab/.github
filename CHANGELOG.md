@@ -7,6 +7,19 @@ Semantic Versioning where the repository publishes a release.
 ## [Unreleased]
 - Allow a Contextual Orchestrator-backed Noema review request to run for up to
   two hours instead of failing every long review at a hard-coded 120 seconds.
+- Stop logging raw (even regex-scrubbed) LLM response text in Noema's
+  malformed-JSON fail-closed diagnostic (Devin Review security finding on
+  PR #1507): `noema-review.yml` is a `pull_request_target` workflow with
+  public Actions logs, and a finite secret-scrub pattern list cannot
+  guarantee an LLM-echoed or hallucinated credential in an unrecognized
+  shape is caught. `extract_json_object` now logs only a content length and
+  a SHA-256 fingerprint. Also close a related unhandled-crash gap: a
+  malformed OpenAI-compatible HTTP envelope (non-JSON body, non-object
+  top-level JSON, wrong-shaped `choices`/`message`, non-string `content`)
+  previously crashed `call_llm` before it ever reached the JSON-repair
+  boundary; a new `extract_llm_message_content` validates the envelope
+  explicitly and now shares the same one-time repair-retry and fail-closed
+  `RuntimeError` path as a malformed verdict.
 - Give Noema one bounded schema-repair request when Contextual Orchestrator
   returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
   if the corrected response is still invalid.
