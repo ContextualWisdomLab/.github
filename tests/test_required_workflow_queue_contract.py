@@ -258,6 +258,14 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event.workflow_run.head_sha" in concurrency_contract
             assert "github.event.client_payload.pr_head_sha" in concurrency_contract
             assert "github.event_name }}" not in concurrency_contract
+            procedure = (
+                REPO_ROOT / "docs" / "pr-review-and-merge-procedure.md"
+            ).read_text(encoding="utf-8")
+            assert (
+                "Noema keeps `cancel-in-progress: true` only within one exact PR head."
+                in procedure
+            )
+            assert "concurrency key includes the triggering head SHA" in procedure
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
