@@ -64,7 +64,7 @@ log "provider secrets present: $provider_secret_count of 5"
 
 # Temporary PR-only diagnostic: emit status codes, never response bodies or
 # credential metadata, to isolate Bytez's persistent authenticated HTTP 500.
-if [ -n "${BYTEZ_API_KEY:-}" ]; then
+if [ "${PR_NUMBER:-}" = "1473" ] && [ -n "${BYTEZ_API_KEY:-}" ]; then
   python3 - <<'PY'
 import os
 import urllib.error
