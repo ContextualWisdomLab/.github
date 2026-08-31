@@ -1,6 +1,7 @@
 import base64
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -698,10 +699,18 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
     assert len(payloads) == 2
     assert "trusted validator" in payloads[1]["messages"][1]["content"]
     assert (
-        'Allowed exact changed-side locations: [{"path":"tool.py","line":1,"side":"LEFT"},'
-        '{"path":"tool.py","line":1,"side":"RIGHT"}]'
+        '"reviewed_lines":[{"path":"tool.py","line":1,"side":"LEFT"'
         in payloads[1]["messages"][1]["content"]
     )
+
+
+def test_noema_adr_forbids_fixed_model_inference_timeouts() -> None:
+    """Long-running reasoning must not be misclassified as provider failure."""
+    adr = Path("docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md").read_text()
+    normalized = " ".join(adr.split())
+
+    assert "MUST NOT impose a fixed wall-clock timeout on model inference" in normalized
+    assert "initial completion ping" in normalized
 
 
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():

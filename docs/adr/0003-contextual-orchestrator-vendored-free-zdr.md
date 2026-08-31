@@ -208,3 +208,15 @@ all five, and auto-optimize routing by cost.
   like Noema, provision the pinned contextual-orchestrator sidecar and use
   `orchestrator/free`. The bootstrap still checks out no PR code and binds no
   Actions secret.
+- **2026-08-31 amendment: model inference has no fixed wall-clock timeout.**
+  OpenCode, Noema, Strix, and their contextual-orchestrator sidecar MUST NOT
+  impose a fixed wall-clock timeout on model inference, including an initial
+  completion ping, warm-up, retry, repair verdict, or substantive review call.
+  A slow reasoning model such as DeepSeek is not unavailable merely because it
+  takes minutes or hours to produce tokens. Cancellation remains an explicit
+  operator or superseded-head action. Non-inference readiness checks such as a
+  loopback `/healthz`, DNS/TLS connection establishment, and provider model-list
+  discovery may remain bounded because they do not classify generation speed
+  or terminate a model response. This amendment supersedes earlier fixed
+  inference-attempt budgets in ADR 0005; those values apply only to
+  non-generating transport/readiness probes after their callers are migrated.
