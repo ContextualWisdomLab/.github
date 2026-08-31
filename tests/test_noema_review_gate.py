@@ -78,17 +78,100 @@ def test_split_repo_and_graphql(monkeypatch):
 
     def fake_run(args, stdin=None):
         calls.append((args, stdin))
+        if "--paginate" in args:
+            return "[[]]"
         return '{"data":{"repository":{"pullRequest":{"number":7}}}}'
 
     monkeypatch.setattr(noema, "run", fake_run)
     assert noema.graphql("query", owner="owner", number=7)["data"]["repository"]["pullRequest"]["number"] == 7
     assert "-f" in calls[0][0]
     assert "-F" in calls[0][0]
-    assert noema.fetch_pr("owner/repo", 7) == {"number": 7}
+    assert noema.fetch_pr("owner/repo", 7) == {
+        "number": 7,
+        "reviews": {"nodes": []},
+    }
 
     monkeypatch.setattr(noema, "graphql", lambda *args, **kwargs: {"data": {"repository": {"pullRequest": None}}})
     with pytest.raises(RuntimeError, match="was not found"):
         noema.fetch_pr("owner/repo", 8)
+
+
+def test_fetch_pr_keeps_exact_head_approval_older_than_one_hundred_reviews(monkeypatch):
+    """The gate must not lose a valid approval behind GitHub's review page size."""
+    head_sha = "a" * 40
+    approval = {
+        "state": "APPROVED",
+        "body": "Result: APPROVE",
+        "user": {"login": "opencode-agent"},
+        "commit_id": head_sha,
+    }
+    later_comments = [
+        {
+            "state": "COMMENTED",
+            "body": f"later review event {index}",
+            "user": {"login": "reviewer"},
+            "commit_id": head_sha,
+        }
+        for index in range(100)
+    ]
+    monkeypatch.setattr(
+        noema,
+        "graphql",
+        lambda *args, **kwargs: {
+            "data": {
+                "repository": {
+                    "pullRequest": make_pr(
+                        headRefOid=head_sha,
+                        reviews={"nodes": later_comments},
+                    )
+                }
+            }
+        },
+    )
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        return json.dumps([[approval, *later_comments]])
+
+    monkeypatch.setattr(noema, "run", fake_run)
+
+    pr = noema.fetch_pr("owner/repo", 7)
+
+    assert noema.current_primary_approval(pr) == {
+        "state": "APPROVED",
+        "body": "Result: APPROVE",
+        "author": {"login": "opencode-agent"},
+        "commit": {"oid": head_sha},
+    }
+    assert calls == [
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            "repos/owner/repo/pulls/7/reviews",
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("{}", "malformed paginated review evidence"),
+        ("[[null]]", "malformed review evidence"),
+    ],
+)
+def test_fetch_complete_reviews_fails_closed_on_malformed_evidence(
+    monkeypatch,
+    payload,
+    message,
+):
+    """Malformed review pages must not become an empty approval history."""
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: payload)
+
+    with pytest.raises(RuntimeError, match=message):
+        noema.fetch_complete_reviews("owner/repo", 7)
 
 
 def test_review_state_helpers_cover_current_head_logic():
