@@ -428,8 +428,10 @@ printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful 
 # in 18s, then this identical request against that same healthy route being
 # cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
 # request could not reach the local sidecar" is this curl failure, not an
-# actual connectivity problem. This required-workflow job already budgets
-# 120 minutes (see timeout-minutes in strix.yml/noema-review.yml), and the
+# actual connectivity problem. Each caller workflow already budgets its own
+# multi-hour job-level timeout-minutes for this required-workflow job (see
+# strix.yml and noema-review.yml -- the two currently differ and either can
+# change independently, so no specific number is pinned here), and the
 # org's own stated policy accepts multi-hour central review latency in
 # favor of accuracy over speed -- a 30s bound on one preflight self-check
 # contradicted that policy and rejected a route the routing probe had just
