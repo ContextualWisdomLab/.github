@@ -955,33 +955,45 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
 
-    def label_starts(candidate: str) -> list[int]:
+    def label_starts(
+        candidate: str, start_index: int = 0, end_index: int | None = None
+    ) -> list[int]:
         """Return exact verification-label starts without suffix collisions."""
+        if end_index is None:
+            end_index = len(text)
         starts = []
-        index = text.find(candidate)
+        index = text.find(candidate, start_index, end_index)
         while index != -1:
             if (
                 candidate == "coverage:"
                 and text[max(0, index - 10) : index] == "docstring "
             ):
-                index = text.find(candidate, index + len(candidate))
+                index = text.find(candidate, index + len(candidate), end_index)
                 continue
             starts.append(index)
-            index = text.find(candidate, index + len(candidate))
+            index = text.find(candidate, index + len(candidate), end_index)
         return starts
 
     starts = label_starts(label)
     if not starts:
         return ""
     start = starts[-1] + len(label)
-    next_starts = [
-        candidate_start
-        for candidate in APPROVAL_VERIFICATION_LABELS
-        if candidate != label
-        for candidate_start in label_starts(candidate)
-        if candidate_start >= start
-    ]
-    end = min(next_starts) if next_starts else len(text)
+
+    end = len(text)
+    for candidate in APPROVAL_VERIFICATION_LABELS:
+        if candidate == label:
+            continue
+        index = text.find(candidate, start, end)
+        while index != -1:
+            if (
+                candidate == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            ):
+                index = text.find(candidate, index + len(candidate), end)
+                continue
+            end = min(end, index)
+            break
+
     return text[start:end]
 
 

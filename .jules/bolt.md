@@ -51,3 +51,6 @@
 ## 2026-08-29 - [대용량 텍스트 스캔 시 정규표현식 대신 네이티브 메서드 활용]
 **Learning:** `scripts/ci/opencode_review_normalize_output.py`의 라벨 스캐닝 루프에서 긴 LLM 리뷰 텍스트를 대상으로 `pattern.finditer()`를 호출하는 패턴이 있었습니다. 마이크로 벤치마크 결과, 단순 문자열 매칭에서는 네이티브 `str.find()`와 `while` 루프를 조합하는 것이 정규표현식 실행 오버헤드 없이 훨씬 빠르다는 것을 확인했습니다.
 **Action:** 내부 탐색 루프에서 정확히 일치하는 리터럴 문자열(라벨 접두사 등)을 검색할 때는 `re.compile(re.escape(string)).finditer()` 대신 고도로 최적화된 Python 네이티브 `text.find(candidate, index)` 메서드를 사용하십시오. 단, 무한 루프를 방지하기 위해 루프의 모든 분기에서 인덱스가 올바르게 진행되도록 보장해야 합니다.
+## 2026-08-29 - [문자열 검색 윈도우 동적 축소를 통한 라벨 스캐닝 최적화]
+**Learning:** `scripts/ci/opencode_review_normalize_output.py`의 `label_section` 함수에서 다음 라벨을 찾을 때, 전체 텍스트에 대해 모든 후보 라벨의 위치를 파악하는 방식은 O(N * L) (N=텍스트 길이, L=라벨 개수)의 심각한 오버헤드를 발생시킵니다.
+**Action:** 긴 텍스트에서 다음 마커(라벨 등)를 찾을 때, 현재까지 발견된 가장 가까운 다음 마커의 위치(`index`)로 검색 윈도우의 끝(`end = min(end, index)`)을 동적으로 축소하면서 네이티브 `text.find(candidate, start, end)`를 호출하십시오. 이는 중복 스캐닝을 크게 줄입니다.
