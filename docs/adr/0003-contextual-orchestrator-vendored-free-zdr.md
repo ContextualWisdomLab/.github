@@ -41,7 +41,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`c107e3e52371993aa9c326fcc245e01c41fc3850` today) into `RUNNER_TEMP`. The
+   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -289,3 +289,12 @@ silently kept the old pin, silently adopted a new instruction, or silently
 treated a bypass merge as settling the question, and
 `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
 records the trail.
+
+## Amendment (2026-08-31): Noema reviews independently of OpenCode
+
+Noema no longer waits for an OpenCode approval, review-thread state, or
+other check conclusions before calling the gateway and submitting its
+current-head review. A colliding OpenCode reviewer credential fails closed.
+The Noema LLM response must include a non-empty summary and an object-list
+`findings` field; `request_changes` additionally requires a substantive
+finding, so a bare decision cannot synthesize an evidence-free green review.
