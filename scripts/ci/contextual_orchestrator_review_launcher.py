@@ -95,6 +95,21 @@ REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 # so this is a reduction in serving-time failover depth among
 # already-proven-healthy routes, not a reduction in how thoroughly preflight
 # searches for a usable one.
+#
+# NOTE (Devin Review, "Serving cap exceeds reachable pool"): today,
+# `_preflight_review_agent_batches` returns on the FIRST batch with any
+# viable candidate (`if viable: return viable, {...}` below), so `agents`
+# here is never larger than REVIEW_PREFLIGHT_BATCH_SIZE=4 in practice --
+# this cap of 10 does not currently bind. That is deliberate, not an
+# oversight: this cap and CALL_LLM_TIMEOUT_SECONDS are a job-deadline safety
+# ceiling derived independently of preflight's own batching strategy, not a
+# number chosen to match it. Coupling them would mean any future change to
+# preflight's early-return behavior (e.g. accumulating viable candidates
+# across batches instead of stopping at the first) could silently regrow the
+# real worst case past what the job's 360-minute ceiling allows again,
+# exactly the bug this constant exists to prevent. Sizing this cap from the
+# job's own budget, independent of today's incidental batch size, means it
+# stays correct even if that batching strategy changes.
 REVIEW_SERVING_MAX_CANDIDATES = 10
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
