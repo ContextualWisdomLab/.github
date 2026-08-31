@@ -241,7 +241,13 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert "cancel-in-progress: true" in workflow
+        if filename == "noema-review.yml":
+            assert (
+                "cancel-in-progress: ${{ github.event_name == 'pull_request_target' || "
+                "github.event_name == 'repository_dispatch' }}"
+            ) in concurrency_contract
+        else:
+            assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
             "security-scan.yml",

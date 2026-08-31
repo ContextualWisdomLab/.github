@@ -25,7 +25,11 @@ concurrency:
     github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
     github.event.client_payload.pr_number ||
     github.run_id }}
-  cancel-in-progress: true
+  # A new PR head or an explicit retry supersedes older work. Peer-review
+  # workflow completions for the same head must not cancel a model review that
+  # can legitimately run for hours; they queue and the exact-head handoff
+  # remains idempotent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch' }}
 
 permissions:
   contents: read

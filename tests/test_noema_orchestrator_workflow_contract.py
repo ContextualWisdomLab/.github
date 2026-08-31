@@ -56,6 +56,16 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
+def test_peer_workflow_completion_does_not_cancel_long_noema_review() -> None:
+    """Only a new PR head or explicit retry may supersede a running review."""
+    workflow = workflow_text("noema-review.yml")
+
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' || "
+        "github.event_name == 'repository_dispatch' }}"
+    ) in workflow
+
+
 def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
     """Bound transient GitHub API failures without weakening visibility validation."""
     workflow = workflow_text("noema-review.yml")
