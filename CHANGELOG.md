@@ -5,6 +5,23 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a broken CI contract test that was blocking every open `.github`-repo
+  PR: `test_strix_quick_gate.sh`'s
+  `assert_opencode_review_uses_codegraph_and_contextual_orchestrator` used an
+  `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` range to isolate that
+  one job's YAML block in `opencode-review.yml`, intending to assert it has
+  no `if:` condition on any step (a real trust-boundary invariant: this
+  bootstrap job must never depend on event-payload fields). Because job keys
+  in that file are always 2-space indented, `/^[^ ]/` (a truly unindented
+  line) never matches anywhere in the `jobs:` section, so the range never
+  closed and silently swallowed every job defined after
+  `required-workflow-bootstrap` too — including the unrelated,
+  legitimate `if: github.event.action != 'closed'` on a completely different
+  job's step. `required-workflow-bootstrap` itself has always had zero `if:`
+  conditions; only the test's own job-scoping was wrong. Replaced the range
+  with an explicit awk state machine that starts at the bootstrap job header
+  and stops at the next 2-space-indented job key, so it correctly isolates
+  only that job's steps.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
