@@ -1621,6 +1621,7 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert workflow.count('run: >-\n          "$RUNNER_TEMP/run-osv-scanner.sh"') == 4
     assert '--user "$(id -u):$(id -g)"' not in workflow
     assert "--cap-drop ALL" in workflow
+    assert "--cap-add DAC_OVERRIDE" in workflow
     assert "--security-opt no-new-privileges" in workflow
     assert 'sudo chown -- "$(id -u):$(id -g)" "$output_file"' in workflow
     assert "rc=125" in workflow

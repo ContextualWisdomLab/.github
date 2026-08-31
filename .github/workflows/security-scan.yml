@@ -173,6 +173,7 @@ jobs:
           set +e
           docker run --rm \
             --cap-drop ALL \
+            --cap-add DAC_OVERRIDE \
             --security-opt no-new-privileges \
             --volume "$GITHUB_WORKSPACE:/github/workspace" \
             --workdir /github/workspace \
