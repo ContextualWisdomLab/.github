@@ -1,8 +1,0 @@
-🎯 What:
-`pingora_edge_policy.py`의 `NoRedirectHandler.redirect_request` 메서드에서 리다이렉트를 처리할 때 명시적으로 `HTTPError`를 발생시키도록 변경했습니다.
-
-⚠️ Risk:
-기존에 `None`을 반환하는 방식은 30x HTTP 응답을 호출자에게 직접 반환할 위험이 있어, 호출자가 이를 200 OK처럼 처리할 경우 SSRF 검증을 우회하거나 예기치 않은 동작을 유발할 수 있는 보안 취약점이 존재했습니다.
-
-🛡️ Solution:
-`urllib.error.HTTPError`를 명시적으로 발생시켜 리다이렉트를 즉시 차단(Fail Securely)하고 예외 처리를 명확히 하여 방어 깊이(Defense-in-depth)를 강화했습니다. 또한 관련된 테스트 코드(`tests/test_pingora_edge_policy.py`)를 업데이트하여 100% 테스트 커버리지를 확보했습니다.

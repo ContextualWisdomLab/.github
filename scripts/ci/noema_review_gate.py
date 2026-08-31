@@ -653,8 +653,13 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
+    try:
+        with opener.open(request, timeout=120) as response:  # nosec B310
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        if exc.code >= 400:
+            raise RuntimeError(f"Noema LLM API returned HTTP {exc.code}: {raw}") from exc
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     verdict = extract_json_object(content)
