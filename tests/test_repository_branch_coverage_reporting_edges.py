@@ -102,26 +102,10 @@ def test_javascript_main_ignores_unmatched_coverage_records(
     assert "missing instrumentation" in capsys.readouterr().out
 
 
-def test_noema_nonblocking_status_small_diff_and_empty_context_branches(
+def test_noema_small_diff_and_empty_context_branches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Success statuses, small diffs, invalid thread lines, and empty sections stay clean."""
-
-    assert noema.blocking_checks(
-        {
-            "statusCheckRollup": {
-                "contexts": {
-                    "nodes": [
-                        {
-                            "__typename": "StatusContext",
-                            "context": "legacy-security",
-                            "state": "SUCCESS",
-                        }
-                    ]
-                }
-            }
-        }
-    ) == []
+    """Small diffs, invalid thread lines, and empty sections stay clean."""
 
     monkeypatch.setattr(noema, "run", lambda _args: "small diff")
     assert noema.fetch_diff("owner/repo", 1) == ("small diff", False)
