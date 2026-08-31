@@ -133,6 +133,8 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "for attempt in" not in required
     assert "rerun-failed-jobs" in dispatched
+    assert '--argjson required_run_id "$GITHUB_RUN_ID"' in required
+    assert "required_run_id:$required_run_id" in required
     assert "id: formal_review_receipt" in dispatched
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
     assert "github.event.client_payload.required_run_id != ''" in dispatched
@@ -143,11 +145,8 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     assert "select(.head_sha == $head)" in dispatched
     wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
     assert "--paginate" not in wake_step
-    # `name`/`display_title` only carry PR/head info when this workflow fires as a
-    # native trigger on its own defining repo, and `workflow_url` only contains
-    # "/actions/required_workflows/" when it fires via the org required-workflow
-    # ruleset on a sibling repo -- never together (verified against live GitHub
-    # API data). Validating the referenced run must not require either.
+    # Identity is the immutable target-repository run id plus event/path/head;
+    # do not depend on context-specific title or workflow_url rendering.
     assert "display_title ==" not in wake_step
     assert ".name | startswith(" not in wake_step
     assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
@@ -255,3 +254,4 @@ exit 1
     recorded = calls.read_text(encoding="utf-8")
     assert "actions/runs/42/rerun-failed-jobs" in recorded
     assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded
+    assert "--paginate" not in recorded

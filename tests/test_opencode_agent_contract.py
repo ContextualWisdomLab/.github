@@ -1107,9 +1107,9 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         "ALLOWED_DISPATCH_TARGETS": (
             "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
         ),
-        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
-        "PR_NUMBER": "1085",
-    }
+            "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+            "PR_NUMBER": "1085",
+        }
 
     authorized = subprocess.run(
         ["bash", "-c", shell],

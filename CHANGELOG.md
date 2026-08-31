@@ -47,11 +47,10 @@ Semantic Versioning where the repository publishes a release.
   dispatch reruns only that required run's failed job. Long model and coverage
   budgets remain unchanged. Fork PRs still fail closed before dispatch;
   maintainers must first materialize them on a trusted base-repository branch.
-  The receipt continuation identifies `pull_request_target` runs by their exact
-  PR/head-bearing `display_title`; their REST `head_sha` is the trusted base
-  revision, not the reviewed PR head. Its retry lookup is server-filtered to a
-  bounded 14-hour window around the 625-minute review budget instead of
-  paginating the repository's full history.
+  The required workflow passes its immutable run ID in the authenticated
+  dispatch; the continuation fetches that target-repository run directly and
+  revalidates its event, central workflow path, and live PR `head_sha` before
+  rerunning it, independent of queue duration.
 - Skip Noema's one-time repair-retry LLM request when the PR head has moved
   since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
   now takes `expected_head` and re-checks it against a fresh `fetch_pr`

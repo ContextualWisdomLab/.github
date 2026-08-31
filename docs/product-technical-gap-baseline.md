@@ -2293,10 +2293,11 @@ releases its runner after one receipt lookup. Once the privileged dispatch valid
 it selects the latest exact-head `Required OpenCode Review` `pull_request_target` run and calls
 `rerun-failed-jobs`; only the small verdict job reruns. This preserves ruleset `18156473`'s required
 workflow identity and the two-hour-plus model allowance while removing roughly eleven runner-hours of
-polling per PR. The wake selector uses the exact PR/head-bearing `display_title` plus required-workflow
-metadata: a `pull_request_target` run's REST `head_sha` points at the trusted base revision and cannot
-identify the reviewed PR head. Each retry searches only a server-filtered 14-hour window around the
-625-minute review budget rather than paginating the repository's full history.
+polling per PR. The authenticated dispatch carries the immutable triggering required-run ID; the
+continuation fetches that target-repository run directly and validates its `pull_request_target` event,
+central workflow path, and live PR `head_sha` before rerunning it. This remains correct even when runner
+queue delay exceeds the model jobs' declared timeout sum and avoids dependence on context-specific title
+or `workflow_url` rendering.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

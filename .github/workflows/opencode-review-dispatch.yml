@@ -7591,17 +7591,10 @@ jobs:
             echo "::error::Required OpenCode run id is missing or non-canonical."
             exit 1
           }
-          # Validate the referenced run's head_sha (verified against live
-          # production data to equal the PR's actual head commit for
-          # pull_request_target runs -- NOT the base branch -- across both this
-          # repo's own PRs and required-workflow-ruleset runs on sibling repos)
-          # rather than `workflow_url`/`display_title`: the latter only carry
-          # PR/head-identifying info when this workflow fires as a native
-          # trigger on its own defining repo, and only carry the
-          # "/actions/required_workflows/" URL shape when it fires via the org
-          # required-workflow ruleset on a sibling repo -- this repo's actual
-          # central-hub use case -- never both at once, so a check requiring
-          # either can never pass for the other context.
+          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
+          # event, central workflow path, and live PR head before rerunning it;
+          # rendered titles and workflow_url differ between native and
+          # organization-required workflow contexts.
           for attempt in $(seq 1 12); do
             run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
             required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
