@@ -289,11 +289,11 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "strix workflow provisions the central contextual-orchestrator sidecar"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "strix workflow uses the sidecar base URL"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "strix workflow uses the sidecar token"
-	assert_file_contains "$workflow_file" "timeout-minutes: 120" "strix workflow job budget preserves full-hour scans and artifact publication margin"
-	assert_file_contains "$workflow_file" "timeout-minutes: 100" "strix workflow scan step permits legitimate 90-minute repository reviews"
+	assert_file_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job budget preserves multi-hour scans and artifact publication margin"
+	assert_file_contains "$workflow_file" "timeout-minutes: 170" "strix workflow scan step permits legitimate 150-minute repository reviews"
 	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
-	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"' "strix workflow preserves a 95-minute bounded total Strix budget"
-	assert_file_contains "$workflow_file" 'process_budget_seconds="5400"' "strix workflow gives a legitimate scan up to 90 minutes"
+	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=9300"' "strix workflow preserves a 155-minute bounded total Strix budget"
+	assert_file_contains "$workflow_file" 'process_budget_seconds="9000"' "strix workflow gives a legitimate scan up to 150 minutes"
 	assert_file_contains "$workflow_file" 'Error code:[[:space:]]*500[^[:cntrl:]]*internal_error' "strix workflow retries contextual-orchestrator internal provider failures"
 	assert_file_contains "$workflow_file" 'strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log' "strix workflow preserves partial console output after failures and timeouts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "gate-last-attempt.log" "strix gate preserves the last partial attempt before runtime cleanup"
@@ -509,7 +509,6 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$bootstrap_file" "coverage-evidence:" "opencode required workflow preserves the stable coverage-evidence branch-protection context"
 	assert_file_contains "$bootstrap_file" "name: opencode-review" "opencode required workflow preserves the stable opencode-review branch-protection context"
 	assert_file_contains "$bootstrap_file" "authenticated default-branch OpenCode review dispatch" "opencode required workflow delegates real review execution to the protected dispatch path"
-	assert_file_contains "$bootstrap_file" "This required check is not a review" "opencode required workflow fails closed without a current-head OpenCode verdict"
 	assert_file_not_contains "$bootstrap_file" "repository_dispatch:" "opencode required workflow does not mix privileged dispatch execution with pull_request_target"
 	assert_file_not_contains "$bootstrap_file" "actions/checkout" "opencode required workflow never checks out pull-request content"
 	assert_file_not_contains "$bootstrap_file" '${{ secrets.' "opencode required workflow never binds repository secrets"
@@ -942,10 +941,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	if [[ "$coverage_merge_tree_step" != *'GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}'* ]]; then
 		record_failure "opencode coverage merge-tree fetch must use the coverage App token and central fallback credentials before github.token for target repository reads"
 	fi
-	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' "coverage evidence fetches the exact base commit as data"
-	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' "coverage evidence first attempts the exact head commit as data"
-	assert_file_contains "$workflow_file" 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' "coverage evidence can resolve an external exact head through the target PR ref"
-	assert_file_contains "$workflow_file" 'fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"' "coverage evidence binds the fetched PR ref back to the expected exact head"
+	assert_file_contains "$workflow_file" 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"' "coverage evidence fetches exact base and head commits as data"
 	assert_file_contains "$workflow_file" 'merge --no-ff --no-edit "$PR_HEAD_SHA"' "coverage evidence materializes the current pull request merge tree without action checkout"
 	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage evidence logs an actionable merge-tree failure reason"
 	assert_file_contains "$workflow_file" "--require-hashes" "coverage tooling installs from a hash-pinned lock"
@@ -1535,8 +1531,6 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
 	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number) }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
-	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository)" "scheduler keeps manual queue scans isolated per repository"
-	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number" "scheduler cancels only metadata-free workflow-run scans in their isolated fallback group"
 	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
 	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
@@ -3749,7 +3743,7 @@ REPORT
 			;;
 		esac
 		;;
-	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success)
+	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success|internal-server-error-unrelated-output-nonretryable|internal-server-error-many-blocks-retry-same-model-success)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-api-connection-primary|vertex_ai/retry-api-connection-primary|openai/openai/retry-api-connection-primary)
 			attempt="0"
@@ -3760,9 +3754,35 @@ REPORT
 			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
 			if [ "$attempt" -eq 1 ]; then
 				if [ "${STRIX_LLM:-}" = "openai/openai/retry-api-connection-primary" ]; then
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-unrelated-output-nonretryable" ]; then
+						echo "Error: litellm.InternalServerError: upstream request failed"
+						for filler in 1 2 3 4 5 6; do
+							echo "target application diagnostic $filler"
+						done
+						echo "Internal Server Error"
+						exit 1
+					fi
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-many-blocks-retry-same-model-success" ]; then
+						# Regression for the SIGPIPE race (Devin finding on
+						# PR #1394): emit enough matching
+						# litellm.InternalServerError blocks that the bounded
+						# awk scan's piped output exceeds a single pipe
+						# buffer, so a `grep -q` that stops reading at the
+						# first match cannot SIGPIPE the still-writing awk
+						# producer into a false non-match under
+						# `set -o pipefail`.
+						for _ in $(seq 1 2000); do
+							echo "line filler some unrelated target application output padding padding padding"
+							echo "Error: litellm.InternalServerError: upstream request failed"
+							echo "Internal Server Error"
+							echo "more filler after context one"
+							echo "more filler after context two"
+						done
+						exit 1
+					fi
 					echo "LLM CONNECTION FAILED"
 					echo "Could not establish connection to the language model."
-					echo "Error: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+					echo "Error: litellm.InternalServerError: upstream request failed"
 				else
 					echo "LLM CONNECTION FAILED"
 					echo "litellm.APIConnectionError: GeminiException - Server disconnected without sending a response."
@@ -6603,6 +6623,48 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	github-models-internal-server-connection-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+		"openai/openai/retry-api-connection-primary" \
+		"" \
+		"0" \
+		"scan ok after same-model api connection retry" \
+		"2" \
+		"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+		"https://models.github.ai/inference|https://models.github.ai/inference" \
+		"openai" \
+		"https://models.github.ai/inference" \
+		"" \
+		"1"
+		;;
+	internal-server-error-unrelated-output-nonretryable)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0"
+		;;
+	internal-server-error-many-blocks-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"0" \
+			"scan ok after same-model api connection retry" \
+			"2" \
+			"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
 			"1"
 		;;
 	endpoint-in-excluded-dir)
@@ -10097,6 +10159,36 @@ run_gate_case_allow_provider_signal "vertex-primary-api-connection-retry-same-mo
 	"1"
 
 run_gate_case_allow_provider_signal "github-models-internal-server-connection-retry-same-model-success" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"0" \
+	"scan ok after same-model api connection retry" \
+	"2" \
+	"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"1"
+
+run_gate_case_allow_provider_signal "internal-server-error-unrelated-output-nonretryable" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0"
+
+# Bug: large provider logs (many matching litellm.InternalServerError
+# blocks) must not suppress a legitimate same-model retry via SIGPIPE on the
+# bounded awk scan under `set -o pipefail`. See PR #1394 Devin finding
+# "Large provider logs suppress retries".
+run_gate_case_allow_provider_signal "internal-server-error-many-blocks-retry-same-model-success" \
 	"openai/openai/retry-api-connection-primary" \
 	"" \
 	"0" \

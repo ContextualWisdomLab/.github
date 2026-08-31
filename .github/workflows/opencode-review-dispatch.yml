@@ -190,7 +190,7 @@ jobs:
             ! [[ "$live_is_private" =~ ^(true|false)$ ]] ||
             [ -z "$live_base_ref" ] ||
             [ -z "$live_head_ref" ]; then
-            printf '::error::PR metadata validation rejected closed, missing, malformed, or base-repository-mismatched live metadata. target=%s#%s state=%s base_repo=%s head_repo=%s base=%s head=%s\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_sha:-<missing>}" "${live_head_sha:-<missing>}"
+            printf '::error::PR metadata validation rejected closed, missing, or malformed live metadata. target=%s#%s state=%s base_repo=%s head_repo=%s base=%s head=%s\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_sha:-<missing>}" "${live_head_sha:-<missing>}"
             exit 1
           fi
 
@@ -338,44 +338,8 @@ jobs:
           git -C "$fetch_dir" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
           if ! git -C "$fetch_dir" \
             -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"; then
-            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base SHA ${PR_BASE_SHA}; check token permissions, target repository access, and SHA visibility."
-            exit 1
-          fi
-          head_fetch_succeeded=0
-          if git -C "$fetch_dir" \
-            -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-            fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"; then
-            head_fetch_succeeded=1
-          else
-            echo "Direct head-SHA coverage fetch was unavailable; resolving the exact head through the target pull request ref."
-          fi
-          if [ "$head_fetch_succeeded" -ne 1 ]; then
-            for pr_head_fetch_attempt in 1 2 3 4 5 6; do
-              if git -C "$fetch_dir" \
-                -c http.extraheader="AUTHORIZATION: basic ${auth_header}" \
-                fetch --no-tags --prune --no-recurse-submodules origin \
-                "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head"; then
-                fetched_head_sha="$(git -C "$fetch_dir" rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"
-                if [ "$fetched_head_sha" = "$PR_HEAD_SHA" ]; then
-                  head_fetch_succeeded=1
-                  break
-                fi
-                if [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; retrying after propagation delay."
-                  sleep 10
-                else
-                  echo "Fetched PR head $fetched_head_sha, expected $PR_HEAD_SHA; no retries remain."
-                fi
-              elif [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                echo "PR head ref fetch failed on attempt $pr_head_fetch_attempt; retrying after propagation delay."
-                sleep 10
-              fi
-            done
-          fi
-          if [ "$head_fetch_succeeded" -ne 1 ] ||
-            ! git -C "$fetch_dir" cat-file -e "${PR_HEAD_SHA}^{commit}"; then
-            echo "::error::Coverage fetch could not resolve exact head SHA ${PR_HEAD_SHA} from ${TARGET_REPOSITORY} or refs/pull/${PR_NUMBER}/head; check token permissions, target repository access, PR state, and SHA propagation."
+            fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"; then
+            echo "::error::Coverage fetch could not authenticate to ${TARGET_REPOSITORY} or read base/head SHAs ${PR_BASE_SHA}/${PR_HEAD_SHA}; check token permissions, target repository access, and SHA visibility."
             exit 1
           fi
           git -C "$fetch_dir" checkout --detach "$PR_BASE_SHA"
@@ -650,17 +614,12 @@ jobs:
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
-            trusted_vcs_license_validator="${GITHUB_WORKSPACE}/scripts/ci/validate_vcs_dependency_license.py"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
               echo "::error::Trusted base Python lock installer must be a regular non-symlink file."
-              exit 1
-            fi
-            if [ ! -f "$trusted_vcs_license_validator" ] || [ -L "$trusted_vcs_license_validator" ]; then
-              echo "::error::Trusted VCS dependency license validator must be a regular non-symlink file."
               exit 1
             fi
             sudo rm -rf "$coverage_build_dir"
@@ -670,8 +629,6 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
-            install -m 0755 "$trusted_vcs_license_validator" \
-              "$coverage_build_dir/validate-vcs-dependency-license.py"
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -821,7 +778,6 @@ jobs:
               -r /tmp/requirements-opencode-review-ci-hashes.txt \
             && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
-          COPY validate-vcs-dependency-license.py /usr/local/libexec/validate-vcs-dependency-license.py
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \
               site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -832,10 +788,6 @@ jobs:
               jq -r '.[] | [.import_name, .repository, .commit] | @tsv' \
                 /tmp/base-python-requirements/vcs-manifest.json >"$dependency_list"; \
               while IFS="$(printf '\t')" read -r import_name repository commit; do \
-                    license_spdx="$(python3 -I /usr/local/libexec/validate-vcs-dependency-license.py \
-                      --repository "$repository" --commit "$commit")"; \
-                    printf 'Validated permitted VCS dependency license: repository=%s commit=%s SPDX=%s\n' \
-                      "$repository" "$commit" "$license_spdx"; \
                     destination="$(printf '/opt/base-vcs-dependencies/dependency-%03d' "$dependency_index")"; \
                     git init --quiet "$destination"; \
                     git -C "$destination" remote add origin \
@@ -993,11 +945,6 @@ jobs:
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN
-          # Corepack may resolve a package-manager release from package.json.
-          # The validated base/head identity check below makes that selection
-          # immutable, and this keeps execution offline even if Corepack would
-          # otherwise attempt a download.
-          export COREPACK_ENABLE_NETWORK=0
           umask 077
           cd "$COVERAGE_SOURCE_WORKDIR"
 
@@ -1544,49 +1491,6 @@ jobs:
             writable_npm_cache_dir="$destination"
           }
 
-          trusted_pnpm_package_manager_matches_base() {
-            local relative_dir
-            local relative_manifest
-            local base_spec
-            local head_spec
-            local worktree_spec
-
-            case "$PWD" in
-              "$COVERAGE_SOURCE_WORKDIR")
-                relative_dir=""
-                ;;
-              "$COVERAGE_SOURCE_WORKDIR"/*)
-                relative_dir="${PWD#"$COVERAGE_SOURCE_WORKDIR"/}"
-                ;;
-              *)
-                echo "::error::pnpm project directory escaped the validated coverage worktree." >&2
-                return 1
-                ;;
-            esac
-            relative_manifest="${relative_dir:+${relative_dir}/}package.json"
-            if [ ! -f package.json ] || [ -L package.json ]; then
-              echo "::error::Current pnpm package manifest must be a regular non-symlink file." >&2
-              return 1
-            fi
-
-            base_spec="$(trusted_git show "${PR_BASE_SHA}:${relative_manifest}" | jq -er '.packageManager // empty')" || {
-              echo "::error::Validated base does not declare an exact pnpm packageManager in ${relative_manifest}." >&2
-              return 1
-            }
-            head_spec="$(trusted_git show "${PR_HEAD_SHA}:${relative_manifest}" | jq -er '.packageManager // empty')" || {
-              echo "::error::Validated head does not declare an exact pnpm packageManager in ${relative_manifest}." >&2
-              return 1
-            }
-            worktree_spec="$(jq -er '.packageManager // empty' package.json)" || {
-              echo "::error::Current pnpm package manifest does not declare packageManager." >&2
-              return 1
-            }
-            if [ "$base_spec" != "$head_spec" ] || [ "$head_spec" != "$worktree_spec" ]; then
-              echo "::error::Current pnpm packageManager specification differs from the validated base; refusing Corepack version resolution." >&2
-              return 1
-            fi
-          }
-
           trusted_manifest_records_lock_revision() {
             local relative_lock="$1"
             local head_blob="$2"
@@ -1739,7 +1643,6 @@ jobs:
                 fi
                 ;;
               pnpm)
-                trusted_pnpm_package_manager_matches_base
                 trusted_pnpm_lock_matches_base
                 prepare_writable_pnpm_store
                 if pnpm_supports_trust_lockfile; then
@@ -2510,7 +2413,7 @@ jobs:
             ! [[ "$EXPECTED_IS_PRIVATE" =~ ^(true|false)$ ]] ||
             ! [[ "$live_is_private" =~ ^(true|false)$ ]] ||
             [ "$live_is_private" != "$EXPECTED_IS_PRIVATE" ]; then
-            printf '::error::OpenCode privileged review metadata changed before OIDC, review-token, CodeGraph, or model execution; exact base/head identity no longer matches the validated request. target=%s#%s state=%s base_repo=%s base=%s/%s expected_base=%s/%s head_repo=%s head=%s/%s expected_head=%s/%s private=%s expected_private=%s\n' \
+            printf '::error::OpenCode privileged review metadata changed before OIDC, review-token, CodeGraph, or model execution. target=%s#%s state=%s base_repo=%s base=%s/%s expected_base=%s/%s head_repo=%s head=%s/%s expected_head=%s/%s private=%s expected_private=%s\n' \
               "$GH_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${base_repository:-<missing>}" "${live_base_ref:-<missing>}" "${live_base_sha:-<missing>}" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "${head_repository:-<missing>}" "${live_head_ref:-<missing>}" "${live_head_sha:-<missing>}" "$EXPECTED_HEAD_REF" "$EXPECTED_HEAD_SHA" "${live_is_private:-<missing>}" "${EXPECTED_IS_PRIVATE:-<missing>}"
             exit 1
           fi

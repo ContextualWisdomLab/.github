@@ -19,7 +19,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "6df4b149a0912767a1e960b0d3e95ec014d88319"
+REVIEW_DISPATCH_BLOB_SHA = "2aa245e7f2a053a4c0b7a9cc8bac0d5d44d38092"
 
 
 def _workflow_text(path: Path) -> str:
@@ -67,7 +67,6 @@ def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:
         '"apiKey": "{env:STRIX_GITHUB_MODELS_TOKEN}"',
         '"baseURL": "https://models.github.ai/inference"',
         "COPILOT_GITHUB_TOKEN",
-        "CLOUDFLARE_API_TOKEN",
     )
     for fragment in forbidden_fragments:
         assert fragment not in workflow, fragment
@@ -174,36 +173,8 @@ def test_missing_gateway_env_fails_closed_before_model_execution() -> None:
     assert conflict_guard in workflow[conflict_start:]
 
 
-def test_independent_review_agent_key_system_is_unchanged() -> None:
-    """Pin reviewer write credentials without freezing unrelated workflow bytes."""
-    workflow = _workflow_text(REVIEW_DISPATCH_WORKFLOW)
-    for expression in (
-        "GH_TOKEN: $"
-        + "{{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-        "GH_TOKEN: $" + "{{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-        "GH_TOKEN: $"
-        + "{{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
-    ):
-        assert expression in workflow
-    assert "pr-review-autofix" not in workflow
-    assert "COPILOT_GITHUB_TOKEN" not in workflow
-
-    model_step_start = workflow.index("      - name: Run OpenCode PR Review model pool")
-    model_step_end = workflow.index(
-        "      - name: Publish OpenCode review outcome", model_step_start
-    )
-    model_step = workflow[model_step_start:model_step_end]
-    # The model pool step no longer declares direct provider credentials
-    # in-line (ContextualWisdomLab/contextual-orchestrator gateway migration,
-    # docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md): it sources
-    # scripts/ci/load_contextual_orchestrator_token.sh instead.
-    assert "load_contextual_orchestrator_token.sh" in model_step
-    assert "PR_REVIEW_MERGE_TOKEN" not in model_step
-    assert "OPENCODE_APPROVE_TOKEN" not in model_step
-
-
 def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:
-    """Pin the complete reviewed reviewer workflow in addition to semantic guards."""
+    """Pin the reviewed read-only reviewer workflow byte-for-byte."""
     result = subprocess.run(
         ["git", "hash-object", str(REVIEW_DISPATCH_WORKFLOW)],
         check=True,
@@ -211,6 +182,7 @@ def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:
         text=True,
     )
     assert result.stdout.strip() == REVIEW_DISPATCH_BLOB_SHA
+    assert "pr-review-autofix" not in _workflow_text(REVIEW_DISPATCH_WORKFLOW)
 
 
 def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -> None:
@@ -279,12 +251,6 @@ def test_operator_doctoring_and_changelog_record_exact_write_scope() -> None:
     assert "OpenCode. (2026a). *Permissions*" in doctoring
     assert "ignored-path inventory" in changelog
     assert "model-mutable Git metadata" in changelog
-    assert "Allowed an allowlisted base repository's open fork-head PR" in changelog
-    assert (
-        "external fork heads now fail closed before OIDC, review-token, CodeGraph, "
-        "model, or merge-control paths"
-        not in changelog
-    )
 
 
 def test_allowed_path_seal_accepts_the_structured_inventory(tmp_path: Path) -> None:

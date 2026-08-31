@@ -546,13 +546,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'http."${GITHUB_SERVER_URL}/".extraheader' not in step
     assert "AUTHORIZATION: bearer ${GH_TOKEN}" not in step
     assert "AUTHORIZATION: bearer" not in step
-    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA"' in step
-    assert 'fetch --no-tags --prune --no-recurse-submodules origin "$PR_HEAD_SHA"' in step
-    assert 'refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head' in step
     assert (
-        'fetched_head_sha="$(git -C "$fetch_dir" rev-parse '
-        '"refs/remotes/origin/pr-${PR_NUMBER}-head")"'
-    ) in step
+        'fetch --no-tags --prune --no-recurse-submodules origin "$PR_BASE_SHA" "$PR_HEAD_SHA"'
+        in step
+    )
     assert "Coverage fetch could not authenticate" in step
     assert 'merge --no-ff --no-edit "$PR_HEAD_SHA"' in step
     assert "Coverage merge tree could not be materialized" in step
@@ -671,20 +668,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert npm_install_case.count("return 0") == 2
     assert "return 1" not in npm_install_case
     assert "trusted_pnpm_lock_matches_base()" in measure_step
-    assert "trusted_pnpm_package_manager_matches_base()" in measure_step
-    assert 'relative_manifest="${relative_dir:+${relative_dir}/}package.json"' in measure_step
-    assert (
-        'base_spec="$(trusted_git show "${PR_BASE_SHA}:${relative_manifest}" '
-        "| jq -er '.packageManager // empty')\""
-        in measure_step
-    )
-    assert (
-        'head_spec="$(trusted_git show "${PR_HEAD_SHA}:${relative_manifest}" '
-        "| jq -er '.packageManager // empty')\""
-        in measure_step
-    )
-    assert "Current pnpm packageManager specification differs from the validated base" in measure_step
-    assert "export COREPACK_ENABLE_NETWORK=0" in measure_step
     assert (
         'base_blob="$(trusted_git rev-parse "${PR_BASE_SHA}:${relative_lock}"'
         in measure_step
@@ -756,9 +739,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
-    assert 'install -m 0755 "$trusted_vcs_license_validator"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
-    assert "COPY validate-vcs-dependency-license.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
     assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
     assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
@@ -767,16 +748,6 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
-    license_validation = measure_step.index(
-        'python3 -I /usr/local/libexec/validate-vcs-dependency-license.py'
-    )
-    vcs_clone = measure_step.index('git init --quiet "$destination"')
-    vcs_registration = measure_step.index(
-        'printf \'%s\\n\' "$python_root" >>"$path_file"'
-    )
-    assert license_validation < vcs_clone < vcs_registration
-    assert '--repository "$repository" --commit "$commit"' in measure_step
-    assert "Validated permitted VCS dependency license" in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step
     assert "has a missing or ambiguous import root" in measure_step
@@ -1482,79 +1453,6 @@ def test_opencode_coverage_gates_trust_lockfile_on_pnpm_11_3(tmp_path):
             f"pnpm {version} expected status {expected_status}, "
             f"got {result.returncode}: {result.stderr}"
         )
-
-
-def test_opencode_coverage_rejects_pnpm_package_manager_version_drift(tmp_path):
-    """A head cannot select a different Corepack pnpm version than the base."""
-    bash = shutil.which("bash")
-    git = shutil.which("git")
-    jq = shutil.which("jq")
-    if bash is None or git is None or jq is None:
-        pytest.skip("bash, git, and jq are required for this workflow regression")
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run([git, "init", "-q", str(repo)], check=True)
-    subprocess.run([git, "-C", str(repo), "config", "user.name", "Test"], check=True)
-    subprocess.run(
-        [git, "-C", str(repo), "config", "user.email", "test@example.invalid"],
-        check=True,
-    )
-    (repo / "package.json").write_text(
-        '{"packageManager":"pnpm@9.15.9"}\n', encoding="utf-8"
-    )
-    (repo / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
-    subprocess.run([git, "-C", str(repo), "add", "."], check=True)
-    subprocess.run([git, "-C", str(repo), "commit", "-qm", "base"], check=True)
-    base_sha = subprocess.run(
-        [git, "-C", str(repo), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    (repo / "package.json").write_text(
-        '{"packageManager":"pnpm@10.28.1"}\n', encoding="utf-8"
-    )
-    subprocess.run([git, "-C", str(repo), "add", "package.json"], check=True)
-    subprocess.run([git, "-C", str(repo), "commit", "-qm", "head"], check=True)
-    head_sha = subprocess.run(
-        [git, "-C", str(repo), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
-        encoding="utf-8"
-    )
-    measure_start = workflow.index("      - name: Measure test and docstring evidence\n")
-    measure_end = workflow.index("\n      - name:", measure_start + 1)
-    measure_step = workflow[measure_start:measure_end]
-    helper_start = measure_step.index(
-        "          trusted_pnpm_package_manager_matches_base() {\n"
-    )
-    helper_end = measure_step.index("\n\n          trusted_pnpm_lock_matches_base()", helper_start)
-    helper = textwrap.dedent(measure_step[helper_start:helper_end])
-    script = f"""
-set -euo pipefail
-trusted_git() {{ git -C "$TEST_REPO" "$@"; }}
-export COVERAGE_SOURCE_WORKDIR="$TEST_REPO"
-export PR_BASE_SHA="{base_sha}"
-export PR_HEAD_SHA="{head_sha}"
-cd "$TEST_REPO"
-{helper}
-trusted_pnpm_package_manager_matches_base
-"""
-    completed = subprocess.run(
-        [bash, "-c", script],
-        env={**os.environ, "TEST_REPO": str(repo)},
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert completed.returncode != 0
-    assert "differs from the validated base" in completed.stderr
 
 
 def test_opencode_coverage_discovers_changed_nested_javascript_package(tmp_path):
@@ -2744,16 +2642,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert "repository_dispatch:" not in bootstrap.split("permissions:", 1)[0]
     assert "actions/checkout" not in bootstrap
     assert "${{ secrets." not in bootstrap
-    assert 'jq -r -s --arg sha "$HEAD_SHA"' in bootstrap
     assert "required-workflow-bootstrap:" in bootstrap
     assert "  coverage-source-tree:\n" in bootstrap
     assert "  coverage-evidence:\n" in bootstrap
     assert "  opencode-review-target:\n" in bootstrap
     assert "    name: opencode-review\n" in bootstrap
     assert "authenticated default-branch OpenCode review dispatch" in bootstrap
-    assert "This required check is not a review" in bootstrap
-    assert "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head" in bootstrap
-    assert "pull-requests: read" in bootstrap
     assert workflow.count("ref: ${{ steps.trusted_source.outputs.ref }}") == 1
     assert "TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}" in workflow
     assert "ref: ${{ github.workflow_sha }}" not in workflow

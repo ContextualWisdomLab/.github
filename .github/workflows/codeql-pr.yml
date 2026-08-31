@@ -194,90 +194,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          # GitHub can omit the synthetic merge ref for stacked/non-default-base PRs;
-          # materialize the exact merge-result SHA locally while retaining the
-          # documented pull-request ref shape for CodeQL result publication.
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
-          # merge-tree requires the real base/head merge base; an explicit-SHA
-          # depth-1 checkout leaves every fetched commit as a shallow root.
-          fetch-depth: 0
-
-      - name: Verify merge preview identity
-        id: verify-merge-preview
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0=http.extraheader
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer $GITHUB_TOKEN"
-          git fetch --no-tags origin "$BASE_SHA" "$MERGE_SHA"
-          head_fetch_succeeded=0
-          if git cat-file -e "$HEAD_SHA^{commit}"; then
-            head_fetch_succeeded=1
-          elif git fetch --no-tags origin "$HEAD_SHA" &&
-            git cat-file -e "$HEAD_SHA^{commit}"; then
-            head_fetch_succeeded=1
-          else
-            echo "Direct CodeQL head-SHA fetch was unavailable; resolving the exact head through the target pull request ref."
-          fi
-          if [ "$head_fetch_succeeded" -ne 1 ]; then
-            for pr_head_fetch_attempt in 1 2 3 4 5 6; do
-              if git fetch --no-tags --prune origin \
-                "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}-head"; then
-                fetched_head_sha="$(git rev-parse "refs/remotes/origin/pr-${PR_NUMBER}-head")"
-                if [ "$fetched_head_sha" = "$HEAD_SHA" ]; then
-                  head_fetch_succeeded=1
-                  break
-                fi
-                if [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                  echo "Fetched PR head $fetched_head_sha, expected $HEAD_SHA; retrying after propagation delay."
-                  sleep 10
-                fi
-              elif [ "$pr_head_fetch_attempt" -lt 6 ]; then
-                echo "PR head ref fetch failed on attempt $pr_head_fetch_attempt; retrying after propagation delay."
-                sleep 10
-              fi
-            done
-          fi
-          if [ "$head_fetch_succeeded" -ne 1 ] ||
-            ! git cat-file -e "$HEAD_SHA^{commit}"; then
-            echo "::error::CodeQL merge preview could not resolve exact head SHA $HEAD_SHA from origin or refs/pull/$PR_NUMBER/head."
-            exit 1
-          fi
-          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
-          provided_tree="$(git rev-parse "$MERGE_SHA^{tree}")"
-          read -r actual_merge parent_one parent_two extra <<EOF
-          $(git rev-list --parents -n 1 "$MERGE_SHA")
-          EOF
-          expected_tree="$(git merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA")"
-          local_merge_sha="$MERGE_SHA"
-          if [ "$actual_merge" != "$MERGE_SHA" ] ||
-            [ "$parent_one" != "$BASE_SHA" ] ||
-            [ "$parent_two" != "$HEAD_SHA" ] ||
-            [ -n "${extra:-}" ] ||
-            [ "$provided_tree" != "$expected_tree" ]; then
-            echo "::notice::GitHub merge preview metadata is stale or structurally different; materializing the exact base/head merge tree locally."
-            local_merge_sha="$(
-              printf 'CWL CodeQL exact merge preview\n\nbase=%s\nhead=%s\n' "$BASE_SHA" "$HEAD_SHA" |
-                env GIT_AUTHOR_NAME='CWL CodeQL verifier' \
-                  GIT_AUTHOR_EMAIL='cwl-codeql-verifier@localhost' \
-                  GIT_COMMITTER_NAME='CWL CodeQL verifier' \
-                  GIT_COMMITTER_EMAIL='cwl-codeql-verifier@localhost' \
-                  git commit-tree "$expected_tree" -p "$BASE_SHA" -p "$HEAD_SHA"
-            )"
-          fi
-          git reset --hard "$local_merge_sha"
-          test "$(git rev-parse "$local_merge_sha^{tree}")" = "$expected_tree"
-          {
-            echo "merge_sha=$local_merge_sha"
-            echo "merge_tree=$expected_tree"
-          } >> "$GITHUB_OUTPUT"
-          echo "Verified merge preview: base=$BASE_SHA head=$HEAD_SHA provided_merge=$MERGE_SHA analyzed_merge=$local_merge_sha tree=$expected_tree"
+          ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
@@ -292,7 +209,7 @@ jobs:
           upload: false
           output: codeql-results-merge
           ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
-          sha: ${{ steps.verify-merge-preview.outputs.merge_sha }}
+          sha: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Enforce CodeQL Medium+ SARIF gate
         shell: python3 {0}

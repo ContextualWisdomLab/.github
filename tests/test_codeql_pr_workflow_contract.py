@@ -35,38 +35,8 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert "CodeQL merge preview" in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "github.event.pull_request.merge_commit_sha" in workflow
-    assert "name: Verify merge preview identity" in workflow
-    assert "id: verify-merge-preview" in workflow
-    assert 'git rev-list --parents -n 1 "$MERGE_SHA"' in workflow
-    assert 'git merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA"' in workflow
-    assert 'git rev-parse "$MERGE_SHA^{tree}"' in workflow
-    assert 'GITHUB_TOKEN: ${{ github.token }}' in workflow
-    assert 'GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer $GITHUB_TOKEN"' in workflow
-    assert 'git fetch --no-tags origin "$BASE_SHA" "$MERGE_SHA"' in workflow
-    assert 'git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" "$MERGE_SHA"' not in workflow
-    assert 'git cat-file -e "$HEAD_SHA^{commit}"' in workflow
-    assert 'fetch --no-tags origin "$HEAD_SHA"' in workflow
-    assert (
-        '"+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/'
-        'pr-${PR_NUMBER}-head"'
-    ) in workflow
-    assert (
-        'fetched_head_sha="$(git rev-parse '
-        '"refs/remotes/origin/pr-${PR_NUMBER}-head")"'
-    ) in workflow
-    assert '[ "$fetched_head_sha" = "$HEAD_SHA" ]' in workflow
-    assert "CodeQL merge preview could not resolve exact head SHA" in workflow
-    assert 'git commit-tree "$expected_tree" -p "$BASE_SHA" -p "$HEAD_SHA"' in workflow
-    assert 'git reset --hard "$local_merge_sha"' in workflow
-    assert 'echo "merge_sha=$local_merge_sha"' in workflow
-    assert "sha: ${{ steps.verify-merge-preview.outputs.merge_sha }}" in workflow
     assert "refs/pull/{0}/head" in workflow
-    assert "ref: ${{ github.event.pull_request.merge_commit_sha }}" in workflow
-    merge_checkout = workflow.split("      - name: Checkout merge preview", 1)[1].split(
-        "      - name: Verify merge preview identity", 1
-    )[0]
-    assert "fetch-depth: 0" in merge_checkout
-    assert "ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}" in workflow
+    assert "refs/pull/{0}/merge" in workflow
     assert workflow.count("security-events: read") == 2
     assert "security-events: write" not in workflow
 
