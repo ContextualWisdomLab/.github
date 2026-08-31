@@ -24,6 +24,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://review.example.invalid/v1/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
     monkeypatch.setattr(
         noema.socket,
         "getaddrinfo",
