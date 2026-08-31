@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Let the required OpenCode verdict check wait up to 325 minutes for the
+  authenticated review, matching the multi-hour model-pool budget instead of
+  failing before reviews that legitimately exceed two hours can finish.
 - Re-pin the reviewed-blob contract test's SHA to the current
   `opencode-review-dispatch.yml` content after the review run timeout change,
   restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.

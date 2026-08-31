@@ -235,7 +235,7 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 325
     permissions:
       contents: read
       pull-requests: read
@@ -292,7 +292,7 @@ jobs:
             exit 1
           fi
           verdict=""
-          for attempt in $(seq 1 180); do
+          for attempt in $(seq 1 640); do
             reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
             verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
@@ -325,7 +325,7 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            if [ "$attempt" -lt 180 ]; then
+            if [ "$attempt" -lt 640 ]; then
               sleep 30
             fi
           done
