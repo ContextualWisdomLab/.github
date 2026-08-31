@@ -18,6 +18,9 @@ Semantic Versioning where the repository publishes a release.
   regression to a real deep payload (not a monkeypatch) now that this bound
   makes the real case reproducible everywhere; the synthetic
   `RecursionError`-from-the-decoder test remains as supplemental coverage.
+- Match JSON delimiter types while discovering Noema verdict candidates, so
+  malformed wrappers such as `[}` or `{]` cannot release a later nested
+  object as an apparently top-level verdict.
 - Convert JSON decoder recursion failures from deeply nested Noema responses
   into the existing bounded, fingerprinted fail-closed diagnostic instead of
   allowing an unhandled `RecursionError` to crash the required review.
@@ -44,6 +47,9 @@ Semantic Versioning where the repository publishes a release.
   dispatch reruns only that required run's failed job. Long model and coverage
   budgets remain unchanged. Fork PRs still fail closed before dispatch;
   maintainers must first materialize them on a trusted base-repository branch.
+  The receipt continuation identifies `pull_request_target` runs by their exact
+  PR/head-bearing `display_title`; their REST `head_sha` is the trusted base
+  revision, not the reviewed PR head.
 - Skip Noema's one-time repair-retry LLM request when the PR head has moved
   since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
   now takes `expected_head` and re-checks it against a fresh `fetch_pr`

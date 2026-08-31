@@ -680,6 +680,13 @@ def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_array(
         )
 
 
+@pytest.mark.parametrize("payload", ['[} {"decision":"approve"}', '{] {"decision":"approve"}'])
+def test_extract_json_object_rejects_recovery_after_mismatched_delimiter(payload):
+    """A mismatched closer must not release a nested verdict candidate."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(payload)
+
+
 def test_extract_json_object_fails_closed_on_a_real_deep_payload():
     """A genuinely deep JSON payload must fail closed on this job's own runtime.
 

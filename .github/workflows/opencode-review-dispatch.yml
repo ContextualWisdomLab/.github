@@ -7582,19 +7582,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
         run: |
           set -euo pipefail
           for attempt in $(seq 1 12); do
-            runs="$(gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&head_sha=${PR_HEAD_SHA}&per_page=100")"
-            required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" '
+            runs="$(gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100")"
+            required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
               [
                 .[].workflow_runs[]
-                | select(.head_sha == $head)
                 | select(.event == "pull_request_target")
                 | select(.path == ".github/workflows/opencode-review.yml")
                 | select(.workflow_url | contains("/actions/required_workflows/"))
-                | select(.name | startswith("Required OpenCode Review " + $repo + "#"))
+                | select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))
               ]
               | sort_by(.id)
               | last

@@ -493,7 +493,7 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
     """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
 
-    A lightweight, string-literal-aware bracket counter: walks forward from
+    A lightweight, string-literal-aware delimiter stack: walks forward from
     ``start`` (a ``{``), ignoring any ``{``/``[``/``}``/``]`` characters that
     appear inside a JSON string literal, and returns ``True`` as soon as the
     opening brace's matching close is found without nesting exceeding
@@ -508,7 +508,7 @@ def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
     see ``extract_json_object``'s docstring for why that behavior cannot be
     trusted to reject excessive nesting on its own.
     """
-    depth = 0
+    delimiters: list[str] = []
     in_string = False
     escaped = False
     for index in range(start, len(text)):
@@ -524,12 +524,14 @@ def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
         if char == '"':
             in_string = True
         elif char in "{[":
-            depth += 1
-            if depth > max_depth:
+            delimiters.append(char)
+            if len(delimiters) > max_depth:
                 return False
-        elif char in "}]":
-            depth -= 1
-            if depth == 0:
+        elif char in "}]" and delimiters:
+            if delimiters[-1] != ("{" if char == "}" else "["):
+                continue
+            delimiters.pop()
+            if not delimiters:
                 return True
     return True
 
@@ -549,7 +551,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
     both ``{``/``}`` and ``[``/``]``) is zero, so a valid nested object cannot
     escape a malformed outer *object or array* wrapper. Every candidate
     starts at a ``{``, making each successful parse a JSON object (``dict``);
-    only the decode failure itself needs converting.
+    only the decode failure itself needs converting. Delimiter types are
+    matched, so a mismatched closer cannot release a nested object as a new
+    top-level candidate.
 
     The raised diagnostic never embeds the raw (or scrubbed) model response.
     This is a ``pull_request_target`` workflow whose Actions logs are public
@@ -589,7 +593,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     decode_error: json.JSONDecodeError | None = None
     candidate_starts: list[int] = []
-    depth = 0
+    delimiters: list[str] = []
     in_string = False
     escaped = False
     for index, character in enumerate(stripped):
@@ -604,11 +608,12 @@ def extract_json_object(text: str) -> dict[str, Any]:
         if character == '"':
             in_string = True
         elif character in "{[":
-            if character == "{" and depth == 0:
+            if character == "{" and not delimiters:
                 candidate_starts.append(index)
-            depth += 1
-        elif character in "}]" and depth:
-            depth -= 1
+            delimiters.append(character)
+        elif character in "}]" and delimiters:
+            if delimiters[-1] == ("{" if character == "}" else "["):
+                delimiters.pop()
 
     for start in candidate_starts:
         if not _json_nesting_within_bound(stripped, start, MAX_JSON_NESTING_DEPTH):
