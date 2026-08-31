@@ -1292,6 +1292,68 @@ conflicting** PRs address pieces of this:
   currently blocked by the sidecar-preflight outage above, so neither could
   be re-reviewed to a genuine pass yet regardless of which approach wins.
 
+## 2026-08-30 PR #1347 Devin Review 6건 검증: 4건 실재 결함 수정, 2건 확인 후 해소
+
+`ContextualWisdomLab/.github#1347` (`fix/sandboxed-web-e2e-isolation-clean`,
+bubblewrap 격리 + SSRF-safe readiness-URL 검증)의 commit `7ac8298b` 기준 Devin
+Review 미해결 6건을 HEAD 코드 기준으로 개별 재검증했다. Finding 텍스트를 그대로
+신뢰하지 않고 각각 실제 동작을 재현해 확인했다.
+
+- **Finding 1 (🟡 malformed readiness port, line 423) — 실재.**
+  `require_loopback_readiness_url`는 `parsed.port`를 한 번도 읽지 않아, 비숫자
+  포트(`:abc`)는 `urllib.parse`를 그대로 통과한 뒤 `http.client.InvalidURL`을
+  발생시켰다 — 이 예외는 `ValueError`도 `urllib.error.URLError`도 아니어서
+  `main()`의 어떤 핸들러에도 잡히지 않고 스크립트가 uncaught traceback으로
+  죽는다(재현 확인). `parsed.port` 접근을 함수 안으로 추가해 동일한
+  `ValueError` 클래스로 통일했다. 백엔드/프런트엔드 readiness URL 양쪽에 대해
+  비숫자·범위초과 포트 테스트를 추가.
+- **Finding 2 (🟡 installed-but-unusable isolation, line 124) — 실재.**
+  `isolation_backend`는 `shutil.which("bwrap")`만 확인하고 실제 namespace 생성
+  가능 여부는 전혀 검증하지 않았다. `isolated_command`가 실제로 쓰는 것과 같은
+  최소 namespace/mount 구성(new PID ns, tmpfs root, 표준 read-only bind,
+  `/proc`, `/dev`, tmpfs `/tmp`)으로 현재 인터프리터의 no-op(`-c pass`)을
+  5초 timeout으로 실행하는 preflight를 추가했다. 실패 시 exit 126로 조기
+  분류.
+- **Finding 3 (📝 child-executable containment, line 163) — 정보성, 정확함.**
+  `--unshare-pid` + 암묵적 mount namespace는 wrapped 프로세스가 낳는 모든
+  자손 프로세스에도 적용되므로 추가 escape 경로가 없음을 코드로 확인. 코드
+  변경 없이 스레드에 확인 회신.
+- **Finding 4 (📝 mapped-home writability, line 135) — 정보성, 정확함.**
+  `_sandbox_environment`가 `HOME` 등을 `/workspace` 하위로 재매핑하고,
+  `sandboxed_verify.scrubbed_env`가 그 경로를 미리 생성하며, `isolated_command`가
+  동일 sandbox_root를 `--bind`(read-write)로 마운트하므로 재매핑된 홈이 실제로
+  존재하고 쓰기 가능함을 확인. 코드 변경 없이 회신.
+- **Finding 5 (🟥 workspace symlink escape, line 188) — 실재, 최우선 처리.**
+  `sandboxed_verify.copy_workspace`가 `shutil.copytree(..., symlinks=True)`를
+  써서 심볼릭 링크를 역참조 없이 그대로 보존한다는 것을 확인. 저장소에 포함된
+  심볼릭 링크가 절대경로 또는 `..` 다단 상대경로로 복사 트리 바깥을 가리키면,
+  복사 후에도 그 링크가 살아있어 `/workspace`에 bind-mount된 이후 이를
+  따라가는 명령이 sandbox 경계 밖 호스트 파일에 접근할 수 있다. 복사 직후
+  트리 전체를 순회(`rglob`, 심볼릭 디렉터리 내부로는 재귀하지 않음 — 순환
+  링크로 인한 무한 루프/과다 순회 방지)하며 모든 심볼릭 링크의 최종 resolve
+  경로가 sandbox root 하위인지 검증하고, 하나라도 벗어나면 복사 전체를
+  `ValueError`로 fail-closed 처리하도록 `_reject_escaping_symlinks`를 추가.
+  절대경로 escape, `../..` 상대경로 escape, 디렉터리 심볼릭 링크 escape,
+  풀 수 없는 순환 심볼릭 링크(RuntimeError/OSError 양쪽 Python 버전 차이
+  모두 처리) 각각에 대한 회귀 테스트와, 내부 상대 심볼릭 링크는 그대로
+  보존되는지 확인하는 회귀 테스트를 추가했다.
+- **Finding 6 (🟨 unresolved-executable bypass, line 156) — 실재.**
+  `isolated_command`는 `shutil.which(argv[0])`가 `None`을 반환하면 전체
+  검증 블록을 건너뛰고 원본 argv를 그대로 bubblewrap에 넘겼다 — 이 버그를
+  그대로 문서화하고 있던 기존 테스트
+  (`test_isolated_command_allows_unresolved_executable_for_bwrap`)를 발견,
+  fail-closed로 전환하는 테스트로 교체했다. 해석 실패 시 다른 검증과 동일한
+  `RuntimeError`(exit 126 경로)를 던지도록 수정.
+
+수정 파일: `scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`,
+`tests/test_sandboxed_web_e2e.py`, `tests/test_sandboxed_verify.py`,
+`docs/doctoring/sandboxed-web-command-isolation.md`,
+`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`, `CHANGELOG.md`.
+전체 스위트(`pytest tests`, 1924 passed) 및 대상 두 모듈 100% line/branch
+coverage, 100% docstring coverage(`interrogate`), `ruff check` 모두 통과 확인.
+GitHub 스레드 6건 각각에 회신하고, 실재 결함 4건 + 정보성 확인 2건 총 6건
+모두 resolve 처리.
+
 ## 2026-08-30 sidecar preflight `max_tokens`: explicit owner critique, ADR-0005 (revised after Devin Review)
 
 Direct owner feedback after #1436's `max_tokens` 16→4096 raise moved the sidecar's gateway preflight
@@ -1653,47 +1715,89 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
-## 2026-08-31 sidecar pin bumped past #922's request-time failover fix
+## 2026-08-31 sidecar pin bumped past #922's failover fix, #941's NVIDIA-account-independence fix, and current `main`
 
 - Bumps `ORCHESTRATOR_PIN_SHA` from `30c6d71680e659f25a0a433d4726ad0d437f9757`
-  (the #1430 pin) to `79c6841b9b3645d1f14b943985825d2302071f5b` in the same
-  three places #1430 established as the contract: the sidecar script default
+  (the #1430 pin) to `0adca4703df67f8f31d3ea5b04a1e07ed775dd6c`
+  (`contextual-orchestrator` `main` tip as of 2026-08-31) in the same three
+  places #1430 established as the contract: the sidecar script default
   (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
   test's `ORCH_PIN_SHA` (`tests/test_contextual_orchestrator_review_sidecar_contract.py`),
   and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
-  reference.
-- This vendors `contextual-orchestrator` PR #922 (`fix(routing): classify
-  primary provider transport failures explicitly` — the classification fix
-  behind this Draft's own request-time failover acceptance contract, see
-  PR #1437) plus everything else that landed on that repo's `main` since the
-  last pin: #912 (video job resource normalization), #868 (gateway default
-  chat model + configured-gateway discovery + OpenRouter ZDR/privacy
-  metadata), #920/#921 (cleanup/docs), #928 (provider-catalog-sync outage
-  tolerance), #925 (`stream_options.include_usage` for tools passthrough),
-  and #929 (Bytez raw-token `Authorization` header fix) — 148 commits total
-  between the two pins.
+  reference. An earlier revision of this branch (PR #1465) targeted
+  `79c6841b9b3645d1f14b943985825d2302071f5b`; that intermediate target has
+  since fallen behind two more merged `contextual-orchestrator` PRs found
+  during this session's own investigation (below), so the bump was extended
+  the rest of the way to current `main` instead of landing a pin that would
+  already be stale on merge.
+- Vendors `contextual-orchestrator` PR #922 (`fix(routing): classify primary
+  provider transport failures explicitly` — the classification fix behind
+  PR #1437's own request-time failover acceptance contract) plus everything
+  else that landed on that repo's `main` since the #1430 pin, most notably:
+  - **#941** (`fix(discovery): keep credential accounts independent`) and its
+    follow-up test fix **#945**: removes the wrong assumption that the two
+    independent `nvidia_nim`/`nvidia_nim_sub` KV credentials share one model
+    catalog/outage domain — an assumption `docs/planning/adrs/0015-durable-
+    provider-catalog.md` (accepted 2026-08-22, in `contextual-orchestrator`)
+    already contradicted. `model_discovery._provider_family` (the collapsing
+    helper) is deleted outright; `select_bootstrap_discovered_agents`,
+    `select_provider_diverse_models`, and `evaluate_provider_credential_
+    inventory` all now diversify/tolerate per credential-backed provider
+    account, not per collapsed family. This is the exact fix this session's
+    investigation was chasing: without this bump, every hosted review run
+    (`noema-review`/`opencode-review`/`strix`) kept using the old, buggy
+    collapsing logic regardless of what was already merged upstream. It is a
+    **prerequisite** for the separate, independent fix to
+    `scripts/ci/contextual_orchestrator_review_policy.py`'s own
+    `PROVIDER_FAMILIES` hardcoded map (this repo's own copy of the identical
+    wrong assumption, never touched by #941 since that PR only fixed
+    `contextual-orchestrator` itself) to have any live effect on the
+    `free_family_diversity` evidence PR #1433 added and PR #1437 (open) gates
+    Strix's `orchestrator/free` eligibility on.
+  - a new, unrelated free-pool correctness fix also on this span: models that
+    declare a non-text input modality (e.g. NVIDIA NIM's vision-input
+    `meta/llama-3.2-90b-vision-instruct`, the root cause of
+    `ContextualWisdomLab/.github#1198`'s incident) are now excluded from the
+    blind general-chat `orchestrator/free` pool via a new
+    `general_free_serving_candidates`/`_is_general_free_agent` predicate,
+    while remaining fully counted in price-only free inventory and reachable
+    through capability-scoped free routes. Additive only (new function, new
+    `discover-models --verbose`/`general_free_serving_count` fields); no
+    removed CLI surface.
+  - #912 (video job resource normalization), #868 (gateway default chat
+    model + configured-gateway discovery + OpenRouter ZDR/privacy metadata),
+    #920/#921 (cleanup/docs), #928 (provider-catalog-sync outage tolerance),
+    #925 (`stream_options.include_usage` for tools passthrough), and #929
+    (Bytez raw-token `Authorization` header fix) — already reviewed by
+    PR #1465's own prior pass, not re-reviewed in depth here.
 - Reviewed for anything that would break the sidecar's actual dependency
-  surface before bumping, since ADR-0003 requires this: `requirements.lock`
-  is byte-for-byte unchanged (no `--require-hashes` drift), and every change
-  to `contextual_orchestrator/__main__.py` (the CLI the launcher invokes) is
-  strictly additive -- new optional flags and discovery-source plumbing, zero
-  removed arguments or subcommands. The `register-credential` and `--serve
-  --agents ... --port ... --auth-token ...` invocations the sidecar/launcher
-  depend on are untouched.
+  surface before bumping, since ADR-0003 requires this — this session's own
+  incremental review covers only the span from the #1465 pin
+  (`79c6841b9b3645d1f14b943985825d2302071f5b`) to the new target
+  (`0adca4703df67f8f31d3ea5b04a1e07ed775dd6c`), i.e. #941/#945 plus the
+  vision-input exclusion above; the earlier span was already reviewed by
+  PR #1465 and is not repeated: `requirements.lock` is byte-for-byte
+  unchanged across the whole span (no `--require-hashes` drift, confirmed by
+  diffing `requirements.lock`/`pyproject.toml` directly between the two
+  SHAs), and every change to `contextual_orchestrator/__main__.py` (the CLI
+  the launcher invokes) is strictly additive -- new optional `--verbose`
+  flags and a new discovery report field, zero removed arguments or
+  subcommands. The `register-credential` and `--serve --agents ... --port
+  ... --auth-token ...` invocations the sidecar/launcher depend on are
+  untouched (confirmed directly in `contextual_orchestrator/__main__.py`).
 - Not independently verified live: this sandbox has no provider credentials
   (`BYTEZ_API_KEY`/`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`/
   `OPENROUTER_API_KEY`/`OPENAI_API_KEY`), so an actually-executed end-to-end
   sidecar run against real providers isn't possible here the way ADR-0003's
   own PoC bar asks for. Local verification is `.github`'s own full suite
-  (2023 passed, 1 skipped, 100% coverage/docstrings) plus the static
-  sidecar/pin contract tests; the real live proof is the next hosted
-  `noema-review`/`opencode-review`/`strix` run against this new pin, once
-  the ongoing org-wide `opencode-review` outage (tracked on PR #1437 and
-  elsewhere in this baseline) clears enough to observe one. Left as this
-  entry's own concrete follow-up rather than a bypass-merge, since (unlike
-  the scheduler-script hotfixes bypass-merged earlier this session) this
-  change's actual correctness depends on live provider behavior this
-  sandbox cannot exercise.
+  (100% coverage/docstrings) plus the static sidecar/pin contract tests; the
+  real live proof is the next hosted `noema-review`/`opencode-review`/`strix`
+  run against this new pin, once the ongoing org-wide `opencode-review`
+  outage (tracked on PR #1437 and elsewhere in this baseline) clears enough
+  to observe one. Left as this entry's own concrete follow-up rather than a
+  bypass-merge, since (unlike the scheduler-script hotfixes bypass-merged
+  earlier this session) this change's actual correctness depends on live
+  provider behavior this sandbox cannot exercise.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
