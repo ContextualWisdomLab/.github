@@ -74,3 +74,7 @@ Noema reviews each current head without waiting for an OpenCode approval,
 review-thread resolution, or other check conclusions. All trigger types share
 one repository-and-PR concurrency key, and the reviewer fails closed when its
 identity or substantive LLM summary cannot be verified.
+
+Runtime acceptance requires a GitHub review whose commit and embedded head SHA
+both match the live PR head. A successful Actions job without that review body
+is not Noema review evidence.

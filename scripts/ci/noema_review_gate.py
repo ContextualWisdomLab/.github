@@ -23,6 +23,7 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
 }
+GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -190,6 +191,16 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
 
 def current_actor() -> str:
     """Return the verified user or GitHub App bot login for the active token."""
+    action_actor = os.environ.get("NOEMA_REVIEW_ACTOR", "").strip()
+    installation_id = os.environ.get("NOEMA_REVIEW_INSTALLATION_ID", "").strip()
+    if action_actor or installation_id:
+        if (
+            os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") != "noema-review-github-app"
+            or not GITHUB_APP_BOT_RE.fullmatch(action_actor)
+            or not installation_id.isdigit()
+        ):
+            raise RuntimeError("Noema GitHub App identity binding is invalid")
+        return action_actor
     for args, suffix in (
         (["gh", "api", "user", "--jq", ".login"], ""),
         (["gh", "api", "/installation", "--jq", ".app_slug"], "[bot]"),
