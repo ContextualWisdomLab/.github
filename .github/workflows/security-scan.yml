@@ -164,13 +164,25 @@ jobs:
           #!/usr/bin/env bash
           set -uo pipefail
           image="ghcr.io/google/osv-scanner-action@sha256:48406c58197201fe55e56615ad9d414f85063da320e204d0b0ed460fb3908dba"
+          output_file=""
+          for argument in "$@"; do
+            case "$argument" in
+              --output-file=*) output_file="${argument#--output-file=}" ;;
+            esac
+          done
           set +e
           docker run --rm \
-            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
             --volume "$GITHUB_WORKSPACE:/github/workspace" \
             --workdir /github/workspace \
             "$image" "$@"
           rc=$?
+          if [ -n "$output_file" ] && [ -e "$output_file" ]; then
+            if ! sudo chown -- "$(id -u):$(id -g)" "$output_file"; then
+              rc=125
+            fi
+          fi
           set -e
           printf 'exit_code=%s\n' "$rc" >>"$GITHUB_OUTPUT"
           if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then

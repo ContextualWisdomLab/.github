@@ -1619,6 +1619,11 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert workflow.count("completed successfully without findings output") == 1
     assert workflow.count("SCAN_EXIT_CODE: ${{ steps.osv_") == 4
     assert workflow.count('run: >-\n          "$RUNNER_TEMP/run-osv-scanner.sh"') == 4
+    assert '--user "$(id -u):$(id -g)"' not in workflow
+    assert "--cap-drop ALL" in workflow
+    assert "--security-opt no-new-privileges" in workflow
+    assert 'sudo chown -- "$(id -u):$(id -g)" "$output_file"' in workflow
+    assert "rc=125" in workflow
     assert workflow.count('runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"]') == 4
     assert "Preserve base OSV evidence and direct-source provenance" in workflow
     assert 'cp -- old-results.json "$RUNNER_TEMP/osv-base-provenance/old-results.json"' in workflow
