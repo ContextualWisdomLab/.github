@@ -34,6 +34,7 @@ jobs:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: read
@@ -224,6 +225,7 @@ jobs:
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       id-token: write
@@ -371,6 +373,7 @@ jobs:
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
       # identity, secret, or write token is available to untrusted tests.
@@ -2309,7 +2312,7 @@ jobs:
     # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
     # overhead without truncating a late current-head verdict, handoff, merge
     # scheduler follow-up, or bounded failure reason.
-    timeout-minutes: 325
+    timeout-minutes: 305
     permissions:
       actions: read
       checks: read

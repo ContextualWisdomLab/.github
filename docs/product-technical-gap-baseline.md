@@ -2034,8 +2034,17 @@ tests. Full validation was re-run after this PR's isolated-clone protocol's pre-
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
-## 2026-08-31 opencode-review.yml required-verdict poller: budget shorter than the job it waits on,
-and a GitHub-hosted 360-minute hard cap this architecture cannot fully absorb
+## 2026-08-31 opencode-review.yml required-verdict poller: complete multi-job wait budget
+
+**Current status: resolved in the same PR.** The investigation below records
+the intermediate single-job mitigation and the platform limit it exposed. Its
+residual-gap conclusion is superseded by the final design: the required check
+dispatches OpenCode directly and chains two 325-minute polling windows, while
+the downstream validation, source, coverage, and review jobs have explicit
+8-, 12-, 300-, and 305-minute bounds. This covers the full 625-minute
+downstream path inside roughly 650 minutes of polling without shortening the
+205-minute model-pool budget. Each Reviews API call is capped at 25 seconds and
+counts inside a fixed 30-second polling cadence.
 
 Devin Review's pass on `opencode-review.yml`'s "Fail closed without a current-head OpenCode verdict"
 step (the poller the branch-protection-required `opencode-review-target` job uses to wait for

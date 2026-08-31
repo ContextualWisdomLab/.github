@@ -231,31 +231,16 @@ jobs:
           echo "This required-workflow job preserves the stable branch-protection
           context without executing pull-request content."
 
-  opencode-review-target:
-    name: opencode-review
+  opencode-review-wait-window-one:
+    name: opencode-review-wait-window-one
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    # The poller below must outlast the *entire* upstream-plus-downstream
-    # dispatch chain, not just opencode-review-dispatch.yml's own
-    # opencode-review-target job (that job's 325-minute budget is documented
-    # at its own timeout-minutes). Before that job's clock even starts,
-    # validate-pr-metadata, coverage-source-tree, and coverage-evidence must
-    # each run (needs: chain) with no timeout-minutes of their own, so their
-    # only script-enforced bound is coverage-evidence's three sequential
-    # `timeout --kill-after=20 900` sandboxed test-measurement invocations
-    # (2700s/45m) plus realistic dispatch/runner/build/artifact overhead.
-    # GitHub-hosted runners hard-cap every job's wall-clock at 360 minutes
-    # (docs.github.com/actions/reference/limits) regardless of
-    # timeout-minutes, so the true realistic worst case (~90-105m upstream +
-    # up to 325m downstream, ~415-430m) cannot fit in one job on this
-    # runner class no matter how this value is set. 355 is the largest value
-    # that stays 5 minutes under that hard cap, maximizing patience within
-    # what this architecture can actually deliver; fully covering the
-    # realistic worst case needs an architecture change (splitting the wait
-    # across multiple short-lived dispatches) tracked as a residual gap
-    # rather than solved here (docs/product-technical-gap-baseline.md,
-    # 2026-08-31 entry).
-    timeout-minutes: 355
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    # GitHub-hosted jobs stop at six hours. Two chained 325-minute polling
+    # windows preserve 35 minutes of cleanup margin per job while covering
+    # the complete bounded multi-hour review path.
+    timeout-minutes: 360
     permissions:
       contents: read
       pull-requests: read
@@ -269,6 +254,9 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -290,12 +278,16 @@ jobs:
           echo "::add-mask::$app_token"
           jq -cn \
             --arg target_repository "$TARGET_REPOSITORY" \
-            --arg pr_number "$PR_NUMBER" \
-            --arg base_branch "$BASE_BRANCH" \
-            '{event_type:"merge-scheduler",client_payload:{target_repository:$target_repository,pr_number:$pr_number,base_branch:$base_branch,max_prs:"1",review_dispatch_limit:"1",trigger_reviews:true,enable_auto_merge:false,update_branches:false,dry_run:false}}' |
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_base_ref "$BASE_BRANCH" \
+            --arg pr_base_sha "$BASE_SHA" \
+            --arg pr_head_ref "$HEAD_BRANCH" \
+            --arg pr_head_sha "$HEAD_SHA" \
+            '{event_type:"opencode-review",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
 
-      - name: Fail closed without a current-head OpenCode verdict
+      - name: Wait for a current-head OpenCode verdict
+        id: verdict
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
@@ -305,30 +297,16 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event.action }}" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
+            echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
           fi
-          # Budget (Devin Review + CodeRabbit findings on PR #1507, 2026-08-31):
-          # 660 sleeps x 30s = 19800s = 330 minutes of pure polling patience,
-          # exceeding opencode-review-dispatch.yml's own opencode-review-target
-          # job's 325-minute budget by an explicit 5-minute margin (the
-          # largest margin available -- see the timeout-minutes comment above
-          # for why 330m/355m is the ceiling this architecture can reach).
-          # Each `gh api --paginate` call is capped at 25s (`timeout 25`) so
-          # one hung or heavily-paginated call cannot silently consume
-          # unbudgeted time; a failed/timed-out call degrades to "no verdict
-          # yet" instead of crashing the step under `set -e`, and the loop
-          # keeps polling on the next attempt. The 355-minute job timeout
-          # reserves ~25 minutes above the 330-minute sleep budget for the
-          # dispatch step, realistic cumulative gh-api latency across up to
-          # 661 attempts, and runner/shutdown overhead, so this loop's own
-          # "::error::No APPROVED or CHANGES_REQUESTED" failure fires before
-          # GitHub's job-level timeout would kill the job mid-poll.
           verdict=""
-          for attempt in $(seq 1 661); do
+          for attempt in $(seq 1 650); do
+            attempt_started=$SECONDS
             if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
               reviews="[]"
             fi
@@ -363,8 +341,88 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            if [ "$attempt" -lt 661 ]; then
-              sleep 30
+            if [ "$attempt" -lt 650 ]; then
+              remaining_seconds=$((30 - (SECONDS - attempt_started)))
+              if [ "$remaining_seconds" -gt 0 ]; then
+                sleep "$remaining_seconds"
+              fi
+            fi
+          done
+          echo "verdict=${verdict}" >>"$GITHUB_OUTPUT"
+          if [ -n "$verdict" ]; then
+            echo "Current-head OpenCode verdict: ${verdict}."
+          else
+            echo "No current-head verdict in the first bounded wait window; continuing in the required verdict job."
+          fi
+
+  opencode-review-target:
+    name: opencode-review
+    needs: [opencode-review-wait-window-one]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Fail closed without a current-head OpenCode verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INITIAL_VERDICT: ${{ needs.opencode-review-wait-window-one.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.action }}" = "closed" ]; then
+            echo "PR closed; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
+            exit 1
+          fi
+          verdict="$INITIAL_VERDICT"
+          for attempt in $(seq 1 650); do
+            if [ -n "$verdict" ]; then
+              break
+            fi
+            attempt_started=$SECONDS
+            if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
+              reviews="[]"
+            fi
+            verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+            (add // [])
+            | [
+                .[]
+                | select(
+                    (.user.login // "" | ascii_downcase) as $user
+                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
+                  )
+                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+              ]
+            | (last // {}) as $review
+            | ($review.body // "" | ascii_downcase) as $body
+            | if $review.state == "CHANGES_REQUESTED" then
+                "CHANGES_REQUESTED"
+              elif $review.state == "APPROVED"
+                and ($body | contains("deterministic current-head evidence") | not)
+                and ($body | contains("deterministic fallback approval") | not)
+                and ($body | contains("model-unavailable evidence fallback") | not)
+                and ($body | contains("did not emit a usable current-head control block") | not)
+                and ($body | contains("scope: `unsupported`") | not)
+                and ($body | contains("model-pool outcome: `unknown`") | not)
+              then
+                "APPROVED"
+              else
+                empty
+              end
+          ')"
+            if [ -z "$verdict" ] && [ "$attempt" -lt 650 ]; then
+              remaining_seconds=$((30 - (SECONDS - attempt_started)))
+              if [ "$remaining_seconds" -gt 0 ]; then
+                sleep "$remaining_seconds"
+              fi
             fi
           done
           if [ -z "$verdict" ]; then
