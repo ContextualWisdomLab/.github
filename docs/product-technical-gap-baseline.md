@@ -1715,6 +1715,67 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 recurring `noema-review` `TimeoutError` at `call_llm`: confirmed policy/timeout mismatch, not infra flakiness
+
+`noema-review`'s required check failed with an identical `TimeoutError` at
+`scripts/ci/noema_review_gate.py:656` (`with opener.open(request, timeout=120) as response:`) across
+at least 4-5 separate check runs on 3+ different PRs (`ContextualWisdomLab/contextual-orchestrator#965`,
+`#958` twice, `#960`) inside roughly two hours. Investigated whether this was transient infra flakiness
+or a genuine policy/timeout mismatch, per this org's own recorded policy
+(`docs/product-goal-directive.md` line 65): *"중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수
+있음을 수용한다"* — central OpenCode, Strix, and Noema may legitimately take over two hours per model,
+and the org explicitly accepts this. `call_llm`'s HTTP request timeout was a hardcoded literal `120`
+(seconds) — three orders of magnitude short of that stated tolerance.
+
+**Confirmed a real bug, not flakiness.** Evidence:
+
+- The failing call is `call_llm`'s own review-completion request — the *actual* review, carrying up to
+  `MAX_DIFF_CHARS` (60000) + `MAX_REVIEW_CONTEXT_CHARS` (24000) chars of prompt content and requesting a
+  structured multi-part JSON verdict (summary, per-line findings, adversarial-validation probes) — not
+  the sidecar's own lightweight "reply with just 'OK'" preflight smoke test
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`'s separate `curl --max-time 120` gateway check).
+  For the job to reach `call_llm` at all, the "Provision contextual-orchestrator review sidecar" step —
+  including its own `/healthz` wait and virtual-pool smoke request — must already have succeeded; a
+  `TimeoutError` specifically at `call_llm` therefore means the sidecar and gateway were already proven
+  reachable and able to serve a completion, and the much larger real review request was what ran past the
+  bound, not a down or unreachable dependency.
+- This org's own `docs/adr/0005-sidecar-preflight-token-budget.md` already reasoned through this exact
+  class of bug once, for the sidecar's smoke-test call: a prior 30-second `curl --max-time` was raised to
+  120s after live reproduction (`ContextualWisdomLab/.github#1449`, job `99253418179`) showed a
+  genuinely-healthy route needing more than 30s for a real generation, citing this same "org accepts
+  multi-hour central review latency" policy. That ADR's own Layer 2 (the smoke test) intentionally keeps
+  its 120s-per-attempt value **unchanged** — appropriate for a tiny fixed-`max_tokens` "OK" probe — but its
+  reasoning was never extended to `call_llm`'s much larger real review request, which inherited the same
+  120s literal seemingly by default/copy rather than by a sizing decision of its own. This is the same bug
+  shape recurring one call site later, previously fixed only where the sidecar's own smoke test needed it.
+- `noema-review.yml`'s job carries no `timeout-minutes` at all (`.github/workflows/noema-review.yml`),
+  so the effective outer bound is GitHub Actions' own 360-minute default — confirmed via `git log -p`
+  that this job has never had an explicit `timeout-minutes`. There was no outer-bound reason to keep the
+  inner HTTP timeout short; the constraint was purely an unjustified inner literal.
+
+**Fix.** Replaced the hardcoded `timeout=120` with a named module-level constant,
+`LLM_REQUEST_TIMEOUT_SECONDS = 3600`, reusing this org's own already-codified precedent for one model-call
+attempt rather than inventing a new number: `OPENCODE_RUN_TIMEOUT_SECONDS`'s default of `3600` in
+`scripts/ci/run_opencode_review_model_pool.sh` (OpenCode's own per-model-attempt run timeout, the same
+"central OpenCode ... may take over two hours" policy's other explicitly-named beneficiary).
+`call_llm` may recurse exactly once — one repair attempt when `validate_substantive_verdict` rejects the
+first verdict — so one review's worst case is two attempts at this bound: `3600 × 2 = 7200s` (2 hours),
+matching this org's stated per-model policy exactly, and matching OpenCode's own analogous
+`OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS` default of `7200` for the same reason. That worst case still
+leaves generous headroom under the job's 360-minute (21600s) default ceiling for checkout, sidecar
+startup/preflight (up to ~625s per ADR-0005's own worst-case arithmetic), JSON parsing, and posting the
+verdict back to GitHub — so no `timeout-minutes` change to `noema-review.yml` was needed or made.
+
+Regression coverage: updated the two existing tests that pinned the old literal
+(`tests/test_noema_review_gate.py::test_call_llm_repairs_one_rejected_changed_line_verdict`,
+`tests/test_repository_branch_coverage_review_schedulers.py::test_noema_public_dns_result_reaches_valid_model_response`)
+to assert against `noema.LLM_REQUEST_TIMEOUT_SECONDS` instead of the bare literal, and added a new,
+dedicated regression test
+(`tests/test_noema_review_gate.py::test_llm_request_timeout_matches_org_two_hour_per_model_policy`)
+pinning both the constant's value and the two-attempt worst-case arithmetic against the org's stated
+policy, so a future edit cannot silently shrink this back toward the bug just fixed. 2127 tests pass
+(2128 after the new test); 100% coverage and 100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

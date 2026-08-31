@@ -34,6 +34,22 @@ MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
+# This org's own recorded policy (docs/product-goal-directive.md: "중앙 OpenCode, Strix, Noema는
+# 모델당 두 시간 이상 걸릴 수 있음을 수용한다" -- central OpenCode, Strix, and Noema may take over
+# two hours per model, and the org accepts this) explicitly names Noema, and noema-review.yml's own
+# job carries no timeout-minutes (GitHub Actions' 360-minute default applies), so this single HTTP
+# request has ample outer headroom. This value is not a new guess: it reuses this org's own already
+# codified precedent for one model-call attempt, `OPENCODE_RUN_TIMEOUT_SECONDS`'s default of 3600s
+# in scripts/ci/run_opencode_review_model_pool.sh. call_llm may recurse exactly once (one repair
+# attempt on a rejected verdict, see below), so the worst case for one review -- two attempts at
+# this bound -- is 7200s (2 hours), matching this org's own stated per-model policy exactly and
+# OpenCode's analogous `OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS` default of 7200 for the same
+# reason. The prior 120-second value was three orders of magnitude short of this policy and was
+# copied from the sidecar's own small "reply OK" preflight smoke-test budget (contract:
+# docs/adr/0005-sidecar-preflight-token-budget.md), not sized for a real review completion carrying
+# up to MAX_DIFF_CHARS + MAX_REVIEW_CONTEXT_CHARS of prompt content.
+LLM_REQUEST_TIMEOUT_SECONDS = 3600
+
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 
@@ -653,7 +669,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    with opener.open(request, timeout=LLM_REQUEST_TIMEOUT_SECONDS) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

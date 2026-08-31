@@ -386,6 +386,24 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert noema.call_llm("owner/repo", 1, pr, "diff", True)["decision"] == "approve"
 
 
+def test_llm_request_timeout_matches_org_two_hour_per_model_policy():
+    """call_llm's HTTP timeout must stay sized for a real review, not a smoke test.
+
+    Regression guard for the recurring `TimeoutError` at this exact call site
+    (ContextualWisdomLab/contextual-orchestrator#965, #958, #960): a prior
+    120-second value was copied from the sidecar's small preflight smoke-test
+    budget and was three orders of magnitude short of this org's own recorded
+    policy that a central Noema/OpenCode/Strix model call may legitimately take
+    over two hours (docs/product-goal-directive.md). One review allows exactly
+    one repair retry (see call_llm's recursive repair-on-rejected-verdict path),
+    so the worst case for a single review must stay at or below that two-hour
+    policy bound, not merely below the per-attempt value alone.
+    """
+    assert noema.LLM_REQUEST_TIMEOUT_SECONDS == 3600
+    max_call_llm_attempts_per_review = 2  # original call + at most one repair retry
+    assert noema.LLM_REQUEST_TIMEOUT_SECONDS * max_call_llm_attempts_per_review == 7200
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()
@@ -688,7 +706,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
 
     class Opener:
         def open(self, request, timeout):
-            assert timeout == 120
+            assert timeout == noema.LLM_REQUEST_TIMEOUT_SECONDS
             payloads.append(json.loads(request.data))
             return Response(invalid if len(payloads) == 1 else valid)
 
