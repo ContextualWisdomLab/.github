@@ -221,7 +221,8 @@ def _probe_isolation_capability(backend: str) -> None:
             "--dev",
             "/dev",
             "--tmpfs",
-            "/tmp",
+            # This is the isolated namespace's tmpfs target, not a host temp path.
+            "/tmp",  # nosec B108  # noqa: S108
             "--bind",
             probe_workspace,
             SANDBOX_MOUNT,
@@ -432,7 +433,8 @@ def isolated_command(
             "--dev",
             "/dev",
             "--tmpfs",
-            "/tmp",
+            # This is the isolated namespace's tmpfs target, not a host temp path.
+            "/tmp",  # nosec B108  # noqa: S108
             "--bind",
             str(sandbox_root),
             SANDBOX_MOUNT,
@@ -546,7 +548,7 @@ def require_unoccupied_readiness_port(url: str) -> None:
     """
     parsed = urllib.parse.urlparse(url)
     hostname = parsed.hostname or "127.0.0.1"
-    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    port = parsed.port if parsed.port is not None else (443 if parsed.scheme.lower() == "https" else 80)
     try:
         with socket.create_connection((hostname, port), timeout=0.2):
             pass
