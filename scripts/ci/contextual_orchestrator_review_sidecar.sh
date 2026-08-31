@@ -72,9 +72,14 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
 # runs show this is still insufficient (all 8 still failing) or the added
 # latency itself becomes the bottleneck, the more complete fix is a live
 # provider /v1/models cross-check at discovery time to drop retired model ids
-# before they ever reach preflight (scripts/ci/select_nvidia_nim_model.py
-# already implements that exact pattern for a different, currently-unwired
-# caller) rather than raising this further.
+# before they ever reach preflight -- see git history's now-removed
+# select_nvidia_nim_model.py (removed in #1442) for a worked example of that
+# exact query-the-provider-catalog pattern, applied there to a different,
+# direct-provider caller -- rather than raising this further. The PR number
+# is used here, not a raw commit SHA or the removing branch's name: a squash
+# merge would leave a raw pre-merge commit unreachable in plain git once the
+# branch is deleted, while the PR itself (and its full commit history) stays
+# permanently resolvable on GitHub.
 CATALOG_FAMILY_CAP="${ORCHESTRATOR_CATALOG_FAMILY_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
@@ -601,6 +606,13 @@ report["gateway"] = {
 temporary = report_path.with_suffix(".tmp")
 temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 temporary.replace(report_path)
+# error_code is already regex-validated above ([A-Za-z0-9_.-]{1,64}) and status
+# is a plain int, so this is safe to print directly to the job's own log --
+# unlike the sidecar server subprocess's stdout/stderr, this synchronous
+# one-shot snippet's output is not routed through the sanitizer, and was
+# previously visible only in the CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE
+# artifact file, not the job log a CI operator actually reads first.
+print(f"[contextual-orchestrator-sidecar] gateway preflight rejected: error_code={code} http_status={status}")
 PY
     fail "gateway preflight returned HTTP ${gateway_http_status} after ${gateway_attempt} attempts"
   fi
