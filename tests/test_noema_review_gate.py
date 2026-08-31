@@ -147,6 +147,37 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
         noema.extract_json_object("not-json")
 
 
+def test_extract_json_object_fails_closed_on_malformed_json():
+    """A brace-wrapped but syntactically invalid LLM response must raise the
+    same fail-closed RuntimeError this module uses for other unusable-verdict
+    cases, never an unhandled json.JSONDecodeError (the reported CI crash)."""
+    # Reproduces "Expecting property name enclosed in double quotes": an
+    # unquoted/truncated key inside an otherwise brace-wrapped object.
+    malformed = '{"decision":"approve", trailing garbage not: "quoted}'
+    with pytest.raises(RuntimeError, match="was not valid JSON") as excinfo:
+        noema.extract_json_object(malformed)
+    assert not isinstance(excinfo.value, json.JSONDecodeError)
+    assert "approve" in str(excinfo.value)
+
+    # A response truncated mid-object hits the same decode failure.
+    truncated = '{"decision":"approve","summary":"looks fine so far,'
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(truncated)
+
+    # Secrets embedded in the raw response must stay scrubbed in the
+    # bounded diagnostic message.
+    leaky = '{"decision":"approve","summary":"token ghp_' + "a" * 36 + '", bad'
+    with pytest.raises(RuntimeError) as leaky_excinfo:
+        noema.extract_json_object(leaky)
+    assert "ghp_" not in str(leaky_excinfo.value)
+    assert "***" in str(leaky_excinfo.value)
+
+    # Long malformed content is bounded rather than logged in full.
+    huge = '{"decision":"approve", ' + ("x" * (noema.MAX_LLM_RESPONSE_LOG_CHARS + 500)) + " bad"
+    with pytest.raises(RuntimeError, match="truncated"):
+        noema.extract_json_object(huge)
+
+
 @pytest.mark.parametrize(
     ("actor", "installation_id", "source"),
     [
@@ -536,6 +567,31 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     with pytest.raises(RuntimeError, match="substantive summary"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
+
+
+def test_call_llm_fails_closed_on_malformed_json_response(monkeypatch):
+    """Reproduces the reported CI crash: an LLM response whose content is
+    truncated/malformed JSON must fail the review cleanly through call_llm's
+    existing RuntimeError path, never as an unhandled json.JSONDecodeError."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Malformed: an unquoted property name after the decision key,
+            # matching "Expecting property name enclosed in double quotes".
+            malformed_content = '{"decision":"approve", trailing garbage not: "quoted}'
+            return json.dumps({"choices": [{"message": {"content": malformed_content}}]}).encode()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False)
 
 

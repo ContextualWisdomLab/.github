@@ -32,6 +32,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_LLM_RESPONSE_LOG_CHARS = 2000
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -489,15 +490,33 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract a JSON object from a strict or lightly wrapped LLM response."""
+    """Extract a JSON object from a strict or lightly wrapped LLM response.
+
+    Fails closed with ``RuntimeError`` — the same "no usable verdict" failure
+    path ``call_llm`` already raises for an unsupported decision, a missing
+    summary, or a malformed finding — instead of letting a malformed or
+    truncated LLM response's ``json.JSONDecodeError`` propagate as an
+    unhandled exception and crash the review job. The candidate substring
+    always starts at a ``{``, so a successful parse is always a JSON object
+    (``dict``); only the decode failure itself needs converting.
+    """
     stripped = text.strip()
     if stripped.startswith("{"):
-        return json.loads(stripped)
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end < start:
-        raise RuntimeError("Noema LLM response did not contain a JSON object")
-    return json.loads(stripped[start : end + 1])
+        candidate = stripped
+    else:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start < 0 or end < start:
+            raise RuntimeError("Noema LLM response did not contain a JSON object")
+        candidate = stripped[start : end + 1]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        bounded = truncate_text(scrub_sensitive_data(stripped) or "", MAX_LLM_RESPONSE_LOG_CHARS)
+        raise RuntimeError(
+            f"Noema LLM response was not valid JSON ({exc}); "
+            f"raw response (truncated): {bounded!r}"
+        ) from exc
 
 
 def _truthy_env(name: str) -> bool:
@@ -824,5 +843,5 @@ if __name__ == "__main__":  # pragma: no cover
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"::error::{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
