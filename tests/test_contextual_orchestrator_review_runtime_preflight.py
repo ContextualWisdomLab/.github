@@ -1480,19 +1480,23 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
     namespace = _load_launcher()
     base = {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     rows = [
-        {"cost_evidence": "free", "provider": "nvidia_nim"},
-        {"cost_evidence": "priced", "provider": "openai"},
-        {"cost_evidence": "priced", "provider": "openai"},
-        {"cost_evidence": "unknown", "provider": "bytez"},
+        {"cost_evidence": "free", "provider": "nvidia_nim", "base_url": "https://integrate.api.nvidia.com/v1"},
+        {"cost_evidence": "priced", "provider": "openai", "base_url": "https://api.openai.com/v1"},
+        {"cost_evidence": "priced", "provider": "openai", "base_url": "https://api.openai.com/v1"},
+        {"cost_evidence": "unknown", "provider": "bytez", "base_url": "https://api.bytez.com/models/v2/openai/v1"},
     ]
     enriched = namespace["_with_discovery_counts"](
-        base, rows, provider_account=policy.provider_account
+        base,
+        rows,
+        provider_account=policy.provider_account,
+        outage_domain=policy._outage_domain,
     )
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
     assert enriched["free_account_diversity"] == 1
+    assert enriched["free_outage_domain_diversity"] == 1
 
 
 def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
@@ -1500,24 +1504,60 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
 
     Regression for a real bug: the ``auto``-pool primary stage only sees
     ZDR-admitted free rows, and the priced-fallback stage sees no free rows
-    at all, so either stage's internally computed ``free_account_diversity``
+    at all, so either stage's internally computed diversity fields
     (whatever ``build_zdr_prioritized_catalog`` returned from its own
     narrower input) would undercount or read zero even when the full
-    discovery has multiple credential accounts with free routes.
+    discovery has multiple credential accounts (and outage domains) with
+    free routes.
     """
     namespace = _load_launcher()
-    stage_report_from_priced_only_rows = {"free_account_diversity": 0}
+    stage_report_from_priced_only_rows = {
+        "free_account_diversity": 0,
+        "free_outage_domain_diversity": 0,
+    }
     full_discovery_rows = [
-        {"cost_evidence": "free", "provider": "nvidia_nim"},
-        {"cost_evidence": "free", "provider": "openrouter"},
-        {"cost_evidence": "priced", "provider": "openai"},
+        {"cost_evidence": "free", "provider": "nvidia_nim", "base_url": "https://integrate.api.nvidia.com/v1"},
+        {"cost_evidence": "free", "provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"},
+        {"cost_evidence": "priced", "provider": "openai", "base_url": "https://api.openai.com/v1"},
     ]
     enriched = namespace["_with_discovery_counts"](
         stage_report_from_priced_only_rows,
         full_discovery_rows,
         provider_account=policy.provider_account,
+        outage_domain=policy._outage_domain,
     )
     assert enriched["free_account_diversity"] == 2
+    assert enriched["free_outage_domain_diversity"] == 2
+
+
+def test_discovery_counts_distinguish_account_from_outage_domain_diversity() -> None:
+    """Two same-endpoint NVIDIA credentials are 2 accounts but 1 outage domain.
+
+    Regression for a real, separate bug found by review during this
+    session: #1468 correctly stopped treating ``nvidia_nim``/
+    ``nvidia_nim_sub`` as one *model-catalog* family (they are independent
+    credentials that may expose different models), but a naive read of that
+    fix could also wrongly assume they are two independent *outage domains*
+    -- they are not: both resolve to the identical
+    ``https://integrate.api.nvidia.com/v1`` upstream. If one physical
+    endpoint's outage were mistaken for two independent domains, a caller
+    gating on diversity (e.g. open PR #1437's Strix ``orchestrator/free``
+    eligibility check) could wrongly conclude the free catalog can survive
+    that single outage.
+    """
+    namespace = _load_launcher()
+    full_discovery_rows = [
+        {"cost_evidence": "free", "provider": "nvidia_nim", "base_url": "https://integrate.api.nvidia.com/v1"},
+        {"cost_evidence": "free", "provider": "nvidia_nim_sub", "base_url": "https://integrate.api.nvidia.com/v1"},
+    ]
+    enriched = namespace["_with_discovery_counts"](
+        {},
+        full_discovery_rows,
+        provider_account=policy.provider_account,
+        outage_domain=policy._outage_domain,
+    )
+    assert enriched["free_account_diversity"] == 2
+    assert enriched["free_outage_domain_diversity"] == 1
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:

@@ -10,6 +10,15 @@ Semantic Versioning where the repository publishes a release.
   still named the removed `free_family_diversity` evidence field instead of
   its `free_account_diversity` replacement, which could send future
   monitoring work looking for a field that no longer exists.
+- `scripts/ci/contextual_orchestrator_review_policy.py`'s catalog admission
+  cap and diversity evidence no longer conflate "independent credential
+  account" with "independent outage domain": `nvidia_nim`/`nvidia_nim_sub`
+  are independent accounts (may expose different models) but share one
+  physical upstream endpoint (`https://integrate.api.nvidia.com/v1`), so
+  they now share one admission-cap budget and count as one outage domain. A
+  new `free_outage_domain_diversity` report field (additive, alongside the
+  existing `free_account_diversity`) reflects this for callers deciding
+  whether a single provider outage could empty the free catalog.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer

@@ -1715,6 +1715,75 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 a second, subtler NVIDIA-independence gap: account diversity conflated with outage-domain diversity
+
+**Context.** This session investigated why `contextual-orchestrator` PR #941/#945's fix (independent
+`nvidia_nim`/`nvidia_nim_sub` credentials must not be assumed to share one model catalog) was not
+reflected in production review evidence, and found two bugs: a stale `ORCHESTRATOR_PIN_SHA` vendoring
+pin, and this repo's own independent copy of the collapsing assumption in
+`scripts/ci/contextual_orchestrator_review_policy.py`'s `PROVIDER_FAMILIES`. Both were superseded
+mid-session by `.github#1468` ("fix(ci): keep sidecar credential accounts independent"), which the repo
+owner merged directly and which covers both: it bumps the pin to `contextual-orchestrator`'s then-current
+`main` tip (`0adca4703df67f8f31d3ea5b04a1e07ed775dd6c`, later advanced again by `.github#1469`) and
+removes `PROVIDER_FAMILIES` entirely, renaming the concept from "provider family" to "provider account"
+throughout (`free_family_diversity` → `free_account_diversity`, `family_cap` → `account_cap`).
+
+**What #1468 did not catch.** Review during this session (a Devin Review finding on the now-closed,
+superseded PR #1470, checked directly against `main`'s actual merged code before acting) found that
+#1468's fix, while correctly removing the wrong model-catalog assumption, introduced a second, more
+subtle conflation on a genuinely different axis. Two independent questions exist for
+`nvidia_nim`/`nvidia_nim_sub`:
+
+1. **Model-catalog identity** — may these two credentials be entitled to different models? Yes. This is
+   what #941/#945/#1468 correctly fixed.
+2. **Outage-domain identity** — would one physical infrastructure outage take both credentials down
+   together? Also yes: both resolve to the identical `https://integrate.api.nvidia.com/v1` upstream (see
+   `PROVIDER_BASE_URLS` in `scripts/ci/zdr_policy.py`, and that table's own `nvidia_nim_sub` ZDR-scope
+   note, which already said as much). #1468's fix, in correcting axis 1, also flattened axis 2 to be
+   identical to axis 1 -- `provider_account()` (identity-only) became the *sole* grouping key for both
+   the `free_account_diversity` evidence field and the catalog's admission cap.
+
+This matters concretely: `free_account_diversity` exists specifically so a caller (open PR #1437,
+draft, gating Strix's `orchestrator/free` eligibility) can tell whether a single provider outage could
+empty the free catalog -- that is fundamentally an outage-domain question, not a credential-count
+question. With the two axes conflated, a discovery report whose only free routes are these two NVIDIA
+credentials reports `free_account_diversity == 2`, which would falsely read as "safe" for exactly the
+decision this evidence exists to support. Separately, the admission cap (`account_cap`, sidecar default
+8) let the two credentials jointly consume up to *twice* its intended per-endpoint budget, which
+concretely re-creates a milder version of the 2026-08-30 `orchestrator/free` exhaustion incident this
+cap exists to prevent (documented earlier in this file): a shared endpoint's rows could crowd out a
+smaller, genuinely independent provider's free routes even when that provider had capacity available.
+
+**Fix (this PR, a small, focused follow-up against current `main`, not a revival of #1470).**
+`scripts/ci/contextual_orchestrator_review_policy.py` gains a second, distinct grouping,
+`_outage_domain(row)`, keyed on each row's own `base_url` evidence (not a second hand-maintained
+provider-name table, so it cannot silently go stale independently of the `base_url` evidence the catalog
+already serves from -- the exact failure mode that made the removed `PROVIDER_FAMILIES` mapping wrong).
+The admission cap now groups by outage domain (two same-endpoint credentials share one cap budget, they
+do not each get their own); a new report field, `free_outage_domain_diversity`, is added *alongside* the
+existing `free_account_diversity` (additive, not a rename, to avoid another naming churn on top of
+#1468's very recent one) so a caller like #1437 can read the field that actually answers its question.
+`scripts/ci/contextual_orchestrator_review_launcher.py`'s `_with_discovery_counts` (which recomputes
+diversity from full discovery-wide rows, not the narrower per-stage set) restores both fields the same
+way. `account_cap`/`DEFAULT_ACCOUNT_CAP`/the CLI `--account-cap` flag/the sidecar's
+`ORCHESTRATOR_CATALOG_ACCOUNT_CAP` env var names are all left unchanged (still meaningful as "the cap
+value"; only its grouping was wrong) to minimize collision risk with `.github#1469`, which was
+concurrently advancing the same sidecar's pin in the same active window.
+
+**Tests.** Two dedicated regressions reproduce the exact gaps: one asserting `nvidia_nim` +
+`nvidia_nim_sub` alone report `free_account_diversity == 2` but `free_outage_domain_diversity == 1`
+(the semantic-conflation bug), and one reproducing the crowding-out scenario concretely (a shared-endpoint
+credential pair with far more free rows than an independent provider; before this fix the independent
+provider could be admitted zero rows, after it the shared endpoint's admissions are capped to protect
+room for independent providers). Existing tests (`test_build_catalog_applies_account_cap`,
+`test_build_catalog_reports_free_account_diversity`, `test_build_catalog_counts_same_vendor_credentials_
+independently`, plus two launcher-facing tests in `test_contextual_orchestrator_review_runtime_
+preflight.py`) were updated to the corrected, domain-aware expectations. Full suite green; 100% coverage
+and 100% docstring coverage on `scripts/ci/`.
+
+**Not touched:** open PR #1437's own gating logic. Its reviewer should read `free_outage_domain_
+diversity`, not `free_account_diversity`, when wiring the `>= 2` eligibility check this file documents.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

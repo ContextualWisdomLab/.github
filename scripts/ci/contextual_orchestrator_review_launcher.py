@@ -670,20 +670,30 @@ def _with_discovery_counts(
     rows: list[dict[str, Any]],
     *,
     provider_account: Any,
+    outage_domain: Any,
 ) -> dict[str, object]:
     """Copy a stage report while restoring full discovery-tier counts.
 
-    ``free_account_diversity`` is recomputed here from the full discovery-wide
-    ``rows``, not trusted from the stage report: the primary ``auto``-pool
-    stage may have selected only ZDR-admitted free rows (undercounting
-    diversity whenever ``--require-zdr`` excludes some free routes) and the
-    priced-fallback stage selects only priced rows (so its own internally
-    computed diversity is always zero) -- either stage report's
-    ``free_account_diversity``, as returned by ``build_zdr_prioritized_catalog``
-    from whatever narrower row set it was given, would otherwise contradict
-    that field's documented "among *all* discovered free routes" contract.
+    ``free_account_diversity`` and ``free_outage_domain_diversity`` are both
+    recomputed here from the full discovery-wide ``rows``, not trusted from
+    the stage report: the primary ``auto``-pool stage may have selected only
+    ZDR-admitted free rows (undercounting diversity whenever ``--require-zdr``
+    excludes some free routes) and the priced-fallback stage selects only
+    priced rows (so its own internally computed diversity is always zero) --
+    either stage report's diversity fields, as returned by
+    ``build_zdr_prioritized_catalog`` from whatever narrower row set it was
+    given, would otherwise contradict those fields' documented "among *all*
+    discovered free routes" contract.
+
+    ``provider_account`` and ``outage_domain`` are two deliberately distinct
+    groupings (see ``contextual_orchestrator_review_policy._outage_domain``'s
+    docstring): the former treats every credential as independent regardless
+    of vendor, the latter groups credentials that share one physical
+    upstream endpoint (e.g. ``nvidia_nim``/``nvidia_nim_sub``, both
+    ``https://integrate.api.nvidia.com/v1``) into one outage domain.
     """
     enriched = dict(report)
+    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
     enriched.update(
         {
             "total_routes": len(rows),
@@ -691,11 +701,10 @@ def _with_discovery_counts(
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
             "free_account_diversity": len(
-                {
-                    provider_account(str(row["provider"]))
-                    for row in rows
-                    if row.get("cost_evidence") == "free"
-                }
+                {provider_account(str(row["provider"])) for row in free_rows}
+            ),
+            "free_outage_domain_diversity": len(
+                {outage_domain(row) for row in free_rows}
             ),
         }
     )
@@ -777,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
     from scripts.ci.contextual_orchestrator_review_policy import (
         PolicyError,
         _load_zdr_endpoints,
+        _outage_domain,
         build_zdr_prioritized_catalog,
         is_zdr_model,
         parse_discovery_report,
@@ -854,7 +864,10 @@ def main(argv: list[str] | None = None) -> int:
         pool=args.pool,
     )
     result["report"] = _with_discovery_counts(
-        result["report"], normalized_rows, provider_account=provider_account
+        result["report"],
+        normalized_rows,
+        provider_account=provider_account,
+        outage_domain=_outage_domain,
     )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
@@ -888,7 +901,10 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows, provider_account=provider_account
+                fallback_result["report"],
+                normalized_rows,
+                provider_account=provider_account,
+                outage_domain=_outage_domain,
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"

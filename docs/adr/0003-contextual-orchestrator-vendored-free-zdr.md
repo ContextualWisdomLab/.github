@@ -190,3 +190,26 @@ all five, and auto-optimize routing by cost.
   amendment" (above) are closed, without requiring a manual re-audit.
   `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
   records that PR's own reasoning trail.
+- **2026-08-31 correction: account diversity is not outage-domain diversity.**
+  Review during this session found that #1468 (above), in correctly stopping
+  `nvidia_nim`/`nvidia_nim_sub` from being treated as one *model-catalog*
+  family, also let `free_account_diversity` and the catalog's admission cap
+  treat them as two fully independent *outage domains* — they are not: both
+  resolve to the identical `https://integrate.api.nvidia.com/v1` upstream
+  (see `PROVIDER_BASE_URLS` in `scripts/ci/zdr_policy.py`, and that table's
+  own `nvidia_nim_sub` ZDR-scope note). Conflating the two meant a discovery
+  report whose only free routes were these two credentials reported
+  `free_account_diversity == 2` — falsely reassuring for exactly the decision
+  this evidence exists to support (would a single physical outage empty the
+  free catalog) — and the admission cap let the pair jointly consume up to
+  twice its intended per-domain budget, crowding out a genuinely independent
+  provider even when one had free routes available.
+  `contextual_orchestrator_review_policy.py` now reports a second, distinct
+  field, `free_outage_domain_diversity`, grouped by each row's own `base_url`
+  evidence rather than a second hand-maintained provider-name table, and the
+  admission cap (`account_cap`; the name predates this fix and is kept for
+  CLI/environment stability) groups by outage domain, not by credential. A
+  caller deciding whether Strix can safely rely on a strict `orchestrator/free`
+  pool without the `orchestrator/auto` paid fallback (open PR #1437) should
+  read `free_outage_domain_diversity`, not `free_account_diversity`, for that
+  specific decision.

@@ -51,6 +51,39 @@ def provider_account(provider_name: str) -> str:
     return provider_name
 
 
+def _outage_domain(row: Mapping[str, Any]) -> str:
+    """Return the shared-infrastructure outage domain for a normalized row.
+
+    This is a deliberately *different* axis from :func:`provider_account`.
+    ``provider_account`` answers "is this a distinct credential that may be
+    entitled to a distinct model catalog" (yes, for ``nvidia_nim`` vs.
+    ``nvidia_nim_sub`` -- see PR #941/#945 in ``contextual-orchestrator`` and
+    this repo's own matching fix, both of which correctly stopped assuming
+    those two independent NVIDIA NIM API keys share a catalog). This
+    function instead answers "would one physical upstream outage take both
+    of these routes down together" -- and for those same two credentials the
+    answer is yes: both resolve to the identical ``base_url``,
+    ``https://integrate.api.nvidia.com/v1`` (see ``PROVIDER_BASE_URLS`` in
+    ``scripts/ci/zdr_policy.py``, and that table's own ``nvidia_nim_sub``
+    ZDR-scope note: "the same integrate.api.nvidia.com trial API").
+    Conflating these two axes -- treating "independent credential" as
+    "independent outage domain" -- would let two same-endpoint credentials
+    jointly report full diversity and jointly fill an admission cap meant to
+    protect against exactly one endpoint's outage, silently recreating the
+    2026-08-30 ``orchestrator/free`` exhaustion incident this cap exists to
+    prevent (see ``docs/product-technical-gap-baseline.md``), just on a
+    different axis than the one #941/#945/#1468 already fixed.
+
+    Grouped by each row's own ``base_url`` evidence (already present on
+    every row ``parse_discovery_report``/the sidecar's live discovery
+    produces) rather than a second hand-maintained provider-name table, so
+    this cannot silently go stale independently of the ``base_url`` evidence
+    the catalog itself already serves from -- the same failure mode that
+    made the removed ``PROVIDER_FAMILIES`` mapping wrong in the first place.
+    """
+    return str(row["base_url"])
+
+
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
     """Return a two-or-more-word snake_case agent identifier."""
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", candidate).strip("_").lower()
@@ -198,20 +231,47 @@ def build_zdr_prioritized_catalog(
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, credential-account-diverse catalog.
+    """Select a free-first, ZDR-aware, outage-domain-diverse catalog.
 
-    The returned report's ``free_account_diversity`` counts the distinct
-    credential accounts among *all* discovered free routes, independent of
-    ``pool`` or the per-account selection cap. Vendor identity is not model
-    equivalence; only an explicit contextual-orchestrator ``model_group`` may
-    share routing evidence across routes.
+    The returned report carries two distinct diversity/admission signals,
+    deliberately kept separate (see :func:`_outage_domain`'s docstring for
+    the full rationale):
+
+    - ``free_account_diversity`` counts the distinct credential accounts
+      (:func:`provider_account`) among *all* discovered free routes. Vendor
+      identity is not model equivalence -- ``nvidia_nim`` and
+      ``nvidia_nim_sub`` are independent here, since either may be entitled
+      to a different model catalog; only an explicit contextual-orchestrator
+      ``model_group`` may share routing evidence across routes.
+    - ``free_outage_domain_diversity`` counts the distinct shared-
+      infrastructure outage domains (:func:`_outage_domain`, keyed on each
+      row's own ``base_url``) among the same routes. ``nvidia_nim`` and
+      ``nvidia_nim_sub`` collapse to *one* domain here, since both resolve to
+      the identical upstream endpoint -- a caller deciding whether it is
+      safe to rely on a strict, fail-closed ``orchestrator/free`` pool
+      without an ``orchestrator/auto`` paid-route safety net (the actual
+      question ADR-0003 raised) should require at least two here, not on
+      ``free_account_diversity``: one shared endpoint's outage can empty the
+      free catalog even when two independent credentials both point at it.
+
+    Both are computed independent of ``pool`` or the per-domain admission
+    cap below. The admission cap itself (``account_cap`` -- the name
+    predates this fix and is kept for CLI/environment stability, but its
+    grouping is by outage domain, matching the cap's original purpose:
+    preventing one physical endpoint from absorbing the bounded catalog, the
+    confirmed root cause of a real 2026-08-30 ``orchestrator/free``
+    exhaustion incident recorded in ``docs/product-technical-gap-
+    baseline.md``) admits at most ``account_cap`` rows per outage domain,
+    not per credential -- two same-endpoint credentials share one cap
+    budget, they do not each get their own.
 
     This counts routes discovery reports as free, not routes runtime
-    preflight has confirmed are actually serving requests: a value of two or
-    more is evidence that one account failure cannot immediately empty the free
-    catalog, not proof that either account is presently reachable. A caller
-    needing readiness, not just discovery-time diversity, must combine this
-    with the runtime preflight report the sidecar already produces.
+    preflight has confirmed are actually serving requests: a
+    ``free_outage_domain_diversity`` of two or more is evidence that one
+    endpoint's outage cannot immediately empty the free catalog, not proof
+    that either domain is presently reachable. A caller needing readiness,
+    not just discovery-time diversity, must combine this with the runtime
+    preflight report the sidecar already produces.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
@@ -248,13 +308,13 @@ def build_zdr_prioritized_catalog(
         )
     )
 
-    per_account: Counter[str] = Counter()
+    per_domain: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
     for row in eligible_rows:
-        account = provider_account(str(row["provider"]))
-        if per_account[account] >= account_cap:
+        domain = _outage_domain(row)
+        if per_domain[domain] >= account_cap:
             continue
-        per_account[account] += 1
+        per_domain[domain] += 1
         picked.append(row)
         if len(picked) >= limit:
             break
@@ -304,6 +364,9 @@ def build_zdr_prioritized_catalog(
     free_account_diversity = len(
         {provider_account(str(row["provider"])) for row in all_free_rows}
     )
+    free_outage_domain_diversity = len(
+        {_outage_domain(row) for row in all_free_rows}
+    )
 
     selected_evidence = [_cost_evidence(row) for row in picked]
     return {
@@ -315,6 +378,7 @@ def build_zdr_prioritized_catalog(
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
             "free_account_diversity": free_account_diversity,
+            "free_outage_domain_diversity": free_outage_domain_diversity,
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": selected_evidence.count(COST_FREE),

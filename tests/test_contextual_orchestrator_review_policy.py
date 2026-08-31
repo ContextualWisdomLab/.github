@@ -75,6 +75,16 @@ def test_provider_account_keeps_nvidia_keys_independent() -> None:
     assert policy.provider_account("openai") == "openai"
 
 
+def test_outage_domain_groups_by_shared_base_url() -> None:
+    """Outage domain is keyed on a row's own base_url, not its provider name."""
+    assert policy._outage_domain(
+        {"base_url": "https://integrate.api.nvidia.com/v1"}
+    ) == policy._outage_domain({"base_url": "https://integrate.api.nvidia.com/v1"})
+    assert policy._outage_domain(
+        {"base_url": "https://api.openai.com/v1"}
+    ) != policy._outage_domain({"base_url": "https://integrate.api.nvidia.com/v1"})
+
+
 @pytest.mark.parametrize(
     ("candidate", "provider", "expected"),
     [
@@ -275,7 +285,15 @@ def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
 
 
 def test_build_catalog_reports_free_account_diversity() -> None:
-    """Diversity counts independently credentialed accounts with free routes."""
+    """Diversity counts independently credentialed accounts with free routes.
+
+    ``free_outage_domain_diversity`` is one lower than ``free_account_
+    diversity`` here: ``nvidia_nim`` and ``nvidia_nim_sub`` are two
+    independent accounts (see ``test_build_catalog_counts_same_vendor_
+    credentials_independently``) but share one physical upstream endpoint,
+    so they collapse to a single outage domain while the other three
+    providers (openrouter, openai, bytez) each keep their own.
+    """
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
@@ -283,10 +301,24 @@ def test_build_catalog_reports_free_account_diversity() -> None:
         zdr_endpoints=ZDR_FEED,
     )
     assert result["report"]["free_account_diversity"] == 5
+    assert result["report"]["free_outage_domain_diversity"] == 4
 
 
 def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
-    """Same-vendor credentials remain distinct discovery accounts."""
+    """Same-vendor credentials remain distinct discovery accounts.
+
+    But they are *not* automatically distinct outage domains:
+    ``free_outage_domain_diversity`` reports 1 here, not 2, because both
+    rows' ``base_url`` (via ``PROVIDER_BASE_URLS``) resolve to the identical
+    ``https://integrate.api.nvidia.com/v1`` upstream. Regression for a real,
+    separate bug found by review during this session: #941/#945/#1468
+    correctly stopped assuming these two credentials share a *model
+    catalog*, but a caller deciding whether a single physical outage could
+    empty the free catalog (e.g. open PR #1437's Strix ``orchestrator/free``
+    eligibility gate) needs the outage-domain count, not the account count
+    -- conflating the two would let this exact pair report a falsely safe
+    diversity of 2 for that specific decision.
+    """
     single_family_report = {
         "models": [
             {
@@ -311,6 +343,7 @@ def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
         account_cap=4,
     )
     assert result["report"]["free_account_diversity"] == 2
+    assert result["report"]["free_outage_domain_diversity"] == 1
 
 
 def test_build_catalog_rejects_unknown_pool() -> None:
@@ -337,7 +370,19 @@ def test_build_catalog_assigns_unique_priorities() -> None:
 
 
 def test_build_catalog_applies_account_cap() -> None:
-    """An account cap keeps one credential from absorbing the pool."""
+    """The admission cap is enforced per outage domain, not per credential.
+
+    ``nvidia_nim`` and ``nvidia_nim_sub`` share one outage domain (both
+    ``https://integrate.api.nvidia.com/v1``), so they share one ``2``-slot
+    cap budget here rather than each getting their own -- with ``account_cap``
+    still named for the credential-account concept it started as, but its
+    grouping fixed to outage domains (see ``test_build_catalog_prevents_
+    shared_endpoint_from_crowding_out_independent_providers`` for the
+    concrete crowding-out scenario this exists to prevent). Sort order
+    (alphabetical among same-cost, same-ZDR rows) picks the two admitted
+    NVIDIA-domain rows from ``nvidia_nim`` specifically, since
+    ``"nvidia_nim" < "nvidia_nim_sub"``.
+    """
     report = {
         "models": [
                 {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
@@ -365,9 +410,54 @@ def test_build_catalog_applies_account_cap() -> None:
     for agent in result["agents"]:
         account = policy.provider_account(agent["provider_name"])
         account_counts[account] = account_counts.get(account, 0) + 1
-    assert account_counts["nvidia_nim"] == 2
-    assert account_counts["nvidia_nim_sub"] == 2
-    assert account_counts["openai"] == 2
+    assert account_counts == {"nvidia_nim": 2, "openai": 2}
+    assert len(result["agents"]) == 4
+
+
+def test_build_catalog_prevents_shared_endpoint_from_crowding_out_independent_providers() -> None:
+    """A shared-endpoint credential pair cannot out-compete independent providers.
+
+    Regression for a real, still-open gap this session's own review found in
+    the already-merged #1468 fix: #1468 correctly stopped treating
+    ``nvidia_nim``/``nvidia_nim_sub`` as one *model-catalog* family, but in
+    doing so also let the admission cap treat them as two fully independent
+    *accounts* -- meaning the two credentials could jointly consume up to
+    ``2 * account_cap`` catalog slots, all from one physical endpoint,
+    crowding out a genuinely independent provider (``openrouter`` here) even
+    though it has its own free routes available. With the cap correctly
+    grouped by outage domain instead, the two NVIDIA credentials share one
+    domain's cap budget and cannot jointly exceed it.
+    """
+    report = {
+        "models": [
+            {"provider": "bytez", "model": f"b{i}", "agent_id": f"bytez_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(2)
+        ]
+        + [
+            {"provider": "nvidia_nim", "model": f"n{i}", "agent_id": f"nim_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(10)
+        ]
+        + [
+            {"provider": "nvidia_nim_sub", "model": f"n{i}", "agent_id": f"nimsub_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(10)
+        ]
+        + [
+            {"provider": "openrouter", "model": f"r{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(2)
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=20, account_cap=4
+    )
+    counts: dict[str, int] = {}
+    for agent in result["agents"]:
+        counts[agent["provider_name"]] = counts.get(agent["provider_name"], 0) + 1
+    # NVIDIA's shared domain admits at most 4 total (all from nvidia_nim,
+    # sorted first) -- not 4 from each credential -- leaving bytez and
+    # openrouter, each an independent domain, fully admitted.
+    assert counts == {"bytez": 2, "nvidia_nim": 4, "openrouter": 2}
+    assert result["report"]["free_account_diversity"] == 4
+    assert result["report"]["free_outage_domain_diversity"] == 3
 
 
 def test_build_catalog_respects_limit() -> None:
