@@ -47,69 +47,16 @@ REVIEW_TEMPERATURE = 1.0
 # still finite catalog while keeping the worst-case provider wait below the
 # sidecar's three-minute readiness deadline.
 REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
-# The serving call has the same 120-second transport budget as the Noema review
-# gate; startup admission stays short so an unavailable route cannot delay healthz.
-REVIEW_SERVING_TIMEOUT_SECONDS = 120
+# A real review may legitimately run far beyond two minutes.  Keep the short
+# timeout confined to startup admission; the outer Noema request/job deadline
+# remains the serving safety boundary.
+REVIEW_SERVING_TIMEOUT_SECONDS = 9600
 REVIEW_PREFLIGHT_BATCH_SIZE = 4
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
-# FIXED (ContextualWisdomLab/.github#1415, Devin Review "Valid reviews exceed
-# job deadline"): the serving TaskOrchestrator previously received the FULL
-# preflight-admitted pool (up to REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24), and
-# noema_review_gate.py's CALL_LLM_TIMEOUT_SECONDS was sized to that pool's
-# honest worst case (23040s = 384 minutes) -- which already exceeds
-# noema-review.yml's own explicit `timeout-minutes: 360` (21600s) job
-# ceiling for a SINGLE call, before even considering that call_llm can issue
-# a second, one-shot verdict-repair call in the same job. A client-side
-# timeout the enclosing job can never actually honor is not a safety margin,
-# it is a false promise. Rather than shrink the promised worst case below
-# what a real multi-candidate, judge-gated failover can legitimately need
-# (reintroducing contextual-orchestrator#946's original bug), this caps how
-# many preflight-verified-ready candidates the SERVING orchestrator draws
-# from -- a separate, smaller number than preflight's own admission-testing
-# depth above, which exists to find *some* ready route, not to bound serving
-# wall-clock.
-#
-# Solved backwards from the job's own ceiling: noema-review.yml's
-# `timeout-minutes: 360` (21600s) minus this job's other, non-serving steps
-# (materialize the trusted archive, credential/token resolution, visibility
-# lookup, and this file's own REVIEW_STARTUP_WATCHDOG_SECONDS-bounded sidecar
-# provisioning -- generously rounded to 900s/15min of headroom) leaves 20700s
-# for the "Run Noema LLM review" step. That step can invoke call_llm up to
-# twice (the original request plus one one-shot verdict-repair retry;
-# see noema_review_gate.py's call_llm), so each call's own worst case must
-# independently fit in half of that, 10350s, for the pair to always fit.
-# One route_once() call's orchestrator-level worst case is
-# outer_route_once_attempts(2, from route_once's own
-# `max_attempts = 1 + min(tool_retry_attempts=1, MAX_TOOL_RETRY_ATTEMPTS=4)`)
-# x roles(2: a worker _invoke() call, then an independent judge _invoke()
-# call via _realtime_route_judge/_model_judge_verification) x
-# per-agent-attempts(2, the same `1 + min(1,4)` expression bounding
-# _invoke's own same-agent retry) x REVIEW_SERVING_TIMEOUT_SECONDS(120) x
-# this candidate cap: 2 x 2 x 2 x 120 x N = 960N seconds. Solving
-# 960N <= 10350 gives N <= 10.78, so N=10 -- see
-# CALL_LLM_TIMEOUT_SECONDS in noema_review_gate.py for the resulting exact
-# 960 x 10 = 9600s per-call value this produces. Every one of these 10
-# candidates has already independently PASSED preflight's own base probe and
-# serving-budget confirmation (see REVIEW_PREFLIGHT_MAX_ESCALATIONS above),
-# so this is a reduction in serving-time failover depth among
-# already-proven-healthy routes, not a reduction in how thoroughly preflight
-# searches for a usable one.
-#
-# NOTE (Devin Review, "Serving cap exceeds reachable pool"): today,
-# `_preflight_review_agent_batches` returns on the FIRST batch with any
-# viable candidate (`if viable: return viable, {...}` below), so `agents`
-# here is never larger than REVIEW_PREFLIGHT_BATCH_SIZE=4 in practice --
-# this cap of 10 does not currently bind. That is deliberate, not an
-# oversight: this cap and CALL_LLM_TIMEOUT_SECONDS are a job-deadline safety
-# ceiling derived independently of preflight's own batching strategy, not a
-# number chosen to match it. Coupling them would mean any future change to
-# preflight's early-return behavior (e.g. accumulating viable candidates
-# across batches instead of stopping at the first) could silently regrow the
-# real worst case past what the job's 360-minute ceiling allows again,
-# exactly the bug this constant exists to prevent. Sizing this cap from the
-# job's own budget, independent of today's incidental batch size, means it
-# stays correct even if that batching strategy changes.
+# Bound the already-admitted serving catalog so immediate-error failover work
+# cannot grow with discovery. The outer Noema request and workflow job remain
+# the wall-clock safety boundaries.
 REVIEW_SERVING_MAX_CANDIDATES = 10
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
