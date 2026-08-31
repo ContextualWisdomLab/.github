@@ -464,6 +464,31 @@ def test_require_unoccupied_readiness_port_allows_a_free_port():
     sandboxed_web_e2e.require_unoccupied_readiness_port(f"http://127.0.0.1:{port}/health")
 
 
+def test_require_unoccupied_readiness_port_probes_explicit_port_zero(monkeypatch):
+    """An explicit ``:0`` port must be probed as port 0, not the scheme default.
+
+    ``urllib.parse``'s ``.port`` returns the int ``0`` for a URL with an
+    explicit ``:0`` port, and ``0 or 80`` evaluates to ``80`` in Python, so a
+    naive ``parsed.port or <default>`` derivation silently probes the
+    scheme's default port instead of the requested port 0. Devin's review on
+    PR #1347 flagged this pattern. This regression test records the actual
+    address ``require_unoccupied_readiness_port`` probes and asserts it names
+    port 0, not port 80, pinning the ``parsed.port if parsed.port is not
+    None else <default>`` fix.
+    """
+    recorded = []
+
+    def fake_create_connection(address, timeout):
+        recorded.append(address)
+        raise OSError("nothing listening")
+
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "create_connection", fake_create_connection)
+
+    sandboxed_web_e2e.require_unoccupied_readiness_port("http://127.0.0.1:0/health")
+
+    assert recorded == [("127.0.0.1", 0)]
+
+
 def test_main_reports_occupied_readiness_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A readiness port already occupied by another process fails closed with exit 125."""
     repo = tmp_path / "repo"
