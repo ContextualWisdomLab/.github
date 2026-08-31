@@ -1715,6 +1715,78 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 exact-head-path-policy hollow gate: broken awk job-block extraction blocked 4 unrelated PRs
+
+- **Trigger:** `exact-head-path-policy` (the `Strix Changed Path Quality CI`
+  required check) started failing on four already-open, unrelated
+  hollow-path-audit fix PRs (#1476, #1484, #1488, #1489) after each was
+  brought current with `main` earlier the same day. None of the four PRs'
+  own diffs touch `scripts/ci/test_strix_quick_gate.sh` or
+  `.github/workflows/opencode-review.yml` — the failure traced to a
+  pre-existing bug already live on unmodified `main`, reproduced identically
+  by running `bash scripts/ci/test_strix_quick_gate.sh` directly against
+  `origin/main` before any change (`FAIL: opencode required workflow
+  bootstrap must not depend on required-workflow event payload fields`,
+  `test_strix_quick_gate: FAIL`).
+- **Root cause:** `assert_opencode_review_uses_codegraph_and_contextual_orchestrator`
+  in `scripts/ci/test_strix_quick_gate.sh` (around line 525) extracted the
+  `required-workflow-bootstrap:` job block from `opencode-review.yml` with
+  `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'`. Every job key in that
+  workflow is indented exactly 2 spaces, never column 0, so the end pattern
+  `/^[^ ]/` never matched until EOF — the "block" captured was actually the
+  remaining 310 lines of the entire jobs section, not the ~189-line single
+  job it named. A legitimate, already-merged, unrelated commit (`4a5dfd8`,
+  PR #1497, "fix(review): require substantive agent verdicts") added a
+  step-level `if: github.event.action != 'closed'` inside the separate
+  `opencode-review-target` job; the broken awk swept that line into the
+  block it thought belonged to `required-workflow-bootstrap`, and the "must
+  not depend on required-workflow event payload fields" assertion fired on
+  content that does not belong to that job at all — itself a hollow-gate bug
+  in the same family this baseline already tracks (a check whose pass/fail
+  does not correspond to the property it names).
+- **Trigger-type check (before deciding whether the 4 PRs needed anything
+  ported):** read `.github/workflows/strix-changed-path-quality-ci.yml` in
+  full. Its `exact-head-path-policy` job triggers on plain `pull_request:`
+  (not `pull_request_target:`) and explicitly checks out
+  `ref: ${{ github.event.pull_request.head.sha || github.sha }}` — each PR
+  runs its *own* head-branch copy of `scripts/ci/test_strix_quick_gate.sh`,
+  not `main`'s. So the fix could not resolve the 4 PRs' checks merely by
+  merging into `main`; it had to be ported into each PR's own branch.
+- **Fix:** replaced the range end pattern with an explicit state flag so the
+  end condition is only tested starting on the line *after* the start match
+  (a plain awk range pattern tests its end pattern against the very line
+  that matched the start pattern too, which collapses the range to one line
+  whenever, as here, the start line's own text also matches the end
+  pattern's class): `awk '/^  required-workflow-bootstrap:$/{p=1; print;
+  next} p && /^  [A-Za-z0-9_-]+:/{exit} p'`. This correctly bounds the block
+  to lines 27-215 (189 lines), stopping immediately before the next job key
+  (`coverage-source-tree:` at line 216). Searched the file for every other
+  occurrence of the same `/^[^ ]/` end-boundary pattern
+  (`grep -n '\^\[\^ \]'`) — this was the only occurrence, so no other
+  extraction needed the same fix. Root-cause fix: #1506.
+- **Validation:** `bash scripts/ci/test_strix_quick_gate.sh` run against
+  both the unfixed and fixed script via `git stash` — unfixed exits 1 with
+  the exact `FAIL:` line above; fixed exits 0 with `test_strix_quick_gate:
+  PASS`. `coverage run -m pytest tests -q && coverage report
+  --show-missing` — 2125 passed, 1 skipped, 21 subtests passed; 100% on
+  `scripts/ci/`. `interrogate` — 100%. `bash -n
+  scripts/ci/test_strix_quick_gate.sh` — syntax OK.
+- **Porting to the 4 blocked PRs:** because the check runs each PR's own
+  head-branch script (plain `pull_request`, confirmed above — not
+  `pull_request_target`), the identical one-line awk fix was ported as a
+  normal commit onto each of #1476
+  (`fix/openrouter-premature-evidence-only-filter`), #1484
+  (`fix/hollow-path-opencode-fact-gate-contract`), #1488
+  (`fix/hollow-path-repair-pr827`), and #1489
+  (`fix/hollow-path-opencode-dispatch-bootstrap`), each from its own
+  isolated clone, each validated the same way, with an explanatory comment
+  left on each PR. This is a temporary duplication of the fix across 5
+  branches (the 4 PR branches plus #1506 targeting `main`) until #1506
+  merges and each PR's own branch is later brought current with `main`
+  again in the ordinary course — no further action is needed for that
+  convergence beyond the normal review/update cycle already in place for
+  these PRs.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
