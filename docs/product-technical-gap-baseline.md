@@ -2268,10 +2268,9 @@ regressions fails a test immediately rather than requiring another bot-finds-it/
 Validation: `coverage run -m pytest tests -q` -- 2179 passed, 1 skipped, 21 subtests passed (1 new test
 plus one extended existing test); `coverage report` -- 100% on `scripts/ci/` (no `.py` production file
 touched by this specific fix; the fix and its tests are entirely in `.github/workflows/noema-review.yml`,
-`docs/`, and `tests/` -- separately, this session also restored the coverage gate itself to 100% after a
-concurrent, unrelated commit introduced one genuinely unreachable branch in `extract_json_object`, marking
-it `# pragma: no branch` with an inline explanation before a second concurrent commit landed the identical
-fix independently); `interrogate` -- 100% docstring coverage (minimum 100.0%, actual 100.0%); `actionlint`
+`docs/`, and `tests/` -- separately, the unreachable type branch in `extract_json_object` was removed so
+the implementation now directly reflects the JSON grammar guarantee); `interrogate` -- 100% docstring
+coverage (minimum 100.0%, actual 100.0%); `actionlint`
 on the modified workflow -- clean. The touched `run:` block parses with `bash -n` and was exercised
 interactively against hand-rolled fake `gh` fixtures for both the crash-reproduction and the fixed
 behavior before being folded into the pytest suite. Full validation was re-run after every rebase, given
