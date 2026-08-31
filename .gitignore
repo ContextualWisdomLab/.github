@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 .codegraph/
 strix_runs/
+.claude/
