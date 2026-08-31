@@ -161,6 +161,12 @@ Noema review. Each run also compares that immutable trigger head with the live
 PR before credential/model setup and immediately before publication; a stale
 run cannot review or publish against a newer head.
 
+The trigger mapping is explicit: `pull_request_target` uses `pull_request.head.sha`,
+`workflow_run` uses `workflow_run.head_sha`, and
+`repository_dispatch` uses `client_payload.pr_head_sha`. Missing or malformed
+HEAD identity fails closed before reviewer credentials or model capacity are
+used.
+
 ## Approve-gate evidence
 
 OpenCode approval is evidence-gated. Before approval, the review summary must

@@ -266,6 +266,12 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 in procedure
             )
             assert "concurrency key includes the triggering head SHA" in procedure
+            for source in (
+                "`pull_request_target` uses `pull_request.head.sha`",
+                "`workflow_run` uses `workflow_run.head_sha`",
+                "`repository_dispatch` uses `client_payload.pr_head_sha`",
+            ):
+                assert source in procedure
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
