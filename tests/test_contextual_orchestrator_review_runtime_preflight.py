@@ -83,14 +83,14 @@ def _openai_text(content: str) -> dict[str, object]:
 
 
 def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
-    """Evidence-only rows (e.g. OpenRouter) must never enter live selection."""
+    """Evidence-only rows for a non-OpenRouter provider never enter live selection."""
     namespace = _load_launcher()
     routable = namespace.get("_routable_discovered_models")
     assert callable(routable), "launcher must expose an evidence-only discovery filter"
 
     evidence_only_model = SimpleNamespace(
-        id="openrouter_evidence_only",
-        provider_name="openrouter",
+        id="nvidia_evidence_only",
+        provider_name="nvidia_nim",
         model_id="some/model",
         evidence_only=True,
     )
@@ -110,6 +110,46 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     ]
     assert routable(None) == []
     assert routable([]) == []
+
+
+def test_routable_discovered_models_exempts_openrouter_from_evidence_only() -> None:
+    """OpenRouter rows are never dropped on evidence_only alone.
+
+    Regression for a confirmed bug: ``contextual-orchestrator``'s OpenRouter
+    ``ProviderModelSource`` currently hardcodes ``evidence_only=True`` for
+    every discovered model unconditionally (not computed per model from
+    real evidence), which -- if this filter applied to OpenRouter like
+    every other provider -- would strip every OpenRouter row, including
+    genuinely servable ones, before ``zdr_policy.is_zdr_model()``'s
+    purpose-built per-route OpenRouter ZDR-feed check ever runs on them.
+    Both an evidence-only-tagged and an untagged OpenRouter row must pass
+    through; a same-shaped row from a different provider must not.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_evidence_only = SimpleNamespace(
+        id="openrouter_evidence_only",
+        provider_name="openrouter",
+        model_id="some/model",
+        evidence_only=True,
+    )
+    openrouter_live = SimpleNamespace(
+        id="openrouter_ready",
+        provider_name="openrouter",
+        model_id="ready/free",
+        evidence_only=False,
+    )
+    nvidia_evidence_only = SimpleNamespace(
+        id="nvidia_evidence_only",
+        provider_name="nvidia_nim",
+        model_id="some/model",
+        evidence_only=True,
+    )
+
+    assert routable(
+        [openrouter_evidence_only, openrouter_live, nvidia_evidence_only]
+    ) == [openrouter_evidence_only, openrouter_live]
 
 
 def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(

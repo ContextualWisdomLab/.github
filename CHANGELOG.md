@@ -5,6 +5,18 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- `scripts/ci/contextual_orchestrator_review_launcher.py`'s `_routable_discovered_models()`
+  no longer blanket-strips every OpenRouter row on `evidence_only` alone.
+  `contextual-orchestrator`'s OpenRouter `ProviderModelSource` currently
+  hardcodes `evidence_only=True` for every discovered model unconditionally
+  (a confirmed bug, being fixed upstream separately), which was excluding
+  100% of OpenRouter discovery rows here before
+  `zdr_policy.is_zdr_model()`'s purpose-built, per-route OpenRouter ZDR-feed
+  check ever got a chance to evaluate them -- making that already-correct
+  mechanism dead code for OpenRouter specifically. OpenRouter rows are now
+  exempt from this exclusion; a genuinely non-servable OpenRouter row is
+  still excluded by the existing, provider-agnostic chat-capability check
+  every other provider's rows already go through.
 - Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
   (flagged by Devin Review on that PR): the standing operating directive
   still named the removed `free_family_diversity` evidence field instead of

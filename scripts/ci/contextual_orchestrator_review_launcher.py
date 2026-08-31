@@ -141,14 +141,51 @@ def _log_discovery_errors(errors: list[object]) -> None:
 def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
     """Drop evidence-only discovery rows before any live-serving selection.
 
-    Evidence-only rows (e.g. the OpenRouter catalog) exist solely to supply
-    ZDR evidence for other providers' models; contextual_orchestrator's own
-    ``agent_from_discovered()`` refuses to turn one into a serving agent.
-    Filtering here keeps that same invariant in this sidecar's selection path,
-    which builds its catalog independently rather than calling
-    ``agent_from_discovered()`` directly.
+    Evidence-only rows (e.g. a provider's pure price/policy-scraping stub)
+    exist solely to supply metadata for other providers' models;
+    contextual_orchestrator's own ``agent_from_discovered()`` refuses to
+    turn one into a serving agent. Filtering here keeps that same invariant
+    in this sidecar's selection path, which builds its catalog independently
+    rather than calling ``agent_from_discovered()`` directly.
+
+    OpenRouter rows are deliberately exempt from this exclusion.
+    ``contextual-orchestrator``'s OpenRouter ``ProviderModelSource``
+    currently hardcodes ``evidence_only=True`` for every discovered model
+    unconditionally -- not computed per model from real evidence, even
+    though genuine per-model ZDR evidence is fetched and parsed for
+    OpenRouter in that same module. Applying this filter to OpenRouter
+    verbatim would strip every OpenRouter row, including genuinely
+    servable, chat-capable ones, before ``zdr_policy.is_zdr_model()``'s
+    purpose-built, per-route OpenRouter ZDR-feed check (``openrouter_
+    endpoints_feed``) ever gets a chance to evaluate them -- making that
+    already-correct, already-wired mechanism dead code for OpenRouter
+    specifically, and leaving OpenRouter contributing zero routes to any
+    pool, including the ZDR-attested routes it genuinely offers. A
+    genuinely non-servable OpenRouter row is still excluded downstream by
+    the same provider-agnostic chat-capability check every other provider's
+    rows already go through (``is_general_chat_agent_model_id`` +
+    ``_has_text_output``, in ``main()``) -- so this exemption relies on
+    that existing, independent check, not on trusting ``evidence_only``'s
+    current, wrong, blanket value for OpenRouter.
+
+    This exemption is expected to have real, live effect once merged (not
+    only once ``contextual-orchestrator``'s own per-model ``evidence_only``
+    fix and a matching ``ORCHESTRATOR_PIN_SHA`` bump land): OpenRouter
+    discovery already runs in this sidecar today, so genuinely chat-capable
+    OpenRouter rows -- currently blocked here regardless of what
+    ``contextual-orchestrator`` reports -- start reaching selection
+    immediately. What remains genuinely blocked on the upstream fix is
+    OpenRouter rows being correctly excluded from ``evidence_only`` on a
+    real per-model basis (e.g. a non-chat listing); until then, this
+    function's remaining protection against those is the same downstream
+    chat-capability check, not ``evidence_only``.
     """
-    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
+    return [
+        model
+        for model in (discovered or [])
+        if not getattr(model, "evidence_only", False)
+        or getattr(model, "provider_name", None) == "openrouter"
+    ]
 
 
 def _route_identity(model: object) -> tuple[str, str]:

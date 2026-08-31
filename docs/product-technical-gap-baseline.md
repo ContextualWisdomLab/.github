@@ -1715,6 +1715,58 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 `.github`-side half of OpenRouter's premature evidence_only exclusion
+
+**Confirmed bug.** `scripts/ci/contextual_orchestrator_review_launcher.py`'s `_routable_discovered_models()`
+(called at the top of `main()`, before any live-serving selection) unconditionally dropped every discovery
+row with `evidence_only=True`. `contextual-orchestrator`'s OpenRouter `ProviderModelSource` hardcodes
+`evidence_only=True` for *every* discovered model unconditionally -- not computed per model from real
+evidence, even though genuine per-model ZDR evidence (`_openrouter_zdr_model_ids`/`_apply_discovered_
+model_evidence`, feeding the `zdr_capable` field) is fetched and parsed for OpenRouter in that same
+module. The upstream half of this bug is being fixed separately (a dispatched agent, PR forthcoming, not
+touched here).
+
+The consequence for this repo specifically: with 100% of OpenRouter rows carrying `evidence_only=True`,
+`_routable_discovered_models()` excluded ALL OpenRouter discovery rows before `scripts/ci/zdr_policy.py`'s
+own purpose-built, already-correct, already-wired per-route OpenRouter ZDR-feed check
+(`is_zdr_model()`'s `openrouter_endpoints_feed` branch, an exact `route_key(provider, model) in
+zdr_endpoints` match against OpenRouter's authoritative `/api/v1/endpoints/zdr` feed) ever got a chance to
+evaluate a single OpenRouter row -- making that mechanism dead code for OpenRouter specifically, and
+leaving OpenRouter contributing zero routes to any pool (free, auto, or ZDR-required private targets),
+even though it genuinely offers ZDR-attested free models via its own documented feed.
+
+**Fix.** OpenRouter rows are now exempt from the `evidence_only` exclusion in `_routable_discovered_
+models()`. A genuinely non-servable OpenRouter row (e.g. a non-chat listing) is still excluded downstream
+by the same provider-agnostic chat-capability check every other provider's rows already go through
+(`is_general_chat_agent_model_id` + `_has_text_output`, in `main()`) -- so this exemption relies on that
+existing, independent check, not on trusting `evidence_only`'s current, wrong, blanket value for
+OpenRouter.
+
+**Sequencing correction, verified before writing this record.** The task as described expected this fix
+to be "inert" until both the upstream `contextual-orchestrator` fix and a matching `ORCHESTRATOR_PIN_SHA`
+bump land. Traced through the actual code before accepting that: OpenRouter discovery already runs in
+this sidecar today (`OPENROUTER_API_KEY` is one of the five KV-registered credentials), and for the
+*general* (non-private, `require_zdr=False`) pool -- which is what Noema/OpenCode/the default Strix path
+use -- `_zdr_admitted_rows()` returns every row unfiltered regardless of ZDR status; `is_zdr_model()` only
+affects sort priority and tagging there, never admission. So this fix has real, immediate effect once
+merged: genuinely chat-capable OpenRouter rows, currently blocked here regardless of what
+`contextual-orchestrator` reports, start reaching selection as soon as this lands -- not only once the
+upstream `evidence_only` fix and pin bump also land. What remains genuinely gated on the upstream fix is
+OpenRouter rows being correctly excluded from `evidence_only` on a real per-model basis (a non-chat
+listing, say); until then this function's only remaining protection against those is the downstream
+chat-capability check, not `evidence_only`. Documented explicitly in `_routable_discovered_models()`'s own
+docstring and in the PR description so a reviewer isn't surprised by observable behavior change before the
+upstream PR merges.
+
+**Tests.** `test_routable_discovered_models_excludes_evidence_only_rows` (existing) corrected to use a
+non-OpenRouter provider for its `evidence_only=True` fixture, since that scenario no longer applies to
+OpenRouter; a new `test_routable_discovered_models_exempts_openrouter_from_evidence_only` regression
+confirms both an `evidence_only`-tagged and an untagged OpenRouter row pass through while a same-shaped
+row from a different provider does not. A contract-test assertion was added to `test_contextual_
+orchestrator_review_sidecar_contract.py` pinning the exemption's presence in source, matching this
+repo's existing pattern of pinning exact prose/structure in trusted scripts. Full suite: 2093 passed, 1
+skipped, 21 subtests passed. 100% coverage and 100% docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

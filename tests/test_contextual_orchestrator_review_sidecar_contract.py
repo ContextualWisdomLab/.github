@@ -284,6 +284,10 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert "routable_discovered = _routable_discovered_models(discovered)" in text
     assert "free_discovered_models(routable_discovered)" in text
     assert 'getattr(model, "evidence_only", False)' in text
+    # OpenRouter must stay exempt from the evidence_only exclusion, or
+    # zdr_policy.is_zdr_model()'s purpose-built per-route OpenRouter ZDR-feed
+    # check goes back to never seeing an OpenRouter row at all.
+    assert 'getattr(model, "provider_name", None) == "openrouter"' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
