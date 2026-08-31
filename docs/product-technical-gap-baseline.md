@@ -1859,6 +1859,48 @@ entirely.** Two more Devin Review findings on this PR, one severe.
 Full suite: 2111 passed, 1 skipped, 21 subtests passed. 100% coverage (including the new reordering
 function and both new fallback branches) and 100% docstring coverage on `scripts/ci/`.
 
+**Third follow-up (same PR, same day): the round-robin fix itself broke tier priority, plus a real IPv6
+normalization collision.** Two more Devin Review findings, one a real correctness regression the previous
+round introduced.
+
+- **Real regression: fairness reordering could drop a free route for a paid one.** The round-robin fix
+  above grouped every row belonging to one outage domain into a single contiguous block, emitted at the
+  position of that domain's *first* appearance in the (already tier-sorted) input -- but a domain's rows
+  can span multiple admission-priority tiers (e.g. `openai` contributes both a free and a priced route,
+  same single-account domain). Grouping by domain first, tier-blind, let a domain's lower-tier row (e.g.
+  priced) get pulled into the same block as its higher-tier row (free), ahead of a *different* domain's
+  higher-tier row that only sorted later because of the `(provider, model)` tie-break. Verified
+  concretely before fixing: sorted input `[free openai, free openrouter, priced openai]` reordered to
+  `[free openai, priced openai, free openrouter]`, and with `limit=2` the genuinely free `openrouter`
+  route was dropped in favor of the priced `openai` route -- a real correctness regression for a catalog
+  whose entire purpose is admitting free/ZDR routes preferentially. Fixed by scoping the round-robin
+  fairness pass strictly *within* one admission-priority tier at a time: `eligible_rows` and
+  `_fair_admission_order` now share one `_admission_priority_key()` function (the sort key and the
+  tier-boundary detector can no longer silently drift apart), the input is split into contiguous
+  same-tier runs (safe, since it is already tier-sorted), and the existing domain/account round-robin
+  logic (renamed `_fair_order_within_tier`) is applied independently to each run, then the runs are
+  concatenated back in their original order. Re-verified: the same scenario now correctly keeps
+  `[free openai, free openrouter]` under `limit=2`; the starvation-fix regression scenario from the
+  previous round still passes unchanged (both were verified together, programmatically, before
+  committing). Added a unit-level regression directly against `_fair_admission_order` and an end-to-end
+  regression through `build_zdr_prioritized_catalog`.
+- **Real: IPv6 host normalization could collide two different endpoints.** `urlsplit().hostname` strips
+  IPv6 literal brackets (`[::1]` -> `::1`); appending a port without re-adding them meant an explicit-port
+  IPv6 URL (`https://[::1]:8443/v1`, host `::1` port `8443`) and an unrelated literal that merely contains
+  the same colon-digit sequence (`https://[::1:8443]/v1`, one IPv6 address, no separate port) both
+  normalized to the identical, syntactically-invalid `::1:8443` -- two genuinely different endpoints
+  undercounted as one outage domain, in addition to producing malformed reassembled URL syntax either
+  way. Fixed by re-wrapping a colon-bearing host in brackets before ever conditionally appending a port.
+  Re-verified: the two example URLs now normalize distinctly, a default IPv6 port is still correctly
+  dropped, and the malformed-IPv6-bracket fallback from the previous round still works unchanged. Two new
+  regression tests.
+- **Optional perf nit, applied since already in this code:** the round-robin queues switched from
+  list-`pop(0)` (O(n) per pop) to `collections.deque.popleft()` (O(1)) -- current catalog sizes make this
+  immaterial, but the change was one import and two identifiers.
+
+Full suite: 2115 passed, 1 skipped, 21 subtests passed. 100% coverage and 100% docstring coverage on
+`scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

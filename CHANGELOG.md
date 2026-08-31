@@ -29,7 +29,16 @@ Semantic Versioning where the repository publishes a release.
   -- fixing a narrower starvation bug the outage-domain grouping itself
   introduced (one credential could otherwise get zero admissions from a
   shared domain even with rows available and cap budget nominally unused
-  by it).
+  by it). That fairness reordering is now strictly scoped to one admission-
+  priority tier (cost tier + ZDR status) at a time, never across tiers --
+  an earlier revision grouped a whole outage domain's rows into one block
+  regardless of tier, which could drag a lower-priority route (paid,
+  non-ZDR) ahead of a higher-priority route (free, ZDR) belonging to a
+  different domain, sometimes dropping a free route for a paid one under a
+  tight catalog limit. IPv6 host normalization now re-brackets a
+  colon-bearing host before appending a port, so an explicit-port address
+  (`[::1]:8443`) and an unrelated literal that merely contains the same
+  digits (`[::1:8443]`) no longer collapse to one outage domain.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer

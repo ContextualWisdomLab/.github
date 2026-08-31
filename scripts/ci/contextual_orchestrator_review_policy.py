@@ -13,7 +13,7 @@ import json
 import math
 import re
 import sys
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
@@ -158,50 +158,128 @@ def _normalize_base_url(base_url: str) -> str:
         return text.casefold()
     scheme = parsed.scheme.casefold()
     host = parsed.hostname.casefold()
-    netloc = host if port is None or port == _DEFAULT_PORTS.get(scheme) else f"{host}:{port}"
+    # urlsplit().hostname strips IPv6 literal brackets (``[::1]`` -> ``::1``).
+    # Re-adding them whenever the host itself contains a colon -- before ever
+    # conditionally appending a port -- is required for two reasons: without
+    # it, an explicit-port IPv6 URL (``[::1]:8443``) and a bracketless,
+    # colon-bearing literal address that merely *looks* like host:port when
+    # flattened (``[::1:8443]``, port None) collapse to the identical
+    # ``::1:8443`` string despite being different addresses; and the
+    # reassembled ``netloc`` must stay valid host:port syntax regardless.
+    bracketed_host = f"[{host}]" if ":" in host else host
+    netloc = (
+        bracketed_host
+        if port is None or port == _DEFAULT_PORTS.get(scheme)
+        else f"{bracketed_host}:{port}"
+    )
     path = parsed.path.rstrip("/")
     return urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
 
 
+def _admission_priority_key(
+    row: Mapping[str, Any], *, zdr_endpoints: frozenset[str]
+) -> tuple[int, int, str, str]:
+    """Return the deterministic ``(cost tier, ZDR tier, provider, model)`` sort key.
+
+    The single source of truth for admission priority: ``build_zdr_
+    prioritized_catalog`` sorts ``eligible_rows`` with this key, and
+    :func:`_fair_admission_order` re-derives just its first two components
+    (the tier, excluding the ``(provider, model)`` tie-break) to find tier
+    boundaries in that same sorted sequence -- sharing one function instead
+    of two independently written key expressions means the two can never
+    silently drift out of sync with each other.
+    """
+    return (
+        _COST_EVIDENCE_RANK[_cost_evidence(row)],
+        0
+        if is_zdr_model(
+            str(row["provider"]), model=str(row["model"]), zdr_endpoints=zdr_endpoints
+        )
+        else 1,
+        str(row["provider"]),
+        str(row["model"]),
+    )
+
+
 def _fair_admission_order(
-    rows: list[Mapping[str, Any]],
+    rows: list[Mapping[str, Any]], *, zdr_endpoints: frozenset[str]
 ) -> list[Mapping[str, Any]]:
     """Reorder rows so one outage domain's cap fills fairly across accounts.
 
-    ``rows`` must already be in the caller's priority order (cost-tier, ZDR
-    preference, deterministic ``(provider, model)`` tie-break -- see
-    ``build_zdr_prioritized_catalog``'s own sort). Grouping the admission cap
-    by outage domain (:func:`_outage_domain`) fixed one starvation bug --
-    two same-endpoint credentials sharing one budget instead of each getting
-    their own -- but introduced a second, narrower one: the greedy admission
-    loop consumes rows in this exact sorted order, so whichever account's
-    rows happen to sort first (``"nvidia_nim"`` before ``"nvidia_nim_sub"``,
-    alphabetically, in every real fixture in this file) could exhaust the
-    *entire* shared cap before the domain's other account is considered at
-    all -- not "prevented from taking more than its share", but shut out
-    completely, even with rows of its own available and cap budget nominally
-    unused by it.
+    ``rows`` must already be sorted by :func:`_admission_priority_key` (see
+    ``build_zdr_prioritized_catalog``'s own sort, which uses the same key).
+    Grouping the admission cap by outage domain (:func:`_outage_domain`)
+    fixed one starvation bug -- two same-endpoint credentials sharing one
+    budget instead of each getting their own -- but introduced a second,
+    narrower one: the greedy admission loop consumes rows in sorted order,
+    so whichever account's rows happen to sort first (``"nvidia_nim"``
+    before ``"nvidia_nim_sub"``, alphabetically, in every real fixture in
+    this file) could exhaust the *entire* shared cap before the domain's
+    other account was considered at all -- not "prevented from taking more
+    than its share", but shut out completely, even with rows of its own
+    available and cap budget nominally unused by it.
 
-    A domain contributed to by only one account is returned completely
-    untouched, in its original relative position -- this function changes
-    nothing for the common case (every provider except the shared
-    ``nvidia_nim``/``nvidia_nim_sub`` pair, as of this writing). Within a
-    domain shared by more than one account, rows are taken in round-robin
-    turns across those accounts -- one row from account A's own queue (which
-    keeps A's rows in their original relative priority order), then one from
-    B's, cycling only over accounts that still have an unconsumed row --
-    instead of admission naturally exhausting whichever account's rows sort
-    first. This guarantees every contending account gets at least one turn
-    before any account gets a second admission from that domain, so the
-    domain's cap is filled proportionally across its accounts rather than by
-    whichever one happens to rank first; an account that runs out of rows
-    before the cap is reached simply stops participating in further rounds,
-    letting the domain's remaining accounts absorb the leftover capacity.
+    Fairness is reordered strictly *within* one admission-priority tier
+    (the ``(cost tier, ZDR tier)`` pair -- the first two components of
+    :func:`_admission_priority_key`), never across tiers: an earlier
+    revision of this function grouped every row for one outage domain into
+    a single block at that domain's first appearance in the whole input,
+    regardless of tier, which could drag a lower-priority route (e.g. paid,
+    non-ZDR) from one domain ahead of a higher-priority route (e.g. free,
+    ZDR) belonging to a *different* domain that happened to appear later in
+    the original order -- a real correctness regression for a catalog whose
+    entire purpose is admitting free/ZDR routes preferentially. Splitting
+    ``rows`` into contiguous same-tier runs first (safe because the input
+    is already tier-sorted, so equal-tier rows are already contiguous) and
+    reordering fairness independently within each run, then concatenating
+    the runs back in their original order, makes tier priority strictly
+    non-negotiable: no row from a worse tier can ever end up ahead of a row
+    from a better tier, regardless of domain/account composition.
 
-    Each domain's whole reordered block is emitted at the position of its
-    first row's original appearance, so which domain is considered before
-    another is unaffected by this function -- only the order *within* a
-    multi-account domain changes.
+    Within one tier, a domain contributed to by only one account is
+    returned completely untouched, in its original relative position --
+    this function changes nothing for the common case (every provider
+    except the shared ``nvidia_nim``/``nvidia_nim_sub`` pair, as of this
+    writing). Within a domain shared by more than one account, rows are
+    taken in round-robin turns across those accounts -- one row from
+    account A's own queue (which keeps A's rows in their original relative
+    order), then one from B's, cycling only over accounts that still have
+    an unconsumed row -- instead of admission naturally exhausting
+    whichever account's rows sort first. This guarantees every contending
+    account gets at least one turn before any account gets a second
+    admission from that domain, so the domain's cap is filled
+    proportionally across its accounts rather than by whichever one
+    happens to rank first within the tier; an account that runs out of rows
+    before the cap is reached simply stops participating in further
+    rounds, letting the domain's remaining accounts absorb the leftover
+    capacity.
+    """
+    ordered: list[Mapping[str, Any]] = []
+    tier_start = 0
+    total = len(rows)
+    while tier_start < total:
+        tier = _admission_priority_key(rows[tier_start], zdr_endpoints=zdr_endpoints)[:2]
+        tier_end = tier_start + 1
+        while (
+            tier_end < total
+            and _admission_priority_key(rows[tier_end], zdr_endpoints=zdr_endpoints)[:2]
+            == tier
+        ):
+            tier_end += 1
+        ordered.extend(_fair_order_within_tier(rows[tier_start:tier_end]))
+        tier_start = tier_end
+    return ordered
+
+
+def _fair_order_within_tier(
+    rows: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Round-robin one already-single-tier run of rows across shared-domain accounts.
+
+    See :func:`_fair_admission_order`'s docstring for why fairness must stay
+    scoped to one admission-priority tier at a time; this is that per-tier
+    reordering step, factored out so it never has visibility into rows from
+    a different tier to (mis)order against.
     """
     domain_order: list[str] = []
     domain_rows: dict[str, list[Mapping[str, Any]]] = {}
@@ -216,12 +294,12 @@ def _fair_admission_order(
     for domain in domain_order:
         bucket = domain_rows[domain]
         account_order: list[str] = []
-        queues: dict[str, list[Mapping[str, Any]]] = {}
+        queues: dict[str, deque[Mapping[str, Any]]] = {}
         for row in bucket:
             account = provider_account(str(row["provider"]))
             if account not in queues:
                 account_order.append(account)
-                queues[account] = []
+                queues[account] = deque()
             queues[account].append(row)
         if len(account_order) <= 1:
             ordered.extend(bucket)
@@ -230,7 +308,7 @@ def _fair_admission_order(
             for account in account_order:
                 queue = queues[account]
                 if queue:
-                    ordered.append(queue.pop(0))
+                    ordered.append(queue.popleft())
     return ordered
 
 
@@ -444,23 +522,12 @@ def build_zdr_prioritized_catalog(
         )
     ]
     eligible_rows.sort(
-        key=lambda row: (
-            _COST_EVIDENCE_RANK[_cost_evidence(row)],
-            0
-            if is_zdr_model(
-                str(row["provider"]),
-                model=str(row["model"]),
-                zdr_endpoints=zdr_endpoints,
-            )
-            else 1,
-            str(row["provider"]),
-            str(row["model"]),
-        )
+        key=lambda row: _admission_priority_key(row, zdr_endpoints=zdr_endpoints)
     )
 
     per_domain: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
-    for row in _fair_admission_order(eligible_rows):
+    for row in _fair_admission_order(eligible_rows, zdr_endpoints=zdr_endpoints):
         domain = _outage_domain(row)
         if per_domain[domain] >= account_cap:
             continue

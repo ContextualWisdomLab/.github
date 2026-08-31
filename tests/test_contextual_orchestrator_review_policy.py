@@ -157,6 +157,32 @@ def test_normalize_base_url_falls_back_on_malformed_ipv6_bracket() -> None:
     )
 
 
+def test_normalize_base_url_distinguishes_ipv6_port_from_literal_colon_digits() -> None:
+    """An IPv6 host:port pair and a differently-shaped literal stay distinct.
+
+    Regression for a Devin Review finding: ``urlsplit().hostname`` strips
+    IPv6 literal brackets (``[::1]`` -> ``::1``), so appending a port
+    without re-adding them collapsed ``https://[::1]:8443/v1`` (host
+    ``::1``, port ``8443``) and ``https://[::1:8443]/v1`` (one IPv6
+    literal, ``::1:8443``, with no separate port at all) to the identical
+    ``::1:8443`` string -- two different addresses undercounted as one
+    outage domain.
+    """
+    explicit_port = policy._normalize_base_url("https://[::1]:8443/v1")
+    literal_colon_digits = policy._normalize_base_url("https://[::1:8443]/v1")
+    assert explicit_port != literal_colon_digits
+    # Both stay valid, bracketed netloc syntax, not the pre-fix bare form.
+    assert explicit_port == "https://[::1]:8443/v1"
+    assert literal_colon_digits == "https://[::1:8443]/v1"
+
+
+def test_normalize_base_url_drops_default_port_for_ipv6_host() -> None:
+    """An explicit default port on an IPv6 host is still dropped, brackets intact."""
+    assert policy._normalize_base_url(
+        "https://[::1]:443/v1"
+    ) == policy._normalize_base_url("https://[::1]/v1")
+
+
 def test_outage_domain_uses_normalized_base_url() -> None:
     """Two rows spelling one endpoint differently share one outage domain."""
     assert policy._outage_domain(
@@ -164,19 +190,22 @@ def test_outage_domain_uses_normalized_base_url() -> None:
     ) == policy._outage_domain({"base_url": "https://Integrate.API.Nvidia.com:443/v1/"})
 
 
-def _row(provider: str, model: str) -> dict[str, object]:
+def _row(
+    provider: str, model: str, *, cost_evidence: str = policy.COST_UNKNOWN
+) -> dict[str, object]:
     """Return a minimal normalized-shaped row for ``_fair_admission_order`` tests."""
     return {
         "provider": provider,
         "model": model,
         "base_url": policy.PROVIDER_BASE_URLS[provider],
+        "cost_evidence": cost_evidence,
     }
 
 
 def test_fair_admission_order_untouched_for_single_account_domains() -> None:
     """A domain with only one contributing account keeps its original order."""
     rows = [_row("openrouter", "a"), _row("openai", "b"), _row("bytez", "c")]
-    assert policy._fair_admission_order(rows) == rows
+    assert policy._fair_admission_order(rows, zdr_endpoints=frozenset()) == rows
 
 
 def test_fair_admission_order_round_robins_a_shared_domain() -> None:
@@ -195,7 +224,7 @@ def test_fair_admission_order_round_robins_a_shared_domain() -> None:
         _row("nvidia_nim_sub", "s0"),
         _row("nvidia_nim_sub", "s1"),
     ]
-    ordered = policy._fair_admission_order(rows)
+    ordered = policy._fair_admission_order(rows, zdr_endpoints=frozenset())
     assert [(row["provider"], row["model"]) for row in ordered] == [
         ("nvidia_nim", "m0"),
         ("nvidia_nim_sub", "s0"),
@@ -203,6 +232,75 @@ def test_fair_admission_order_round_robins_a_shared_domain() -> None:
         ("nvidia_nim_sub", "s1"),
         ("nvidia_nim", "m2"),
     ]
+
+
+def test_fair_admission_order_never_moves_a_row_across_priority_tiers() -> None:
+    """Fairness reordering never lets a worse-tier row outrank a better-tier one.
+
+    Regression for a real correctness bug a Devin Review finding caught: an
+    earlier revision of ``_fair_admission_order`` grouped every row for one
+    outage domain into a single block at that domain's first appearance,
+    *regardless of tier* -- so a lower-priority row (here, priced OpenAI)
+    sharing a domain with a higher-priority row (free OpenAI) could get
+    dragged ahead of a higher-priority row from a *different* domain (free
+    OpenRouter) that happened to sort later only because of the
+    ``(provider, model)`` tie-break. Concretely: sorted input
+    ``[free OpenAI, free OpenRouter, priced OpenAI]`` must stay in that
+    exact order -- the free OpenRouter row must never be pushed behind the
+    priced OpenAI row merely because OpenAI's two rows share a domain.
+    """
+    rows = [
+        _row("openai", "free-model", cost_evidence=policy.COST_FREE),
+        _row("openrouter", "free-model", cost_evidence=policy.COST_FREE),
+        _row("openai", "priced-model", cost_evidence=policy.COST_PRICED),
+    ]
+    ordered = policy._fair_admission_order(rows, zdr_endpoints=frozenset())
+    assert [(row["provider"], row["model"]) for row in ordered] == [
+        ("openai", "free-model"),
+        ("openrouter", "free-model"),
+        ("openai", "priced-model"),
+    ]
+
+
+def test_build_catalog_never_admits_a_priced_route_over_a_free_one_from_another_domain() -> None:
+    """End-to-end: a tight limit must never drop a free route for a paid one.
+
+    Same Devin Review finding as ``test_fair_admission_order_never_moves_a_
+    row_across_priority_tiers``, exercised through the full public API
+    rather than the internal reordering helper directly.
+    """
+    report = {
+        "models": [
+            {
+                "provider": "openai",
+                "model": "free-model",
+                "agent_id": "oa_free",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+            {
+                "provider": "openai",
+                "model": "priced-model",
+                "agent_id": "oa_priced",
+                "is_free": False,
+                "prompt_price_per_1k": 0.002,
+                "completion_price_per_1k": 0.008,
+                "currency_code": "USD",
+            },
+            {
+                "provider": "openrouter",
+                "model": "free-model",
+                "agent_id": "or_free",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=2, account_cap=4, pool="auto"
+    )
+    assert [agent["model"] for agent in result["agents"]] == ["free-model", "free-model"]
+    assert [agent["provider_name"] for agent in result["agents"]] == ["openai", "openrouter"]
 
 
 def test_fair_admission_order_preserves_domain_position_and_multiple_domains() -> None:
@@ -222,7 +320,7 @@ def test_fair_admission_order_preserves_domain_position_and_multiple_domains() -
         _row("nvidia_nim_sub", "s0"),
         _row("openrouter", "r0"),
     ]
-    ordered = policy._fair_admission_order(rows)
+    ordered = policy._fair_admission_order(rows, zdr_endpoints=frozenset())
     assert [(row["provider"], row["model"]) for row in ordered] == [
         ("bytez", "b0"),
         ("nvidia_nim", "m0"),
