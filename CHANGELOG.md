@@ -37,17 +37,13 @@ Semantic Versioning where the repository publishes a release.
   unrelated to the review itself. Treat "cannot verify" the same as
   "verified stale": stop cancelling further runs, but exit 0 so the job --
   and the actual review later in it -- proceeds.
-- Let the required OpenCode verdict check wait for the complete bounded review
-  path: it now dispatches the authenticated review directly, bounds validation
-  and coverage prerequisites, permits five hours of coverage evidence plus the
-  205-minute model pool inside a 305-minute review job, and uses two chained
-  325-minute polling windows with cleanup margin instead of assuming one
-  GitHub-hosted job can cover the complete multi-hour path. Reviews API calls
-  have a 25-second cap inside the fixed 30-second cadence, so slow calls cannot
-  silently consume time outside the declared budget. Long-running waits fail
-  closed for fork PRs at bootstrap, preventing untrusted external contributors
-  from exhausting runner slots; maintainers must first materialize those
-  contributions on a trusted base-repository branch.
+- Replace the required OpenCode workflow's two chained 325-minute polling jobs
+  with event-driven continuation. The required run dispatches the authenticated
+  multi-hour review, checks once, and fails closed without retaining a hosted
+  runner; after a formal exact-head receipt is published, the privileged
+  dispatch reruns only that required run's failed job. Long model and coverage
+  budgets remain unchanged. Fork PRs still fail closed before dispatch;
+  maintainers must first materialize them on a trusted base-repository branch.
 - Skip Noema's one-time repair-retry LLM request when the PR head has moved
   since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
   now takes `expected_head` and re-checks it against a fresh `fetch_pr`

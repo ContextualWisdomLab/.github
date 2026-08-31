@@ -7548,6 +7548,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Enforce current-head formal OpenCode review receipt
+        id: formal_review_receipt
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
@@ -7570,6 +7571,52 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --head-sha "$PR_HEAD_SHA" \
             "${draft_args[@]}"
+
+      - name: Wake exact-head required OpenCode workflow
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            runs="$(gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&head_sha=${PR_HEAD_SHA}&per_page=100")"
+            required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" '
+              [
+                .[].workflow_runs[]
+                | select(.head_sha == $head)
+                | select(.event == "pull_request_target")
+                | select(.path == ".github/workflows/opencode-review.yml")
+                | select(.workflow_url | contains("/actions/required_workflows/"))
+                | select(.name | startswith("Required OpenCode Review " + $repo + "#"))
+              ]
+              | sort_by(.id)
+              | last
+              | [(.id // ""), (.status // ""), (.conclusion // "")]
+              | @tsv
+            ')"
+            IFS=$'\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
+              gh api -X POST "repos/${GH_REPOSITORY}/actions/runs/${required_run_id}/rerun-failed-jobs" >/dev/null
+              echo "Re-ran failed jobs for exact-head Required OpenCode Review run ${required_run_id}."
+              exit 0
+            fi
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "success" ]; then
+              echo "Exact-head Required OpenCode Review run ${required_run_id} already succeeded."
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Formal OpenCode receipt exists, but the exact-head required workflow did not reach a rerunnable failed state."
+          exit 1
 
       - name: Publish repository_dispatch OpenCode status
         if: >-

@@ -140,6 +140,14 @@ OpenCode for the same PR head when review evidence is missing or stale. This
 avoids running PR-head review, CodeGraph, coverage, or PoC code as an
 unbounded local workflow copy.
 
+The required OpenCode workflow does not poll for the multi-hour model run on a
+hosted runner. It dispatches once, checks for an existing exact-head formal
+receipt, and otherwise fails closed. After the privileged dispatch publishes
+an `APPROVED` or `CHANGES_REQUESTED` receipt, it selects the latest matching
+`pull_request_target` run by exact head and reruns only its failed job. Thus the
+ruleset-required workflow becomes successful only after the receipt exists,
+without reserving a runner while the model works.
+
 Scheduled review-feedback autofix is also centralized. The
 `PR Review Fix Scheduler` dispatches the central `PR Review Autofix` worker
 in `ContextualWisdomLab/.github` and passes the target repository, PR number,

@@ -2284,6 +2284,15 @@ nested object after its malformed outer object failed to decode. Recovery now co
 brace groups, preserving lightly wrapped and multiple-object responses while failing closed on nested
 escape. A regression test reproduces the former nested-object acceptance directly.
 
+The two chained required-workflow pollers were then replaced after live organization evidence showed
+53 concurrent Actions runs and a growing runner queue. The required workflow still dispatches the same
+bounded multi-hour OpenCode path and still fails closed without a formal exact-head receipt, but it now
+releases its runner after one receipt lookup. Once the privileged dispatch validates the formal receipt,
+it selects the latest exact-head `Required OpenCode Review` `pull_request_target` run and calls
+`rerun-failed-jobs`; only the small verdict job reruns. This preserves ruleset `18156473`'s required
+workflow identity and the two-hour-plus model allowance while removing roughly eleven runner-hours of
+polling per PR.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

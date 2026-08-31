@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
+import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -107,17 +108,16 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Reject untrusted fork review resource consumption" in workflow
     assert "github.event.pull_request.head.repo.full_name" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
-    assert "timeout-minutes: 360" in target_job.split("    steps:\n", 1)[0]
-    assert workflow.count("for attempt in $(seq 1 650)") == 2
-    first_window = workflow.split("  opencode-review-wait-window-one:\n", 1)[1]
-    assert "id-token: write" in first_window.split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 5" in target_job.split("    steps:\n", 1)[0]
+    assert "for attempt in" not in workflow
+    assert "opencode-review-wait-window-one" not in workflow
+    assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
+    assert "steps.verdict.outputs.verdict == ''" in target_job
     assert 'event_type:"opencode-review"' in workflow
-    assert 'sleep "$remaining_seconds"' in target_job
-    assert workflow.count("timeout 25 gh api --paginate") == 2
-    assert workflow.count('if ! reviews="$(timeout 25 gh api') == 2
-    assert workflow.count('reviews="[]"') == 2
-    assert workflow.count("attempt_started=$SECONDS") == 2
-    assert workflow.count('remaining_seconds=$((30 - (SECONDS - attempt_started)))') == 2
+    assert 'sleep "$remaining_seconds"' not in workflow
+    assert workflow.count("timeout 25 gh api --paginate") == 1
+    assert workflow.count('if ! reviews="$(timeout 25 gh api') == 1
+    assert workflow.count('reviews="[]"') == 1
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
@@ -127,46 +127,54 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     )
 
 
-def test_required_verdict_budget_contains_complete_dispatched_review() -> None:
-    """The required check must outlive bounded prerequisites and model review."""
+def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> None:
+    """A formal receipt wakes the failed required run instead of polling for hours."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    assert "for attempt in" not in required
+    assert "rerun-failed-jobs" in dispatched
+    assert "id: formal_review_receipt" in dispatched
+    assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
+    assert 'select(.head_sha == $head)' in dispatched
+    assert 'select(.event == "pull_request_target")' in dispatched
+    assert 'select(.workflow_url | contains("/actions/required_workflows/"))' in dispatched
+    assert 'startswith("Required OpenCode Review " + $repo + "#")' in dispatched
 
-    def matched_int(pattern: str, source: str) -> int:
-        match = re.search(pattern, source, re.MULTILINE)
-        assert match, f"missing timeout contract: {pattern}"
-        return int(match.group(1))
 
-    required_timeouts = [
-        matched_int(
-            r"^    timeout-minutes: (\d+)$",
-            re.split(
-                r"\n  (?=[a-z0-9_-]+:\n)",
-                required.split(f"\n  {job}:\n", 1)[1],
-                maxsplit=1,
-            )[0],
-        )
-        for job in ("opencode-review-wait-window-one", "opencode-review-target")
-    ]
-    attempts = [int(value) for value in re.findall(r"seq 1 (\d+)", required)]
-    assert len(attempts) == 2
-    job_timeouts = [
-        matched_int(
-            r"^    timeout-minutes: (\d+)$",
-            re.split(
-                r"\n  (?=[a-z0-9_-]+:\n)",
-                dispatched.split(f"\n  {job}:\n", 1)[1],
-                maxsplit=1,
-            )[0],
-        )
-        for job in (
-            "validate-pr-metadata",
-            "coverage-source-tree",
-            "coverage-evidence",
-            "opencode-review-target",
-        )
-    ]
-    polling_minutes = sum((attempt - 1) / 2 + 25 / 60 for attempt in attempts)
-
-    assert sum(job_timeouts) <= polling_minutes
-    assert polling_minutes + 20 <= sum(required_timeouts)
+def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
+    """Execute the production wake script against a deterministic fake GitHub API."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    run_block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    script = textwrap.dedent(run_block)
+    calls = tmp_path / "calls"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"actions/runs?"* ]]; then
+  printf '%s\\n' '{json.dumps({"workflow_runs": [{"id": 42, "head_sha": HEAD, "event": "pull_request_target", "name": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}]})}'
+  exit 0
+fi
+if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "FAKE_CALLS": str(calls),
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_HEAD_SHA": HEAD,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "actions/runs/42/rerun-failed-jobs" in calls.read_text(encoding="utf-8")
