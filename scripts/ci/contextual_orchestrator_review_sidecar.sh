@@ -31,7 +31,7 @@ if [ "$#" -ne 0 ]; then
   exit 1
 fi
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-9942b620bed03ca4f414338bf82a08cff4f267ed}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-a426755ab0122bb9ea0714433b174f34fbf43230}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
