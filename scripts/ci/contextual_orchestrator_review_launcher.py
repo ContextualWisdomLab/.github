@@ -665,6 +665,36 @@ def _bounded_fallback_catalog_limit(
     return total_limit - primary_count
 
 
+def _catalog_account_cap(default: int) -> int:
+    """Return the configured per-account catalog admission cap.
+
+    ``default`` must be ``scripts.ci.contextual_orchestrator_review_policy``'s
+    own ``DEFAULT_ACCOUNT_CAP`` -- the single source of truth for how many
+    routes one credential account may contribute to the bounded preflight
+    budget. A caller must never substitute a total-routes-scale constant
+    (e.g. ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES``) here: doing so silently
+    disables per-account diversification and lets one rate-limited account
+    consume the entire preflight budget. That is not a hypothetical failure
+    mode -- a sibling in-flight branch's own ``_catalog_family_cap()``
+    fell back to exactly ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` and, in a live
+    production run, let two NVIDIA NIM credentials sharing one rate-limited
+    upstream jointly occupy 12/12 preflight slots, of which 10 were then
+    rejected with 429/404/timeout (see ContextualWisdomLab/.github#1415 and
+    the "빈 깡통 경로" report it responds to). Routing the default through the
+    caller-supplied ``policy.DEFAULT_ACCOUNT_CAP`` (rather than hand-typing a
+    literal here) keeps this module's cap from silently drifting out of sync
+    with the policy module's own declared intent.
+
+    Args:
+        default: The cap to use when ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` is
+            unset, always ``policy.DEFAULT_ACCOUNT_CAP``.
+
+    Returns:
+        The per-account cap to pass to ``build_zdr_prioritized_catalog``.
+    """
+    return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
+
+
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -775,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
+        DEFAULT_ACCOUNT_CAP,
         PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
@@ -848,7 +879,7 @@ def main(argv: list[str] | None = None) -> int:
     result = build_zdr_prioritized_catalog(
         primary_rows,
         limit=primary_limit,
-        account_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")),
+        account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
@@ -879,7 +910,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
                 limit=fallback_limit,
-                account_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")),
+                account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",

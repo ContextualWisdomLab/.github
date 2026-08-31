@@ -677,6 +677,8 @@ def test_noema_review_supports_review_token_pat_fallback() -> None:
         in workflow
     )
     assert "steps.noema_credential.outputs.source == 'github-app'" in workflow
+    assert "NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug']" in workflow
+    assert "NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}" in workflow
 
 
 def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
@@ -1520,7 +1522,7 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
     assert "--output=old-results.json" not in workflow
     assert "--output=new-results.json" not in workflow
     assert workflow.count("path: source") == 2
-    assert workflow.count("\n            source/\n") == 4
+    assert workflow.count("--no-resolve --allow-no-lockfiles -r source/") == 4
     assert "clean: false" not in workflow
     assert "test -s old-results.json" in workflow
     assert "test -s new-results.json" in workflow
@@ -1582,7 +1584,7 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "Retry head OSV without transitive resolution" in workflow
     assert workflow.count("timeout-minutes: 8") == 2
     assert workflow.count("timeout-minutes: 4") == 2
-    assert workflow.count("\n            --no-resolve\n") == 4
+    assert workflow.count("--no-resolve --allow-no-lockfiles -r source/") == 4
     assert workflow.count("did not produce authoritative result evidence") == 2
     assert (
         "Direct manifest and lockfile vulnerability evidence remains enforced"
@@ -1611,9 +1613,12 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
     assert "Require authoritative base and head OSV evidence" in workflow
     assert "Require successful base and head OSV scans" not in workflow
     assert "Normalize successful empty OSV result documents" not in workflow
-    assert "failure with authoritative vulnerability evidence" not in workflow
-    assert workflow.count("non-successful scan outcome cannot prove completeness") == 1
+    assert workflow.count("scanner exit 1 with authoritative vulnerability evidence") == 1
+    assert workflow.count("scanner exit {exit_code} cannot prove complete result evidence") == 2
+    assert workflow.count("sha256:48406c58197201fe55e56615ad9d414f85063da320e204d0b0ed460fb3908dba") == 1
     assert workflow.count("completed successfully without findings output") == 1
+    assert workflow.count("SCAN_EXIT_CODE: ${{ steps.osv_") == 4
+    assert workflow.count('run: >-\n          "$RUNNER_TEMP/run-osv-scanner.sh"') == 4
     assert workflow.count('runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"]') == 4
     assert "Preserve base OSV evidence and direct-source provenance" in workflow
     assert 'cp -- old-results.json "$RUNNER_TEMP/osv-base-provenance/old-results.json"' in workflow
@@ -1629,31 +1634,43 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
 
 
 @pytest.mark.parametrize(
-    ("outcome", "payload", "expected_complete", "expected_message"),
+    ("exit_code", "payload", "expected_complete", "expected_message"),
     [
         (
-            "failure",
+            "1",
             {"results": [{"packages": [{"vulnerabilities": [{"id": "PYSEC-1"}]}]}]},
-            "false",
-            "non-successful scan outcome cannot prove completeness",
+            "true",
+            "scanner exit 1 with authoritative vulnerability evidence",
         ),
         (
-            "failure",
+            "1",
             {"results": []},
             "false",
-            "non-successful scan outcome cannot prove completeness",
+            "scanner exit 1 cannot prove complete result evidence",
         ),
         (
-            "failure",
+            "129",
             {"results": "malformed"},
             "false",
             "results must be a list",
+        ),
+        (
+            "129",
+            {"results": [{"packages": [{"vulnerabilities": [{"id": "PYSEC-1"}]}]}]},
+            "false",
+            "scanner exit 129 cannot prove complete result evidence",
+        ),
+        (
+            "",
+            {"results": [{"packages": [{"vulnerabilities": [{"id": "PYSEC-1"}]}]}]},
+            "false",
+            "scanner exit code is missing or malformed",
         ),
     ],
 )
 def test_osv_result_evidence_classifier_distinguishes_findings_from_scan_failure(
     tmp_path: Path,
-    outcome: str,
+    exit_code: str,
     payload: dict[str, object],
     expected_complete: str,
     expected_message: str,
@@ -1671,7 +1688,7 @@ def test_osv_result_evidence_classifier_distinguishes_findings_from_scan_failure
         capture_output=True,
         env={
             **os.environ,
-            "SCAN_OUTCOME": outcome,
+            "SCAN_EXIT_CODE": exit_code,
             "RESULT_FILE": str(result_path),
             "GITHUB_OUTPUT": str(output_path),
         },
@@ -1698,7 +1715,7 @@ def test_osv_result_evidence_classifier_normalizes_only_successful_empty_scan(
         capture_output=True,
         env={
             **os.environ,
-            "SCAN_OUTCOME": "success",
+            "SCAN_EXIT_CODE": "0",
             "RESULT_FILE": str(result_path),
             "GITHUB_OUTPUT": str(output_path),
         },
@@ -1733,7 +1750,7 @@ def test_osv_result_evidence_classifier_rejects_symlinked_finding_document(
         capture_output=True,
         env={
             **os.environ,
-            "SCAN_OUTCOME": "failure",
+            "SCAN_EXIT_CODE": "1",
             "RESULT_FILE": str(result_path),
             "GITHUB_OUTPUT": str(output_path),
         },

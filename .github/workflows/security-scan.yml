@@ -97,15 +97,21 @@ jobs:
           from pathlib import Path
 
           result = Path(os.environ["RESULT_FILE"])
-          outcome = os.environ.get("SCAN_OUTCOME", "")
+          exit_code_text = os.environ.get("SCAN_EXIT_CODE", "")
           complete = False
           message = ""
           try:
+              try:
+                  exit_code = int(exit_code_text)
+              except ValueError as error:
+                  raise ValueError("scanner exit code is missing or malformed") from error
               if result.is_symlink() or (result.exists() and not result.is_file()):
                   raise ValueError("result document must be a regular file")
               if not result.exists() or result.stat().st_size == 0:
-                  if outcome != "success":
-                      raise ValueError("failed without an OSV result document")
+                  if exit_code != 0:
+                      raise ValueError(
+                          f"scanner exit {exit_code} cannot prove complete result evidence"
+                      )
                   result.write_text('{"results":[]}\n', encoding="utf-8")
                   complete = True
                   message = "completed successfully without findings output"
@@ -132,12 +138,19 @@ jobs:
                           if not all(isinstance(item, dict) for item in vulnerabilities):
                               raise ValueError("each vulnerability must be an object")
                           finding_count += len(vulnerabilities)
-                  if outcome != "success":
-                      raise ValueError(
-                          "non-successful scan outcome cannot prove completeness"
+                  if exit_code == 0:
+                      complete = True
+                      message = f"completed successfully with {finding_count} finding(s)"
+                  elif exit_code == 1 and finding_count > 0:
+                      complete = True
+                      message = (
+                          "scanner exit 1 with authoritative vulnerability evidence "
+                          f"({finding_count} finding(s))"
                       )
-                  complete = True
-                  message = f"completed successfully with {finding_count} finding(s)"
+                  else:
+                      raise ValueError(
+                          f"scanner exit {exit_code} cannot prove complete result evidence"
+                      )
           except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
               message = str(error)
 
@@ -147,6 +160,25 @@ jobs:
           print(f"::{level}::OSV result evidence: {message}")
           PY
           chmod 500 "$RUNNER_TEMP/classify-osv-result.py"
+          cat >"$RUNNER_TEMP/run-osv-scanner.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          image="ghcr.io/google/osv-scanner-action@sha256:48406c58197201fe55e56615ad9d414f85063da320e204d0b0ed460fb3908dba"
+          set +e
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:/github/workspace" \
+            --workdir /github/workspace \
+            "$image" "$@"
+          rc=$?
+          set -e
+          printf 'exit_code=%s\n' "$rc" >>"$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
+            exit 0
+          fi
+          exit "$rc"
+          SH
+          chmod 500 "$RUNNER_TEMP/run-osv-scanner.sh"
       - name: Prepare base OSV output boundary
         shell: python3 {0}
         run: |
@@ -161,23 +193,18 @@ jobs:
         id: osv_base
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
-        with:
-          scan-args: |
-            --format=json
-            --output-file=old-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=old-results.json
+          --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+          --no-resolve --allow-no-lockfiles -r source/
       - name: Classify base OSV result evidence
         id: osv_base_evidence
         if: always()
         shell: python3 {0}
         env:
           RESULT_FILE: old-results.json
-          SCAN_OUTCOME: ${{ steps.osv_base.outcome }}
+          SCAN_EXIT_CODE: ${{ steps.osv_base.outputs.exit_code }}
         run: |
           import os
           import runpy
@@ -203,22 +230,17 @@ jobs:
         id: osv_base_retry
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
-        with:
-          scan-args: |
-            --format=json
-            --output-file=old-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=old-results.json
+          --no-resolve --allow-no-lockfiles -r source/
       - name: Classify retried base OSV result evidence
         id: osv_base_retry_evidence
         if: steps.osv_base_evidence.outputs.complete != 'true'
         shell: python3 {0}
         env:
           RESULT_FILE: old-results.json
-          SCAN_OUTCOME: ${{ steps.osv_base_retry.outcome }}
+          SCAN_EXIT_CODE: ${{ steps.osv_base_retry.outputs.exit_code }}
         run: |
           import os
           import runpy
@@ -274,23 +296,18 @@ jobs:
         id: osv_head
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
-        with:
-          scan-args: |
-            --format=json
-            --output-file=new-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=new-results.json
+          --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+          --no-resolve --allow-no-lockfiles -r source/
       - name: Classify head OSV result evidence
         id: osv_head_evidence
         if: always()
         shell: python3 {0}
         env:
           RESULT_FILE: new-results.json
-          SCAN_OUTCOME: ${{ steps.osv_head.outcome }}
+          SCAN_EXIT_CODE: ${{ steps.osv_head.outputs.exit_code }}
         run: |
           import os
           import runpy
@@ -316,22 +333,17 @@ jobs:
         id: osv_head_retry
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
-        with:
-          scan-args: |
-            --format=json
-            --output-file=new-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=new-results.json
+          --no-resolve --allow-no-lockfiles -r source/
       - name: Classify retried head OSV result evidence
         id: osv_head_retry_evidence
         if: steps.osv_head_evidence.outputs.complete != 'true'
         shell: python3 {0}
         env:
           RESULT_FILE: new-results.json
-          SCAN_OUTCOME: ${{ steps.osv_head_retry.outcome }}
+          SCAN_EXIT_CODE: ${{ steps.osv_head_retry.outputs.exit_code }}
         run: |
           import os
           import runpy
