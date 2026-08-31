@@ -259,19 +259,28 @@ def test_github_json_is_read_only_and_rejects_failures() -> None:
 
     def paginated_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
         """Return one successful paginated API response."""
-        assert args[0] == ["gh", "api", "--paginate", "--slurp", "repos/a/repo"]
-        return CompletedProcess([], 0, "[[{\"id\": 1}]]", "")
+        assert args[0] == ["gh", "api", "repos/a/repo"]
+        return CompletedProcess([], 0, "[{\"id\": 1}]", "")
 
     assert queue_health.github_json("repos/a/repo", paginate=True, runner=paginated_runner) == {
         "_queue_health_pages": [[{"id": 1}]]
     }
-    for output in ("[]", json.dumps([{}] * (queue_health.MAX_API_PAGES + 1))):
-        with pytest.raises(queue_health.QueueHealthError, match="page set"):
-            queue_health.github_json(
-                "repos/a/repo",
-                paginate=True,
-                runner=lambda *args, output=output, **kwargs: CompletedProcess([], 0, output, ""),
-            )
+    with pytest.raises(queue_health.QueueHealthError, match="no bounded array"):
+        queue_health.github_json(
+            "repos/a/repo",
+            paginate=True,
+            runner=lambda *args, **kwargs: CompletedProcess([], 0, '{}', ''),
+        )
+    requested_pages: list[str] = []
+
+    def full_page_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        requested_pages.append(args[-1])
+        return CompletedProcess(args, 0, json.dumps([{}] * 100), "")
+
+    with pytest.raises(queue_health.QueueHealthError, match="exceeds 20 pages"):
+        queue_health.github_json("repos/a/repo?per_page=100", paginate=True, runner=full_page_runner)
+    assert requested_pages[-1].endswith("page=20")
+    assert not any(path.endswith("page=21") for path in requested_pages)
     with pytest.raises(queue_health.QueueHealthError):
         queue_health.github_json("orgs/a/repos", runner=success_runner)
 
@@ -475,7 +484,11 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = responses[args[-1]]
+        payload = (
+            responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else responses[args[-1]]
+        )
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -512,7 +525,11 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def invalid_run_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return an invalid workflow-run identity for the isolation case."""
-        payload = invalid_run_responses[args[-1]]
+        payload = (
+            invalid_run_responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else invalid_run_responses[args[-1]]
+        )
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -530,7 +547,11 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one incomplete pull response followed by a valid response."""
         nonlocal retry_calls
-        payload = responses[args[-1]]
+        payload = (
+            responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else responses[args[-1]]
+        )
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [bad_pull] if retry_calls == 1 else payload
@@ -544,7 +565,13 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
 
     def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return an incomplete pull response on every retry."""
-        payload = [bad_pull] if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100" else responses[args[-1]]
+        payload = (
+            [bad_pull]
+            if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100"
+            else responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else responses[args[-1]]
+        )
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -595,7 +622,11 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one empty-identity pull response followed by a complete one."""
         nonlocal retry_calls
-        payload = responses[args[-1]]
+        payload = (
+            responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else responses[args[-1]]
+        )
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
             payload = [empty_identity_pull] if retry_calls == 1 else payload
@@ -653,7 +684,11 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
-        payload = responses[args[-1]]
+        payload = (
+            responses.get(args[-1], [])
+            if "/actions/runs?status=" in args[-1]
+            else responses[args[-1]]
+        )
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
@@ -731,22 +766,36 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
             payload = []
         elif "/actions/runs?status=" in path:
-            payload = {"total_count": 0, "workflow_runs": []}
+            status = path.split("status=", 1)[1].split("&", 1)[0]
+            payload = {
+                "total_count": 1,
+                "workflow_runs": [workflow_run(100 + len(requested_paths), status=status)],
+            }
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
         if "--paginate" in args:
             payload = [payload]
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
-    queue_health.collect_snapshot(
+    snapshot = queue_health.collect_snapshot(
         ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
     )
 
     run_paths = [path for path in requested_paths if "/actions/runs?status=" in path]
     assert run_paths == [
         "repos/owner/repo/actions/runs?status=in_progress&per_page=50",
+        "repos/owner/repo/actions/runs?status=pending&per_page=50",
         "repos/owner/repo/actions/runs?status=queued&per_page=50",
+        "repos/owner/repo/actions/runs?status=requested&per_page=50",
+        "repos/owner/repo/actions/runs?status=waiting&per_page=50",
     ]
+    assert {run["status"] for run in snapshot["repositories"][0]["runs"]} == {
+        "IN_PROGRESS",
+        "PENDING",
+        "QUEUED",
+        "REQUESTED",
+        "WAITING",
+    }
 
 
 def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:

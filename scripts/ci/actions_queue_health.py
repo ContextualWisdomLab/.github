@@ -126,34 +126,51 @@ def github_json(path: str, *, paginate: bool = False, runner: Runner = subproces
     """Read one GitHub REST endpoint through ``gh`` without shell evaluation."""
     if not path.startswith("repos/"):
         raise QueueHealthError(f"GitHub endpoint is outside repository scope: {path}")
-    command = ["gh", "api"]
-    if paginate:
-        command.extend(("--paginate", "--slurp"))
-    command.append(path)
-    try:
-        result = runner(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=GITHUB_API_TIMEOUT_SECONDS,
+    pages: list[Any] = []
+    page_size_match = re.search(r"(?:[?&])per_page=(\d+)(?:&|$)", path)
+    page_size = int(page_size_match.group(1)) if page_size_match else MAX_API_PAGE_SIZE
+    page_numbers = range(1, MAX_API_PAGES + 1) if paginate else range(1, 2)
+    for page_number in page_numbers:
+        page_path = path
+        if paginate and page_number > 1:
+            page_path = f"{path}{'&' if '?' in path else '?'}page={page_number}"
+        try:
+            result = runner(
+                ["gh", "api", page_path],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GITHUB_API_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise QueueHealthError(
+                f"GitHub API read timed out after {GITHUB_API_TIMEOUT_SECONDS} seconds for {page_path}"
+            ) from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "GitHub API read failed").strip()
+            raise QueueHealthError(f"GitHub API read failed for {page_path}: {detail[:400]}")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise QueueHealthError(f"GitHub API returned invalid JSON for {page_path}") from exc
+        if not paginate:
+            return payload
+        pages.append(payload)
+        values = payload if isinstance(payload, list) else None
+        total_count = payload.get("total_count") if isinstance(payload, dict) else None
+        if isinstance(payload, dict):
+            values = next((value for value in payload.values() if isinstance(value, list)), None)
+        if not isinstance(values, list):
+            raise QueueHealthError(f"GitHub API page has no bounded array for {page_path}")
+        collected = sum(
+            len(page) if isinstance(page, list) else len(next((value for value in page.values() if isinstance(value, list)), []))
+            for page in pages
         )
-    except subprocess.TimeoutExpired as exc:
-        raise QueueHealthError(
-            f"GitHub API read timed out after {GITHUB_API_TIMEOUT_SECONDS} seconds for {path}"
-        ) from exc
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "GitHub API read failed").strip()
-        raise QueueHealthError(f"GitHub API read failed for {path}: {detail[:400]}")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise QueueHealthError(f"GitHub API returned invalid JSON for {path}") from exc
-    if paginate:
-        if not isinstance(payload, list) or not payload or len(payload) > MAX_API_PAGES:
-            raise QueueHealthError(f"GitHub API returned an unbounded page set for {path}")
-        return {PAGINATED_PAGES_KEY: payload}
-    return payload
+        if (type(total_count) is int and total_count <= collected) or len(values) < page_size:
+            return {PAGINATED_PAGES_KEY: pages}
+    raise QueueHealthError(
+        f"GitHub API pagination exceeds {MAX_API_PAGES} pages for {path}"
+    )
 
 
 def _normalise_pull_request(
@@ -351,7 +368,7 @@ def collect_snapshot(
         pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
         runs_by_id: dict[int, dict[str, Any]] = {}
         try:
-            for status in ("in_progress", "queued"):
+            for status in ("in_progress", "pending", "queued", "requested", "waiting"):
                 runs = _list_payload(
                     github_json(
                         f"repos/{repository}/actions/runs?status={status}&per_page={WORKFLOW_RUN_PAGE_SIZE}",
@@ -369,7 +386,10 @@ def collect_snapshot(
                         continue
                     candidate = _normalise_run(repository, run, [])
                     identity, _ = _run_identity(candidate, pull_requests_by_number)
-                    if identity != "current_head" or candidate["status"] == "QUEUED":
+                    if identity != "current_head" or candidate["status"] not in {
+                        "IN_PROGRESS",
+                        "WAITING",
+                    }:
                         runs_by_id[run_id] = candidate
                         continue
                     jobs_payload = github_json(

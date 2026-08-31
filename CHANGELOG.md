@@ -5,7 +5,551 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Raise `contextual_orchestrator_review_sidecar.sh`'s
+- Harden the review sidecar's per-account catalog cap against silent drift:
+  `contextual_orchestrator_review_launcher.py`'s two
+  `build_zdr_prioritized_catalog` call sites now source their
+  `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` fallback from
+  `contextual_orchestrator_review_policy.DEFAULT_ACCOUNT_CAP` through a new
+  `_catalog_account_cap()` helper, instead of a hand-typed `"4"` literal.
+  This closes the exact drift class that produced a real, observed
+  preflight-budget waste on a separate in-flight branch (a sibling
+  `_catalog_family_cap()` helper there fell back to the *total* routes
+  budget instead of the per-account cap, letting two rate-limited NVIDIA
+  NIM credentials jointly consume all 12 preflight slots, 10 of which were
+  then rejected via 429/404/timeout). New regression tests pin the default
+  to the policy module's canonical value and forbid the total-routes
+  constant from reappearing as the account-cap fallback.
+- Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
+  (flagged by Devin Review on that PR): the standing operating directive
+  still named the removed `free_family_diversity` evidence field instead of
+  its `free_account_diversity` replacement, which could send future
+  monitoring work looking for a field that no longer exists.
+- Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
+  at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
+  as an independent discovery account. Same-vendor credentials no longer
+  collapse into a provider family; only explicit model groups may share
+  routing evidence.
+- Web verification now runs backend, frontend, and E2E commands inside an
+  isolated Linux bubblewrap workspace by default (`--isolation required`),
+  mounting a read-only runtime root with a single writable `/workspace`
+  bind; trusted local debugging may opt out with `--isolation disabled`.
+  Isolation-backend resolution and the existing loopback readiness-URL
+  boundary are now both checked before any service starts, so an
+  unavailable isolation backend or an invalid readiness URL fails closed
+  with a clear diagnostic (exit code 126/125) instead of after services are
+  already running.
+- Close four gaps a Devin Review pass found in the same web E2E isolation
+  helper (`scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`):
+  a non-numeric or out-of-range readiness-URL port now raises the same
+  `ValueError` every other readiness check raises, instead of an uncaught
+  `http.client.InvalidURL` escaping past `main`'s exit-125 handling; a `bwrap`
+  binary on `PATH` now passes a bounded capability preflight (proving it can
+  actually create the sandbox's namespaces) before isolation is trusted as
+  available, so a restricted host fails closed with exit 126 instead of a
+  later, confusing readiness/test failure; an executable that cannot be
+  resolved on `PATH` is now a hard `isolated_command` failure rather than a
+  silent fallthrough that ran unwrapped and unvalidated; and the shared
+  workspace copy now rejects (fails the whole copy closed) any symlink whose
+  resolved target lands outside the copied tree, since `copytree(...,
+  symlinks=True)` otherwise preserves an escaping symlink as a live link
+  inside the bind-mounted `/workspace`.
+- (Devin review 반영, 후속 라운드) 같은 sandboxed web E2E isolation 헬퍼에 두 건을 추가로
+  hardening했습니다: (1) `_probe_isolation_capability`가 이제 `isolated_command`가 실제로
+  수행하는 모든 연산(`--new-session`, `/tmp` tmpfs, 실제 명령이 사용하는 것과 동일한 mount
+  point로의 쓰기 가능한 bind+chdir)을 진짜 임시 디렉터리로 그대로 재현합니다 — 이전의 축소된
+  probe는 이 중 하나를 거부하는 host에서는 통과했다가 실제 서비스 실행에서만 실패할 수
+  있었습니다. (2) `scripts/ci/sandboxed_verify.py`의 `copy_workspace` 기본 제외 목록에
+  자격증명 관련 dotfile/디렉터리(`.env*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`,
+  `.git-credentials`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`)를 추가했습니다 — 쓰기
+  가능한 `/workspace` mount는 테스트 대상 명령이 읽고 쓸 수 있으므로, repo checkout에 우연히
+  존재하는 자격증명 파일이 그대로 복사되어서는 안 됩니다(로그·per-command home은 명령이 실제로
+  써야 하므로 의도적으로 동일 mount 안에 유지).
+- Fix two live-on-`main` regressions Devin Review found immediately after
+  PRs #1456 and #1459 merged (both bypass-merged past the org-wide
+  `opencode-review` outage; these hotfixes correct real defects the local
+  test suites' mocks couldn't catch):
+  - `pr_review_fix_scheduler.py`'s `issue_comments()` (#1459) added
+    `-f per_page=100` to its `gh api` call without an explicit `-X GET`.
+    `gh api` defaults to POST once any `-f`/`-F` field is present unless
+    `-X`/`--method` overrides it, so every comment fetch became a malformed
+    POST against the comment-*creation* endpoint (no `body` field) --
+    failing every call outright and deferring every candidate PR, the
+    opposite of this fix's purpose. Now pins `-X GET` explicitly. Added a
+    regression asserting the exact argv shape.
+  - `pr_review_merge_scheduler.py`'s `rest_pr_node()` (#1456) fetched
+    classic commit statuses from `commits/{sha}/statuses` (plural), which
+    returns full status history in reverse-chronological order with no
+    dedup -- a context that transitioned from success to failure surfaced
+    both entries, letting a stale success outlive a later real failure for
+    `strix_evidence_state()` (which accepts the first success it finds).
+    Switched to `commits/{sha}/status` (singular, combined), which already
+    reports only the most recent status per context, matching the GraphQL
+    rollup's own shape. Added a regression proving a failed-then-superseded
+    context reports `"failed"`, not a stale `"complete"`.
+- Root-cause the hourly PR-review-fix scheduler's silent `autofix_dispatches: 0`
+  on nearly every run (surfaced while investigating why 40 of `.github`'s 81
+  open PRs were stuck reporting "This branch has conflicts that must be
+  resolved"): `github-hourly-review-repair.yml`'s most recent run inspected
+  50 PRs and dispatched zero autofixes, with every candidate PR's decision
+  reading `"error": "API rate limit exceeded for installation ID ..."`. Two
+  compounding causes in `scripts/ci/pr_review_fix_scheduler.py`: (1)
+  `issue_comments()` fetched a PR's *entire* issue-comment history with the
+  default 30-per-page pagination even though `recent_fix_marker_exists()`
+  only ever needs the most recent marker; (2) `process_queue()`'s concurrent
+  comment-prefetch (up to 10 simultaneous `gh api --paginate` calls against
+  the same shared, org-wide-contended OpenCode app installation) silently
+  swallowed a failed fetch and then had `inspect_pr()` immediately retry the
+  *same* doomed call sequentially with zero backoff, doubling the wasted
+  request volume for every already-failing PR. `issue_comments()` now
+  requests `per_page=100` (cutting page count for long comment threads by
+  up to 3x) and retries a detected rate-limit error with a short linear
+  backoff (up to 2 attempts) before propagating; `process_queue()` now
+  caps prefetch concurrency at 4 workers instead of 10, and a PR whose
+  comment fetch still fails after retries is deferred to the next scheduled
+  pass (`"wait"`) instead of silently prefetch-swallowed and then
+  redundantly re-fetched and reported as a scary `"error"`. This is a
+  single shared script, so the fix applies identically to every one of the
+  ~19 product-specific hourly review-repair callers, not just `.github`'s
+  own.
+- Fix a Devin Review finding on PR #1456: the REST fallback path
+  (`rest_pr_node`, used when GraphQL is unavailable) only ever fetched a
+  head commit's CheckRuns (`commits/{sha}/check-runs`), never its classic
+  commit statuses (`commits/{sha}/statuses`), so a same-head manual
+  `workflow_dispatch` Strix run's classic-status evidence silently
+  disappeared under REST fallback -- `strix_evidence_state()` would see no
+  Strix evidence at all and could never reach `"complete"` through that
+  identity, exactly the loss of manual evidence the two preceding fixes on
+  this PR were built to preserve. `rest_pr_node` now also fetches classic
+  statuses and folds them into the same `statusCheckRollup.contexts.nodes`
+  list via a new `rest_status_node` shape converter, alongside the existing
+  CheckRun conversion. Added a regression assertion that a classic status
+  survives the REST fallback and that `strix_evidence_state()` sees it as
+  `"complete"` end-to-end.
+- Fix a second, immediately-following Devin Review finding on PR #1456
+  (`strix_evidence_state()`), which directly refined the previous entry's
+  fix: making a required-workflow CheckRun the sole authority whenever
+  present also meant a genuinely failing CheckRun could never be excused by
+  a same-head manual `workflow_dispatch` Strix run's classic-status
+  success -- but this repo documents exactly that as intended: a manual run
+  "may supply review evidence but does not replace required PR checks",
+  precisely for a self-modifying `.github` PR whose `pull_request_target`
+  CheckRun runs the *base* branch's trusted scripts and can legitimately
+  fail against a PR editing those very scripts, while a trusted same-head
+  manual dispatch correctly evaluates the new code. `strix_evidence_state()`
+  now treats either Strix identity's authoritative success as sufficient
+  for "complete" (never substituting for GitHub's own independently
+  enforced required CheckRun at actual merge time, which this function does
+  not touch); only when *no* identity ever succeeds does it report "failed".
+  This still resolves the original endless-rerun-loop defect (a stale
+  classic failure can no longer block a since-succeeded CheckRun) while
+  also letting a genuine same-head manual success unblock review when the
+  CheckRun itself is the one that's wrong. Updated the previous round's
+  regression test asserting the reverse case as "failed" to the corrected
+  "complete", and added a fourth case (both identities failing, still
+  correctly "failed") to keep every combination covered.
+- Fix a Devin Review finding on PR #1456: `strix_evidence_state()` treated a
+  classic commit-status Strix context (e.g. a same-head manual
+  `workflow_dispatch` run) as equally authoritative to a required-workflow
+  Strix CheckRun, so a stale classic-status failure left the gate "failed"
+  forever even after the real CheckRun evidence succeeded --
+  `dispatch_strix_evidence()` can only rerun a CheckRun's Actions job, never
+  a classic status, so this produced an endless, pointless rerun loop that
+  permanently blocked OpenCode dispatch. A required-workflow CheckRun is now
+  the sole authority whenever one is present; a classic status is evaluated
+  only when no CheckRun exists at all, matching this repo's documented
+  policy that a manual run "may supply review evidence but does not replace
+  required PR checks." Added regression tests for a stale classic failure
+  beside a successful CheckRun (now "complete"), a genuinely failing
+  CheckRun beside an unrelated classic success (still correctly "failed"),
+  and a still-running CheckRun beside a stale classic failure (still
+  "running", not prematurely "failed").
+- Let an explicit mention-triggered review request (`@opencode-agent review`)
+  actually dispatch a current-head OpenCode review for a **draft** PR.
+  `pr_review_merge_scheduler.py`'s `inspect_pr()` unconditionally returned
+  `skip: draft PR` before reaching any review-dispatch logic, so
+  `agent-mention-opencode-dispatch.yml`'s already-structurally-review-only
+  forward to the scheduler (`trigger_reviews=true`, `enable_auto_merge=false`,
+  `update_branches=false`, `merge_mode=disabled`) was silently discarded for
+  drafts: the mention router resolved and forwarded the request correctly,
+  but the scheduler never posted a review. New opt-in `--allow-draft-review-dispatch`
+  CLI flag (requires `--pr-number`; rejected otherwise) and `inspect_pr()`
+  parameter route a draft PR through a new `dispatch_draft_review_only()`
+  helper that runs the same Strix-then-OpenCode dispatch gate the ready-PR
+  pipeline uses, then returns immediately — before any of `inspect_pr`'s
+  unresolved-thread, changes-requested, branch-update, or auto-merge logic,
+  so a draft still cannot be merged, auto-merged, or have its branch updated
+  through this path. `pr-review-merge-scheduler.yml`'s `scan-pr-queue` job
+  sets the new `ALLOW_DRAFT_REVIEW_DISPATCH` flag from
+  `github.event.client_payload.agent_invocation_key` — a field only the
+  mention-dispatch workflow ever sets — so the ordinary multi-PR queue sweep
+  (schedule/push/pull_request_target/pull_request_review/workflow_run) keeps
+  skipping drafts exactly as before.
+  Three follow-up fixes from adversarial review before this shipped:
+  - `dispatch_draft_review_only()` treated `opencode_progress_state(pr) == "complete"`
+    (a matching check/status reached a terminal state) as proof a verdict
+    exists. That state does not distinguish a posted review from the
+    required-workflow gate's own terminal failure when no verdict was ever
+    dispatched, so a failed dispatch attempt would permanently block every
+    later explicit retry. Now gated on an actual current-head formal review
+    (`has_current_head_approval`/`has_current_head_changes_requested`),
+    matching the non-draft path's own review-state checks.
+  - When Strix evidence is missing, the initial mention dispatches Strix and
+    ends that scheduler run; the Strix-completion `workflow_run` that follows
+    carries no `repository_dispatch` `client_payload` of its own, so the
+    first design's env-var-driven flag would be unset on that later pass and
+    the draft would fall back to being skipped before ever reaching OpenCode.
+    `agent-mention-opencode-dispatch.yml` now claims a short-lived
+    (`retention-days: 1`), exact-head-named Actions artifact
+    (`cwl-draft-review-request-<repo>-<pr>-<head-sha>`) alongside its existing
+    invocation ledger, only after its own HMAC-style canonical-payload check
+    has already validated the invocation; `inspect_pr()`'s draft branch
+    checks for this durable marker (`active_draft_review_request()`), so a
+    later pass over the same exact head — the ordinary `workflow_run`
+    trigger, single-PR or the bulk sweep — still recognizes and continues
+    the same explicit request through to OpenCode dispatch.
+  - The first design's `ALLOW_DRAFT_REVIEW_DISPATCH` env var trusted the mere
+    *presence* of `client_payload.agent_invocation_key` on a `merge-scheduler`
+    `repository_dispatch` event as proof of a legitimate mention, without
+    verifying the key or binding it to a specific head. Any dispatch-capable
+    caller could supply an arbitrary nonempty string for an arbitrary target
+    repository/PR to get an unrequested draft review dispatched, and a
+    genuinely stale mention (new commits landed after the request) would
+    review a commit nobody asked about. Removed that env var and its CLI
+    pass-through entirely — `active_draft_review_request()`'s cryptographically
+    gated, exact-head-named artifact marker (above) is now the sole automatic
+    gate; `--allow-draft-review-dispatch` remains only as a manual,
+    direct-CLI operator override.
+  - `strix_evidence_state()` classified *any* terminal Strix check-run or
+    commit-status as `"complete"` because it only ever inspected `status`
+    (CheckRun) / whether a value was present (classic status) to tell
+    running from terminal, never the actual `conclusion` (CheckRun) or
+    terminal `state` value (classic status). A terminal `FAILURE`, `ERROR`,
+    `CANCELLED`, `TIMED_OUT`, `SKIPPED`, `NEUTRAL`, `ACTION_REQUIRED`,
+    `STALE`, or `STARTUP_FAILURE` outcome therefore satisfied the same gate
+    as an authoritative `SUCCESS`, letting non-passing Strix evidence unlock
+    OpenCode dispatch on both the draft review-only path and the ordinary
+    scheduler path. The function now returns a new `"failed"` state whenever
+    Strix evidence is terminal but not an authoritative success, and every
+    call site (`post_update_branch_followup`, `dispatch_draft_review_only`,
+    and the main non-draft `inspect_pr` Strix-then-OpenCode chain) treats
+    `"failed"` exactly like `"missing"`: it dispatches a fresh Strix attempt
+    and never falls through to OpenCode on that non-authoritative evidence.
+    Fails closed by design: any single non-success terminal context marks
+    the whole gate `"failed"` even alongside a successful one. Added
+    exhaustive regression fixtures for every non-passing terminal
+    conclusion/state plus authoritative success, for both CheckRun and
+    classic commit-status shapes.
+  - Two more adversarial-review findings against that same fix, both fixed:
+    - `strix_evidence_state()` walked every Strix context node in the
+      rollup directly, so a rerun's stale failed CheckRun attempt (GitHub
+      keeps every prior attempt's CheckRun node alongside the latest one)
+      could permanently keep the gate `"failed"` even after a later retry
+      succeeded. Extracted the CheckRun-identity dedup `failed_status_checks()`
+      already used (latest attempt per `(workflow, name)`, by `startedAt`
+      then rollup order) into a shared `latest_check_run_attempts()` helper
+      and evaluate only the latest attempt per Strix CheckRun identity.
+      `failed_status_checks()` itself now calls the same helper instead of
+      duplicating the dedup logic, with no behavior change. Added
+      regression tests for an older failed attempt followed by a newer
+      success, the reverse ordering, and a running retry after a failure.
+    - `active_draft_review_request()`'s Actions-artifact read used the
+      generic target-repository read credential
+      (`gh_api_json`/`SCHEDULER_READ_TOKEN`), but the artifact always lives
+      in the central `.github` repository regardless of which repository
+      the PR belongs to, and — per `scheduler_dispatch_env()`'s own
+      pre-existing documented fact — "the OpenCode app installation has no
+      Actions permission." For a cross-repository dispatch with only the
+      OpenCode app credential configured (no `PR_REVIEW_MERGE_TOKEN`/
+      `OPENCODE_APPROVE_TOKEN` secret), the read credential resolved to
+      that same Actions-permission-less app token, so the artifact read
+      would fail and the initial mention-triggered request for a draft PR
+      outside `.github` could never get past its own authorization check.
+      New `gh_api_json_via_dispatch_token()` reads through
+      `run_github_dispatch()`/`SCHEDULER_DISPATCH_TOKEN` instead — the same
+      central-repository dispatch credential already used to create the
+      `repository_dispatch` there — which the workflow always sets to the
+      runner's own `github.token`, valid for `.github`'s own Actions
+      artifacts regardless of the PR's actual repository. Added a
+      regression test proving the read uses the dispatch token, not
+      whatever generic `GH_TOKEN` the OpenCode app credential resolves to.
+  - One more adversarial-review finding against that same dispatch-token
+    fix: the central-repository dispatch credential is itself only valid
+    when this scheduler executes inside `.github`. `scan-pr-queue` has no
+    such guard — the organization's required-workflow ruleset runs it
+    directly in each sibling repository's own context for that repository's
+    ordinary (non-mention) PR events, where `github.token` is scoped only
+    to that sibling repository and cannot read `.github`'s artifacts
+    either. `active_draft_review_request()` previously let that `gh`
+    failure -- or a malformed/tampered artifact-list response -- propagate
+    as an unhandled exception, replacing the intended `skip: draft PR`
+    outcome with an error that would abort the whole multi-PR scan over one
+    draft PR. It now resolves any such failure to `False` (no confirmed
+    active request) instead, the same safe outcome as a completed check
+    that finds nothing. Added regression tests for both the credential
+    failure and a malformed response.
+- Fix one more Devin Review finding on PR #1452, a genuine gap in the round-4
+  malformed-gateway-reply fix (`scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`):
+  `json.loads()` legally parses a top-level JSON array, `null`, a bare
+  string, or a number, not just an object -- the immediately following
+  `response.get("choices")` assumes a dict and raises `AttributeError` for
+  any of those, which was not in the round-4 fix's caught exception tuple,
+  so a valid-JSON-but-wrong-shaped HTTP 200 body still lost evidence exactly
+  like the original bug (the script still failed closed overall, since an
+  uncaught exception exits non-zero, but wrote nothing to the gateway
+  evidence report). Fixed with an explicit `isinstance(response, dict)`
+  check that raises the already-caught `TypeError` rather than widening the
+  tuple to `AttributeError` broadly. Added parametrized regression tests
+  (`[]`, `null`, a bare string, and a bare number) confirmed to fail against
+  the pre-fix script before the fix, and pass after. 1930 tests pass; 100%
+  coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 3 more Devin Review findings from a fourth review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), plus two
+  doc/test-staleness cleanups: an escalated attempt's EXCEPTION handler
+  (`_record_provider_exception`) left the base attempt's stale
+  `finish_reason`/`reasoning_without_content` on the row -- the same
+  mixed-attempt-telemetry bug class already fixed for the escalated-empty
+  and escalated-success outcomes, now closed for the escalated-exception
+  outcome too (both fields are cleared, not backfilled, since there is no
+  response object to describe). `_response_has_reasoning_without_content`
+  checked only whether `message.reasoning` was truthy, never whether
+  `message.content` was actually empty/absent -- so a normal, complete
+  answer that also discloses a reasoning trace alongside real content would
+  be wrongly flagged as "starved" (this had gone latent-but-harmless while
+  the predicate was only ever called on already-known-empty responses; the
+  round-3 fix that started calling it on the SUCCESS path exposed the
+  actual bug for the first time). Fixed to require content be genuinely
+  absent, reusing `_chat_response_has_text`'s own definition so the two
+  predicates are provably consistent; same predicate fixed in the sidecar
+  script's mirrored Layer 2 logic. A malformed/unparseable HTTP-200 gateway
+  response body (or a missing response file) hit the bare
+  `except (...): pass` fallback and wrote nothing to the gateway evidence
+  report -- the same evidence-loss pattern as the earlier transport-
+  exhaustion fix, a different trigger -- now records a bounded
+  `gateway_invalid_response` classification via the same atomic-write
+  pattern. Extended the fake-curl harness with `NOFILE:<status>` and
+  malformed-JSON-body plan entries to cover both. Also corrected a stale
+  test docstring (still described the routing probe as proving every route
+  at the real 4096-token budget, no longer true since most routes now prove
+  readiness at the cheaper 16-token base probe) and updated ADR-0005's
+  status from `proposed` to `accepted` with its Consequences section
+  reframed to present tense, now that this PR implements it. 1926 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 2 more Devin Review findings from a third review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `docs/adr/0005-sidecar-preflight-token-budget.md`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`): an
+  escalated-attempt HTTP rejection (401 auth, 429 throttle, 5xx server error)
+  was unconditionally labeled `escalated_probe_rejected`, wrongly implying
+  every one of those was evidence the token budget specifically was too large
+  -- no status code alone is that evidence, and this codebase deliberately
+  never captures raw provider error text that could validate the distinction.
+  Extracted a shared `_record_provider_exception` helper so the escalated
+  attempt now gets the exact same sanitized exception-type/HTTP-status
+  classification the base probe already used, with parametrized 401/429/5xx
+  test coverage; the ADR's own text (which originally claimed this
+  attribution) is corrected in place. Separately, `finish_reason`/
+  `reasoning_without_content` were only ever populated on failure/escalation
+  outcomes, never on an ordinary successful probe (the most common case) --
+  now populated on every outcome, in both the launcher and the sidecar
+  script's successful-gateway-evidence writer, so future tuning has a real
+  "normal" baseline to compare against. 1920 tests pass; 100% coverage and
+  100% docstring coverage on `scripts/ci/`.
+- Fix 3 more Devin Review findings from a second review pass on PR #1452
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`), triggered
+  by the push that resolved the first 7: a successful escalated attempt still
+  carried the base attempt's stale `finish_reason`/`reasoning_without_content`
+  (the same class of bug as the mixed-attempt fix above, on the opposite
+  branch) -- now both fields are refreshed from the escalated response on
+  success too. `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`'s new `case` guard
+  rejected non-numeric values but not oversized all-digit ones, which hit the
+  identical `[ -ge ]` integer-overflow failure mode the guard exists to
+  prevent (reproduced directly: a 55-digit value fails the same way a
+  non-numeric one did) -- the guard now also caps digit count (at most 4
+  digits, 9999). Added mixed-outcome fake-curl tests (transport failure then
+  HTTP rejection, and the reverse) proving exhaustion evidence reflects
+  whichever attempt actually happened last. Two further findings from the same
+  pass -- (1) a base-probe success never confirms the candidate at the real
+  serving token budget (only escalation-on-failure does), and (2)
+  `discover_all_models()`'s own up-to-~105s sequential network time (verified
+  against the vendored `contextual_orchestrator.model_discovery` source: ~7
+  sequential HTTP calls at up to 15s each) is not counted against the same
+  180s watchdog Layer 1's 160s probing bound assumes it has entirely to
+  itself -- are real, verified, and architecturally significant enough to need
+  their own design pass rather than a guessed patch; documented in place with
+  cross-references and tracked as `ContextualWisdomLab/.github#1454` and
+  `#1455` respectively, left open (not resolved) on the PR. 1917 tests pass;
+  100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Fix 7 Devin Review findings on PR #1452, ADR-0005's implementation
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`,
+  `tests/test_contextual_orchestrator_review_runtime_preflight.py`). Two were
+  blocking: (1) `_preflight_review_agents` reset its escalation counter fresh
+  on every call, so `_preflight_with_fallback` calling it twice (primary,
+  then fallback) could spend the full `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget in each stage -- up to 200s, past Layer 1's 180s
+  healthz-readiness watchdog and contradicting the ADR's own claimed 160s
+  worst case. Fixed by threading the primary stage's ending
+  `escalations_used` into the fallback stage as its starting point, so one
+  shared budget covers the whole run; both stages' counts remain visible in
+  the returned evidence. (2) A non-numeric, empty, zero, or negative
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` made the shell script's integer
+  comparison silently fail on every iteration, removing the retry bound
+  entirely instead of failing closed. Fixed with an explicit `case` guard
+  before the retry loop starts. The remaining five: an escalated-attempt
+  transport failure (no HTTP status at all) was mislabeled
+  `EscalatedProbeRejected`, falsely attributing a connectivity failure to
+  the token budget -- now distinguishes on HTTP-status presence, falling
+  back to the sanitized exception type otherwise; total transport-attempt
+  exhaustion at Layer 2 used to `fail` without ever writing gateway evidence
+  -- now records a bounded `gateway_transport_exhausted` classification
+  first, via the same sanitize-and-atomic-replace pattern the non-2xx and
+  invalid-content paths already use; Layer 1's error-type strings were
+  CamelCase (`EscalatedProbeRejected`, `InvalidChatResponse`,
+  `EscalationBudgetExhausted`) while the ADR and Layer 2 already used
+  snake_case -- Layer 1 (and Layer 2's one remaining outlier) now match:
+  `escalated_probe_rejected`, `invalid_chat_response`,
+  `escalation_budget_exhausted`, `gateway_transport_exhausted`; the Layer 2
+  gateway retry-loop test only asserted source literals rather than
+  executing the loop -- added a fake-curl harness (extracting the tracked
+  script's real retry-loop source and running it under `bash` against a
+  scripted, no-network `curl` stand-in) covering first-attempt success,
+  transport-failure recovery, non-2xx exhaustion, transport exhaustion, and
+  the malformed-attempt-limit guard; and a mixed-attempt telemetry bug where
+  `finish_reason` reflected the escalated attempt while
+  `reasoning_without_content` was left describing the base attempt -- both
+  fields now always describe the same (most recent) attempt. 1913 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Implement ADR-0005's diagnostic, bounded-retry sidecar preflight
+  (`scripts/ci/contextual_orchestrator_review_launcher.py`,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`). A 5th Devin
+  Review pass on the ADR found the escalation predicate
+  (`finish_reason == "length"` alone) missed the vendored
+  `ModelClient._response_content`'s own broader "reasoning without
+  content" signature -- the exact original PR #1436 failure mode --
+  verified directly against current orchestrator.py before fixing.
+  Layer 1's per-candidate probe now starts at a new
+  `REVIEW_PREFLIGHT_BASE_TOKENS = 16` and escalates the same candidate
+  once to the existing `REVIEW_MAX_OUTPUT_TOKENS` (4096) only when the
+  response is empty and either `finish_reason == "length"` or a
+  populated `reasoning` field is present, bounded by a shared
+  `REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4` across the whole run. Layer 2
+  keeps its existing 4096/120s budget unchanged and retries only on
+  transport failure/non-2xx, up to
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3`, labeling a
+  retry-specific rejection `gateway_retry_rejected` rather than
+  implying candidate-ceiling attribution it cannot support. 1901 tests
+  pass; 100% coverage and 100% docstring coverage on `scripts/ci/`.
+- Add `docs/adr/0005-sidecar-preflight-token-budget.md`, an evidence-based
+  design decision responding to the owner's direct critique that a single
+  hardcoded `max_tokens` cannot fit a heterogeneous `orchestrator/free` pool.
+  Revised after six verified Devin Review findings on its PR (#1449),
+  including two real design flaws in the first draft: reusing a fixed tiny
+  `max_tokens` for a per-candidate probe reproduces the same
+  reasoning-budget-starvation bug one layer down, and dropping the sidecar's
+  separate virtual-pool smoke request in favor of per-candidate checks alone
+  cannot catch a virtual-pool dispatch bug (already documented live on
+  PR #1433). The current decision keeps both existing preflight layers
+  (`_preflight_review_agents`/`_preflight_with_fallback` in the launcher; the
+  shell script's virtual-pool request). A second Devin Review pass then found
+  the first revision's single retry predicate could not fire for the exact
+  live evidence cited (a `curl` timeout with zero bytes has no `finish_reason`
+  to inspect), plus an unbounded-looking worst case and other gaps. Revised
+  again to model two distinct, explicitly-bounded retry triggers: no-response
+  (timeout/connection failure) retries at the same budget; a response with
+  `finish_reason == "length"` escalates the budget. Layer 2's existing,
+  already-evidenced 120s per-attempt timeout is kept unchanged (shortening it
+  would regress this file's own prior 30s→120s fix) and gets up to 3 bounded
+  attempts instead of one with no recovery path; Layer 1 stays within its
+  existing 180s ceiling via a computed, capped escalation budget. Adds two
+  real tracked upstream issues (`ContextualWisdomLab/contextual-orchestrator#926`,
+  `#927`) and SHA-pinned permalink citations (`8b3235d2...`) in place of both
+  prose-only follow-ups and line numbers that would otherwise rot. A third
+  Devin Review pass found the revised text still self-contradicted which
+  layer retries on which trigger, plus an attribution problem: Layer 2's
+  escalation retried the virtual pool, not a pinned candidate, so a
+  rejection there could not be honestly blamed on one candidate's ceiling.
+  A fourth pass found a sharper version of the same question -- a
+  `finish_reason == "length"` response is still HTTP 200, so the gateway's
+  routing already recorded that attempt as successful, making a same-budget
+  retry more likely to repeat the same candidate than diversify away from
+  it. Per this org's convergence rule, and after directly checking
+  `contextual_orchestrator/server.py` for a candidate-exclusion parameter
+  and finding none: Layer 2 no longer retries on `finish_reason == "length"`
+  at all, only on transport failure/hang, and its route diversity is stated
+  as an unverified best effort rather than a guarantee. Layer 1 (which pins
+  one specific candidate per attempt) is unaffected. Consequences corrected
+  from present tense to prospective, matching the ADR's `proposed` status.
+  A fifth Devin Review pass found Trigger B's definition itself was too
+  narrow: `finish_reason == "length"` alone misses the vendored
+  `ModelClient._response_content`'s own broader "reasoning, no content"
+  signature (a populated `message.reasoning` field with no string
+  `content`, already anticipated in the codebase's own error message) --
+  exactly the original PR #1436 failure mode, since a reasoning model can
+  exhaust its budget under a different or absent `finish_reason`, and
+  provider `finish_reason` semantics for this case aren't verified as
+  uniform across a pool this heterogeneous. Trigger B is now defined as
+  `finish_reason == "length"` OR that reasoning-without-content signature,
+  consistently through Decision §1 and §3 and the "every other outcome"
+  fallback case; Layer 2's "no retry on Trigger B" applies to both halves
+  of the signature, not just the finish_reason one. A sixth Devin Review
+  pass (two findings, verified against the vendored source directly) found
+  two more precision/scope gaps. First: `_response_content` checks
+  `isinstance(content, str)` before ever inspecting `reasoning`, so a
+  genuinely empty string `""` (not missing/`null`) is treated as a valid,
+  non-erroring return and never reaches the reasoning-without-content
+  check -- the already-implemented preflight predicate in `ContextualWisdomLab/.github#1452`
+  was independently verified to already handle this correctly (it treats
+  `content == ""` the same as missing content, deliberately broader than
+  `_response_content`'s own narrower technical condition), so this was a
+  documentation-precision gap, not a code bug; the ADR's Trigger B
+  definition and a new precision note now state explicitly that this
+  preflight's "no usable content" is broader than any one downstream
+  library call's exact return-value convention. Second: a
+  reasoning-without-content failure at Layer 2 can itself surface as a
+  generic `HTTP 502` (`server.py`'s blanket `except ProviderResponseError:`
+  handler collapses both `ProviderResponseError` causes into an identical
+  body with no distinguishing field), so it is misclassified as Trigger A
+  and retried up to 3 times instead of failing fast as Trigger B --
+  verified as requiring an out-of-scope `contextual-orchestrator` change to
+  fix properly (no in-repo workaround exists that avoids fragile
+  message-text matching), so documented as a known, accepted, tracked
+  Layer 2 limitation (`ContextualWisdomLab/contextual-orchestrator#932`,
+  following the `#926`/`#927` pattern) rather than worked around. No code
+  change in this PR; the sidecar migration is tracked separately. A seventh
+  Devin Review pass found four more items, judged against this org's
+  convergence rule after 26+ review threads across seven rounds on this
+  docs-only PR. Trivial: the Evidence trail's upstream-issue citation still
+  named only `#926`/`#927`, missing `#932` -- added. Cross-reference gap,
+  not a new architectural question: Layer 1's `160s` worst case (Decision
+  §3) still didn't reference `ContextualWisdomLab/.github#1455` (the
+  discovery-timing gap filed and fully reasoned during the implementation
+  pass) anywhere in this ADR's own text -- added the cross-reference at the
+  point of definition and in Consequences, without reopening the
+  underlying question #1455 already tracks. Genuinely new, verified real:
+  the shared, catalog-order-consumed `REVIEW_PREFLIGHT_MAX_ESCALATIONS`
+  budget can deny a later-sorting, healthy candidate its own escalation
+  attempt once 4 earlier candidates have claimed the budget -- catalog
+  order is deterministic, not random, but not purely alphabetical either:
+  `build_zdr_prioritized_catalog` sorts by `(cost_evidence_rank,
+  zdr_attested_rank, provider, model)`, so alphabetical `(provider, model)`
+  is only the tie-breaker within each same-cost/same-ZDR-status group.
+  Considered reordering (round-robin, random shuffling) as a cheap fix and
+  rejected it: no selection policy for a fixed-size shared budget removes
+  the underlying trade-off, only changes which arbitrary policy governs
+  it, and picking one without real evidence would itself be the kind of
+  unjustified heuristic this ADR already rejects elsewhere. Documented as
+  a known, accepted, tracked limitation (`ContextualWisdomLab/.github#1458`,
+  matching the `#1454`/`#1455`/`#932` pattern) rather than redesigned.
+  Informational, no change: the gap-baseline's repeated review-round
+  narrative is this repo's own documented, intentional convention
+  (ADR-0002: the baseline is "an operational snapshot," not a duplicate of
+  the ADR's design record), not accidental redundancy.- Raise `contextual_orchestrator_review_sidecar.sh`'s
   `ORCHESTRATOR_CATALOG_FAMILY_CAP` default from 4 to 8: root-caused the
   live "no provider route passed the Strix plain-chat preflight" outage
   blocking `noema-review`/`opencode-review`/`strix` org-wide to
@@ -206,6 +750,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Require the PR Review Merge Scheduler to observe both GitHub's aggregate
+  `APPROVED` decision and the latest effective non-author, non-OpenCode formal
+  approval bound to the exact live head before direct merge or auto-merge.
+  A later same-head change request revokes that reviewer's earlier approval,
+  and existing auto-merge is disarmed when either authorization is absent.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
@@ -229,6 +778,15 @@ Semantic Versioning where the repository publishes a release.
   API or pagination failures into explicit incomplete-evidence report entries so
   healthy repositories remain observable without turning partial evidence into a
   passing merge decision.
+- Keep the central required-workflow coverage placeholder from superseding a
+  failed repository-dispatch coverage run; coverage retry and merge decisions
+  now use authoritative execution evidence for the central scheduler.
+- Re-dispatch an exact-head OpenCode review after its coverage-only blocker is
+  cleared, selecting the newest coverage rerun by timestamp across workflow
+  names and ignoring only the superseded `opencode-review` failure and central
+  required-workflow placeholder. Conflicting heads and failed sibling jobs in an
+  OpenCode workflow remain fail-closed alongside unresolved threads, Strix,
+  coverage, and unrelated failed checks.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.

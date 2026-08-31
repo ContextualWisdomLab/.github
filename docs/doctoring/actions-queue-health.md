@@ -30,11 +30,14 @@ parent run's, so a later job in an already in-progress run (for example one
 gated by `needs:`) that only just became eligible is not measured against the
 whole run's age and does not trigger a false capacity-breach alert.
 
-Queued runs use run-level evidence because GitHub has not assigned their jobs;
-only current-head `in_progress` runs make the additional jobs API read needed
-to inspect a concrete runner assignment.
+Requested, pending, and queued runs use run-level evidence because GitHub has
+not assigned their jobs. Current-head `in_progress` and `waiting` runs make the
+additional jobs API read needed to distinguish concrete runner assignment from
+an environment or deployment approval wait.
 
-List endpoints use GitHub CLI pagination with at most 20 pages. Pull-request
+List endpoints use collector-controlled GitHub API pagination with at most 20
+explicit page reads; the collector never asks GitHub CLI to download an
+unbounded page set and never requests page 21. Pull-request
 and job lists use pages of 100 records; workflow-run lists use pages of 50 so a
 large Actions queue does not require one oversized response. An incomplete,
 malformed, or larger response is recorded as repository-scoped incomplete
