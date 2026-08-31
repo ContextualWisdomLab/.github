@@ -137,6 +137,37 @@ def test_required_workflow_reruns_on_draft_reconversion() -> None:
     ) in workflow
 
 
+def test_request_review_execution_step_is_also_gated_on_draft() -> None:
+    """The dispatch step must not run for drafts either.
+
+    ``Fail closed without a current-head OpenCode verdict`` exempts drafts,
+    but the earlier ``Request current-head OpenCode review execution`` step
+    performs its own OIDC token exchange, OpenCode app-token exchange, and
+    ``repository_dispatch`` call under ``set -euo pipefail``, any of which
+    can fail on infrastructure trouble unrelated to draft status. Without a
+    matching draft guard on this step's own ``if:``, that failure happens
+    before the later exemption ever gets a chance to run, keeping the
+    required check red on every draft PR whenever OIDC or the dispatch API
+    has trouble.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    step_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "- name: Request current-head OpenCode review execution"
+    )
+    if_line = next(
+        line.strip()
+        for line in lines[step_index + 1 :]
+        if line.strip().startswith("if:")
+    )
+    assert (
+        if_line
+        == "if: github.event.action != 'closed' && !github.event.pull_request.draft"
+    )
+
+
 def _extract_run_block(workflow_text: str, step_name: str) -> str:
     """Return the literal bash text of one workflow step's ``run: |`` block."""
     lines = workflow_text.splitlines()

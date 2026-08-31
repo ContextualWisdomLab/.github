@@ -242,7 +242,7 @@ jobs:
       id-token: write
     steps:
       - name: Request current-head OpenCode review execution
-        if: github.event.action != 'closed'
+        if: github.event.action != 'closed' && !github.event.pull_request.draft
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai

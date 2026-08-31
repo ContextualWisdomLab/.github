@@ -27,6 +27,20 @@ Semantic Versioning where the repository publishes a release.
   run, so its previously failed `opencode-review` check keeps showing
   failure indefinitely even though the draft exemption above would have
   passed it.
+- Also gate `opencode-review-target`'s earlier `Request current-head
+  OpenCode review execution` step on `!github.event.pull_request.draft`,
+  not only the later `Fail closed without a current-head OpenCode verdict`
+  step. That earlier step performs its own OIDC token exchange, OpenCode
+  app-token exchange, and `repository_dispatch` call under
+  `set -euo pipefail`; any transient failure there (an OIDC hiccup, the
+  OpenCode token endpoint erroring, a `gh api` dispatch failure) stopped
+  the job with `exit 1` before the later step's draft exemption ever ran,
+  so a genuinely infrastructure-caused outage could still turn a draft
+  PR's required check red even after the fix above. The dispatch step now
+  short-circuits for drafts exactly like the verdict step does, while
+  still running for every non-draft, non-`closed` event. See the new
+  `test_request_review_execution_step_is_also_gated_on_draft` regression
+  test asserting the exact `if:` condition string on this step.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
