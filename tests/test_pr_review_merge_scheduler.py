@@ -1058,6 +1058,53 @@ def test_context_review_and_check_helpers(monkeypatch):
     classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
     assert sched.strix_evidence_state(classic_success) == "complete"
 
+    # A required-workflow CheckRun, when present, is the sole authority: a
+    # stale classic-status failure left over from an unrelated same-head
+    # manual `workflow_dispatch` Strix run must not keep the gate "failed"
+    # forever once the real CheckRun evidence succeeds -- `dispatch_strix_evidence`
+    # can only rerun a CheckRun's Actions job, so a classic status it cannot
+    # touch must never be what perpetually blocks this gate (regression for
+    # the endless-rerun loop this would otherwise cause).
+    checkrun_success_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_success_classic_failure) == "complete"
+    # The reverse direction stays correctly gated: a genuinely failing
+    # CheckRun is not excused by an unrelated classic-status success, since
+    # the CheckRun is the retryable evidence this gate exists to protect.
+    checkrun_failure_classic_success = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "SUCCESS"},
+                    strix_check(conclusion="FAILURE"),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_failure_classic_success) == "failed"
+    # A CheckRun still in progress is not undermined by a stale classic
+    # failure either -- the classic status is ignored entirely once any
+    # CheckRun is present, including while that CheckRun is still running.
+    checkrun_running_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(status="IN_PROGRESS", conclusion=""),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_running_classic_failure) == "running"
+
     # A stale failed attempt must not outlive a later successful retry, and a
     # later failed attempt must override an earlier success -- only the
     # latest attempt per Strix CheckRun identity counts (regression for a

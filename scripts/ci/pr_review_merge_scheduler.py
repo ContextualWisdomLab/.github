@@ -1222,17 +1222,30 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
     callers fail closed instead of unlocking on non-passing evidence. Only
     the latest attempt per Strix CheckRun identity is evaluated, so a stale
     failed attempt cannot outlive a later successful retry.
+
+    A required-workflow Strix CheckRun, when present, is the sole authority:
+    a classic commit-status context (e.g. a same-head manual
+    `workflow_dispatch` Strix run) is evaluated only when no CheckRun exists
+    at all. This matches this repo's documented policy that a manual run
+    "may supply review evidence but does not replace required PR checks" --
+    without it, a stale manual-status failure that `dispatch_strix_evidence`
+    has no way to clear (it can only rerun a CheckRun's Actions job) would
+    keep this gate "failed" forever even after the real, retryable CheckRun
+    evidence succeeds, forcing an endless, pointless rerun loop.
     """
-    found = False
+    strix_nodes = [node for node in latest_check_run_attempts(context_nodes(pr)) if is_strix_context(node)]
+    if not strix_nodes:
+        return "missing"
+    check_run_present = any(node.get("__typename") == "CheckRun" for node in strix_nodes)
     saw_failure = False
-    for node in latest_check_run_attempts(context_nodes(pr)):
-        if not is_strix_context(node):
+    for node in strix_nodes:
+        is_check_run = node.get("__typename") == "CheckRun"
+        if check_run_present and not is_check_run:
             continue
-        found = True
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
             return "running"
-        if node.get("__typename") == "CheckRun":
+        if is_check_run:
             if status != "COMPLETED":
                 return "running"
             conclusion = (node.get("conclusion") or "").upper()
@@ -1240,8 +1253,6 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
                 saw_failure = True
         elif status not in _STRIX_SUCCESS_CONCLUSIONS:
             saw_failure = True
-    if not found:
-        return "missing"
     return "failed" if saw_failure else "complete"
 
 

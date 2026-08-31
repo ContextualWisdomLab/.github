@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a Devin Review finding on PR #1456: `strix_evidence_state()` treated a
+  classic commit-status Strix context (e.g. a same-head manual
+  `workflow_dispatch` run) as equally authoritative to a required-workflow
+  Strix CheckRun, so a stale classic-status failure left the gate "failed"
+  forever even after the real CheckRun evidence succeeded --
+  `dispatch_strix_evidence()` can only rerun a CheckRun's Actions job, never
+  a classic status, so this produced an endless, pointless rerun loop that
+  permanently blocked OpenCode dispatch. A required-workflow CheckRun is now
+  the sole authority whenever one is present; a classic status is evaluated
+  only when no CheckRun exists at all, matching this repo's documented
+  policy that a manual run "may supply review evidence but does not replace
+  required PR checks." Added regression tests for a stale classic failure
+  beside a successful CheckRun (now "complete"), a genuinely failing
+  CheckRun beside an unrelated classic success (still correctly "failed"),
+  and a still-running CheckRun beside a stale classic failure (still
+  "running", not prematurely "failed").
 - Let an explicit mention-triggered review request (`@opencode-agent review`)
   actually dispatch a current-head OpenCode review for a **draft** PR.
   `pr_review_merge_scheduler.py`'s `inspect_pr()` unconditionally returned
