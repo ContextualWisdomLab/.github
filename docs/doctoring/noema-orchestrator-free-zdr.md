@@ -79,6 +79,21 @@ Runtime acceptance requires a GitHub review whose commit and embedded head SHA
 both match the live PR head. A successful Actions job without that review body
 is not Noema review evidence.
 
+## 2026-08-31 response timeout removal
+
+Two exact-head naruon Noema jobs reached a healthy sidecar and then failed at
+the same `urllib` call after its hard-coded 120-second response timeout. This
+was shorter than the standing review contract, which permits central LLM
+reviews to take two hours or more. `call_llm` now passes `timeout=None`; the
+workflow remains the cancellation and concurrency boundary. Redirect refusal,
+URL validation, loopback pinning, bounded prompt construction, and substantive
+verdict validation are unchanged.
+
+Regression tests assert that both the ordinary provider seam and the rejected
+verdict repair call use the unbounded request contract. Hosted acceptance still
+requires an exact-head review verdict; removing the client timeout does not
+turn an incomplete run into passing evidence.
+
 For GitHub App credentials, reviewer identity is bound to the pinned token
 mint action's app slug and numeric installation ID. PAT and OIDC credentials
 continue to resolve their actor through GitHub's authenticated API.

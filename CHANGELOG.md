@@ -5,6 +5,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Remove Noema's fixed 120-second LLM response timeout. The central workflow
+  now owns cancellation, allowing the documented multi-hour review path to
+  finish instead of failing after a healthy orchestrator preflight.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their

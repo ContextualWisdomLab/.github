@@ -653,7 +653,8 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    # Noema reviews can legitimately take hours; the workflow owns cancellation.
+    with opener.open(request, timeout=None) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
