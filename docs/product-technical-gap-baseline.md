@@ -1715,6 +1715,71 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 `opencode-review` required check races its own async dispatch on every push
+
+**A structural, org-wide gap: the `opencode-review` required check almost never passes on the
+first evaluation, on any PR, in either `.github` or `contextual-orchestrator`.** Confirmed live on
+five independent PRs across both repos (`ContextualWisdomLab/contextual-orchestrator#953`,
+`ContextualWisdomLab/.github#1437`, `#1478`, `#1479`, `#1482`), each failing within 1–10 seconds of
+push with the identical message:
+
+```
+::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required
+check is not a review and must not succeed until the authenticated dispatch posts a current-head
+verdict.
+```
+
+**Root cause, traced through the actual workflow graph, not assumed:** `opencode-review.yml`'s
+`opencode-review-target` job (display name `opencode-review`, the one branch protection tracks)
+runs synchronously inside the single `pull_request_target` run that fires on push
+(`types: [opened, synchronize, reopened, ready_for_review, closed]`) and, as its last step, checks
+via `gh api .../pulls/{number}/reviews` whether an `opencode-agent` review already exists for the
+current head — then exits 1 if not. Nothing in that job's own dependency chain
+(`required-workflow-bootstrap` → `coverage-source-tree` → `coverage-evidence` →
+`opencode-review-target`) ever calls or waits for the real review. The actual review is produced by
+an entirely separate, asynchronous path: `pr-review-merge-scheduler.yml` also fires on the same
+`pull_request_target` push (`TRIGGER_REVIEWS` is true for that event) and — after its own
+materialization/evidence work — fires a `repository_dispatch: opencode-review` event that
+`opencode-review-dispatch.yml` (`repository_dispatch`-only trigger, by design, so untrusted PR
+content never runs with review-write credentials) picks up, runs the real LLM review against, and
+finally posts as a GitHub PR review. This can easily take longer than the `opencode-review-target`
+job's own ~10-second runtime, especially given this org's own documented tolerance for OpenCode/
+Strix/Noema review calls running "2+ hours" (`docs/product-goal-directive.md` §8). Once the real
+review does land, **nothing re-runs the already-failed `opencode-review-target` check** —
+`opencode-review.yml`'s only trigger is `pull_request_target`, which does not refire on a review
+being posted, unlike `noema-review.yml` and `pr-review-merge-scheduler.yml`, which both also listen
+for `workflow_run: workflows: ["Required OpenCode Review", "Strix Security Scan"]` completion and
+so get a natural second chance.
+
+**Impact:** every PR in `.github` and `contextual-orchestrator` needs a manual "re-run failed jobs"
+(or another push) to have any chance of `opencode-review` passing, and even that only works if
+enough wall-clock time has passed for the async dispatch to complete by the time of the re-run —
+otherwise the re-run reproduces the identical race. This is not a flake in the sense the org's own
+CI-triage convention means (`docs/pr-review-and-merge-procedure.md`'s guidance to re-run once and
+move on): re-running immediately after the original failure reproduces the same deterministic
+outcome, confirmed directly on `.github#1482` (re-run at essentially the same instant as the
+original failure, same error). The check is a real, meaningful signal once it does pass — it is not
+a check that should be weakened or bypassed — the defect is purely in *when* it evaluates versus
+*when* the evidence it is looking for can possibly exist.
+
+**Not fixed this pass.** This is required-workflow, `pull_request_target` trust-boundary code — the
+canonical implementation for every sibling repo in the org, not a single PR's concern — and multiple
+sessions were independently pushing to the exact same review-pipeline files while this was being
+diagnosed (`#1477`, `#1480` both merged mid-investigation). Landing a fix here needs deliberate,
+single-owned attention, not a rushed addition to an unrelated PR. Two directions worth evaluating,
+not yet chosen between:
+
+1. Give `opencode-review.yml` a `workflow_run` re-entry point (mirroring `noema-review.yml`'s own
+   pattern) so a later, successful `opencode-review-dispatch.yml` completion gets `opencode-review`
+   a real second evaluation instead of relying on an operator noticing and re-running manually.
+2. Have `opencode-review-dispatch.yml` (or the scheduler) explicitly re-trigger the specific failed
+   `opencode-review-target` check run via the Actions API once it has confirmed the review posted,
+   so the required check reflects the real outcome without a second full workflow run.
+
+Either direction needs its own PR, its own review, and hosted-run confirmation before it can be
+trusted for a required, `pull_request_target`-triggered check — not something to bundle into an
+unrelated fix.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
