@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import dataclasses
 import json
 import os
 import re
@@ -1499,7 +1500,28 @@ def main(argv: list[str] | None = None) -> int:
     client = _build_model_client(
         ModelClient, timeout=REVIEW_SERVING_TIMEOUT_SECONDS
     )
-    orchestrator = TaskOrchestrator(agents, client=client)
+    # tool_retry_attempts=0: TaskOrchestrator's default (1) makes route_once's
+    # _invoke retry the SAME agent once more on a transient failure before
+    # failing over to the next candidate -- doubling worst-case per-agent
+    # wall-clock (2 x REVIEW_SERVING_TIMEOUT_SECONDS) on top of the
+    # cross-candidate failover this sidecar already relies on for
+    # reliability. Disabled here so each candidate gets exactly one bounded
+    # attempt; failover to the next preflight-verified-ready candidate still
+    # happens (see contextual-orchestrator#946's noema-review TimeoutError
+    # investigation and contextual-orchestrator#974's worst-case enumeration).
+    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=0)
+    # realtime_judge (on by default via TaskOrchestrator's internal
+    # OrchestrationPolicy) makes route_once() issue a SECOND, independent,
+    # fully-bounded provider call per candidate to judge the first call's
+    # answer before accepting it -- doubling worst-case wall-clock again on
+    # top of the retry elimination above. That judge feeds a quality ledger
+    # meant to steer *future* routing decisions inside a long-lived process;
+    # this sidecar is a fresh, ephemeral process serving exactly one review
+    # request per CI run, so that learning has no opportunity to matter here.
+    # TaskOrchestrator's constructor has no policy override parameter and
+    # OrchestrationPolicy is a frozen dataclass, so replace the instance
+    # attribute directly (TaskOrchestrator itself is a plain, unfrozen class).
+    orchestrator.policy = dataclasses.replace(orchestrator.policy, realtime_judge=False)
     serve(
         orchestrator,
         host=args.host,

@@ -415,6 +415,35 @@ def test_call_llm_selects_direct_route_for_the_process_local_sidecar(monkeypatch
     assert seen["body"]["orchestration"] == "route"
 
 
+def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
+    """The client-side read timeout must match the enumerated sidecar worst case.
+
+    Regression test for contextual-orchestrator#946's four consecutive
+    ``noema-review`` ``TimeoutError`` failures and contextual-orchestrator#974's
+    worst-case enumeration: a plain ``timeout=120`` here raced the sidecar's
+    own internal per-candidate budget with zero margin, and could not survive
+    even one candidate needing a legitimate cross-candidate failover. This
+    must stay exactly ``CALL_LLM_TIMEOUT_SECONDS`` -- see that constant's own
+    comment for the enumerated derivation -- so a change to either side of
+    the mismatch is caught here rather than rediscovered via a live CI outage.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["timeout"] = timeout
+        return FakeResponse({"choices": [{"message": {"content": '{"decision":"comment","summary":"ok","findings":[]}'}}]})
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            return fake_urlopen(request, timeout)
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
+    noema.call_llm("owner/repo", 1, make_pr(), "diff", False)
+    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 3000
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()
@@ -717,7 +746,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
 
     class Opener:
         def open(self, request, timeout):
-            assert timeout == 120
+            assert timeout == noema.CALL_LLM_TIMEOUT_SECONDS
             payloads.append(json.loads(request.data))
             return Response(invalid if len(payloads) == 1 else valid)
 

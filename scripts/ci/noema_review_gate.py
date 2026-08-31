@@ -32,6 +32,23 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+# Enumerated, not guessed: the review sidecar's serving ModelClient bounds a
+# single provider attempt to REVIEW_SERVING_TIMEOUT_SECONDS=120s (see
+# scripts/ci/contextual_orchestrator_review_launcher.py), with retries and
+# the real-time judge's own second provider call both disabled specifically
+# so the *combined* per-candidate wall-clock never exceeds that 120s. The
+# sidecar's serving candidate pool is exactly the set of routes preflight
+# verified ready, bounded by REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES=24 (the same
+# file) -- so the true worst case, every verified-ready candidate rejecting
+# the full-size real payload after preflight accepted it on a tiny probe, is
+# 24 x 120s = 2880s. This client-side read timeout must stay comfortably
+# above that combined worst case (plus routing/JSON/GC overhead margin) so a
+# legitimate multi-candidate failover is never mistaken for a hang -- see
+# contextual-orchestrator#946's four consecutive TimeoutError failures and
+# contextual-orchestrator#974's worst-case enumeration, which first
+# identified this exact mismatch (there against the previous, un-tuned
+# defaults; here against this file's own now-matching serving timeout).
+CALL_LLM_TIMEOUT_SECONDS = 3000
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -655,7 +672,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    with opener.open(request, timeout=CALL_LLM_TIMEOUT_SECONDS) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

@@ -63,7 +63,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
         """Open one deterministic provider response."""
 
         def open(self, _request: Any, timeout: int) -> Response:
-            assert timeout == 120
+            assert timeout == noema.CALL_LLM_TIMEOUT_SECONDS
             return Response()
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())

@@ -5,6 +5,26 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix the root cause of `noema-review`'s four consecutive `TimeoutError`
+  failures on `contextual-orchestrator#946` (enumerated in
+  `contextual-orchestrator#974`): the review sidecar's *serving*
+  `TaskOrchestrator` left `tool_retry_attempts` at its default (1, doubling
+  worst-case per-agent wall-clock via a same-agent retry) and
+  `policy.realtime_judge` at its default (`True`, adding a second, fully
+  independent provider call per candidate to judge the first one's answer)
+  — neither tuned to fit inside `noema_review_gate.py`'s external client
+  timeout, unlike the deliberately zero-retry preflight client. Set
+  `tool_retry_attempts=0` and replace the (frozen) `OrchestrationPolicy`
+  with `realtime_judge=False` for the serving orchestrator only — safe here
+  since this sidecar is a fresh, ephemeral, one-shot process per CI run, so
+  the judge's quality-ledger learning (meant to steer a long-lived
+  process's *future* routing) has no opportunity to matter. Also raised
+  `noema_review_gate.py`'s external read timeout from a plain, margin-free
+  `120` to a new `CALL_LLM_TIMEOUT_SECONDS=3000`, derived from the
+  enumerated worst case (up to `REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`=24
+  preflight-verified-ready candidates, each now bounded to at most one
+  `REVIEW_SERVING_TIMEOUT_SECONDS`=120s attempt) plus overhead margin, not
+  guessed.
 - Fix two real bugs Devin's automated review found on this same PR
   (ContextualWisdomLab/.github#1415) against the just-landed
   `_catalog_account_cap(DEFAULT_ACCOUNT_CAP)` fix and the discovery-budget
