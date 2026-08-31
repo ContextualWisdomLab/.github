@@ -523,7 +523,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as exc:
-        fingerprint = hashlib.sha256(stripped.encode("utf-8")).hexdigest()[:16]
+        fingerprint = hashlib.sha256(
+            stripped.encode("utf-8", errors="surrogatepass")
+        ).hexdigest()[:16]
         raise RuntimeError(
             f"Noema LLM response was not valid JSON ({exc}). Raw model output "
             "is not logged here (this pull_request_target workflow's logs "

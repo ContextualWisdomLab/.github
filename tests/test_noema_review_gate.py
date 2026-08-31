@@ -217,6 +217,19 @@ def test_extract_json_object_fails_closed_on_malformed_json():
     assert len(huge_message) < 500
     assert f"response length={len(huge)} chars" in huge_message
 
+    # Devin Review follow-up finding: a malformed verdict containing an
+    # escaped lone surrogate (valid inside a Python/JSON string, but not
+    # representable in strict UTF-8) must not crash the fingerprint
+    # computation itself with an unhandled UnicodeEncodeError -- it must
+    # still fail closed with the same bounded RuntimeError.
+    surrogate_bearing = '{"decision":"approve", "note": "\ud800", trailing bad'
+    with pytest.raises(RuntimeError, match="was not valid JSON") as surrogate_excinfo:
+        noema.extract_json_object(surrogate_bearing)
+    assert not isinstance(surrogate_excinfo.value, UnicodeEncodeError)
+    surrogate_message = str(surrogate_excinfo.value)
+    assert "sha256=" in surrogate_message
+    assert f"response length={len(surrogate_bearing)} chars" in surrogate_message
+
 
 def test_extract_llm_message_content_happy_paths():
     """A well-formed envelope returns its stripped content; a missing (not
