@@ -1864,6 +1864,67 @@ empty string, so the falsey-envelope path still fails closed one layer down. Ver
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge). Devin's own framing marked this
 the last expected finding in this decode/parse vein for this PR.
 
+## 2026-08-31 noema-review-gate stale-trigger guard: workflow_run head misread and case-sensitive SHA
+comparison
+
+Devin Review's next pass on PR #1507 reviewed the stale-trigger guard added around `EXPECTED_HEAD` (the
+mechanism that aborts a Noema review run — before any credential/model work or verdict publication — when
+its triggering event's head no longer matches the PR's live head) and found two real bugs. Given this
+PR's concurrent commit velocity, a sibling session landed the same two fixes to `noema-review.yml` and
+`scripts/ci/noema_review_gate.py` (`d74fc4b`/`a5262f3`/`a398a02`/`e4c7a8d`) while this session was still
+verifying them; this entry records the independently-confirmed root cause and evidence, plus the
+regression tests this session added on top of that already-landed fix (rebased cleanly, no functional
+disagreement between the two).
+
+**Bug 1 (confirmed real): `workflow_run`-triggered reviews always looked stale.** `noema-review.yml`
+subscribes to `workflow_run` for `["Required OpenCode Review", "Strix Security Scan"]` — both
+`pull_request_target` workflows — so Noema runs as their follow-up. `EXPECTED_HEAD`, the `run-name`, and
+the `concurrency` group all read `github.event.workflow_run.head_sha` for that path, but GitHub's
+`workflow_run.head_sha` is the base/trusted commit the completing `pull_request_target` job checked out
+(its own `github.sha`), not the PR's head — confirmed against GitHub's REST/webhook docs for the
+`workflow_run` payload and against this same workflow's own `PR_NUMBER` line, which already reads the
+correct PR association via `github.event.workflow_run.pull_requests[0].number`. Every
+`workflow_run`-triggered follow-up review was therefore comparing the live PR head against the wrong
+(base) commit in `EXPECTED_HEAD` and would almost always find them unequal, aborting the run and silently
+skipping the review it exists to produce. Fixed by reusing the same established `pull_requests[0]` pattern
+for the head SHA everywhere it appears: `github.event.workflow_run.pull_requests[0].head.sha`, in
+`EXPECTED_HEAD`, `run-name`, and the `concurrency` group alike (`docs/pr-review-and-merge-procedure.md`'s
+trigger-mapping table updated to match). `pull_requests` is documented to come back empty for cross-fork
+PRs; that already degrades safely (`EXPECTED_HEAD` falls through to `''`, and `PR_NUMBER` — sourced from
+the same array — already falls through the same way, so the existing "Skip events without pull request
+context" step short-circuits before any stale-head comparison runs).
+
+**Bug 2 (confirmed real): uppercase `--expected-head` was falsely treated as stale.**
+`scripts/ci/noema_review_gate.py`'s `--expected-head` regex (`^[0-9a-fA-F]{40}$`) accepts uppercase hex,
+and the bash-side guard in `noema-review.yml` accepts it too, but both of the script's live-head
+comparisons (`inspect_and_review`'s pre-model-work check against `fetch_pr(...).headRefOid`, and its
+pre-publication re-check against a freshly re-fetched `headRefOid`) used a plain case-sensitive `!=`
+against GitHub's GraphQL `headRefOid`, which is always lowercase — as did the workflow YAML's own bash
+`[ "$live_head" != "$EXPECTED_HEAD" ]` check against the REST `.head.sha` field. A legitimately
+uppercase-cased dispatch (e.g. from `client_payload.pr_head_sha`) would be rejected or silently skipped at
+every one of these sites even though it named the correct commit. Fixed by lowercasing both sides at
+every comparison: `inspect_and_review` normalizes its `expected_head` parameter once
+(`expected_head = expected_head.strip().lower()`) and lowercases `headRefOid` at both comparison sites;
+the workflow's bash check now compares `"${live_head,,}" != "${EXPECTED_HEAD,,}"`, reusing this repo's
+existing `${VAR,,}` lowercase-normalization idiom already used for PR SHAs elsewhere in
+`opencode-review-dispatch.yml`.
+
+Regression tests added by this session on top of the landed fix: `tests/test_noema_orchestrator_workflow_contract.py` adds
+`test_workflow_run_expected_head_uses_pull_request_head_not_base_commit` (proves, with distinct base vs.
+PR-head SHA values, that the fixed expression resolves to the PR head and not the base commit) and
+`test_workflow_run_expected_head_fails_closed_when_pull_requests_is_empty`, plus
+`test_stale_trigger_step_compares_expected_head_case_insensitively` and
+`test_stale_trigger_step_still_rejects_a_genuinely_different_head`, which execute the workflow's own
+extracted bash step against a fake `gh` to prove the case-insensitive fix without weakening genuine
+stale-trigger detection. `tests/test_noema_review_gate.py` adds
+`test_uppercase_expected_head_is_not_stale_before_model_work` and
+`test_uppercase_expected_head_is_not_stale_before_publication`, covering both Python-side comparison
+sites end-to-end (through to `submit_review` actually being called), complementing the sibling session's
+own `test_expected_head_comparison_is_case_insensitive`. 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

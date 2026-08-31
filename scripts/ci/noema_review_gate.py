@@ -909,9 +909,17 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 
 
 def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
-    """Inspect PR state and submit Noema's independent LLM review."""
+    """Inspect PR state and submit Noema's independent LLM review.
+
+    ``expected_head`` is normalized to lowercase before both stale-head
+    comparisons below. ``--expected-head`` is validated as 40 hex characters
+    of either case (``main``'s regex accepts uppercase), but GitHub's API
+    always reports ``headRefOid`` in lowercase; without normalizing, a valid
+    uppercase-cased trigger would be misdetected as stale and every such
+    review would be silently skipped (Devin Review finding on PR #1507).
+    """
+    expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
-    expected_head = expected_head.lower()
     if str(pr.get("headRefOid") or "").lower() != expected_head:
         print("Trigger head is stale; Noema review skipped before model work.")
         return 0

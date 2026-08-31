@@ -918,6 +918,42 @@ def test_head_movement_stops_before_review_publication(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7, "head") == 0
 
 
+def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
+    """An uppercase --expected-head must match GitHub's lowercase live SHA (Devin Review, PR #1507)."""
+    pr = make_pr(headRefOid="abc123def0")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
+    calls = []
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7, "ABC123DEF0") == 0
+    assert calls
+
+
+def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
+    """The pre-publication re-check must also compare case-insensitively."""
+    pull_requests = iter((make_pr(headRefOid="abc123def0"), make_pr(headRefOid="abc123def0")))
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(
+        noema,
+        "call_llm",
+        lambda *args, **kwargs: {"decision": "approve", "summary": "ok"},
+    )
+    calls = []
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7, "ABC123DEF0") == 0
+    assert calls
+
+
 def test_call_llm_rejects_empty_review_content(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")

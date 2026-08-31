@@ -56,6 +56,142 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
+def _expected_head_from_workflow_run_event(event: dict) -> str:
+    """Mirror EXPECTED_HEAD's ``||`` fallback chain for a ``workflow_run`` event.
+
+    Reproduces GitHub Actions' short-circuit-on-falsy ``||`` semantics over
+    the same dotted paths ``noema-review.yml``'s ``EXPECTED_HEAD`` env var
+    reads, so a test can prove — with concrete, distinct base vs. PR-head SHA
+    values — which commit the expression actually resolves to, without
+    needing a live Actions runner to evaluate ``${{ }}`` syntax.
+    """
+    client_payload = event.get("client_payload") or {}
+    pull_request = event.get("pull_request") or {}
+    workflow_run = event.get("workflow_run") or {}
+    pull_requests = workflow_run.get("pull_requests") or []
+    workflow_run_pr_head = (
+        (pull_requests[0].get("head") or {}).get("sha") if pull_requests else None
+    )
+    return (
+        client_payload.get("pr_head_sha")
+        or (pull_request.get("head") or {}).get("sha")
+        or workflow_run_pr_head
+        or ""
+    )
+
+
+def test_workflow_run_expected_head_uses_pull_request_head_not_base_commit() -> None:
+    """EXPECTED_HEAD for a workflow_run completion must resolve the PR head, not the base.
+
+    Devin Review finding on PR #1507: ``github.event.workflow_run.head_sha``
+    is the base/trusted commit the completing ``pull_request_target``
+    workflow (Required OpenCode Review / Strix Security Scan) checked out —
+    not the PR head — so every workflow_run-triggered follow-up review used
+    to fail the stale-trigger gate. The fix reuses this same workflow's own
+    established pattern for ``PR_NUMBER`` (``pull_requests[0].number``) and
+    reads the actual PR head from ``pull_requests[0].head.sha`` instead.
+    """
+    workflow = workflow_text("noema-review.yml")
+    assert (
+        "EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || "
+        "github.event.pull_request.head.sha || "
+        "github.event.workflow_run.pull_requests[0].head.sha || '' }}"
+    ) in workflow
+    assert "EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || '' }}" not in workflow
+
+    base_sha = "b" * 40
+    pr_head_sha = "a" * 40
+    assert base_sha != pr_head_sha
+    workflow_run_event = {
+        "workflow_run": {
+            # The top-level head_sha on a workflow_run object completing a
+            # pull_request_target run is the base/trusted commit that run
+            # checked out (its own github.sha) -- not the PR's head.
+            "head_sha": base_sha,
+            "pull_requests": [
+                {"number": 42, "head": {"sha": pr_head_sha}, "base": {"sha": base_sha}}
+            ],
+        }
+    }
+    assert _expected_head_from_workflow_run_event(workflow_run_event) == pr_head_sha
+    assert _expected_head_from_workflow_run_event(workflow_run_event) != base_sha
+
+
+def test_workflow_run_expected_head_fails_closed_when_pull_requests_is_empty() -> None:
+    """A fork-originated workflow_run (empty pull_requests[]) yields no expected head.
+
+    ``pull_requests`` is documented to come back empty for cross-fork PRs;
+    EXPECTED_HEAD must fall through to '' rather than fabricate a head, and
+    PR_NUMBER (already sourced from the same array) falls through the same
+    way, so the job's existing "Skip events without pull request context"
+    step still short-circuits the run before any stale-head comparison.
+    """
+    workflow_run_event = {"workflow_run": {"head_sha": "c" * 40, "pull_requests": []}}
+    assert _expected_head_from_workflow_run_event(workflow_run_event) == ""
+
+
+def _run_stale_trigger_step(
+    tmp_path: Path, *, expected_head: str, live_head: str
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Reject a stale trigger" step's bash with a fake `gh` on PATH."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    step_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Reject a stale trigger before credential or model setup",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        f"#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s' '{live_head}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "PR_NUMBER": "7",
+        "EXPECTED_HEAD": expected_head,
+        "GH_TOKEN": "synthetic-token",
+    }
+    return subprocess.run(  # noqa: S603, S607
+        [bash_executable, "-c", step_script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_stale_trigger_step_compares_expected_head_case_insensitively(
+    tmp_path: Path,
+) -> None:
+    """An uppercase EXPECTED_HEAD must not be rejected against GitHub's lowercase live SHA.
+
+    Devin Review finding on PR #1507: this bash-side stale-trigger guard
+    accepts uppercase hex (its own regex allows it, matching
+    ``--expected-head``'s Python-side validation) but used to compare
+    case-sensitively against the live PR head GitHub's API always reports in
+    lowercase, rejecting every valid uppercase-cased dispatch as stale.
+    """
+    sha = "a" * 40
+    result = _run_stale_trigger_step(tmp_path, expected_head=sha.upper(), live_head=sha)
+    assert result.returncode == 0, result.stderr
+    assert "is stale" not in result.stdout
+
+
+def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
+    tmp_path: Path,
+) -> None:
+    """A truly stale trigger (different commit, any case) is still rejected."""
+    result = _run_stale_trigger_step(
+        tmp_path, expected_head="A" * 40, live_head="b" * 40
+    )
+    assert result.returncode == 1
+    assert "Noema trigger is stale" in result.stdout
+
+
 def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
     """Bound transient GitHub API failures without weakening visibility validation."""
     workflow = workflow_text("noema-review.yml")
