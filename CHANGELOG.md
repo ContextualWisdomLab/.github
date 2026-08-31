@@ -5,6 +5,23 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a false-positive in `scripts/ci/test_strix_quick_gate.sh`'s
+  `assert_opencode_review_uses_codegraph_and_contextual_orchestrator`: its
+  `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` range never actually
+  terminated (no line in `opencode-review.yml`'s `jobs:` block dedents to
+  column 0 before EOF), so the assertion scanned the entire rest of the file
+  instead of just the `required-workflow-bootstrap` job -- flagging the
+  unrelated `opencode-review-target` job's own `if:
+  github.event.action != 'closed'` (a legitimate closed-PR skip) as if it
+  violated required-workflow-bootstrap's payload-independence rule.
+  Confirmed via two independent full runs of the script (this branch's
+  merged worktree, and a fresh clone of `main` alone) that both fail this
+  exact assertion identically -- a pre-existing defect on `main`, not
+  introduced by this branch's merge. Replaced the range with a flag-based
+  scan that stops at the next 2-space-indented job key. Verified the fix
+  still catches a genuine violation (a synthetic `if:` injected inside
+  `required-workflow-bootstrap` itself) and that the full script now passes
+  with zero failures.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their

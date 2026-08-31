@@ -2627,6 +2627,58 @@ scorecard/dependency-review/coverage-evidence/noema-review)은 이미 success �
 validate job, `metadata-only gate evaluation`만 아직 in_progress. 다음 tick에서 이들이 완료되면
 bypass-merge 조건 충족 여부를 재확인한다.
 
+## 2026-08-31 시간별 재개: naruon#1486 Devin 추가 배치 3건 수정 + `.github#1438` exact-head-path-policy false positive 근본원인 수정
+
+이전 항목 이후 `naruon#1486`(head `399c1e5f`→`1b85703c`)에 대해 Devin이 head를 다시 분석하며
+새로 지적한 진짜 결함 3건을 각각 실제 RED 확인 후 고쳤다.
+
+1. **🔴 critical: POP3 동기화가 매 실행마다 조용히 메일을 0건 임포트.** `Pop3SyncWorker._import_messages`가
+   `TenantConfig`에 존재하지 않는 `workspace_id`를 `getattr(config, "workspace_id", "")`로 읽어
+   항상 빈 문자열을 얻고, 바로 다음 가드에서 무조건 0건을 반환했다. `ImapSyncWorker`가 이미 쓰던
+   `resolve_unambiguous_workspace_id()`(소유자의 기존 임포트 메일에서 workspace 역산, 0건/모호하면
+   fail-closed)를 공용 헬퍼로 추출해 POP3에도 재사용(커밋 `c3e2856a`).
+2. **🟡 `import_fixtures.py`가 커스텀 `NARUON_IMPORT_WORKSPACE_ID`를 무시.** 스레드 배정에는 반영하면서
+   실제 저장하는 `Email.workspace_id`는 그 자리에서 재계산해 env var를 무시했다(커밋 `399c1e5f`).
+3. **🟡 owner당 이메일 임포트 할당량이 workspace마다 곱절로 증가.** `MAX_IMPORT_EMAILS_PER_OWNER`/advisory
+   lock은 `(user_id, organization_id)` 단위인데 카운트 쿼리가 `Email.owner_filters()`를 그대로
+   재사용해 `workspace_id`까지 필터링했다 — 같은 owner가 여러 workspace로 임포트하면 매 workspace가
+   독립적인 1000건 한도를 받았다(커밋 `c6085ef5`).
+4. **🔍 analysis: calendar conflict judgment 영속화 경로에 실제 PostgreSQL 커버리지 부재.**
+   `apply_correction`의 `with_for_update()` row lock을 포함해 전부 mock 세션으로만 테스트되고 있었다
+   — 새 real-Postgres smoke 테스트 추가, 로컬 PostgreSQL 16으로 실제 통과 확인(커밋 `c6085ef5`).
+5. **🔍 analysis: `calendar_conflict_corrections.rationale`가 2단어 컬럼명 컨벤션 위반.**
+   `correction_rationale`로 리네임(모델/마이그레이션/서비스 계층만; API 응답 필드명은 유지). 동일
+   패턴의 기존 `project_graph_object_corrections.rationale`(이 PR 이전부터 존재)은 범위 밖으로 남김
+   (커밋 `1b85703c`).
+
+각 수정 모두 전체 백엔드 스위트(최종 1897 passed / 36 skipped)와 ruff clean을 확인했고, 관련
+Devin 스레드 전부(POP3, fixture workspace 무시, fixture registry 우회, PostgreSQL 증거 부족,
+legacy mail 도달 불가 재확인, IMAP 사전 workspace 증거 확인, owner quota, naming policy 확인,
+rationale 리네임 등 총 9개)에 답글을 달고 resolve했다.
+
+**`.github#1438`: `exact-head-path-policy` 체크가 병합(`d753f38b`) 직후 FAIL로 나타난 원인을
+근본까지 추적.** `scripts/ci/test_strix_quick_gate.sh`의
+`assert_opencode_review_uses_codegraph_and_contextual_orchestrator`가 `required-workflow-bootstrap`
+job 하나만 검사하려는 의도로 `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` 범위를 썼는데,
+GitHub Actions의 `jobs:` 아래 어떤 job 정의도 실제로는 column 0로 dedent되지 않는다(EOF까지 계속
+2-space indent) — 즉 `/^[^ ]/`는 사실상 파일 끝까지 절대 매치하지 않아, 이 assertion이
+`required-workflow-bootstrap` 하나가 아니라 **파일의 나머지 전체(다른 job들 포함)** 를 검사하고
+있었다. 그 결과 훨씬 뒤에 있는 무관한 `opencode-review-target` job 자신의 `if:
+github.event.action != 'closed'`(closed-PR skip 목적, 정상)까지 "required-workflow-bootstrap이
+event payload에 의존한다"는 오탐으로 잡았다.
+
+**main 자체도 동일하게 실패함을 실증으로 확인**(이 PR이 만든 결함이 아님): (1) `.github#1438`이
+병합해 들어온 워크트리에서 `STRIX_TEST_PROCESS_TIMEOUT_SECONDS=3 STRIX_TEST_FAKE_SLEEP_SECONDS=5
+bash scripts/ci/test_strix_quick_gate.sh` 전체 실행 → 정확히 이 assertion 1건만 FAIL. (2)
+`origin/main`(commit `1cbb6aa`) 단독 fresh clone에서 동일 스크립트를 독립적으로 실행 → **동일하게
+정확히 이 assertion 1건만 FAIL** — 병합이 가져온 게 아니라 `main` 자체의 선행 결함임을 확정했다.
+
+**수정**: `awk` 범위를 column-0 종료 조건 대신, 다음 2-space indent job 키(`^  [A-Za-z0-9_-]+:$`)에서
+멈추는 flag 기반 스크립트로 교체(`scripts/ci/test_strix_quick_gate.sh`). 검증: (a) 실제
+`required-workflow-bootstrap` job 안에 가짜 `if:`를 주입한 사본에서는 여전히 정확히 감지됨(진짜
+위반은 계속 잡음). (b) 수정된 스크립트를 `.github#1438` 워크트리 전체에 대해 재실행 →
+`test_strix_quick_gate: PASS`로 회귀 없이 통과.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
