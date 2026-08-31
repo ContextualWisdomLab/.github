@@ -111,15 +111,21 @@ def _normalize_base_url(base_url: str) -> str:
     omitting it; exactly one trailing slash is stripped from the path, since
     a base URL's trailing slash does not change which resource it addresses.
     Every other distinction -- a different host, a different non-default
-    port, a different path -- is preserved verbatim, including the query and
-    fragment components (routing evidence has no legitimate reason to carry
-    either; preserving rather than dropping them means an unexpected one
-    cannot silently vanish from the computed identity). Any userinfo
-    component present is dropped rather than preserved: outage-domain
-    identity is about the physical endpoint, not which credential reaches
-    it, and this codebase's base URLs never carry userinfo (see
-    ``configured_gateway_source`` in ``contextual-orchestrator``, which
-    rejects one outright).
+    port, a different path, or a different query string -- is preserved
+    verbatim (routing evidence has no legitimate reason to carry a query
+    string; preserving rather than dropping it means an unexpected one
+    cannot silently vanish from the computed identity). The URL fragment is
+    the one deliberate exception: it is stripped, not preserved, because a
+    fragment is a client-side-only artifact that is never transmitted to
+    the server and therefore never identifies a different upstream endpoint
+    -- two base URLs differing only by fragment must collapse to the same
+    outage-domain key, sharing one diversity count and one admission-cap
+    budget, not report inflated diversity or a separately budgeted cap. Any
+    userinfo component present is dropped rather than preserved:
+    outage-domain identity is about the physical endpoint, not which
+    credential reaches it, and this codebase's base URLs never carry
+    userinfo (see ``configured_gateway_source`` in
+    ``contextual-orchestrator``, which rejects one outright).
 
     A string this cannot parse into a scheme, host, and numeric port --
     including an empty string (which would otherwise normalize to a value
@@ -173,7 +179,7 @@ def _normalize_base_url(base_url: str) -> str:
         else f"{bracketed_host}:{port}"
     )
     path = parsed.path.rstrip("/")
-    return urlunsplit((scheme, netloc, path, parsed.query, parsed.fragment))
+    return urlunsplit((scheme, netloc, path, parsed.query, ""))
 
 
 def _admission_priority_key(
@@ -252,7 +258,15 @@ def _fair_admission_order(
     happens to rank first within the tier; an account that runs out of rows
     before the cap is reached simply stops participating in further
     rounds, letting the domain's remaining accounts absorb the leftover
-    capacity.
+    capacity. Crucially, a shared domain's own rows keep the exact global
+    positions they already occupied among ``rows`` -- round-robin only
+    decides which of the domain's own rows lands in which of its own
+    positions, never how far ahead or behind an unrelated domain's row
+    sits (see :func:`_fair_order_within_tier`'s docstring for the concrete
+    bug an earlier revision had here: collapsing a shared domain into one
+    contiguous block at its first appearance silently displaced an
+    unrelated domain's row that had been priority-ranked between two of
+    the shared domain's own occurrences).
     """
     ordered: list[Mapping[str, Any]] = []
     tier_start = 0
@@ -280,19 +294,31 @@ def _fair_order_within_tier(
     scoped to one admission-priority tier at a time; this is that per-tier
     reordering step, factored out so it never has visibility into rows from
     a different tier to (mis)order against.
-    """
-    domain_order: list[str] = []
-    domain_rows: dict[str, list[Mapping[str, Any]]] = {}
-    for row in rows:
-        domain = _outage_domain(row)
-        if domain not in domain_rows:
-            domain_order.append(domain)
-            domain_rows[domain] = []
-        domain_rows[domain].append(row)
 
-    ordered: list[Mapping[str, Any]] = []
-    for domain in domain_order:
-        bucket = domain_rows[domain]
+    This never collapses a domain's rows into one contiguous block. An
+    earlier revision grouped every row for one domain at that domain's
+    *first* appearance in ``rows``, which silently moved rows belonging to
+    *other* domains whenever a shared domain's own rows were not already
+    contiguous in the input: e.g. ``[A1, B1, A2]`` (domain A shared by two
+    accounts, with an unrelated domain B's row ranked between A's two
+    occurrences) became ``[A1, A2, B1]`` under that revision -- B1, an
+    independent domain's row that had outranked A2, was pushed behind
+    *both* of A's rows, which could drop B1 entirely under a tight
+    admission limit even though it was priority-ranked ahead of A2.
+    Instead, each domain keeps exactly the global positions its own rows
+    already occupy (recorded in ``domain_positions`` below); round-robining
+    a shared domain's accounts only decides which of *that domain's own*
+    rows fills each of its own positions, so a shared domain's Nth admitted
+    row can only displace what its own Nth-occurrence priority position
+    would have displaced, never a different domain's row.
+    """
+    domain_positions: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        domain_positions.setdefault(_outage_domain(row), []).append(index)
+
+    ordered: list[Mapping[str, Any]] = list(rows)
+    for positions in domain_positions.values():
+        bucket = [rows[index] for index in positions]
         account_order: list[str] = []
         queues: dict[str, deque[Mapping[str, Any]]] = {}
         for row in bucket:
@@ -302,13 +328,15 @@ def _fair_order_within_tier(
                 queues[account] = deque()
             queues[account].append(row)
         if len(account_order) <= 1:
-            ordered.extend(bucket)
             continue
+        reordered: list[Mapping[str, Any]] = []
         while any(queues[account] for account in account_order):
             for account in account_order:
                 queue = queues[account]
                 if queue:
-                    ordered.append(queue.popleft())
+                    reordered.append(queue.popleft())
+        for index, row in zip(positions, reordered):
+            ordered[index] = row
     return ordered
 
 

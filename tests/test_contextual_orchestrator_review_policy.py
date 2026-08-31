@@ -92,12 +92,17 @@ def test_outage_domain_groups_by_shared_base_url() -> None:
         ("https://integrate.api.nvidia.com:443/v1", "https://integrate.api.nvidia.com/v1"),
         ("https://integrate.api.nvidia.com/v1/", "https://integrate.api.nvidia.com/v1"),
         ("https://integrate.api.nvidia.com/v1//", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com/v1#fragment", "https://integrate.api.nvidia.com/v1"),
+        (
+            "https://integrate.api.nvidia.com/v1#fragment-a",
+            "https://integrate.api.nvidia.com/v1#fragment-b",
+        ),
     ],
 )
 def test_normalize_base_url_treats_equivalent_spellings_as_one_domain(
     base_url: str, equivalent_to: str
 ) -> None:
-    """Case, an explicit default port, and a trailing slash do not split a domain.
+    """Case, an explicit default port, a trailing slash, or a fragment don't split a domain.
 
     Regression for a Devin Review finding on this fix: comparing raw
     ``base_url`` strings would let a hostname-case difference, an explicit
@@ -106,6 +111,12 @@ def test_normalize_base_url_treats_equivalent_spellings_as_one_domain(
     the diversity-overstating, cap-bypassing bug this module exists to fix,
     for exactly the ``nvidia_nim``/``nvidia_nim_sub`` pair it was written to
     protect.
+
+    The two fragment cases are a second, later Devin Review finding: a URL
+    fragment is client-side only and never reaches the server, so it cannot
+    identify a different upstream endpoint -- two base URLs differing only
+    by fragment (including one with no fragment at all against one that has
+    one) must still normalize to the identical outage-domain key.
     """
     assert policy._normalize_base_url(base_url) == policy._normalize_base_url(equivalent_to)
 
@@ -117,12 +128,18 @@ def test_normalize_base_url_treats_equivalent_spellings_as_one_domain(
         ("https://integrate.api.nvidia.com:8443/v1", "https://integrate.api.nvidia.com/v1"),
         ("https://integrate.api.nvidia.com/v2", "https://integrate.api.nvidia.com/v1"),
         ("http://integrate.api.nvidia.com/v1", "https://integrate.api.nvidia.com/v1"),
+        ("https://integrate.api.nvidia.com/v1?tenant=a", "https://integrate.api.nvidia.com/v1"),
     ],
 )
 def test_normalize_base_url_preserves_genuine_distinctions(
     base_url: str, distinct_from: str
 ) -> None:
-    """A different host, non-default port, path, or scheme stays a different domain."""
+    """A different host, non-default port, path, scheme, or query stays a different domain.
+
+    The query-string case guards the fragment fix's scope: only the
+    fragment is dropped, the query string stays a real distinguishing
+    component (see :func:`_normalize_base_url`'s docstring).
+    """
     assert policy._normalize_base_url(base_url) != policy._normalize_base_url(distinct_from)
 
 
@@ -328,6 +345,89 @@ def test_fair_admission_order_preserves_domain_position_and_multiple_domains() -
         ("nvidia_nim", "m1"),
         ("openrouter", "r0"),
     ]
+
+
+def test_fair_admission_order_preserves_non_contiguous_shared_domain_positions() -> None:
+    """A shared domain's own rows never displace an interleaved independent row.
+
+    Regression for a Devin Review finding: an earlier revision collapsed a
+    domain to one contiguous block at that domain's *first* appearance,
+    which was wrong whenever the domain's own rows were not already
+    contiguous in priority order. Here domain A (shared by two accounts)
+    contributes ``A1`` and ``A2``, with an unrelated domain B's ``B1``
+    priority-ranked between them: ``[A1, B1, A2]``. The old code produced
+    ``[A1, A2, B1]`` -- B1, which had outranked A2, got pushed behind
+    *both* of A's rows. The fix must preserve B1's original slot between
+    A1 and A2.
+    """
+    rows = [
+        _row("nvidia_nim", "m0"),
+        _row("bytez", "b0"),
+        _row("nvidia_nim_sub", "s0"),
+    ]
+    ordered = policy._fair_admission_order(rows, zdr_endpoints=frozenset())
+    assert [(row["provider"], row["model"]) for row in ordered] == [
+        ("nvidia_nim", "m0"),
+        ("bytez", "b0"),
+        ("nvidia_nim_sub", "s0"),
+    ]
+
+
+def test_build_catalog_does_not_drop_an_interleaved_independent_route_under_a_tight_limit() -> None:
+    """A tight global limit must not drop an independent-domain route.
+
+    End-to-end regression for the same Devin Review finding as
+    ``test_fair_admission_order_preserves_non_contiguous_shared_domain_
+    positions``, exercised through the full public API with a real,
+    sort-derived priority order rather than a hand-fed one.
+
+    ``nvidia_nim`` and ``nvidia_nim_sub`` are this codebase's only shared
+    outage domain (both resolve to ``https://integrate.api.nvidia.com/v1``),
+    and no third registered provider name sorts alphabetically between them
+    -- so to reach a genuinely *sort-derived* interleaved order (not just a
+    hand-fed one) this reuses the ``nvidia_nim`` credential for a second row
+    with an explicit ``base_url`` override pointing at an unrelated,
+    independent endpoint. Account identity and outage-domain identity are
+    deliberately decoupled by this module's own design (see
+    ``_outage_domain``'s docstring), so one credential's discovery rows
+    spanning two different base URLs is a legitimate shape, not a
+    contrivance. Choosing a model name (``"z-indep"``) that sorts after
+    ``"m0"`` places the independent row's priority rank between the shared
+    domain's ``nvidia_nim`` and ``nvidia_nim_sub`` rows once
+    ``build_zdr_prioritized_catalog`` sorts by ``_admission_priority_key``.
+    """
+    report = {
+        "models": [
+            {
+                "provider": "nvidia_nim",
+                "model": "m0",
+                "agent_id": "nim_m0",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+            {
+                "provider": "nvidia_nim",
+                "model": "z-indep",
+                "agent_id": "nim_indep",
+                "is_free": True,
+                "base_url": "https://independent.example.com/v1",
+                **FREE_PRICE,
+            },
+            {
+                "provider": "nvidia_nim_sub",
+                "model": "s0",
+                "agent_id": "nimsub_s0",
+                "is_free": True,
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=2, account_cap=4
+    )
+    admitted = {(agent["provider_name"], agent["model"]) for agent in result["agents"]}
+    assert ("nvidia_nim", "z-indep") in admitted
+    assert len(result["agents"]) == 2
 
 
 @pytest.mark.parametrize(
@@ -630,6 +730,49 @@ def test_build_catalog_collapses_differently_spelled_equivalent_endpoints() -> N
     assert result["report"]["free_outage_domain_diversity"] == 1
     # The shared domain's cap of 1 admits only the first-sorted row, not one
     # from each differently-spelled row.
+    assert len(result["agents"]) == 1
+
+
+def test_build_catalog_collapses_fragment_only_difference() -> None:
+    """A fragment-only spelling difference cannot split one domain.
+
+    End-to-end regression for a Devin Review finding: a URL fragment is
+    client-side only and is never sent to the server, so it cannot
+    legitimately identify a different upstream endpoint. Two base URLs
+    differing only by fragment must still share one
+    ``free_outage_domain_diversity`` count and one admission-cap budget,
+    exercised through ``parse_discovery_report``'s ``base_url`` override
+    the same way as
+    ``test_build_catalog_collapses_differently_spelled_equivalent_endpoints``.
+    """
+    fragment_only_report = {
+        "models": [
+            {
+                "provider": "nvidia_nim",
+                "model": "nvidia/nemotron-3-nano-30b-a3b",
+                "agent_id": "nim_nano_free",
+                "is_free": True,
+                "base_url": "https://integrate.api.nvidia.com/v1#primary",
+                **FREE_PRICE,
+            },
+            {
+                "provider": "nvidia_nim_sub",
+                "model": "meta/llama-3.3-70b-instruct",
+                "agent_id": "nimsec_70b",
+                "is_free": True,
+                "base_url": "https://integrate.api.nvidia.com/v1#secondary",
+                **FREE_PRICE,
+            },
+        ]
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(fragment_only_report),
+        limit=12,
+        account_cap=1,
+    )
+    assert result["report"]["free_outage_domain_diversity"] == 1
+    # The shared domain's cap of 1 admits only the first-sorted row, not one
+    # from each differently-fragmented row.
     assert len(result["agents"]) == 1
 
 
