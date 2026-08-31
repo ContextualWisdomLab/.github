@@ -1486,13 +1486,13 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
         {"cost_evidence": "unknown", "provider": "bytez"},
     ]
     enriched = namespace["_with_discovery_counts"](
-        base, rows, provider_family=policy.provider_family
+        base, rows, provider_account=policy.provider_account
     )
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
-    assert enriched["free_family_diversity"] == 1
+    assert enriched["free_account_diversity"] == 1
 
 
 def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
@@ -1500,13 +1500,13 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
 
     Regression for a real bug: the ``auto``-pool primary stage only sees
     ZDR-admitted free rows, and the priced-fallback stage sees no free rows
-    at all, so either stage's internally computed ``free_family_diversity``
+    at all, so either stage's internally computed ``free_account_diversity``
     (whatever ``build_zdr_prioritized_catalog`` returned from its own
     narrower input) would undercount or read zero even when the full
-    discovery has multi-family free-route diversity.
+    discovery has multiple credential accounts with free routes.
     """
     namespace = _load_launcher()
-    stage_report_from_priced_only_rows = {"free_family_diversity": 0}
+    stage_report_from_priced_only_rows = {"free_account_diversity": 0}
     full_discovery_rows = [
         {"cost_evidence": "free", "provider": "nvidia_nim"},
         {"cost_evidence": "free", "provider": "openrouter"},
@@ -1515,9 +1515,9 @@ def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage(
     enriched = namespace["_with_discovery_counts"](
         stage_report_from_priced_only_rows,
         full_discovery_rows,
-        provider_family=policy.provider_family,
+        provider_account=policy.provider_account,
     )
-    assert enriched["free_family_diversity"] == 2
+    assert enriched["free_account_diversity"] == 2
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ import sys
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -24,6 +24,7 @@ PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
   title
+  author { login }
   isDraft
   mergeable
   mergeStateStatus
@@ -53,12 +54,13 @@ fragment SchedulerPullRequestFields on PullRequest {
     nodes { path }
   }
   reviews(last: 100) {
+    pageInfo { hasPreviousPage startCursor }
     nodes {
       databaseId
       state
       body
       submittedAt
-      author { login }
+      author { login __typename }
       commit { oid }
     }
   }
@@ -73,6 +75,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           startedAt
           detailsUrl
           checkSuite {
+            createdAt
             workflowRun {
               workflow { name }
             }
@@ -111,12 +114,43 @@ query($owner: String!, $name: String!, $number: Int!) {
 }
 """ + PULL_REQUEST_FIELDS_FRAGMENT
 
+# Follow-up query for one pull request's reviews, walking backward past the
+# ``reviews(last: 100)`` window in SchedulerPullRequestFields. GraphQL
+# connections keep chronological (oldest-first) node order regardless of
+# pagination direction, so ``last: 100, before: $cursor`` returns the up-to-100
+# reviews immediately preceding the cursor, still oldest-first.
+PR_REVIEWS_PAGE_QUERY = """\
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviews(last: 100, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
+        nodes {
+          databaseId
+          state
+          body
+          submittedAt
+          author { login __typename }
+          commit { oid }
+        }
+      }
+    }
+  }
+}
+"""
+
 OPEN_PRS_PAGE_SIZE = 25
+# Defends against a pathological GraphQL pageInfo loop when backfilling a PR's
+# full review history; 500 pages * 100 reviews/page is far beyond any
+# realistic PR review count, so hitting it indicates a bug upstream rather
+# than a PR that legitimately needs more pagination.
+MAX_REVIEW_PAGINATION_PAGES = 500
 # Must exceed the 45-minute OpenCode job cap plus typical runner-queue wait.
 # QUEUED counts as running and the age clock starts at check creation, so this
 # remains deliberately larger than the job cap while recovering genuine zombie
 # checks in the same operating window instead of leaving them for seven hours.
 DEFAULT_STALE_OPENCODE_MINUTES = 90
+DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {
@@ -161,6 +195,11 @@ DETERMINISTIC_APPROVAL_MARKERS = (
     "deterministic current-head evidence",
     "deterministic fallback approval",
     "did not emit a usable current-head control block",
+)
+COVERAGE_REVIEW_MARKERS = (
+    "coverage evidence did not pass",
+    "coverage-evidence",
+    "required test/docstring evidence",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
 
@@ -753,6 +792,69 @@ def gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
             time.sleep(delay)
 
 
+def complete_paginated_pr_reviews(
+    owner: str, name: str, number: int, reviews: dict[str, Any]
+) -> dict[str, Any]:
+    """Backfill one pull request's review history past the GraphQL 100-node window.
+
+    ``reviews(last: 100)`` in SchedulerPullRequestFields only returns the
+    newest 100 reviews on a pull request. Once a PR accumulates more than 100
+    review events (bot reviewers post multiple reviews per push in this org),
+    ``pageInfo.hasPreviousPage`` comes back true and earlier reviews --
+    including a genuine independent APPROVED review made early in the PR's
+    life -- are silently missing from ``nodes``. This walks backward with
+    ``before`` cursors via PR_REVIEWS_PAGE_QUERY, merging each page in front of
+    the ones already collected so the result stays oldest-first (the order
+    every ``reversed(...)`` consumer in this module expects), until GitHub
+    reports no earlier page. A page-fetch failure propagates (fail closed)
+    rather than returning a partial history.
+    """
+    page_info = reviews.get("pageInfo") or {}
+    nodes = list(reviews.get("nodes") or [])
+    pages_fetched = 0
+    while page_info.get("hasPreviousPage"):
+        pages_fetched += 1
+        if pages_fetched > MAX_REVIEW_PAGINATION_PAGES:
+            raise RuntimeError(
+                f"Pull request {owner}/{name}#{number} review pagination exceeded "
+                f"{MAX_REVIEW_PAGINATION_PAGES} pages without exhausting hasPreviousPage; "
+                "refusing to loop indefinitely."
+            )
+        cursor = page_info.get("startCursor")
+        if not cursor:
+            raise RuntimeError(
+                f"Pull request {owner}/{name}#{number} reported hasPreviousPage=true "
+                "without a startCursor; cannot continue review pagination."
+            )
+        payload = gh_graphql(
+            PR_REVIEWS_PAGE_QUERY, owner=owner, name=name, number=number, cursor=cursor
+        )
+        pull_request = ((payload.get("data") or {}).get("repository") or {}).get(
+            "pullRequest"
+        ) or {}
+        page = pull_request.get("reviews") or {}
+        nodes = list(page.get("nodes") or []) + nodes
+        page_info = page.get("pageInfo") or {}
+    return {"nodes": nodes}
+
+
+def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) -> None:
+    """Backfill full review history in place for every fetched PR node that needs it.
+
+    Only PRs whose initial ``reviews(last: 100)`` window reported
+    ``hasPreviousPage`` pay the extra round trip; PRs with 100 or fewer
+    reviews (the overwhelming majority) are untouched.
+    """
+    for pr in prs:
+        reviews = pr.get("reviews")
+        if not reviews:
+            continue
+        if (reviews.get("pageInfo") or {}).get("hasPreviousPage"):
+            pr["reviews"] = complete_paginated_pr_reviews(
+                owner, name, pr.get("number"), reviews
+            )
+
+
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
     """Return whether GitHub denied an API read for the current integration token."""
 
@@ -796,9 +898,43 @@ def rest_review_node(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
-    """Convert a REST check-run payload into the GraphQL status rollup shape."""
+def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
+    """Fetch every REST review for a pull request, paginating past 100.
 
+    A single ``per_page=100`` page silently drops earlier reviews once a PR
+    accumulates more than 100 review events, the same truncation the GraphQL
+    ``reviews(last: 100)`` window hits. This walks ``page=1,2,3,...`` --
+    mirroring ``fetch_open_prs_rest``'s pagination style -- until a page
+    shorter than 100 rows confirms the end of the history. A page-fetch
+    failure propagates (fail closed) rather than returning a partial history.
+    """
+    reviews: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        batch = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100&page={page}")
+        if not batch:
+            break
+        reviews.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return reviews
+
+
+def rest_check_node(
+    check: dict[str, Any], suite_created_at_by_id: dict[int, str] | None = None
+) -> dict[str, Any]:
+    """Convert a REST check-run payload into the GraphQL status rollup shape.
+
+    ``suite_created_at_by_id`` maps each check suite's REST ``id`` to its
+    ``created_at`` timestamp -- the REST check-run payload itself only
+    carries the check suite's bare ``id`` (see ``rest_pr_node``), so that
+    lookup is how this function attaches the same ``checkSuite.createdAt``
+    signal the GraphQL fragment fetches directly, keeping
+    ``check_run_recency_key`` behaviorally consistent across both paths.
+    """
+    suite_id = (check.get("check_suite") or {}).get("id")
+    suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
     return {
         "__typename": "CheckRun",
         "name": check.get("name"),
@@ -806,7 +942,7 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"workflowRun": {"workflow": {}}},
+        "checkSuite": {"createdAt": suite_created_at, "workflowRun": {"workflow": {}}},
     }
 
 
@@ -821,15 +957,32 @@ def rest_status_node(status: dict[str, Any]) -> dict[str, Any]:
 
 
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
-    """Convert a REST pull request payload into the GraphQL shape used by the scheduler."""
+    """Convert a REST pull request payload into the GraphQL shape used by the scheduler.
+
+    Classic commit statuses come from the *combined* status endpoint
+    (``commits/{sha}/status``), never the list endpoint
+    (``commits/{sha}/statuses``): the list endpoint returns full status
+    history in reverse-chronological order with no dedup, so a context that
+    transitioned from success to failure would surface both entries --
+    letting a stale, superseded success outlive a later real failure for
+    any caller (like ``strix_evidence_state()``) that accepts the first
+    success it finds. The combined endpoint already reports only the most
+    recent status per context, matching the GraphQL rollup's own shape.
+    """
 
     number = int(pr["number"])
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     head_repo = head.get("repo") or {}
-    reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
+    reviews = fetch_all_pr_reviews_rest(repo, number)
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
-    statuses = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/statuses?per_page=100")
+    check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
+    suite_created_at_by_id = {
+        suite["id"]: suite.get("created_at")
+        for suite in (check_suites.get("check_suites") or [])
+        if suite.get("id") is not None
+    }
+    combined_status = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/status")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
@@ -838,6 +991,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": number,
         "title": pr.get("title"),
+        "author": {"login": ((pr.get("user") or {}).get("login"))},
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
         "mergeStateStatus": rest_merge_state,
@@ -856,12 +1010,12 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check)
+                    rest_check_node(check, suite_created_at_by_id)
                     for check in (checks.get("check_runs") or [])
                 ]
                 + [
                     rest_status_node(status)
-                    for status in (statuses or [])
+                    for status in (combined_status.get("statuses") or [])
                 ]
             }
         },
@@ -932,6 +1086,11 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
 
+    # Bulk-scan results feed merge decisions directly (the scheduler's push-
+    # triggered and org-queue-sweep runs never re-fetch a single PR before
+    # calling inspect_pr), so this path needs the same full review history as
+    # fetch_pr, not just the first/last 100-review window.
+    complete_all_pr_reviews(owner, name, prs)
     enrich_rest_mergeable_states(repo, prs)
     return prs
 
@@ -947,6 +1106,7 @@ def fetch_pr(repo: str, number: int) -> list[dict[str, Any]]:
         raise
     pr = payload["data"]["repository"].get("pullRequest")
     prs = [pr] if pr else []
+    complete_all_pr_reviews(owner, name, prs)
     enrich_rest_mergeable_states(repo, prs)
     return prs
 
@@ -1056,6 +1216,20 @@ def context_nodes(pr: dict[str, Any]) -> list[dict[str, Any]]:
     return contexts.get("nodes") or []
 
 
+def is_opencode_check_run(node: dict[str, Any]) -> bool:
+    """Return whether a CheckRun carries the OpenCode workflow identity."""
+    if node.get("__typename") != "CheckRun":
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return (
+        node.get("name") == "opencode-review"
+        or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+    )
+
+
 def is_opencode_context(node: dict[str, Any]) -> bool:
     """Return whether a check or status context belongs to OpenCode Review."""
     if node.get("__typename") == "CheckRun":
@@ -1064,11 +1238,7 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
             # status. Organization required-workflow CheckRuns are deliberately
             # non-authoritative placeholders and must not suppress that dispatch.
             return False
-        workflow = (
-            ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
-            or {}
-        )
-        return node.get("name") == "opencode-review" or workflow.get("name") in OPENCODE_WORKFLOW_NAMES
+        return is_opencode_check_run(node)
     return node.get("context") == "opencode-review"
 
 
@@ -1116,6 +1286,119 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def check_run_recency_key(
+    node: dict[str, Any], started_at: datetime | None, index: int
+) -> tuple[int, datetime, int]:
+    """Return a single comparable recency key for one same-purpose check run.
+
+    Ranking a sequence of same-purpose check runs (either the reruns sharing
+    one (workflow, name) key in ``latest_check_runs``, or the
+    coverage-evidence runs ``latest_coverage_evidence_index`` compares across
+    workflow names) down to the single newest one used to be done by folding
+    a pairwise "does B supersede A" predicate left-to-right across the
+    candidates. That is only valid when the predicate is a transitive total
+    order, and it was not: a queued/null-``startedAt`` candidate could
+    legitimately supersede an older completed predecessor, but a later,
+    differently-timestamped completed candidate could then override that
+    queued winner too -- purely because "a timestamped candidate beats a
+    null-timestamp current-best" -- even when the later candidate was itself
+    older than whichever run the queued candidate had already displaced.
+
+    Building one derived key per candidate instead, and comparing those keys
+    directly, cannot go non-transitive: Python tuple ordering is already a
+    valid total order, so ``max()``/``sorted()`` over these keys give a
+    result that does not depend on candidate order.
+
+    A ``startedAt``-only signal has a gap: GitHub reports a check run as
+    ``completed``/``cancelled`` with ``startedAt: null`` when a queued rerun
+    is cancelled before it ever starts, so that row carries no timestamp and
+    is not pending either -- nothing (short of hardcoding the ``cancelled``
+    conclusion, which would only patch this one case) distinguishes it from
+    a run that legitimately never mattered. ``checkSuite.createdAt`` closes
+    that gap generally instead of special-casing it: GitHub creates the
+    check suite unconditionally the moment the triggering push, rerun, or
+    dispatch happens, strictly before any check run inside it can be queued,
+    start, or be cancelled before starting, and ``CheckSuite.createdAt`` is
+    non-nullable in GitHub's schema. So it is a recency signal that is
+    always available, for every check run regardless of how it resolved --
+    unlike ``startedAt``, which is genuinely absent for a run that never
+    started.
+
+    Three tiers, low to high:
+
+    * ``0`` -- no recency signal at all: neither the check run's own check
+      suite ``createdAt`` nor its ``startedAt`` is available, and it is not
+      currently pending either. Real GitHub responses always carry
+      ``checkSuite.createdAt``, so this tier is only reachable for
+      payloads that omit it (e.g. hand-built fixtures).
+    * ``1`` -- a real timestamp: the check run's own check suite
+      ``createdAt`` when present, else its ``startedAt``. Preferring the
+      check-suite timestamp means two runs are ranked by when each was
+      actually triggered, not by whether either one got far enough to
+      start -- a rerun cancelled before starting still ranks correctly
+      relative to an older, already-completed run.
+    * ``2`` -- no timestamp of any kind, but actively pending (queued/in
+      progress/etc, via ``running_check_state``): kept only as the
+      fallback for payloads without ``checkSuite.createdAt``, where GitHub
+      only ever creates such a row after any run it might supersede, so it
+      is presumed newer than every already-resolved run in that same
+      payload shape, regardless of that run's timestamp.
+
+    Ties within a tier fall back to the later index, matching the order
+    ``context_nodes`` returns them in.
+    """
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    suite_created_at = parse_github_datetime((node.get("checkSuite") or {}).get("createdAt"))
+    recency_timestamp = suite_created_at or started_at
+    if recency_timestamp is not None:
+        return (1, recency_timestamp, index)
+    if running_check_state(node) == "running":
+        return (2, epoch, index)
+    return (0, epoch, index)
+
+
+def _newest_check_run_per_identity(
+    indexed_check_runs: Sequence[tuple[int, dict[str, Any]]]
+) -> list[tuple[int, dict[str, Any]]]:
+    """Return the newest CheckRun per (workflow, name) identity, index-tagged.
+
+    Shared core for ``latest_check_runs`` (which keeps only CheckRun nodes)
+    and ``latest_check_run_attempts`` (which also passes non-CheckRun nodes
+    through unchanged): both resolve CheckRun reruns sharing one
+    (workflow, name) identity down to the single newest attempt, and both
+    must rank candidates with the identical ``check_run_recency_key`` signal
+    so they cannot silently diverge again the way ``latest_check_run_attempts``
+    once did with its own ``startedAt``-only comparison. Each input
+    ``(index, node)`` pair's original position is preserved in the return
+    value so callers can restore overall document order after merging back
+    any non-CheckRun nodes.
+    """
+    latest: dict[tuple[str, str], tuple[tuple[int, datetime, int], int, dict[str, Any]]] = {}
+    for index, node in indexed_check_runs:
+        workflow = (
+            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
+            or ""
+        )
+        key = (workflow, node.get("name") or "check-run")
+        started_at = parse_github_datetime(node.get("startedAt"))
+        recency_key = check_run_recency_key(node, started_at, index)
+        previous = latest.get(key)
+        if previous is None or recency_key >= previous[0]:
+            latest[key] = (recency_key, index, node)
+    return [(index, node) for _, index, node in latest.values()]
+
+
+def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the newest check run for each workflow and check-name pair."""
+    indexed_check_runs = [
+        (index, node)
+        for index, node in enumerate(context_nodes(pr))
+        if node.get("__typename") == "CheckRun"
+    ]
+    deduped = _newest_check_run_per_identity(indexed_check_runs)
+    return [node for _, node in sorted(deduped, key=lambda item: item[0])]
 
 
 def review_matches_current_head(review: dict[str, Any], pr: dict[str, Any]) -> bool:
@@ -1187,42 +1470,31 @@ def latest_check_run_attempts(nodes: list[dict[str, Any]]) -> list[dict[str, Any
     """Return each CheckRun's most recent attempt per (workflow, name) identity.
 
     A rerun leaves every earlier attempt's CheckRun node in the rollup
-    alongside the latest one, so callers that walk ``context_nodes`` directly
-    can see a stale failed attempt outlive a later successful retry. This
-    resolves each CheckRun identity to only its most recently started
-    attempt (falling back to rollup order when ``startedAt`` is missing),
-    while passing every non-CheckRun (classic commit-status) node through
-    unchanged. The result preserves the original relative ordering.
+    alongside the latest one, so callers that walk ``nodes`` directly can see
+    a stale failed attempt outlive a later successful retry. This used to
+    resolve each CheckRun identity with its own inline ``startedAt``-only
+    comparison, which had the same gap ``check_run_recency_key`` documents
+    for ``latest_check_runs``: GitHub reports a rerun cancelled before it
+    ever started as completed with ``startedAt: null``, so that row carried
+    no timestamp and could never outrank an older, already-completed
+    attempt -- even though it was the genuinely newer one. This now shares
+    the exact ``check_run_recency_key`` ranking (via
+    ``_newest_check_run_per_identity``) that ``latest_check_runs`` uses --
+    preferring ``checkSuite.createdAt`` over ``startedAt``, with a
+    "currently pending" fallback tier -- so the two dedup passes rank
+    CheckRun reruns identically and cannot silently diverge again. Every
+    non-CheckRun (classic commit-status) node is passed through unchanged:
+    classic commit statuses never appear as duplicate reruns in
+    ``context_nodes``, so no dedup is needed for them. The result preserves
+    the original relative ordering.
     """
-    latest: dict[tuple[str, str], tuple[datetime | None, int, dict[str, Any]]] = {}
-    ordered: list[tuple[int, dict[str, Any]]] = []
-    for index, node in enumerate(nodes):
-        if node.get("__typename") != "CheckRun":
-            ordered.append((index, node))
-            continue
-        workflow = (
-            (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
-            or ""
-        )
-        key = (workflow, node.get("name") or "check-run")
-        started_at = parse_github_datetime(node.get("startedAt"))
-        previous = latest.get(key)
-        if previous is None:
-            latest[key] = (started_at, index, node)
-            continue
-        previous_started_at, previous_index, _ = previous
-        if started_at is None and previous_started_at is not None:
-            continue
-        if previous_started_at is None and started_at is not None:
-            latest[key] = (started_at, index, node)
-            continue
-        if (started_at or datetime.min.replace(tzinfo=timezone.utc), index) >= (
-            previous_started_at or datetime.min.replace(tzinfo=timezone.utc),
-            previous_index,
-        ):
-            latest[key] = (started_at, index, node)
-    for started_at, index, node in latest.values():
-        ordered.append((index, node))
+    indexed_check_runs = [
+        (index, node) for index, node in enumerate(nodes) if node.get("__typename") == "CheckRun"
+    ]
+    ordered: list[tuple[int, dict[str, Any]]] = [
+        (index, node) for index, node in enumerate(nodes) if node.get("__typename") != "CheckRun"
+    ]
+    ordered.extend(_newest_check_run_per_identity(indexed_check_runs))
     ordered.sort(key=lambda item: item[0])
     return [node for _, node in ordered]
 
@@ -1337,6 +1609,23 @@ def review_author_login(review: dict[str, Any]) -> str:
     return ((review.get("author") or {}).get("login") or "").lower()
 
 
+def is_bot_review_author(review: dict[str, Any]) -> bool:
+    """Return whether a review's author is a GitHub bot actor.
+
+    GitHub's REST API appends the ``[bot]`` suffix to a bot actor's
+    ``login`` (e.g. ``dependabot[bot]``), but GitHub's GraphQL API can
+    return the bare account name for that same actor (e.g. ``dependabot``)
+    while exposing ``__typename: "Bot"`` on the ``author`` field instead of
+    the suffix. Checking both keeps bot exclusion correct regardless of
+    which API surface -- and which suffix convention -- produced the
+    review node; ``rest_review_node`` never sets ``__typename``, so REST
+    reviews continue to rely solely on the login suffix.
+    """
+    if review_author_login(review).endswith("[bot]"):
+        return True
+    return ((review.get("author") or {}).get("__typename")) == "Bot"
+
+
 def is_opencode_review(review: dict[str, Any]) -> bool:
     """Return whether a review was authored by the OpenCode agent."""
     return review_author_login(review) in {"opencode-agent", "opencode-agent[bot]"}
@@ -1393,9 +1682,189 @@ def has_current_head_approval(pr: dict[str, Any]) -> bool:
     return current_head_review_state(pr, "APPROVED")
 
 
+def has_independent_current_head_approval(pr: dict[str, Any]) -> bool:
+    """Return whether an eligible reviewer's latest exact-head policy state approves."""
+    author = ((pr.get("author") or {}).get("login") or "").lower()
+    if not author:
+        return False
+    seen_reviewers: set[str] = set()
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        reviewer = review_author_login(review)
+        state = (review.get("state") or "").upper()
+        if (
+            not reviewer
+            or reviewer == author
+            or is_automated_opencode_review(review)
+            or reviewer == "github-actions"
+            or is_bot_review_author(review)
+            or not review_matches_current_head(review, pr)
+            or state not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+            or reviewer in seen_reviewers
+        ):
+            continue
+        seen_reviewers.add(reviewer)
+        if state == "APPROVED":
+            return True
+    return False
+
+
+def merge_approval_block_reason(pr: dict[str, Any]) -> str | None:
+    """Return the fail-closed repository and independent approval blocker."""
+    review_decision = str(pr.get("reviewDecision") or "").upper()
+    if review_decision != "APPROVED":
+        return (
+            "current-head OpenCode review approved, but GitHub reviewDecision is "
+            f"{review_decision or '<missing>'}; repository approval policy is unsatisfied"
+        )
+    if not has_independent_current_head_approval(pr):
+        return (
+            "current-head OpenCode review approved, but no independent non-author "
+            "exact-current-head formal APPROVED review exists"
+        )
+    return None
+
+
 def has_current_head_changes_requested(pr: dict[str, Any]) -> bool:
     """Return whether OpenCode requested changes on the exact current head."""
     return current_head_review_state(pr, "CHANGES_REQUESTED")
+
+
+def latest_current_head_coverage_change_request(
+    pr: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the latest exact-head OpenCode request that only cites coverage."""
+    for review in reversed((pr.get("reviews") or {}).get("nodes") or []):
+        if not is_opencode_review(review) or not review_matches_current_head(review, pr):
+            continue
+        if (review.get("state") or "").upper() != "CHANGES_REQUESTED":
+            return None
+        body = (review.get("body") or "").lower()
+        return review if all(marker in body for marker in COVERAGE_REVIEW_MARKERS) else None
+    return None
+
+
+def current_head_coverage_change_request(pr: dict[str, Any]) -> bool:
+    """Return whether the latest current-head request is only a coverage gate."""
+    return latest_current_head_coverage_change_request(pr) is not None
+
+
+def coverage_retry_wait_reason(
+    pr: dict[str, Any],
+    *,
+    repo: str | None = None,
+    workflow: str | None = None,
+    now: datetime | None = None,
+    floor_minutes: int = DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES,
+) -> str | None:
+    """Return a wait reason until one same-head coverage retry interval elapses.
+
+    The latest exact-head review submission or completed dispatch timestamp is the
+    durable same-head retry marker. Missing or malformed timestamps fail closed so
+    a repeated coverage-only review cannot create an unbounded dispatch loop.
+    """
+    review = latest_current_head_coverage_change_request(pr)
+    if review is None:
+        return None
+    submitted_at = parse_github_datetime(review.get("submittedAt"))
+    if submitted_at is None:
+        return "current-head OpenCode coverage review has no valid submission timestamp; defer same-head re-review"
+    retry_anchor = submitted_at
+    if repo and workflow:
+        try:
+            dispatch_started_at = latest_opencode_dispatch_started_at(
+                repo, workflow, pr, since=retry_anchor
+            )
+        except RuntimeError:
+            return "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
+        if dispatch_started_at and dispatch_started_at > retry_anchor:
+            retry_anchor = dispatch_started_at
+    current_time = now or datetime.now(timezone.utc)
+    if current_time < retry_anchor + timedelta(minutes=max(0, floor_minutes)):
+        return "same-head OpenCode coverage retry floor has not elapsed"
+    return None
+
+
+def is_non_authoritative_coverage_check_run(node: dict[str, Any]) -> bool:
+    """Return whether central metadata-only coverage evidence is non-authoritative."""
+    if not (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip():
+        return False
+    if (node.get("name") or "").lower() != "coverage-evidence":
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return workflow.get("name") == "Required OpenCode Review"
+
+
+def coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> list[int]:
+    """Return indexes of coverage-evidence checks in one check-run snapshot."""
+    return [
+        index
+        for index, node in enumerate(check_runs)
+        if (node.get("name") or "").lower() == "coverage-evidence"
+        and not is_non_authoritative_coverage_check_run(node)
+    ]
+
+
+def latest_coverage_evidence_index(check_runs: Sequence[dict[str, Any]]) -> int | None:
+    """Return the newest coverage-evidence index across workflow names.
+
+    Ranks every coverage-evidence candidate with ``check_run_recency_key``
+    and picks the single largest key via ``max()``, so a freshly QUEUED
+    coverage-evidence rerun (``startedAt: null``) in one workflow correctly
+    outranks an older, already-completed coverage-evidence run in a
+    *different* workflow instead of losing a naive timestamp comparison
+    because it has not started yet -- and, unlike folding a pairwise
+    supersession predicate two at a time, the answer does not depend on how
+    many other candidates are present or what order they arrive in, because
+    each candidate's key depends only on its own timestamp/pending status.
+    """
+    coverage_indices = coverage_evidence_indices(check_runs)
+    if not coverage_indices:
+        return None
+    return max(
+        coverage_indices,
+        key=lambda item: check_run_recency_key(
+            check_runs[item],
+            parse_github_datetime(check_runs[item].get("startedAt")),
+            item,
+        ),
+    )
+
+
+def coverage_evidence_state(pr: dict[str, Any]) -> str:
+    """Return missing, running, complete, or failed for the latest coverage gate."""
+    check_runs = latest_check_runs(pr)
+    latest_index = latest_coverage_evidence_index(check_runs)
+    if latest_index is not None:
+        node = check_runs[latest_index]
+        status = (node.get("status") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        return "complete" if (node.get("conclusion") or "").upper() == "SUCCESS" else "failed"
+    for node in reversed(context_nodes(pr)):
+        if node.get("__typename") == "CheckRun":
+            continue
+        name = (node.get("name") or node.get("context") or "").lower()
+        if name != "coverage-evidence":
+            continue
+        status = (node.get("status") or node.get("state") or "").upper()
+        if status in RUNNING_CHECK_STATES:
+            return "running"
+        return "complete" if status == "SUCCESS" else "failed"
+    return "missing"
+
+
+def superseded_coverage_evidence_indices(check_runs: Sequence[dict[str, Any]]) -> set[int]:
+    """Return older coverage checks superseded by a newer successful run."""
+    authoritative_index = latest_coverage_evidence_index(check_runs)
+    if authoritative_index is None:
+        return set()
+    authoritative = check_runs[authoritative_index]
+    if (authoritative.get("conclusion") or "").upper() != "SUCCESS":
+        return set()
+    return set(coverage_evidence_indices(check_runs)) - {authoritative_index}
 
 
 def can_retry_check_gated_opencode_review(pr: dict[str, Any]) -> bool:
@@ -1595,21 +2064,41 @@ def dismiss_stale_opencode_change_requests(repo: str, pr: dict[str, Any], *, dry
     return len(review_ids)
 
 
-def failed_status_checks(pr: dict[str, Any]) -> list[str]:
-    """Return failing check or status context names from the PR rollup."""
+def failed_status_checks(
+    pr: dict[str, Any],
+    *,
+    ignore_opencode: bool = False,
+) -> list[str]:
+    """Return failing check or status context names from the PR rollup.
+
+    ``ignore_opencode`` is reserved for the authenticated coverage-only retry
+    path: the previous ``opencode-review`` job or status is expected to be
+    failing there because it published the current-head coverage change request
+    being retried. Sibling jobs in the same workflow remain authoritative.
+    """
     failed: list[str] = []
-    nodes = latest_check_run_attempts(context_nodes(pr))
-    status_contexts = [node for node in nodes if node.get("__typename") != "CheckRun"]
+    check_runs = latest_check_runs(pr)
+    superseded_coverage_indices = superseded_coverage_evidence_indices(check_runs)
+    status_contexts = [
+        node
+        for node in context_nodes(pr)
+        if node.get("__typename") != "CheckRun"
+    ]
+
     successful_status_contexts = {
         node.get("context")
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
-    for node in nodes:
-        if node.get("__typename") != "CheckRun":
+    for index, node in enumerate(check_runs):
+        if is_non_authoritative_coverage_check_run(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in FAILED_CHECK_CONCLUSIONS:
+            if index in superseded_coverage_indices:
+                continue
+            if ignore_opencode and node.get("name") == "opencode-review":
+                continue
             if is_strix_context(node) and "strix" in successful_status_contexts:
                 continue
             if is_opencode_context(node) and "opencode-review" in successful_status_contexts:
@@ -1618,6 +2107,8 @@ def failed_status_checks(pr: dict[str, Any]) -> list[str]:
     for node in status_contexts:
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
+            if ignore_opencode and is_opencode_context(node):
+                continue
             failed.append(node.get("context") or "status-context")
     return failed
 
@@ -2034,27 +2525,45 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
 
 
-def active_workflow_runs(repo: str, statuses: Sequence[str] = ("queued", "in_progress")) -> list[dict[str, Any]]:
-    """Return active workflow runs for a repository."""
+def active_workflow_runs(
+    repo: str,
+    statuses: Sequence[str] = ("queued", "in_progress"),
+    *,
+    event: str | None = None,
+    created: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return workflow runs for a repository, optionally narrowed server-side.
+
+    ``event`` and ``created`` map directly onto GitHub's ``List workflow
+    runs for a repository`` REST query parameters (``event`` selects the
+    triggering webhook event, ``created`` accepts a date/range qualifier
+    such as ``>=2026-08-24T00:00:00Z``). Both are omitted by default so
+    existing callers keep fetching every run for the given statuses
+    unfiltered; a caller with a naturally bounded lookup -- one whose
+    target repository's run history only grows, such as a same-head
+    dispatch search -- should pass them to avoid paginating history it can
+    never use.
+    """
     runs: list[dict[str, Any]] = []
     for status in statuses:
-        payload = json.loads(
-            run_github_actions(
-                [
-                    "gh",
-                    "api",
-                    "--method",
-                    "GET",
-                    f"repos/{repo}/actions/runs",
-                    "--paginate",
-                    "--slurp",
-                    "-f",
-                    f"status={status}",
-                    "-F",
-                    "per_page=100",
-                ]
-            )
-        )
+        args = [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            f"repos/{repo}/actions/runs",
+            "--paginate",
+            "--slurp",
+            "-f",
+            f"status={status}",
+            "-F",
+            "per_page=100",
+        ]
+        if event:
+            args += ["-f", f"event={event}"]
+        if created:
+            args += ["-f", f"created={created}"]
+        payload = json.loads(run_github_actions(args))
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
@@ -2184,6 +2693,62 @@ def active_opencode_run_refs(
         workflow_aliases=frozenset(OPENCODE_WORKFLOW_NAMES),
         statuses=statuses,
     )
+
+
+def latest_opencode_dispatch_started_at(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    *,
+    since: datetime | None = None,
+) -> datetime | None:
+    """Return the latest completed same-head OpenCode dispatch start time.
+
+    The dispatch repository hosting ``repository_dispatch`` runs only
+    accumulates completed-run history over time, so this narrows GitHub's
+    REST query server-side to ``event=repository_dispatch`` plus a
+    ``created`` lower bound of ``since``, instead of paginating every
+    completed run ever recorded there and filtering client-side. ``since``
+    is safe to pass whenever the caller only cares about a dispatch strictly
+    newer than a known anchor timestamp -- any run created at or before that
+    anchor cannot become the returned maximum -- and is left unset (no lower
+    bound) for callers with no such anchor.
+    """
+    target_repo = validate_github_repository(repo)
+    dispatch_repo = repository_dispatch_target(target_repo)
+    head = str(pr.get("headRefOid") or "").lower()
+    number = int(pr["number"])
+    title_prefixes = tuple(
+        f"{title} {target_repo}#{number}@"
+        for title in sorted(
+            {"Required OpenCode Review", *OPENCODE_WORKFLOW_NAMES},
+            key=len,
+            reverse=True,
+        )
+    )
+    created = f">={since.strftime('%Y-%m-%dT%H:%M:%SZ')}" if since else None
+    latest: datetime | None = None
+    for run_data in active_workflow_runs(
+        dispatch_repo, ("completed",), event="repository_dispatch", created=created
+    ):
+        if run_data.get("event") != "repository_dispatch":
+            continue
+        display_title = str(run_data.get("display_title") or "")
+        prefix = next(
+            (candidate for candidate in title_prefixes if display_title.startswith(candidate)),
+            None,
+        )
+        if prefix is None:
+            continue
+        dispatched_head = display_title.removeprefix(prefix).lower()
+        if not GIT_SHA_RE.fullmatch(dispatched_head) or dispatched_head != head:
+            continue
+        started_at = parse_github_datetime(
+            run_data.get("run_started_at") or run_data.get("created_at")
+        )
+        if started_at and (latest is None or started_at > latest):
+            latest = started_at
+    return latest
 
 
 def active_opencode_run_ids(
@@ -2466,6 +3031,63 @@ def current_head_can_attempt_merge(pr: dict[str, Any], merge_state: str) -> bool
     if merge_state == "CLEAN":
         return True
     return False
+
+
+def revalidate_current_head_approval(repo: str, pr: dict[str, Any]) -> str | None:
+    """Re-check exact-head approval immediately before a merge-authorizing mutation.
+
+    ``inspect_pr`` computes ``current_head_approved``/``approval_reason`` once, early
+    in the function, from the GraphQL/REST snapshot this scheduler invocation fetched
+    at the start of its run. Much later in the same invocation it reaches a branch
+    that calls ``merge_pr``/``enable_auto_merge`` using that stale snapshot. If the
+    reviewer who approved the exact head SHA dismisses or revokes that review -- or
+    GitHub otherwise recomputes ``reviewDecision`` -- in the window between the
+    snapshot and the mutating call, the merge would proceed on authorization that no
+    longer holds. The ``--match-head-commit`` guard those mutations carry only
+    protects against the *commit* changing in that window; it does nothing to protect
+    against the *review state* changing on the identical commit.
+
+    Re-fetch the pull request right before the mutating call and recompute the exact
+    same independent exact-head approval decision (``has_current_head_approval`` and
+    ``merge_approval_block_reason``, the same helpers used for the original snapshot)
+    from the fresh data. Returns ``None`` when the fresh snapshot still authorizes the
+    merge, or a human-readable reason to block it otherwise. Any failure to re-fetch --
+    a transient API error, or the pull request no longer being open or accessible --
+    fails closed: it is treated exactly like a freshly observed missing approval so a
+    merge can never proceed on evidence this scheduler could not actually reconfirm.
+    """
+    number = pr["number"]
+    try:
+        refreshed = fetch_pr(repo, number)
+    except RuntimeError as exc:
+        return (
+            "re-checking current-head approval immediately before merge failed "
+            f"({exc}); treating the exact-head approval as unconfirmed"
+        )
+    if not refreshed:
+        return (
+            "re-checking current-head approval immediately before merge found PR "
+            f"#{number} no longer open or accessible; treating the exact-head "
+            "approval as unconfirmed"
+        )
+    fresh_pr = refreshed[0]
+    expected_head = pr.get("headRefOid")
+    fresh_head = fresh_pr.get("headRefOid")
+    if expected_head and fresh_head and fresh_head != expected_head:
+        return (
+            f"current head changed from {short_sha(expected_head)} to "
+            f"{short_sha(fresh_head)} immediately before merge; the exact-head "
+            "approval no longer applies to the current commit"
+        )
+    if not has_current_head_approval(fresh_pr):
+        return (
+            "current-head OpenCode approval was revoked immediately before merge; "
+            "the merge-authorizing snapshot is no longer current"
+        )
+    reason = merge_approval_block_reason(fresh_pr)
+    if reason:
+        return f"{reason} (re-confirmed immediately before merge)"
+    return None
 
 
 def draft_review_request_artifact_name(repo: str, pr_number: int, head_sha: str) -> str:
@@ -2784,6 +3406,26 @@ def inspect_pr(
         """Create a decision after applying shared cleanup notes."""
         return finish(Decision(number, action, reason))
 
+    def revalidate_before_merge() -> Decision | None:
+        """Return a blocking decision if a fresh re-check just revoked approval.
+
+        Call this immediately before every ``merge_pr``/``enable_auto_merge``
+        invocation below, after every other authorization check has already passed
+        against the (possibly stale) snapshot fetched at the top of this scheduler
+        invocation -- closing the TOCTOU window between that snapshot and the
+        mutating call. Returns ``None`` when the fresh re-check still authorizes the
+        merge, so the caller proceeds unchanged. dry-run inspection never mutates
+        anything, so it skips the extra re-fetch entirely.
+        """
+        if dry_run:
+            return None
+        reason = revalidate_current_head_approval(repo, pr)
+        if not reason:
+            return None
+        if pr.get("autoMergeRequest"):
+            return finish(disable_auto_merge_decision(repo, pr, dry_run=dry_run, reason=reason))
+        return decide("wait", reason)
+
     def request_branch_update(freshness_reason: str, *, suffix: str = "") -> Decision:
         """Request update-branch and attach any same-head evidence follow-up."""
         if not branch_update_allowed:
@@ -2845,24 +3487,116 @@ def inspect_pr(
             return request_branch_update(
                 "current-head OpenCode review requested changes; branch is outdated before re-review"
             )
-        if not (
-            can_retry_check_gated_opencode_review(pr)
+        coverage_retry_progress = opencode_progress_state(
+            pr, stale_after_minutes=stale_opencode_minutes
+        )
+        coverage_ready = (
+            merge_state not in {"DIRTY", "CONFLICTING"}
             and trigger_reviews
             and review_dispatch_allowed
-            and not pr.get("autoMergeRequest")
-        ):
+            and current_head_coverage_change_request(pr)
+            and coverage_evidence_state(pr) == "complete"
+            and strix_evidence_state(pr) == "complete"
+            and not failed_status_checks(pr, ignore_opencode=True)
+        )
+        if coverage_ready:
+            if coverage_retry_progress == "running":
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                "current-head OpenCode coverage evidence is complete; disable "
+                                "auto-merge while same-head re-review is already running"
+                            ),
+                        )
+                    )
+                return decide(
+                    "wait",
+                    "current-head OpenCode coverage evidence is complete; "
+                    "same-head OpenCode re-review is already running",
+                )
+            retry_wait_reason = coverage_retry_wait_reason(
+                pr,
+                repo=repo if not dry_run else None,
+                workflow=workflow if not dry_run else None,
+            )
+            if retry_wait_reason:
+                if pr.get("autoMergeRequest"):
+                    return finish(
+                        disable_auto_merge_decision(
+                            repo,
+                            pr,
+                            dry_run=dry_run,
+                            reason=(
+                                f"{retry_wait_reason}; disable auto-merge until the same-head "
+                                "coverage retry floor elapses"
+                            ),
+                        )
+                    )
+                return decide("wait", retry_wait_reason)
             if pr.get("autoMergeRequest"):
                 return finish(
                     disable_auto_merge_decision(
                         repo,
                         pr,
                         dry_run=dry_run,
-                        reason="current-head OpenCode review requested changes; address the review before re-enabling auto-merge",
+                        reason=(
+                            "current-head OpenCode coverage blocker is cleared; disable auto-merge "
+                            "before same-head re-review"
+                        ),
                     )
                 )
-            return decide("block", "current-head OpenCode review requested changes")
+            wait_reason = repository_dispatch_wait_reason(repo, workflow)
+            if wait_reason:
+                return decide("wait", wait_reason)
+            dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "already_running":
+                return decide(
+                    "wait",
+                    "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active",
+                )
+            return decide(
+                "review_dispatch",
+                "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched",
+            )
+        # Not a coverage-only gate: a separately eligible check-gated retry (the
+        # review was blocked only on then-failing GitHub Checks, which have
+        # since cleared) also earns a fall-through instead of a block, so the
+        # ordinary Strix/OpenCode dispatch pipeline below can re-review it.
+        check_gated_retry_ready = (
+            can_retry_check_gated_opencode_review(pr)
+            and trigger_reviews
+            and review_dispatch_allowed
+            and not pr.get("autoMergeRequest")
+        )
+        if not check_gated_retry_ready:
+            conflict_suffix = (
+                f"; {merge_conflict_guidance(pr, merge_state)}"
+                if merge_state in {"DIRTY", "CONFLICTING"}
+                else ""
+            )
+            if pr.get("autoMergeRequest"):
+                return finish(
+                    disable_auto_merge_decision(
+                        repo,
+                        pr,
+                        dry_run=dry_run,
+                        reason=(
+                            "current-head OpenCode review requested changes; address the review "
+                            f"before re-enabling auto-merge{conflict_suffix}"
+                        ),
+                    )
+                )
+            return decide(
+                "block",
+                f"current-head OpenCode review requested changes{conflict_suffix}",
+            )
 
     current_head_approved = has_current_head_approval(pr)
+    approval_reason = merge_approval_block_reason(pr) if current_head_approved else None
     if current_head_approved:
         stale_review_cleanup_count = dismiss_stale_opencode_change_requests(
             repo,
@@ -2870,6 +3604,18 @@ def inspect_pr(
             dry_run=dry_run,
         )
     auto_merge_enabled = bool(pr.get("autoMergeRequest"))
+    if approval_reason and auto_merge_enabled:
+        return finish(
+            disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason=(
+                    f"{approval_reason}; obtain fresh independent approval before "
+                    "re-enabling auto-merge"
+                ),
+            )
+        )
     if merge_state in {"DIRTY", "CONFLICTING"}:
         conflict_reason = merge_conflict_guidance(pr, merge_state)
         if current_head_approved:
@@ -2938,6 +3684,8 @@ def inspect_pr(
         merge_state == "CLEAN" or merge_mode in {"direct", "direct_or_auto"}
     )
     if current_head_approved and merge_before_update:
+        if approval_reason:
+            return decide("wait", approval_reason)
         if not same_repository_head(repo, pr):
             return decide("wait", external_head_merge_reason(repo, pr))
         if not enable_auto_merge_flag:
@@ -2949,6 +3697,9 @@ def inspect_pr(
                 return decide("wait", auto_merge_wait_reason(merge_state, pr))
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
+            revalidation = revalidate_before_merge()
+            if revalidation:
+                return revalidation
             try:
                 merge_pr(repo, pr, dry_run=dry_run)
             except RuntimeError as exc:
@@ -2979,30 +3730,48 @@ def inspect_pr(
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
         if pr.get("autoMergeRequest"):
             return decide("wait", auto_merge_wait_reason(merge_state, pr))
+        revalidation = revalidate_before_merge()
+        if revalidation:
+            return revalidation
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 
     behind_by = branch_outdated_by_base(pr, merge_state)
     if behind_by and (current_head_approved or auto_merge_enabled):
+        if not current_head_approved:
+            # auto_merge_enabled must be True to have reached this branch (the
+            # outer condition requires current_head_approved or
+            # auto_merge_enabled). An outdated branch is routine and does not
+            # by itself justify disarming auto-merge -- but an auto-merge
+            # request armed with no live current-head approval is exactly the
+            # stale authorization this scheduler exists to catch, and simply
+            # requesting a branch update here would leave it queued: once the
+            # updated head's required checks pass, GitHub's own native
+            # auto-merge could merge it without this scheduler ever getting a
+            # chance to require a fresh independent approval on that new
+            # head. Disarm before requesting the update rather than after.
+            return finish(
+                disable_auto_merge_decision(
+                    repo,
+                    pr,
+                    dry_run=dry_run,
+                    reason=(
+                        f"branch is {behind_by} commit(s) behind base (GitHub mergeability is "
+                        f"{merge_state}) with no live current-head approval to authorize "
+                        "auto-merge; obtain fresh independent approval before re-enabling auto-merge"
+                    ),
+                )
+            )
         if not update_branches:
-            if current_head_approved:
-                return decide("wait", "current-head OpenCode review approved; branch update disabled")
-            return decide("wait", "auto-merge already enabled; branch update disabled")
+            return decide("wait", "current-head OpenCode review approved; branch update disabled")
         if not can_update_pr_head(repo, pr):
             return decide("wait", non_mutable_head_reason(repo, pr))
         suffix = "; existing auto-merge request remains queued" if auto_merge_enabled else ""
-        if current_head_approved and merge_state == "BEHIND":
+        if merge_state == "BEHIND":
             freshness_reason = "current-head OpenCode review approved"
-        elif current_head_approved:
-            freshness_reason = (
-                "current-head OpenCode review approved; "
-                f"base branch is {behind_by} commit(s) ahead even though GitHub mergeability is {merge_state}"
-            )
-        elif merge_state == "BEHIND":
-            freshness_reason = "auto-merge already enabled"
         else:
             freshness_reason = (
-                "auto-merge already enabled; "
+                "current-head OpenCode review approved; "
                 f"base branch is {behind_by} commit(s) ahead even though GitHub mergeability is {merge_state}"
             )
         return request_branch_update(freshness_reason, suffix=suffix)
@@ -3052,6 +3821,35 @@ def inspect_pr(
             )
         )
 
+    if not current_head_approved and auto_merge_enabled:
+        # Neither behind-by disarm path applies (the branch is not behind
+        # base) and the last-push-approval restamp does not apply either (it
+        # requires current_head_approved). Yet auto-merge is still armed with
+        # no live current-head approval -- whether from a previously valid
+        # approval a new push has since invalidated, or from auto-merge armed
+        # before any review ever ran, this scheduler draws no distinction
+        # between the two (see the behind-by disarm path and the prior
+        # unconditional catch-all below, neither of which drew one either).
+        # Disarm immediately here, before any of the wait/dispatch branches
+        # below (OpenCode running, deterministic-fallback wait, stale-review
+        # retry, or the ordinary Strix/OpenCode dispatch cascade -- the
+        # everyday state for a PR between or during reviews) can return
+        # without having done so. Relying on a catch-all reached only once
+        # dispatch has nothing left to do would let GitHub's own native
+        # auto-merge complete the merge first if this scheduler is the only
+        # thing enforcing the OpenCode-approval requirement.
+        return finish(
+            disable_auto_merge_decision(
+                repo,
+                pr,
+                dry_run=dry_run,
+                reason=(
+                    "current head has no OpenCode approval; wait for fresh same-head "
+                    "approval before re-enabling auto-merge"
+                ),
+            )
+        )
+
     opencode_state = opencode_progress_state(pr, stale_after_minutes=stale_opencode_minutes)
     if opencode_state == "running":
         return decide("wait", "OpenCode review is already in progress")
@@ -3098,6 +3896,8 @@ def inspect_pr(
         return decide("wait", "mergeability is still being calculated and no branch freshness evidence is available")
 
     if current_head_approved:
+        if approval_reason:
+            return decide("wait", approval_reason)
         if pr.get("autoMergeRequest"):
             return decide("wait", auto_merge_wait_reason(merge_state, pr))
         if not same_repository_head(repo, pr):
@@ -3108,6 +3908,9 @@ def inspect_pr(
             return decide("wait", "current head is approved; merge mode disabled by scheduler inputs")
         if merge_mode in {"direct", "direct_or_auto"}:
             if merge_mode == "direct_or_auto":
+                revalidation = revalidate_before_merge()
+                if revalidation:
+                    return revalidation
                 try:
                     merge_pr(repo, pr, dry_run=dry_run)
                 except RuntimeError as exc:
@@ -3132,6 +3935,9 @@ def inspect_pr(
             )
         if merge_mode != "auto":
             return decide("wait", f"current head is approved; unsupported merge mode: {merge_mode}")
+        revalidation = revalidate_before_merge()
+        if revalidation:
+            return revalidation
         enable_auto_merge(repo, pr, dry_run=dry_run)
         return decide("auto_merge", "current head is approved; auto-merge enabled")
 
@@ -3203,16 +4009,11 @@ def inspect_pr(
             "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
-    if pr.get("autoMergeRequest"):
-        return finish(
-            disable_auto_merge_decision(
-                repo,
-                pr,
-                dry_run=dry_run,
-                reason="current head has no OpenCode approval; wait for fresh same-head approval before re-enabling auto-merge",
-            )
-        )
-
+    # No autoMergeRequest re-check is needed here: the hoisted
+    # `not current_head_approved and auto_merge_enabled` guard above already
+    # disarmed and returned before any of the wait/dispatch branches between
+    # it and here could be reached, so auto-merge cannot still be armed by
+    # this point.
     return decide("block", "current head has no OpenCode approval")
 
 
@@ -3702,6 +4503,7 @@ def self_test_scheduler_invariants() -> None:
         pass
     sample = {
         "number": 1,
+        "author": {"login": "pull-request-author"},
         "headRefOid": "abc",
         "baseRefName": "main",
         "baseRefOid": "base",
@@ -3712,7 +4514,7 @@ def self_test_scheduler_invariants() -> None:
         "isCrossRepository": False,
         "maintainerCanModify": False,
         "headRepository": {"nameWithOwner": "owner/repo"},
-        "reviewDecision": "REVIEW_REQUIRED",
+        "reviewDecision": "APPROVED",
         "commits": {
             "nodes": [
                 {
@@ -3733,7 +4535,13 @@ def self_test_scheduler_invariants() -> None:
                     "body": "OpenCode Agent approved this head.",
                     "submittedAt": "2026-06-25T15:42:19Z",
                     "commit": {"oid": "abc"},
-                }
+                },
+                {
+                    "state": "APPROVED",
+                    "author": {"login": "independent-reviewer"},
+                    "submittedAt": "2026-06-25T15:43:19Z",
+                    "commit": {"oid": "abc"},
+                },
             ]
         },
         "statusCheckRollup": {"contexts": {"nodes": []}},
@@ -3967,6 +4775,13 @@ def self_test_scheduler_invariants() -> None:
     sample["isCrossRepository"] = False
     sample["maintainerCanModify"] = False
     sample["autoMergeRequest"] = {"enabledAt": "2026-01-01T00:02:00Z"}
+    sample["reviews"]["nodes"].append(
+        {
+            "state": "APPROVED",
+            "author": {"login": "independent-reviewer"},
+            "commit": {"oid": "abc"},
+        }
+    )
     decision = inspect_pr(
         "owner/repo",
         sample,
@@ -4071,6 +4886,7 @@ def self_test_scheduler_invariants() -> None:
     assert "git status --short" in conflict_guidance["commands"]
     blocked_sample = {
         "number": 2,
+        "author": {"login": "pull-request-author"},
         "headRefOid": "abc",
         "baseRefName": "main",
         "baseRefOid": "base",
@@ -4099,14 +4915,20 @@ def self_test_scheduler_invariants() -> None:
         "reviewThreads": {"nodes": []},
         "reviews": {
             "nodes": [
-                {
-                    "state": "APPROVED",
-                    "author": {"login": "opencode-agent"},
+                    {
+                        "state": "APPROVED",
+                        "author": {"login": "opencode-agent"},
                     "body": "OpenCode Agent approved this head.",
                     "submittedAt": "2026-06-25T15:42:19Z",
-                    "commit": {"oid": "abc"},
-                }
-            ]
+                        "commit": {"oid": "abc"},
+                    },
+                    {
+                        "state": "APPROVED",
+                        "author": {"login": "independent-reviewer"},
+                        "submittedAt": "2026-06-25T15:43:19Z",
+                        "commit": {"oid": "abc"},
+                    },
+                ]
         },
         "statusCheckRollup": {
             "contexts": {

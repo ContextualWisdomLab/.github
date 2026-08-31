@@ -3,3 +3,4 @@ __pycache__/
 .coverage
 .pytest_cache/
 .codegraph/
+strix_runs/

@@ -5,6 +5,73 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a dangling reference #1468 left in `docs/product-goal-directive.md`
+  (flagged by Devin Review on that PR): the standing operating directive
+  still named the removed `free_family_diversity` evidence field instead of
+  its `free_account_diversity` replacement, which could send future
+  monitoring work looking for a field that no longer exists.
+- Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
+  at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
+  as an independent discovery account. Same-vendor credentials no longer
+  collapse into a provider family; only explicit model groups may share
+  routing evidence.
+- Web verification now runs backend, frontend, and E2E commands inside an
+  isolated Linux bubblewrap workspace by default (`--isolation required`),
+  mounting a read-only runtime root with a single writable `/workspace`
+  bind; trusted local debugging may opt out with `--isolation disabled`.
+  Isolation-backend resolution and the existing loopback readiness-URL
+  boundary are now both checked before any service starts, so an
+  unavailable isolation backend or an invalid readiness URL fails closed
+  with a clear diagnostic (exit code 126/125) instead of after services are
+  already running.
+- Close four gaps a Devin Review pass found in the same web E2E isolation
+  helper (`scripts/ci/sandboxed_web_e2e.py`, `scripts/ci/sandboxed_verify.py`):
+  a non-numeric or out-of-range readiness-URL port now raises the same
+  `ValueError` every other readiness check raises, instead of an uncaught
+  `http.client.InvalidURL` escaping past `main`'s exit-125 handling; a `bwrap`
+  binary on `PATH` now passes a bounded capability preflight (proving it can
+  actually create the sandbox's namespaces) before isolation is trusted as
+  available, so a restricted host fails closed with exit 126 instead of a
+  later, confusing readiness/test failure; an executable that cannot be
+  resolved on `PATH` is now a hard `isolated_command` failure rather than a
+  silent fallthrough that ran unwrapped and unvalidated; and the shared
+  workspace copy now rejects (fails the whole copy closed) any symlink whose
+  resolved target lands outside the copied tree, since `copytree(...,
+  symlinks=True)` otherwise preserves an escaping symlink as a live link
+  inside the bind-mounted `/workspace`.
+- (Devin review 반영, 후속 라운드) 같은 sandboxed web E2E isolation 헬퍼에 두 건을 추가로
+  hardening했습니다: (1) `_probe_isolation_capability`가 이제 `isolated_command`가 실제로
+  수행하는 모든 연산(`--new-session`, `/tmp` tmpfs, 실제 명령이 사용하는 것과 동일한 mount
+  point로의 쓰기 가능한 bind+chdir)을 진짜 임시 디렉터리로 그대로 재현합니다 — 이전의 축소된
+  probe는 이 중 하나를 거부하는 host에서는 통과했다가 실제 서비스 실행에서만 실패할 수
+  있었습니다. (2) `scripts/ci/sandboxed_verify.py`의 `copy_workspace` 기본 제외 목록에
+  자격증명 관련 dotfile/디렉터리(`.env*`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`,
+  `.git-credentials`, `.ssh`, `.gnupg`, `.aws`, `.kube`, `.docker`)를 추가했습니다 — 쓰기
+  가능한 `/workspace` mount는 테스트 대상 명령이 읽고 쓸 수 있으므로, repo checkout에 우연히
+  존재하는 자격증명 파일이 그대로 복사되어서는 안 됩니다(로그·per-command home은 명령이 실제로
+  써야 하므로 의도적으로 동일 mount 안에 유지).
+- Fix two live-on-`main` regressions Devin Review found immediately after
+  PRs #1456 and #1459 merged (both bypass-merged past the org-wide
+  `opencode-review` outage; these hotfixes correct real defects the local
+  test suites' mocks couldn't catch):
+  - `pr_review_fix_scheduler.py`'s `issue_comments()` (#1459) added
+    `-f per_page=100` to its `gh api` call without an explicit `-X GET`.
+    `gh api` defaults to POST once any `-f`/`-F` field is present unless
+    `-X`/`--method` overrides it, so every comment fetch became a malformed
+    POST against the comment-*creation* endpoint (no `body` field) --
+    failing every call outright and deferring every candidate PR, the
+    opposite of this fix's purpose. Now pins `-X GET` explicitly. Added a
+    regression asserting the exact argv shape.
+  - `pr_review_merge_scheduler.py`'s `rest_pr_node()` (#1456) fetched
+    classic commit statuses from `commits/{sha}/statuses` (plural), which
+    returns full status history in reverse-chronological order with no
+    dedup -- a context that transitioned from success to failure surfaced
+    both entries, letting a stale success outlive a later real failure for
+    `strix_evidence_state()` (which accepts the first success it finds).
+    Switched to `commits/{sha}/status` (singular, combined), which already
+    reports only the most recent status per context, matching the GraphQL
+    rollup's own shape. Added a regression proving a failed-then-superseded
+    context reports `"failed"`, not a stale `"complete"`.
 - Root-cause the hourly PR-review-fix scheduler's silent `autofix_dispatches: 0`
   on nearly every run (surfaced while investigating why 40 of `.github`'s 81
   open PRs were stuck reporting "This branch has conflicts that must be
@@ -660,6 +727,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Require the PR Review Merge Scheduler to observe both GitHub's aggregate
+  `APPROVED` decision and the latest effective non-author, non-OpenCode formal
+  approval bound to the exact live head before direct merge or auto-merge.
+  A later same-head change request revokes that reviewer's earlier approval,
+  and existing auto-merge is disarmed when either authorization is absent.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
@@ -681,6 +753,15 @@ Semantic Versioning where the repository publishes a release.
 - Normalized a successful OSV scan with no findings output to a valid empty
   result document after both base and head scan outcomes are verified, while
   keeping failed scans, failed retries, and symlinked result paths fail-closed.
+- Keep the central required-workflow coverage placeholder from superseding a
+  failed repository-dispatch coverage run; coverage retry and merge decisions
+  now use authoritative execution evidence for the central scheduler.
+- Re-dispatch an exact-head OpenCode review after its coverage-only blocker is
+  cleared, selecting the newest coverage rerun by timestamp across workflow
+  names and ignoring only the superseded `opencode-review` failure and central
+  required-workflow placeholder. Conflicting heads and failed sibling jobs in an
+  OpenCode workflow remain fail-closed alongside unresolved threads, Strix,
+  coverage, and unrelated failed checks.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.
