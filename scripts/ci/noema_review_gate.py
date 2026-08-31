@@ -101,6 +101,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       body
       isDraft
       headRefOid
+      changedFiles
       reviewDecision
       reviewThreads(first: 100) {
         nodes {
@@ -214,10 +215,54 @@ def current_actor() -> str:
     return ""
 
 
-def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
-    """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
-    diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
-    truncated = len(diff) > MAX_DIFF_CHARS
+def fetch_diff(
+    repo: str, number: int, expected_files: int | None = None
+) -> tuple[str, bool]:
+    """Fetch paginated PR file patches and bound them for the LLM prompt."""
+    try:
+        pages = json.loads(
+            run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/pulls/{number}/files?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GitHub PR files response was not valid JSON") from exc
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise RuntimeError("GitHub PR files response had an unexpected shape")
+    files = [file for page in pages for file in page]
+    if any(not isinstance(file, dict) for file in files):
+        raise RuntimeError("GitHub PR files response had an unexpected file record")
+    if expected_files is not None and len(files) != expected_files:
+        raise RuntimeError(
+            f"GitHub returned {len(files)} of {expected_files} changed PR files"
+        )
+
+    sections: list[str] = []
+    incomplete_patch = False
+    for file in files:
+        filename = str(file.get("filename") or "")
+        if not filename:
+            raise RuntimeError("GitHub PR file record omitted its filename")
+        old_filename = str(file.get("previous_filename") or filename)
+        status = str(file.get("status") or "modified")
+        old_label = "/dev/null" if status == "added" else f"a/{old_filename}"
+        new_label = "/dev/null" if status == "removed" else f"b/{filename}"
+        patch = file.get("patch")
+        if not isinstance(patch, str):
+            patch = "[patch unavailable from GitHub PR files API]"
+            incomplete_patch = True
+        sections.append(
+            f"diff --git a/{old_filename} b/{filename}\n"
+            f"--- {old_label}\n+++ {new_label}\n{patch}"
+        )
+    diff = "\n".join(sections)
+    truncated = incomplete_patch or len(diff) > MAX_DIFF_CHARS
     if truncated:
         diff = diff[:MAX_DIFF_CHARS]
     return diff, truncated
@@ -610,7 +655,7 @@ def inspect_and_review(repo: str, number: int) -> int:
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
-    diff, truncated = fetch_diff(repo, number)
+    diff, truncated = fetch_diff(repo, number, pr.get("changedFiles"))
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context)
     submit_review(repo, number, pr, actor, verdict)

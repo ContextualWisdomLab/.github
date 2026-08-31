@@ -144,7 +144,10 @@ def test_noema_fetch_diff_truncates_to_prompt_budget(
 ) -> None:
     """Oversized diffs are bounded and explicitly marked truncated."""
 
-    monkeypatch.setattr(noema, "run", lambda _args: "x" * (noema.MAX_DIFF_CHARS + 1))
+    response = json.dumps(
+        [[{"filename": "large.py", "patch": "x" * (noema.MAX_DIFF_CHARS + 1)}]]
+    )
+    monkeypatch.setattr(noema, "run", lambda _args: response)
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated is True
     assert len(diff) == noema.MAX_DIFF_CHARS

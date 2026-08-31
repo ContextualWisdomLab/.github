@@ -136,15 +136,75 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", app_identity)
     assert noema.current_actor() == "cwl-noema-review[bot]"
 
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "x" * (noema.MAX_DIFF_CHARS + 5))
-    diff, truncated = noema.fetch_diff("owner/repo", 1)
+    pages = [
+        [
+            {
+                "filename": "src/added.py",
+                "status": "added",
+                "patch": "@@ -0,0 +1 @@\n+added",
+            }
+        ],
+        [
+            {
+                "filename": "src/current.py",
+                "previous_filename": "src/old.py",
+                "status": "renamed",
+                "patch": "x" * noema.MAX_DIFF_CHARS,
+            }
+        ],
+    ]
+
+    def paginated_files(args, **kwargs):
+        assert "repos/owner/repo/pulls/1/files?per_page=100" in args
+        assert "--paginate" in args
+        assert "--slurp" in args
+        return json.dumps(pages)
+
+    monkeypatch.setattr(noema, "run", paginated_files)
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=2)
     assert truncated
     assert len(diff) == noema.MAX_DIFF_CHARS
+    assert "--- /dev/null\n+++ b/src/added.py" in diff
+    assert "diff --git a/src/old.py b/src/current.py" in diff
+
+    with pytest.raises(RuntimeError, match="returned 2 of 3"):
+        noema.fetch_diff("owner/repo", 1, expected_files=3)
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
     with pytest.raises(RuntimeError, match="did not contain"):
         noema.extract_json_object("not-json")
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        ("not-json", "not valid JSON"),
+        ("{}", "unexpected shape"),
+        ("[{}]", "unexpected shape"),
+        ("[[null]]", "unexpected file record"),
+        ("[[{}]]", "omitted its filename"),
+    ],
+)
+def test_fetch_diff_rejects_incomplete_paginated_responses(
+    monkeypatch, response, message
+):
+    """Malformed or incomplete GitHub file pages fail closed."""
+    monkeypatch.setattr(noema, "run", lambda _args: response)
+    with pytest.raises(RuntimeError, match=message):
+        noema.fetch_diff("owner/repo", 1)
+
+
+def test_fetch_diff_marks_unavailable_patch_as_truncated(monkeypatch):
+    """A file without GitHub patch text remains visible but incomplete."""
+    response = json.dumps([[{"filename": "removed.bin", "status": "removed"}]])
+    monkeypatch.setattr(noema, "run", lambda _args: response)
+
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=1)
+
+    assert truncated
+    assert "+++ /dev/null" in diff
+    assert "[patch unavailable from GitHub PR files API]" in diff
 
 
 @pytest.mark.parametrize(
@@ -451,7 +511,9 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(
+        noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False)
+    )
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
@@ -489,7 +551,9 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(
+        noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False)
+    )
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
