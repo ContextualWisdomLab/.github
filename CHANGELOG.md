@@ -83,6 +83,29 @@ Semantic Versioning where the repository publishes a release.
   budget), while a fifth, batch-2 candidate that would succeed both its base
   probe and its confirmation is wrongly denied under the pre-fix code and
   correctly admitted after the fix.
+- Fix a real bug Devin Review found on this same PR ("Startup watchdog counts
+  polls, not seconds", `ContextualWisdomLab/.github#1415`): the sidecar's
+  healthz-wait loop incremented a plain poll counter `i` once per iteration
+  and compared *that* to `sidecar_startup_watchdog_seconds`, even though a
+  single iteration's real cost is the `curl --max-time 2` health probe's own
+  duration plus the trailing `sleep 1` — up to 3s, not the 1s the counter
+  implicitly assumed. A fully-consumed 2s timeout on every poll could let the
+  255s watchdog run for roughly 765s (~3x its documented wall-clock budget)
+  before firing, directly contradicting the wall-clock derivation this same
+  PR's earlier fix (`b0917a64`) established `REVIEW_STARTUP_WATCHDOG_SECONDS`
+  as the single source of truth for. The loop now resets bash's builtin
+  `SECONDS` to 0 immediately before the loop and compares `$SECONDS` —
+  real, auto-advancing wall-clock elapsed time immune to curl's own per-call
+  cost — against the deadline instead, with both places the old poll count
+  was surfaced (the watchdog's own failure message and the successful-startup
+  log line) now reporting `$SECONDS` too. Added a regression
+  (`test_healthz_wait_loop_fires_near_the_wall_clock_deadline_not_a_poll_count`
+  plus a companion message-format test) that extracts the loop's exact,
+  tracked source and drives it against a fake, always-failing `curl` that
+  sleeps longer than 1s per call with a small configured watchdog, asserting
+  the loop fails near the configured wall-clock seconds and well under the
+  poll-counting bound the old code needed — verified failing against the
+  pre-fix loop text and passing after the fix.
 - Keep startup route probes on a ten-second timeout while giving serving-time
   model calls the Noema gate's 120-second transport budget; both retain a
   zero-retry transport policy at the client level (ADR-0005's own,

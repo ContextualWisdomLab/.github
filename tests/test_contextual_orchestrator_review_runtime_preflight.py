@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1876,11 +1877,17 @@ def test_sidecar_derives_its_watchdog_from_the_launcher_single_source_of_truth()
         "import REVIEW_STARTUP_WATCHDOG_SECONDS" in sidecar_text
     )
     assert 'sidecar_startup_watchdog_seconds="$(' in sidecar_text
-    assert '[ "$i" -ge "$sidecar_startup_watchdog_seconds" ]' in sidecar_text
+    assert '[ "$SECONDS" -ge "$sidecar_startup_watchdog_seconds" ]' in sidecar_text
     # The old, uncoordinated hard-coded bound must be gone from the watchdog
     # comparison -- not just supplemented by the new derived one.
     assert '[ "$i" -ge 180 ]' not in sidecar_text
     assert "-ge 180" not in sidecar_text
+    # Regression for Devin Review's "Startup watchdog counts polls, not
+    # seconds" finding (ContextualWisdomLab/.github#1415): the comparison
+    # must read bash's real wall-clock $SECONDS builtin, not a hand-rolled
+    # poll counter incremented once per loop iteration regardless of how
+    # long that iteration's own curl call took.
+    assert '[ "$i" -ge "$sidecar_startup_watchdog_seconds" ]' not in sidecar_text
 
     # Exercise the exact derivation command the sidecar script runs, proving
     # it truly needs no vendored dependency yet at that point in the script
@@ -1901,6 +1908,166 @@ def test_sidecar_derives_its_watchdog_from_the_launcher_single_source_of_truth()
         check=True,
     )
     assert result.stdout.strip() == str(namespace["REVIEW_STARTUP_WATCHDOG_SECONDS"])
+
+
+_HEALTHZ_WAIT_BLOCK_START = "SECONDS=0\nuntil curl -fsSL --max-time 2 "
+_HEALTHZ_WAIT_BLOCK_END = "\n  sleep 1\ndone"
+
+
+def _run_healthz_wait_loop(
+    tmp_path: Path,
+    *,
+    watchdog_seconds: int,
+    curl_delay_seconds: float,
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    """Execute the sidecar's real healthz-wait loop against a fake, always-failing curl.
+
+    Extracts the exact, current source of the loop from the tracked sidecar
+    script (the same technique ``_run_gateway_retry_loop`` uses above) so a
+    future edit to the loop is automatically exercised here instead of
+    silently drifting from a second, hand-copied duplicate.
+
+    Args:
+        tmp_path: Pytest's per-test scratch directory.
+        watchdog_seconds: Value for ``sidecar_startup_watchdog_seconds``.
+        curl_delay_seconds: How long the fake ``curl`` sleeps before failing,
+            simulating a slow-but-still-under-its-own-``--max-time`` health
+            probe.
+
+    Returns:
+        The completed harness process and the measured real wall-clock time
+        the loop took to fail, as observed from outside the subprocess.
+    """
+    sidecar_text = _SIDECAR.read_text(encoding="utf-8")
+    start = sidecar_text.index(_HEALTHZ_WAIT_BLOCK_START)
+    end = sidecar_text.index(_HEALTHZ_WAIT_BLOCK_END, start) + len(_HEALTHZ_WAIT_BLOCK_END)
+    loop_block = sidecar_text[start:end]
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        f"#!/usr/bin/env bash\nsleep {curl_delay_seconds}\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+
+    sidecar_stderr = tmp_path / "sidecar-stderr.txt"
+    sidecar_stderr.write_text("", encoding="utf-8")
+    preflight_report = tmp_path / "preflight.json"
+    preflight_report.write_text("{}", encoding="utf-8")
+
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -euo pipefail\n"
+        "log() { printf '[test-sidecar] %s\\n' \"$*\"; }\n"
+        'fail() { log "error: $*" >&2; exit 1; }\n'
+        # The real loop's "sidecar exited early" branch calls `kill -0
+        # "$sidecar_pid"` to tell a dead sidecar apart from one still
+        # starting; stub it so this harness exercises only the watchdog
+        # deadline comparison, never that other branch.
+        "kill() { return 0; }\n"
+        "wait_for_sidecar_sanitizers() { :; }\n"
+        "sidecar_pid=$$\n"
+        'ORCHESTRATOR_HOST="127.0.0.1"\n'
+        'ORCHESTRATOR_PORT="18080"\n'
+        f"sidecar_startup_watchdog_seconds={watchdog_seconds}\n"
+        f'sidecar_stderr="{sidecar_stderr}"\n'
+        f'preflight_report="{preflight_report}"\n'
+        + loop_block
+        + "\n",
+        encoding="utf-8",
+    )
+
+    start_time = time.monotonic()
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    elapsed = time.monotonic() - start_time
+    return result, elapsed
+
+
+def test_healthz_wait_loop_fires_near_the_wall_clock_deadline_not_a_poll_count(
+    tmp_path: Path,
+) -> None:
+    """Regression for Devin Review's "Startup watchdog counts polls, not
+    seconds" finding (ContextualWisdomLab/.github#1415).
+
+    Before the fix, the loop incremented a plain poll counter ``i`` once per
+    iteration and compared *that* to ``sidecar_startup_watchdog_seconds`` --
+    even though a single iteration's real cost is the curl call's own
+    duration (up to its ``--max-time``) plus the trailing ``sleep 1``. With a
+    health probe that itself takes close to its full timeout, that made the
+    watchdog run roughly 3x longer than its configured bound (255s
+    configured, ~765s observed worst case).
+
+    This drives the sidecar's real, tracked healthz-wait loop (extracted
+    verbatim, not a hand-copied duplicate) against a fake ``curl`` that
+    always fails after a deliberately slow ``curl_delay_seconds``, with a
+    small configured watchdog. It asserts the loop fails close to the
+    *configured* wall-clock seconds (allowing headroom for the cadence of
+    one in-flight curl call plus one ``sleep 1``), and, crucially, well
+    under 3x that bound -- the exact regression class this test guards
+    against.
+    """
+    watchdog_seconds = 3
+    curl_delay_seconds = 2.0
+
+    result, elapsed = _run_healthz_wait_loop(
+        tmp_path,
+        watchdog_seconds=watchdog_seconds,
+        curl_delay_seconds=curl_delay_seconds,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert (
+        f"sidecar did not become healthy within {watchdog_seconds}s" in result.stderr
+    )
+    # The old, buggy poll-counting comparison would need
+    # `watchdog_seconds` full iterations -- each costing
+    # curl_delay_seconds + 1s of sleep -- before firing: roughly
+    # watchdog_seconds * (curl_delay_seconds + 1) = 9s here. The fixed,
+    # real-wall-clock comparison fires as soon as accumulated curl time
+    # alone crosses the deadline: roughly one extra curl call past the
+    # bound, ~5s here. Assert comfortably between the two, strictly below
+    # the poll-counting bound -- proving this is not that regression.
+    poll_counting_bound = watchdog_seconds * (curl_delay_seconds + 1)
+    assert elapsed < poll_counting_bound - 1, (
+        f"loop took {elapsed:.1f}s to fail, at or beyond the poll-counting "
+        f"bound of {poll_counting_bound:.1f}s that this fix removes -- the "
+        "watchdog is counting polls again, not real wall-clock seconds"
+    )
+    # A lower bound too: the loop cannot legitimately fail before at least
+    # one curl call has run (the deadline is only checked after a curl
+    # attempt), so it must take at least curl_delay_seconds.
+    assert elapsed >= curl_delay_seconds
+
+
+def test_healthz_wait_loop_reports_wall_clock_seconds_not_a_poll_count(
+    tmp_path: Path,
+) -> None:
+    """The failure message's own reported bound must not silently change.
+
+    A narrower companion to the timing test above: even independent of how
+    long the loop actually took, the fixed loop's fail() message must still
+    name the *configured* ``sidecar_startup_watchdog_seconds`` -- proving
+    the message-formatting side of the fix (``$SECONDS`` swapped in for
+    ``$i`` in both the comparison and the two places it is interpolated)
+    did not regress independently of the timing behavior.
+    """
+    result, _elapsed = _run_healthz_wait_loop(
+        tmp_path, watchdog_seconds=2, curl_delay_seconds=1.5
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "sidecar did not become healthy within 2s" in result.stderr
 
 
 def test_preflight_stage_limits_share_one_startup_budget() -> None:

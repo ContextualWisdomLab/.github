@@ -333,7 +333,7 @@ sidecar_startup_watchdog_seconds="$(
     'from scripts.ci.contextual_orchestrator_review_launcher import REVIEW_STARTUP_WATCHDOG_SECONDS; print(REVIEW_STARTUP_WATCHDOG_SECONDS)'
 )" || fail "could not derive the startup watchdog seconds from the launcher module"
 # Same digit-count defense as REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS below: a
-# non-numeric value would make the "$i" -ge "$sidecar_startup_watchdog_seconds"
+# non-numeric value would make the "$SECONDS" -ge "$sidecar_startup_watchdog_seconds"
 # comparison itself a bash integer-comparison error rather than a controlled
 # failure, and an all-digit value can still overflow the shell's integer
 # range the same way. Six digits (up to 999999s, over eleven days) is already
@@ -398,7 +398,7 @@ cleanup_sidecar_on_error() {
 }
 trap cleanup_sidecar_on_error EXIT
 
-i=0
+SECONDS=0
 until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
@@ -423,7 +423,6 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     fi
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
-  i=$((i + 1))
   # FIXED (ContextualWisdomLab/.github#1455, Devin Review finding "Startup
   # watchdog preempts valid preflight"): this bound covers the launcher's
   # ENTIRE startup sequence -- discovery, catalog build, AND preflight
@@ -436,7 +435,20 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
   # uncoordinated shell constant that only covered probing's own budget by
   # coincidence -- see that constant's own module-level comment for the full,
   # numbered derivation this single source of truth keeps in sync.
-  if [ "$i" -ge "$sidecar_startup_watchdog_seconds" ]; then
+  #
+  # FIXED (ContextualWisdomLab/.github#1415, Devin Review finding "Startup
+  # watchdog counts polls, not seconds"): the comparison below now reads
+  # bash's builtin $SECONDS -- reset to 0 immediately before this loop --
+  # instead of a hand-incremented poll counter. $SECONDS auto-advances with
+  # real wall-clock time regardless of what runs inside the loop body, so it
+  # stays accurate even though each iteration's own cost varies (a `curl
+  # --max-time 2` call can itself take up to 2s before the trailing `sleep 1`
+  # even runs). A poll counter incremented once per iteration undercounts
+  # elapsed time by however long curl actually took, so this bound is now a
+  # true wall-clock deadline, immune to curl's own per-call timeout cost --
+  # not an approximation of one via a poll count that silently assumed every
+  # iteration costs exactly 1s.
+  if [ "$SECONDS" -ge "$sidecar_startup_watchdog_seconds" ]; then
     fail "sidecar did not become healthy within ${sidecar_startup_watchdog_seconds}s; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   sleep 1
@@ -445,7 +457,7 @@ if [ ! -s "$preflight_report" ]; then
   fail "sidecar became healthy without runtime preflight evidence"
 fi
 publish_sidecar_evidence
-log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+log "healthz and provider-route preflight confirmed after ${SECONDS}s (pid $sidecar_pid)"
 # A successful startup never re-reads $sidecar_stderr otherwise: only the
 # failure branches above embed it in their ::error:: message. A partial,
 # non-fatal provider discovery failure (e.g. one bad credential) would
