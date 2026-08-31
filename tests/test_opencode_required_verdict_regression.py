@@ -154,7 +154,7 @@ def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path)
 set -euo pipefail
 printf '%s\\n' "$*" >>"$FAKE_CALLS"
 if [[ "$*" == *"actions/runs?"* ]]; then
-  printf '%s\\n' '{json.dumps({"workflow_runs": [{"id": 42, "head_sha": HEAD, "event": "pull_request_target", "name": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}]})}'
+  printf '%s\\n' '{json.dumps({"workflow_runs": [{"id": 42, "head_sha": HEAD, "event": "pull_request_target", "name": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}, {"id": 43, "head_sha": HEAD, "event": "pull_request_target", "name": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/workflows/10", "status": "completed", "conclusion": "failure"}]})}'
   exit 0
 fi
 if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
