@@ -40,6 +40,28 @@ Semantic Versioning where the repository publishes a release.
   가능한 `/workspace` mount는 테스트 대상 명령이 읽고 쓸 수 있으므로, repo checkout에 우연히
   존재하는 자격증명 파일이 그대로 복사되어서는 안 됩니다(로그·per-command home은 명령이 실제로
   써야 하므로 의도적으로 동일 mount 안에 유지).
+- Fix two live-on-`main` regressions Devin Review found immediately after
+  PRs #1456 and #1459 merged (both bypass-merged past the org-wide
+  `opencode-review` outage; these hotfixes correct real defects the local
+  test suites' mocks couldn't catch):
+  - `pr_review_fix_scheduler.py`'s `issue_comments()` (#1459) added
+    `-f per_page=100` to its `gh api` call without an explicit `-X GET`.
+    `gh api` defaults to POST once any `-f`/`-F` field is present unless
+    `-X`/`--method` overrides it, so every comment fetch became a malformed
+    POST against the comment-*creation* endpoint (no `body` field) --
+    failing every call outright and deferring every candidate PR, the
+    opposite of this fix's purpose. Now pins `-X GET` explicitly. Added a
+    regression asserting the exact argv shape.
+  - `pr_review_merge_scheduler.py`'s `rest_pr_node()` (#1456) fetched
+    classic commit statuses from `commits/{sha}/statuses` (plural), which
+    returns full status history in reverse-chronological order with no
+    dedup -- a context that transitioned from success to failure surfaced
+    both entries, letting a stale success outlive a later real failure for
+    `strix_evidence_state()` (which accepts the first success it finds).
+    Switched to `commits/{sha}/status` (singular, combined), which already
+    reports only the most recent status per context, matching the GraphQL
+    rollup's own shape. Added a regression proving a failed-then-superseded
+    context reports `"failed"`, not a stale `"complete"`.
 - Root-cause the hourly PR-review-fix scheduler's silent `autofix_dispatches: 0`
   on nearly every run (surfaced while investigating why 40 of `.github`'s 81
   open PRs were stuck reporting "This branch has conflicts that must be

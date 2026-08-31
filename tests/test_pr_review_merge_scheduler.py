@@ -1008,13 +1008,16 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                 {"id": 555, "created_at": "2026-06-30T00:00:00Z"},
             ]
         },
-        "repos/owner/repo/commits/abc123/statuses?per_page=100": [
-            {
-                "context": "strix",
-                "state": "success",
-                "target_url": "https://github.com/owner/repo/actions/runs/3",
-            }
-        ],
+        "repos/owner/repo/commits/abc123/status": {
+            "state": "success",
+            "statuses": [
+                {
+                    "context": "strix",
+                    "state": "success",
+                    "target_url": "https://github.com/owner/repo/actions/runs/3",
+                }
+            ],
+        },
         "repos/owner/repo/pulls/42/files?per_page=20": [
             {"filename": "scripts/ci/pr_review_merge_scheduler.py"},
         ],
@@ -1048,7 +1051,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         "repos/owner/repo/pulls/42/reviews?per_page=100&page=1",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
         "repos/owner/repo/commits/abc123/check-suites?per_page=100",
-        "repos/owner/repo/commits/abc123/statuses?per_page=100",
+        "repos/owner/repo/commits/abc123/status",
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]
     assert node["number"] == 42
@@ -1079,6 +1082,60 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         }
     ]
     assert sched.strix_evidence_state(node) == "complete"
+
+
+def test_rest_pr_fallback_uses_combined_status_not_full_history(monkeypatch):
+    """The REST fallback must not resurrect a superseded classic-status success.
+
+    ``commits/{sha}/statuses`` (plural) returns full status history in
+    reverse-chronological order with no dedup, so a context that
+    transitioned from success to failure would surface both entries --
+    a stale success could then outlive a later real failure for any caller
+    that accepts the first success it finds, like `strix_evidence_state()`.
+    The combined endpoint (`commits/{sha}/status`, singular) already
+    reports only the most recent status per context (regression for a
+    Devin Review finding: "Stale success unlocks failed scans").
+    """
+    payloads = {
+        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1": [],
+        "repos/owner/repo/commits/abc123/check-runs?per_page=100": {"check_runs": []},
+        "repos/owner/repo/commits/abc123/check-suites?per_page=100": {"check_suites": []},
+        "repos/owner/repo/commits/abc123/status": {
+            "state": "failure",
+            "statuses": [
+                {
+                    "context": "strix",
+                    "state": "failure",
+                    "target_url": "https://github.com/owner/repo/actions/runs/4",
+                }
+            ],
+        },
+        "repos/owner/repo/pulls/42/files?per_page=20": [],
+    }
+    monkeypatch.setattr(sched, "gh_api_json", lambda path: payloads[path])
+    node = sched.rest_pr_node(
+        "owner/repo",
+        {
+            "number": 42,
+            "title": "Fallback",
+            "draft": False,
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "base": {"ref": "main", "sha": "base123"},
+            "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
+            "maintainer_can_modify": True,
+            "auto_merge": None,
+        },
+    )
+    classic_nodes = [n for n in node["statusCheckRollup"]["contexts"]["nodes"] if "context" in n]
+    assert classic_nodes == [
+        {
+            "context": "strix",
+            "state": "FAILURE",
+            "targetUrl": "https://github.com/owner/repo/actions/runs/4",
+        }
+    ]
+    assert sched.strix_evidence_state(node) == "failed"
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):

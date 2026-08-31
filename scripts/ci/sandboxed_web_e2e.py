@@ -456,6 +456,7 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -572,7 +573,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     require_loopback_readiness_url(url)
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+    opener = urllib.request.build_opener(NoRedirectHandler(), urllib.request.ProxyHandler({}))
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
@@ -597,6 +598,7 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
+        shell=False,
     )
 
 
