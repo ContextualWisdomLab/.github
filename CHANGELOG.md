@@ -5,14 +5,19 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Remove the permanently-unreachable PR #827 repair workflow
+- Keep the PR #827 repair workflow
   (`.github/workflows/repair-pr827-coderabbit-comments.yml`) and its driver
-  script (`scripts/ci/repair_pr827_coderabbit_comments.py`): PR #827 is
-  closed and unmerged, GitHub never reuses PR numbers, so the workflow's
-  `github.event.pull_request.number == 827` gate could never fire again.
-  Its only caller was that workflow; the script's sole remaining reference
-  was a synthetic-fixture test kept alive purely to satisfy the 100%
-  coverage gate, which is removed along with it.
+  script (`scripts/ci/repair_pr827_coderabbit_comments.py`): a prior pass on
+  this same PR proposed removing them as dead code on the theory that
+  "GitHub never reuses PR numbers" makes `github.event.pull_request.number
+  == 827` permanently false. Devin Review correctly flagged that reasoning
+  as a red herring here — PR #827 is `closed`/`merged: false`/`locked:
+  false`, so it remains reopenable by anyone with write access (or its
+  author) and would keep its original number if reopened, and its exact
+  head branch (`fix/opencode-rust-coverage-runtime-boundary-main`) still
+  exists on the remote at the same SHA. The workflow and script are
+  restored unchanged; the synthetic-fixture test kept alive purely for the
+  100% coverage gate is restored with them.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
