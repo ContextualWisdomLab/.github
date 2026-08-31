@@ -43,6 +43,18 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-latest
+    # Explicit, computed ceiling instead of GitHub Actions' implicit 360-minute
+    # (6-hour) default: worst case is two call_llm attempts at
+    # LLM_REQUEST_TIMEOUT_SECONDS=7200 each (scripts/ci/noema_review_gate.py's
+    # LLM_REQUEST_TOTAL_BUDGET_SECONDS = 14400s = 240 minutes) plus sidecar
+    # startup/preflight (ADR-0005: up to ~180s healthz wait + ~360s Layer-2
+    # gateway retries ≈ 9 minutes), credential minting/visibility-lookup
+    # retries, diff/context fetch, and verdict submission -- well under one
+    # more hour on top, for a computed worst case of roughly 252 minutes. 300
+    # minutes leaves a deliberate safety margin above that computed bound
+    # while staying under GitHub Actions' 360-minute hard ceiling for
+    # GitHub-hosted runners.
+    timeout-minutes: 300
     if: >-
       github.event_name == 'repository_dispatch'
       || (
@@ -299,8 +311,9 @@ jobs:
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
-      - name: Run Noema LLM review and submit verdict
+      - name: Run Noema LLM review
         if: env.PR_NUMBER != ''
+        id: review
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
@@ -310,10 +323,11 @@ jobs:
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "No pull request number was available for this event; skipping."
+            echo "has_verdict=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
+            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot run."
             exit 1
           fi
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
@@ -325,6 +339,118 @@ jobs:
           export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
+          # A review-completion model call may run for up to
+          # LLM_REQUEST_TOTAL_BUDGET_SECONDS (4 hours; see that constant in
+          # scripts/ci/noema_review_gate.py), long enough to outlive the
+          # short-lived credential minted above. Compute the verdict here and
+          # persist it; a later step mints a FRESH credential and submits it,
+          # so the token used to post the review is never the one that may
+          # have expired while call_llm was in flight (Devin Review,
+          # ContextualWisdomLab/.github#1509).
+          noema_state_file="${RUNNER_TEMP}/noema-review-state.json"
           python3 -m scripts.ci.noema_review_gate \
             --repo "$TARGET_REPOSITORY" \
-            --pr-number "$PR_NUMBER"
+            --pr-number "$PR_NUMBER" \
+            --phase review \
+            --state-file "$noema_state_file"
+          if [ -s "$noema_state_file" ]; then
+            echo "has_verdict=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "has_verdict=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint fresh repository-scoped Noema GitHub App submission token
+        if: env.PR_NUMBER != '' && steps.review.outputs.has_verdict == 'true' && steps.noema_credential.outputs.source == 'github-app'
+        id: noema_github_app_token_submit
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_credential.outputs.repository }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: write
+          permission-security-events: read
+          permission-statuses: read
+          permission-vulnerability-alerts: read
+
+      - name: Exchange fresh Noema app submission token through OIDC
+        if: env.PR_NUMBER != '' && steps.review.outputs.has_verdict == 'true' && steps.noema_credential.outputs.source == 'oidc'
+        id: noema_oidc_token_submit
+        env:
+          OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
+          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+        run: |
+          set -euo pipefail
+
+          fail_unavailable() {
+            local message="$1"
+            echo "::error::$message"
+            exit 1
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            fail_unavailable "Noema app submission token exchange unavailable: OIDC request environment is missing."
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            fail_unavailable "Noema app submission token exchange unavailable: OIDC token request did not complete."
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            fail_unavailable "Noema app submission token exchange unavailable: OIDC token response was empty."
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${oidc_token}" \
+              --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
+              "${TOKEN_EXCHANGE_URL}"
+          )"; then
+            fail_unavailable "Noema app submission token exchange unavailable: app token request did not complete."
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            fail_unavailable "Noema app submission token exchange unavailable: app token response was empty."
+          fi
+
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Submit Noema review verdict
+        if: env.PR_NUMBER != '' && steps.review.outputs.has_verdict == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token_submit.outputs.token || steps.noema_oidc_token_submit.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token_submit.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token_submit.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token_submit.outputs['installation-id'] }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema submission credential selection succeeded but no fresh token was minted; verdict cannot be submitted."
+            exit 1
+          fi
+          noema_state_file="${RUNNER_TEMP}/noema-review-state.json"
+          python3 -m scripts.ci.noema_review_gate \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --phase submit \
+            --state-file "$noema_state_file"

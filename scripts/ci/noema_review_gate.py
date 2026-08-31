@@ -34,21 +34,37 @@ MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
-# This org's own recorded policy (docs/product-goal-directive.md: "중앙 OpenCode, Strix, Noema는
-# 모델당 두 시간 이상 걸릴 수 있음을 수용한다" -- central OpenCode, Strix, and Noema may take over
-# two hours per model, and the org accepts this) explicitly names Noema, and noema-review.yml's own
-# job carries no timeout-minutes (GitHub Actions' 360-minute default applies), so this single HTTP
-# request has ample outer headroom. This value is not a new guess: it reuses this org's own already
-# codified precedent for one model-call attempt, `OPENCODE_RUN_TIMEOUT_SECONDS`'s default of 3600s
-# in scripts/ci/run_opencode_review_model_pool.sh. call_llm may recurse exactly once (one repair
-# attempt on a rejected verdict, see below), so the worst case for one review -- two attempts at
-# this bound -- is 7200s (2 hours), matching this org's own stated per-model policy exactly and
-# OpenCode's analogous `OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS` default of 7200 for the same
-# reason. The prior 120-second value was three orders of magnitude short of this policy and was
-# copied from the sidecar's own small "reply OK" preflight smoke-test budget (contract:
-# docs/adr/0005-sidecar-preflight-token-budget.md), not sized for a real review completion carrying
-# up to MAX_DIFF_CHARS + MAX_REVIEW_CONTEXT_CHARS of prompt content.
-LLM_REQUEST_TIMEOUT_SECONDS = 3600
+# This org's own recorded policy (docs/product-goal-directive.md line 65: "중앙 OpenCode, Strix,
+# Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다" -- central OpenCode, Strix, and Noema may
+# legitimately take over two hours PER MODEL CALL, and the org accepts this) is stated per model
+# call, not per review. A prior fix here (docs/product-technical-gap-baseline.md's 2026-08-31
+# "recurring noema-review TimeoutError" entry) set this to 3600s, reasoning that call_llm's
+# at-most-one repair-retry recursion made "two 1-hour attempts" equal the org's two-hour policy --
+# that reasoning was itself a bug (Devin Review on ContextualWisdomLab/.github#1509): the repair
+# retry only fires when the model's response FAILS validate_substantive_verdict (a content problem),
+# never because the HTTP call itself ran long, so a single genuinely-slow-but-healthy call needing,
+# say, 90 minutes would hit a 3600s timeout and fail even though it never needed a retry and stayed
+# well within the org's per-model allowance. Each attempt -- the original call or the repair retry --
+# is its own independent model call under this policy and must each get the full two-hour bound, not
+# half of it split across the two. This is not merely policy-literal, either: read against evidence,
+# the repair-retry prompt (see the `repair_error` branch in call_llm's prompt construction below)
+# resends the SAME full diff and SAME full review_context as the original attempt, appending only two
+# short instruction lines -- it asks the model to redo the entire review with corrected evidence, not
+# a small patch -- so there is no evidence a repair attempt is typically cheaper or faster than the
+# original call, and therefore no basis for giving it a smaller budget than the original.
+LLM_REQUEST_TIMEOUT_SECONDS = 7200
+
+# call_llm recurses at most once: the recursive call passes `repair_error`, and the
+# `if repair_error: raise` guard immediately below the recursive call prevents a second recursion, so
+# one review's worst-case call_llm duration is exactly two attempts at the full per-attempt bound
+# above. Named so the two-attempt worst case is asserted and documented independently of the
+# per-attempt value (tests/test_noema_review_gate.py pins both separately, per Devin Review's request
+# to assert per-attempt and overall budgets separately rather than only their product). Sidecar
+# startup/preflight (ADR-0005: up to ~180s healthz wait plus up to ~360s of Layer-2 gateway retries),
+# diff/context fetch, and verdict submission add well under one more hour on top of this total, so
+# noema-review.yml's `noema-review` job declares an explicit `timeout-minutes` safely above this bound
+# instead of relying on GitHub Actions' implicit 360-minute (6-hour) default.
+LLM_REQUEST_TOTAL_BUDGET_SECONDS = LLM_REQUEST_TIMEOUT_SECONDS * 2
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -795,8 +811,17 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's independent LLM review."""
+def run_review_phase(repo: str, number: int) -> dict[str, Any] | None:
+    """Run pre-flight checks and the LLM review call, without submitting.
+
+    Returns ``None`` when the review is skipped (draft PR, or the current
+    head already has a Noema review) so a caller can skip minting a fresh
+    submission credential and the submission step entirely. On success,
+    returns the JSON-serializable state (``pr``, ``actor``, ``verdict``)
+    ``submit_pending_verdict`` needs to submit the review later, potentially
+    under a different (freshly minted) credential -- see that function's
+    docstring for why the credential used here is not assumed still valid.
+    """
     pr = fetch_pr(repo, number)
     actor = current_actor()
     if not actor:
@@ -808,15 +833,74 @@ def inspect_and_review(repo: str, number: int) -> int:
         )
     if pr.get("isDraft"):
         print("PR is draft; Noema review skipped.")
-        return 0
+        return None
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
-        return 0
+        return None
     diff, truncated = fetch_diff(repo, number)
     changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
     verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
-    submit_review(repo, number, pr, actor, verdict)
+    return {"pr": pr, "actor": actor, "verdict": verdict}
+
+
+def write_review_state(state_path: str, state: dict[str, Any]) -> None:
+    """Persist review-phase output as JSON for a later submission phase to read."""
+    with open(state_path, "w", encoding="utf-8") as handle:
+        json.dump(state, handle)
+
+
+def load_review_state(state_path: str) -> dict[str, Any] | None:
+    """Load review-phase JSON output, or ``None`` when no verdict is pending."""
+    if not os.path.exists(state_path):
+        return None
+    with open(state_path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def submit_pending_verdict(repo: str, number: int, state: dict[str, Any]) -> None:
+    """Submit a previously computed verdict under the current credential.
+
+    ``call_llm`` may run for up to ``LLM_REQUEST_TOTAL_BUDGET_SECONDS`` (4
+    hours), long enough to outlive the GitHub App installation token or
+    OIDC-exchanged token that was valid when ``run_review_phase`` computed the
+    verdict -- installation tokens are short-lived (about one hour). The
+    noema-review workflow therefore mints a fresh submission credential after
+    ``run_review_phase`` returns and before calling this function. Re-verify
+    the reviewer identity against that fresh credential rather than trusting
+    the identity recorded in ``state``, so a rebinding of
+    ``NOEMA_REVIEW_ACTOR``/``NOEMA_REVIEW_INSTALLATION_ID`` to a different
+    identity between the two phases is refused instead of silently trusted --
+    this preserves the same verified-reviewer-identity guarantee
+    ``run_review_phase`` already enforced, under the new credential.
+    """
+    actor = current_actor()
+    if not actor:
+        raise RuntimeError("Noema reviewer identity could not be verified")
+    if actor != state["actor"]:
+        raise RuntimeError(
+            f"Noema submission credential identity {actor!r} does not match the "
+            f"identity {state['actor']!r} that computed the verdict; refusing to "
+            "submit under a different identity."
+        )
+    submit_review(repo, number, state["pr"], actor, state["verdict"])
+
+
+def inspect_and_review(repo: str, number: int) -> int:
+    """Inspect PR state and submit Noema's independent LLM review in one pass.
+
+    Single-process convenience path: runs the review and submits it under the
+    same credential throughout, with no fresh-credential remint between the
+    two. The noema-review workflow itself instead runs the review and submit
+    phases as two separate CLI invocations (``--phase review`` /
+    ``--phase submit``) bracketing a fresh credential mint, since a single
+    long-running review can outlive one credential's lifetime -- see
+    ``run_review_phase`` and ``submit_pending_verdict``.
+    """
+    state = run_review_phase(repo, number)
+    if state is None:
+        return 0
+    submit_review(repo, number, state["pr"], state["actor"], state["verdict"])
     return 0
 
 
@@ -825,6 +909,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument(
+        "--phase",
+        choices=("review", "submit"),
+        default=None,
+        help=(
+            "Run only the review phase (computes and persists a verdict) or only "
+            "the submit phase (submits a previously persisted verdict), so the "
+            "caller can mint a fresh submission credential between them. Requires "
+            "--state-file. Omit both for the legacy single-process path."
+        ),
+    )
+    parser.add_argument(
+        "--state-file",
+        default=None,
+        help="Path used to hand the computed verdict from the review phase to the "
+        "submit phase. Required together with --phase.",
+    )
     return parser.parse_args(argv)
 
 
@@ -833,7 +934,21 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    return inspect_and_review(args.repo, args.pr_number)
+    if args.phase is None:
+        return inspect_and_review(args.repo, args.pr_number)
+    if not args.state_file:
+        raise SystemExit("--state-file is required with --phase")
+    if args.phase == "review":
+        state = run_review_phase(args.repo, args.pr_number)
+        if state is not None:
+            write_review_state(args.state_file, state)
+        return 0
+    state = load_review_state(args.state_file)
+    if state is None:
+        print("No pending Noema verdict to submit; nothing to do.")
+        return 0
+    submit_pending_verdict(args.repo, args.pr_number, state)
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

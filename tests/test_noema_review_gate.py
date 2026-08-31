@@ -387,21 +387,33 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
 
 def test_llm_request_timeout_matches_org_two_hour_per_model_policy():
-    """call_llm's HTTP timeout must stay sized for a real review, not a smoke test.
+    """call_llm's per-attempt HTTP timeout must itself be the full per-model policy bound.
 
-    Regression guard for the recurring `TimeoutError` at this exact call site
-    (ContextualWisdomLab/contextual-orchestrator#965, #958, #960): a prior
-    120-second value was copied from the sidecar's small preflight smoke-test
-    budget and was three orders of magnitude short of this org's own recorded
-    policy that a central Noema/OpenCode/Strix model call may legitimately take
-    over two hours (docs/product-goal-directive.md). One review allows exactly
-    one repair retry (see call_llm's recursive repair-on-rejected-verdict path),
-    so the worst case for a single review must stay at or below that two-hour
-    policy bound, not merely below the per-attempt value alone.
+    Regression guard, round two, for the recurring `TimeoutError` at this exact
+    call site (ContextualWisdomLab/contextual-orchestrator#965, #958, #960).
+    Round one (ContextualWisdomLab/.github#1509) set the per-attempt timeout to
+    3600s (half the two-hour policy), reasoning that call_llm's at-most-one
+    repair-retry recursion made "two 1-hour attempts" equal the org's stated
+    two-hour-per-model-call policy (docs/product-goal-directive.md). That
+    reasoning was itself a bug, caught by Devin Review on the same PR: the
+    repair retry only fires when the model's response FAILS
+    validate_substantive_verdict, never because the HTTP call itself ran long,
+    so a single genuinely-slow-but-healthy call needing e.g. 90 minutes would
+    hit a 3600s timeout and fail despite never needing a retry and staying
+    within the org's per-model allowance. Each attempt is an independent model
+    call under the org's policy and must therefore individually get the full
+    two-hour bound. Per-attempt and overall-budget assertions are pinned
+    separately here (rather than only their product) per Devin Review's
+    explicit ask, so a future edit cannot silently shrink either one back
+    toward either bug already fixed.
     """
-    assert noema.LLM_REQUEST_TIMEOUT_SECONDS == 3600
+    assert noema.LLM_REQUEST_TIMEOUT_SECONDS == 7200
     max_call_llm_attempts_per_review = 2  # original call + at most one repair retry
-    assert noema.LLM_REQUEST_TIMEOUT_SECONDS * max_call_llm_attempts_per_review == 7200
+    assert noema.LLM_REQUEST_TOTAL_BUDGET_SECONDS == 14400
+    assert (
+        noema.LLM_REQUEST_TIMEOUT_SECONDS * max_call_llm_attempts_per_review
+        == noema.LLM_REQUEST_TOTAL_BUDGET_SECONDS
+    )
 
 
 def test_noema_redirect_handler_rejects_redirects():
@@ -536,6 +548,83 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
 
     assert noema.inspect_and_review("owner/repo", 7) == 0
     assert calls
+
+
+def test_run_review_phase_returns_state_or_none(monkeypatch):
+    """run_review_phase must hand back JSON-serializable state, or None to skip.
+
+    Regression coverage for ContextualWisdomLab/.github#1509's second Devin
+    Review finding: the workflow now mints a fresh submission credential
+    between computing a verdict and submitting it, which required splitting
+    inspect_and_review's single pass into a review phase (this function) and a
+    submit phase (submit_pending_verdict). run_review_phase must never call
+    submit_review itself.
+    """
+    clean_pr = make_pr()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(
+        noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []}
+    )
+    monkeypatch.setattr(
+        noema, "submit_review", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not submit"))
+    )
+
+    state = noema.run_review_phase("owner/repo", 7)
+    assert state == {
+        "pr": clean_pr,
+        "actor": "noema",
+        "verdict": {"decision": "approve", "summary": "ok", "findings": []},
+    }
+
+    draft_pr = make_pr(isDraft=True)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: draft_pr)
+    assert noema.run_review_phase("owner/repo", 7) is None
+
+
+def test_write_and_load_review_state_round_trip(tmp_path):
+    """Review-phase state must round-trip through JSON for the submit phase."""
+    state_path = str(tmp_path / "noema-review-state.json")
+    assert noema.load_review_state(state_path) is None
+
+    state = {"pr": make_pr(), "actor": "cwl-noema-review[bot]", "verdict": {"decision": "comment"}}
+    noema.write_review_state(state_path, state)
+    assert noema.load_review_state(state_path) == state
+
+
+def test_submit_pending_verdict_matches_and_rejects_identity_drift(monkeypatch):
+    """submit_pending_verdict must re-verify identity against the fresh credential.
+
+    Regression coverage for ContextualWisdomLab/.github#1509's second Devin
+    Review finding: a long call_llm can outlive the credential minted before
+    it, so the workflow mints a fresh one before submitting. This must not
+    silently trust the identity recorded when the verdict was computed --
+    a mismatch (e.g. a misconfigured refresh binding a different identity)
+    must fail closed rather than post under an unverified identity.
+    """
+    calls = []
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(noema, "current_actor", lambda: "cwl-noema-review[bot]")
+    state = {
+        "pr": make_pr(),
+        "actor": "cwl-noema-review[bot]",
+        "verdict": {"decision": "approve", "summary": "ok", "findings": []},
+    }
+    noema.submit_pending_verdict("owner/repo", 7, state)
+    assert calls == [("owner/repo", 7, state["pr"], "cwl-noema-review[bot]", state["verdict"])]
+
+    calls.clear()
+    monkeypatch.setattr(noema, "current_actor", lambda: "a-different-identity[bot]")
+    with pytest.raises(RuntimeError, match="does not match the identity"):
+        noema.submit_pending_verdict("owner/repo", 7, state)
+    assert calls == []
+
+    monkeypatch.setattr(noema, "current_actor", lambda: "")
+    with pytest.raises(RuntimeError, match="identity could not be verified"):
+        noema.submit_pending_verdict("owner/repo", 7, state)
 
 
 def test_call_llm_rejects_empty_review_content(monkeypatch):
@@ -715,6 +804,16 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
     assert noema.call_llm("owner/repo", 7, make_pr(), diff, False)["decision"] == "approve"
     assert len(payloads) == 2
     assert "trusted validator" in payloads[1]["messages"][1]["content"]
+    # Evidence for LLM_REQUEST_TIMEOUT_SECONDS applying unchanged to a repair
+    # retry (ContextualWisdomLab/.github#1509, Devin Review): the repair
+    # attempt resends the SAME full diff as the original attempt, not a
+    # smaller patch, so it is not typically a cheaper/faster call and gets no
+    # smaller a timeout budget than the original.
+    original_content = payloads[0]["messages"][1]["content"]
+    repair_content = payloads[1]["messages"][1]["content"]
+    assert original_content.count(diff) == 1
+    assert repair_content.count(diff) == 1
+    assert len(repair_content) >= len(original_content)
 
 
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():
@@ -1016,6 +1115,8 @@ def test_parse_args_and_main(monkeypatch):
     parsed = noema.parse_args(["--repo", "owner/repo", "--pr-number", "9"])
     assert parsed.repo == "owner/repo"
     assert parsed.pr_number == 9
+    assert parsed.phase is None
+    assert parsed.state_file is None
 
     seen = []
     monkeypatch.setattr(noema, "inspect_and_review", lambda repo, number: seen.append((repo, number)) or 0)
@@ -1024,3 +1125,40 @@ def test_parse_args_and_main(monkeypatch):
 
     with pytest.raises(SystemExit, match="--pr-number must be positive"):
         noema.main(["--repo", "owner/repo", "--pr-number", "0"])
+
+
+def test_main_phase_requires_state_file(monkeypatch):
+    """--phase without --state-file must fail closed, for either phase value."""
+    for phase in ("review", "submit"):
+        with pytest.raises(SystemExit, match="--state-file is required with --phase"):
+            noema.main(["--repo", "owner/repo", "--pr-number", "9", "--phase", phase])
+
+
+def test_main_review_phase_writes_state_only_when_computed(monkeypatch, tmp_path):
+    """--phase review must persist state on success and write nothing to skip."""
+    state_path = str(tmp_path / "state.json")
+    monkeypatch.setattr(noema, "run_review_phase", lambda repo, number: {"pr": {}, "actor": "noema", "verdict": {}})
+    assert noema.main(["--repo", "owner/repo", "--pr-number", "9", "--phase", "review", "--state-file", state_path]) == 0
+    assert noema.load_review_state(state_path) == {"pr": {}, "actor": "noema", "verdict": {}}
+
+    skip_path = str(tmp_path / "skip.json")
+    monkeypatch.setattr(noema, "run_review_phase", lambda repo, number: None)
+    assert noema.main(["--repo", "owner/repo", "--pr-number", "9", "--phase", "review", "--state-file", skip_path]) == 0
+    assert noema.load_review_state(skip_path) is None
+
+
+def test_main_submit_phase_submits_or_skips(monkeypatch, tmp_path):
+    """--phase submit must submit persisted state, or skip cleanly when absent."""
+    missing_path = str(tmp_path / "missing.json")
+    monkeypatch.setattr(
+        noema, "submit_pending_verdict", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not submit"))
+    )
+    assert noema.main(["--repo", "owner/repo", "--pr-number", "9", "--phase", "submit", "--state-file", missing_path]) == 0
+
+    state_path = str(tmp_path / "state.json")
+    state = {"pr": {}, "actor": "noema", "verdict": {}}
+    noema.write_review_state(state_path, state)
+    seen = []
+    monkeypatch.setattr(noema, "submit_pending_verdict", lambda repo, number, s: seen.append((repo, number, s)))
+    assert noema.main(["--repo", "owner/repo", "--pr-number", "9", "--phase", "submit", "--state-file", state_path]) == 0
+    assert seen == [("owner/repo", 9, state)]

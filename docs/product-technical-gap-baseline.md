@@ -1776,6 +1776,101 @@ pinning both the constant's value and the two-attempt worst-case arithmetic agai
 policy, so a future edit cannot silently shrink this back toward the bug just fixed. 2127 tests pass
 (2128 after the new test); 100% coverage and 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 PR #1509 Devin Review 2건 검증: `LLM_REQUEST_TIMEOUT_SECONDS` 배분 오류와 제출 시점 credential 만료, 둘 다 실재 결함으로 확인 후 수정
+
+Devin Review posted two new findings on `ContextualWisdomLab/.github#1509` (the same-day
+`LLM_REQUEST_TIMEOUT_SECONDS = 3600` fix above), both against that fix's own PR diff. Investigated
+both against the actual `call_llm`/`submit_review` code paths and the `noema-review.yml` workflow,
+rather than trusting either finding at face value. **Both confirmed real, not false positives.**
+
+**Finding 1 — the 3600s value itself split the two-hour policy across two attempts instead of
+giving each attempt the full two hours.** The prior fix's own reasoning was: `call_llm` recurses at
+most once, so "two attempts at 3600s" equals the org's stated two-hour-per-model-call policy. That
+reasoning conflates "one review may need two hours total" with "each individual model call may
+need two hours" — but `docs/product-goal-directive.md` line 65 says the latter ("모델당" = per
+model [call]), and the repair-retry recursion is not a size-halving operation: it only fires when
+`validate_substantive_verdict` rejects the first verdict's *content* (missing evidence, wrong
+locations, etc.) — never because the HTTP call itself ran long. A single, genuinely slow-but-healthy
+call needing e.g. 90 minutes would hit the 3600s timeout and fail even though it never triggered a
+repair retry and stayed well inside the org's per-model allowance. Read `call_llm`'s repair-retry
+prompt-construction branch directly for evidence on whether a repair attempt is cheaper than the
+original (Devin's own prompt asked this to be checked, not assumed): it resends the *same* full
+`diff` and the *same* full `review_context` as the original attempt, appending only two short
+instruction lines — it asks the model to redo the entire review with corrected evidence, not a small
+patch. There is therefore no basis for giving the repair attempt a smaller budget than the original.
+
+**Fix.** `LLM_REQUEST_TIMEOUT_SECONDS` raised from `3600` to `7200` (the full two-hour policy bound,
+applied to *each* attempt), with a new named `LLM_REQUEST_TOTAL_BUDGET_SECONDS = 14400` (4 hours)
+constant documenting the two-attempt worst case explicitly rather than leaving it as an unstated
+product of the two numbers. `noema-review.yml`'s `noema-review` job — which had no `timeout-minutes`
+at all, relying on GitHub Actions' implicit 360-minute (6-hour) default — now declares
+`timeout-minutes: 300`: the computed worst case is the 14400s (240-minute) `call_llm` budget plus
+sidecar startup/preflight (ADR-0005: up to ~180s healthz wait + ~360s Layer-2 gateway retries, ~9
+minutes), credential minting, visibility-lookup retries, diff/context fetch, and verdict submission
+— roughly 252 minutes total — so 300 minutes leaves a deliberate margin above that computed bound
+while staying under the 360-minute hard ceiling GitHub Actions enforces for hosted runners (a job
+cannot exceed it regardless of `timeout-minutes`, so 300 was chosen, not a larger number that would
+have been silently clamped).
+
+**Finding 2 — the submission token could expire mid-review, given the new timeout.** Investigated
+`noema-review.yml` directly: the job mints exactly one repository-scoped credential
+(`actions/create-github-app-token`, a step early in the job, before sidecar provisioning) and reused
+it — unchanged — through `fetch_pr`, `call_llm`, and the final `submit_review` POST, all inside one
+`python3 -m scripts.ci.noema_review_gate` invocation. GitHub App installation tokens minted by that
+action are short-lived (about one hour); with `call_llm` now legitimately able to run for up to four
+hours, the credential minted at job start could easily have expired before `submit_review`'s POST at
+the end, making a fully-computed, valid review verdict silently fail to post. Confirmed the OIDC
+exchange path (`noema_oidc_token`) has the same shape: one exchange near job start, reused unchanged
+at submission time.
+
+**Fix.** Restructured both the workflow and `scripts/ci/noema_review_gate.py` so a fresh submission
+credential is minted *after* `call_llm` returns, immediately before the GitHub API call that posts
+the review — per Devin's own suggested option (a), reusing the existing mint/exchange step shapes
+rather than inventing a new mechanism. `noema_review_gate.py`'s single `inspect_and_review` pass is
+now backed by three building blocks: `run_review_phase` (pre-flight checks through `call_llm`,
+returns JSON-serializable `{pr, actor, verdict}` state or `None` to skip a draft/already-reviewed
+PR), `write_review_state`/`load_review_state` (persist that state to a file between two separate
+process invocations), and `submit_pending_verdict` (submits previously computed state under the
+*current* credential). `inspect_and_review` itself is kept as a single-process convenience path
+(same credential throughout, calls `submit_review` directly) so every test that already exercised it
+needed no behavior change. The CLI gained `--phase {review,submit}` plus `--state-file PATH`;
+`noema-review.yml`'s single "Run Noema LLM review and submit verdict" step is now three steps: "Run
+Noema LLM review" (`--phase review`, writes state and a `has_verdict` output), a repeat of the
+GitHub-App-mint / OIDC-exchange step (new ids `noema_github_app_token_submit` /
+`noema_oidc_token_submit`, gated on `has_verdict == 'true'` so a skipped review never mints an unused
+credential), and "Submit Noema review verdict" (`--phase submit`, using the fresh credential's
+outputs for `GH_TOKEN`/`NOEMA_REVIEW_ACTOR`/`NOEMA_REVIEW_INSTALLATION_ID`). The `NOEMA_REVIEW_TOKEN`
+PAT fallback path is unaffected (reused directly at both phases; PATs are not the short-lived
+installation tokens this finding is about).
+
+`submit_pending_verdict` also **preserves the verified-reviewer-identity binding across the
+credential swap**, per Devin's explicit ask, rather than trusting the identity recorded when the
+verdict was computed: it re-calls `current_actor()` against the *fresh* credential and raises if the
+resulting identity differs from the one `run_review_phase` verified, refusing to submit under an
+unverified or rebound identity.
+
+Regression coverage (`tests/test_noema_review_gate.py`): `test_run_review_phase_returns_state_or_none`
+(review phase returns serializable state or `None`, and never calls `submit_review` itself),
+`test_write_and_load_review_state_round_trip`, `test_submit_pending_verdict_matches_and_rejects_identity_drift`
+(matching identity submits; a mismatched or empty fresh identity raises and never calls
+`submit_review`), `test_main_phase_requires_state_file`, `test_main_review_phase_writes_state_only_when_computed`,
+`test_main_submit_phase_submits_or_skips` (six new tests), plus extended
+`test_call_llm_repairs_one_rejected_changed_line_verdict` with an explicit assertion that the repair
+attempt's prompt contains the same full diff and is not shorter than the original attempt's prompt
+(the direct evidence for Finding 1's sizing decision), and rewrote
+`test_llm_request_timeout_matches_org_two_hour_per_model_policy` to pin `LLM_REQUEST_TIMEOUT_SECONDS
+== 7200` and `LLM_REQUEST_TOTAL_BUDGET_SECONDS == 14400` as separate assertions rather than only
+their product, per Devin's request. Workflow-contract tests referencing the old step name ("Run
+Noema LLM review and submit verdict") in `tests/test_required_workflow_queue_contract.py` and
+`tests/test_noema_orchestrator_workflow_contract.py` were updated to the new step name ("Run Noema
+LLM review"); every other existing workflow-contract assertion against `noema-review.yml` still
+passes unmodified since the original mint/exchange step ids and the review step's own `GH_TOKEN`/
+`NOEMA_REVIEW_ACTOR`/`NOEMA_REVIEW_INSTALLATION_ID` expressions were left in place, only the
+submission step's sourcing was changed. All ten `run: |` shell blocks in `noema-review.yml` (up from
+eight) pass `bash -n`; the workflow parses under PyYAML with the expected 12 steps and
+`timeout-minutes: 300`. 2134 tests pass (2133 plus one pre-existing skip); 100% coverage and 100%
+docstring coverage on `scripts/ci/`.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
