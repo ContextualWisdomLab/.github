@@ -1773,6 +1773,41 @@ tracked here rather than dropped:**
   in either case, not a constant tweak, and this exact family of finding has already been through several
   rounds of patch → new finding on `#1415` without converging.
 
+## 2026-08-31 (later) required-check dispatch runs starved by GitHub Actions runner-queue contention
+
+**Observed independently on three different required checks across three different PRs within the same
+window, all with the identical shape:** a required check dispatches a `repository_dispatch` run against
+`main` to produce evidence, then polls for that evidence within a bounded window; the dispatched run
+itself sits in GitHub's own `queued` state for well over an hour without a runner ever picking it up, so
+the polling step times out and reports failure — not because anything in the reviewed diff is wrong, but
+because the evidence-producing run never got to execute at all.
+
+- `noema-review` on `ContextualWisdomLab/.github#1415` (job `99521003275`): failed with the exact
+  pre-existing `contextual-orchestrator#946` `TimeoutError` this repo's own fix targets — confirmed via
+  the traceback showing `noema_review_gate.py:656`'s *unfixed* `timeout=120` literal, proving this ran
+  `main`'s trusted copy of the script (the `pull_request_target` trust boundary), not the PR's own fix.
+  Separate from the congestion finding below, but interacts with it: even after the fix reaches `main`,
+  a dispatch-model required check is still exposed to this same starvation class.
+- `opencode-review` on `#1500`/`#1502`/`#1503` (see the structural-deadlock entry above): the
+  `pr-review-merge-scheduler.yml`-triggered dispatch chain (`coverage-source-tree` → `coverage-evidence`
+  → `opencode-review-target`) sat queued for over an hour with zero progress.
+- `strix` on `#1503` (run `33400353198`, `repository_dispatch` against `main`): created `14:02:56Z`,
+  still `queued` with `run_started_at == created_at` (never picked up by a runner) when the "strix"
+  commit status finally posted `failure` (`"Default-branch repository_dispatch Strix evidence failed"`)
+  at `15:39:43Z` — 96 minutes of pure queue time, zero execution time.
+
+**Not fixed in this pass — this is an infrastructure capacity/scheduling question, not a code defect any
+one PR's diff can address.** All three central required checks (`noema-review`, `opencode-review`,
+`strix`) share the same async dispatch-and-poll architecture (`docs/pr-review-and-merge-procedure.md`),
+so all three inherit the same exposure to GitHub Actions concurrent-job-limit contention when the org's
+overall Actions usage spikes (plausibly from this same autonomous loop running many concurrent sessions
+across many repos and PRs). **Next development increment**: quantify the org's actual concurrent-runner
+ceiling against typical in-flight job count at peak (via the Actions usage API), and evaluate whether a
+dedicated larger runner pool, a queuing/backpressure mechanism in the dispatch step itself (fail fast
+with a clear "queue congested" status instead of waiting the full poll window then reporting an opaque
+failure), or self-hosted runners for the dispatch-target jobs specifically would relieve it — a
+budget/infrastructure decision, not something to guess at in a single PR's scope.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
