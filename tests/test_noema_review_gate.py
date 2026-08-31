@@ -294,8 +294,8 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
                                     "decision": "approve",
                                     "summary": "ok",
                                     "findings": [
-                                        {"severity": "low", "file": "a.py", "line": 1, "message": "checked"},
-                                        {"severity": "medium", "file": "b.py", "line": 2, "message": "checked"},
+                                        {"severity": "low", "file": "a.py", "line": 1, "side": "RIGHT", "message": "checked"},
+                                        {"severity": "medium", "file": "b.py", "line": 2, "side": "LEFT", "message": "checked"},
                                     ],
                                 }
                             )
@@ -436,13 +436,13 @@ def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
 def test_format_findings_and_submit_review(monkeypatch):
     findings = noema.format_findings(
         [
-            {"severity": "high", "file": "a.py", "line": 3, "message": "bad"},
+            {"severity": "high", "file": "a.py", "line": 3, "side": "RIGHT", "message": "bad"},
             {"severity": "low", "file": "b.py", "line": 0, "message": "note"},
             "skip",
             {"message": ""},
         ]
     )
-    assert findings == ["- [high] a.py:3: bad", "- [low] b.py: note"]
+    assert findings == ["- [high] a.py:3 (RIGHT): bad", "- [low] b.py: note"]
 
     calls = []
     monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", "oidc")
@@ -452,7 +452,7 @@ def test_format_findings_and_submit_review(monkeypatch):
         7,
         make_pr(),
         "noema",
-        {"decision": "request_changes", "summary": "fix it", "findings": [{"file": "a.py", "line": 1, "message": "bad"}]},
+        {"decision": "request_changes", "summary": "fix it", "findings": [{"file": "a.py", "line": 1, "side": "RIGHT", "message": "bad"}]},
     )
     payload = calls[0][1]
     assert payload["event"] == "REQUEST_CHANGES"
@@ -472,6 +472,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
@@ -510,6 +511,7 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
@@ -544,7 +546,7 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
     verdict = {
         "decision": "request_changes",
         "summary": "blocking issue",
-        "findings": [{"severity": "high", "file": "a.py", "line": 1, "message": message}],
+        "findings": [{"severity": "high", "file": "a.py", "line": 1, "side": "RIGHT", "message": message}],
     }
 
     class Response:
@@ -731,6 +733,57 @@ def test_changed_diff_locations_handles_new_files_and_no_newline_marker():
     assert noema.changed_diff_locations(malformed_side_lines) == set()
 
 
+def test_changed_diff_locations_decodes_git_quoted_utf8_paths():
+    diff = '''diff --git "a/caf\\303\\251.py" "b/caf\\303\\251.py"
+--- "a/caf\\303\\251.py"
++++ "b/caf\\303\\251.py"
+@@ -1 +1 @@
+-old = True
++new = True
+'''
+    assert noema.changed_diff_locations(diff) == {
+        ("café.py", 1, "LEFT"),
+        ("café.py", 1, "RIGHT"),
+    }
+    assert noema.parse_diff_path('"unterminated', "a/") == ""
+
+
+def test_complete_changed_paths_preserve_material_probe_requirement():
+    diff = """--- a/docs/note.md
++++ b/docs/note.md
+@@ -1 +1 @@
+-old
++new
+"""
+    verdict = {
+        "decision": "approve",
+        "summary": "Documentation remains accurate.",
+        "findings": [],
+        "reviewed_lines": [
+            {"path": "docs/note.md", "line": 1, "side": "RIGHT", "analysis": "Replacement checked."}
+        ],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "Runtime file was outside the prompt diff.",
+            "probes": [
+                {
+                    "path": "docs/note.md",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "hypothesis": "The replacement is empty.",
+                    "attack_or_counterexample": "Inspect the added line.",
+                    "evidence": "The added line is nonempty.",
+                    "outcome": "falsified",
+                }
+            ],
+        },
+    }
+    with pytest.raises(RuntimeError, match="at least 2 concrete probe"):
+        noema.validate_substantive_verdict(
+            verdict, diff, ["docs/note.md", "src/runtime.py"]
+        )
+
+
 def test_substantive_verdict_rejects_non_changed_location_and_accepts_left_deletion():
     diff = """diff --git a/docs/old.md b/docs/old.md
 --- a/docs/old.md
@@ -778,7 +831,7 @@ def test_request_changes_requires_confirmed_probe_at_finding_location():
     verdict = {
         "decision": "request_changes",
         "summary": "The safety gate is disabled.",
-        "findings": [{"severity": "high", "file": "config.yml", "line": 1, "message": "Keep the gate enabled."}],
+        "findings": [{"severity": "high", "file": "config.yml", "line": 1, "side": "RIGHT", "message": "Keep the gate enabled."}],
         "reviewed_lines": [
             {"path": "config.yml", "line": 1, "side": "RIGHT", "analysis": "The new value disables the gate."}
         ],
@@ -808,6 +861,10 @@ def test_request_changes_requires_confirmed_probe_at_finding_location():
         },
     }
     noema.validate_substantive_verdict(verdict, diff)
+    verdict["findings"][0]["side"] = "LEFT"
+    with pytest.raises(RuntimeError, match="confirmed probe on a published finding"):
+        noema.validate_substantive_verdict(verdict, diff)
+    verdict["findings"][0]["side"] = "RIGHT"
     verdict["adversarial_validation"]["probes"][0]["outcome"] = "falsified"
     with pytest.raises(RuntimeError, match="confirmed probe on a published finding"):
         noema.validate_substantive_verdict(verdict, diff)

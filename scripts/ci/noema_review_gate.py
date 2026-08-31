@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import ipaddress
 import json
@@ -234,13 +235,11 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
     in_hunk = False
     for raw_line in diff.splitlines():
         if raw_line.startswith("--- "):
-            value = raw_line[4:].split("\t", 1)[0]
-            old_path = "" if value == "/dev/null" else value.removeprefix("a/")
+            old_path = parse_diff_path(raw_line[4:], "a/")
             in_hunk = False
             continue
         if raw_line.startswith("+++ "):
-            value = raw_line[4:].split("\t", 1)[0]
-            new_path = "" if value == "/dev/null" else value.removeprefix("b/")
+            new_path = parse_diff_path(raw_line[4:], "b/")
             in_hunk = False
             continue
         match = DIFF_HUNK_RE.match(raw_line)
@@ -264,7 +263,23 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
     return locations
 
 
-def validate_substantive_verdict(verdict: dict[str, Any], diff: str) -> None:
+def parse_diff_path(raw: str, prefix: str) -> str:
+    """Decode a Git unified-diff path, including C-quoted UTF-8 paths."""
+    value = raw.split("\t", 1)[0]
+    if value == "/dev/null":
+        return ""
+    if value.startswith('"'):
+        try:
+            decoded = ast.literal_eval(value)
+            value = decoded.encode("latin-1").decode("utf-8")
+        except (SyntaxError, ValueError, UnicodeError):
+            return ""
+    return value.removeprefix(prefix)
+
+
+def validate_substantive_verdict(
+    verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
+) -> None:
     """Reject formal verdicts without changed-line and adversarial evidence."""
     decision = str(verdict.get("decision") or "").lower()
     if decision == "comment":
@@ -297,12 +312,12 @@ def validate_substantive_verdict(verdict: dict[str, Any], diff: str) -> None:
     if not isinstance(residual_risk, str) or not residual_risk.strip():
         raise RuntimeError("Noema adversarial validation requires residual_risk")
     probes = validation.get("probes")
-    changed_paths = {path for path, _line, _side in locations}
-    required_probes = 2 if any(changed_file_is_material(path) for path in changed_paths) else 1
+    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
+    required_probes = 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
     if not isinstance(probes, list) or len(probes) < required_probes:
         raise RuntimeError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
 
-    confirmed: set[tuple[str, int]] = set()
+    confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
@@ -322,13 +337,13 @@ def validate_substantive_verdict(verdict: dict[str, Any], diff: str) -> None:
             raise RuntimeError(f"Noema adversarial probe {index} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
-            confirmed.add((str(probe["path"]), int(probe["line"])))
+            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
         raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
     if decision == "request_changes":
         finding_locations = {
-            (str(finding.get("file") or ""), finding.get("line"))
+            (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
             for finding in verdict.get("findings") or []
             if isinstance(finding, dict)
         }
@@ -573,6 +588,7 @@ def call_llm(
     diff: str,
     truncated: bool,
     review_context: str = "",
+    changed_paths: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
@@ -589,7 +605,7 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"message":"..."}]}',
+                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 f"Repository: {repo}",
@@ -643,13 +659,14 @@ def call_llm(
             or not finding["file"].strip()
             or type(finding.get("line")) is not int
             or finding["line"] <= 0
+            or finding.get("side") not in {"RIGHT", "LEFT"}
             or not isinstance(finding.get("message"), str)
             or not finding["message"].strip()
         ):
             raise RuntimeError("Noema LLM response contained a malformed finding")
     if decision == "request_changes" and not findings:
         raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
-    validate_substantive_verdict(verdict, diff)
+    validate_substantive_verdict(verdict, diff, changed_paths)
     return verdict
 
 
@@ -664,7 +681,8 @@ def format_findings(findings: Any) -> list[str]:
         severity = str(finding.get("severity") or "info")
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
-        location = f"{file_name}:{line}" if isinstance(line, int) and line > 0 else file_name
+        side = str(finding.get("side") or "")
+        location = f"{file_name}:{line} ({side})" if isinstance(line, int) and line > 0 else file_name
         message = str(finding.get("message") or "").strip()
         if message:
             lines.append(f"- [{severity}] {location}: {message}")
@@ -750,8 +768,9 @@ def inspect_and_review(repo: str, number: int) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
+    changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
-    verdict = call_llm(repo, number, pr, diff, truncated, review_context)
+    verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
     submit_review(repo, number, pr, actor, verdict)
     return 0
 

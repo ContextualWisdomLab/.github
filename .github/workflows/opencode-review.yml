@@ -235,9 +235,11 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
+    timeout-minutes: 95
     permissions:
       contents: read
       pull-requests: read
+      id-token: write
     steps:
       - name: Request current-head OpenCode review execution
         if: github.event.action != 'closed'
@@ -289,8 +291,10 @@ jobs:
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
           fi
-          reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+          verdict=""
+          for attempt in $(seq 1 180); do
+            reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+            verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
                 .[]
@@ -318,6 +322,13 @@ jobs:
                 empty
               end
           ')"
+            if [ -n "$verdict" ]; then
+              break
+            fi
+            if [ "$attempt" -lt 180 ]; then
+              sleep 30
+            fi
+          done
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
             exit 1
