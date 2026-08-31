@@ -7586,8 +7586,19 @@ jobs:
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
         run: |
           set -euo pipefail
+          # The declared end-to-end review budget is 625 minutes. Search a
+          # bounded 14-hour server-side window so setup/cleanup margin is
+          # covered without walking a repository's complete run history on
+          # each retry.
+          lookup_since="$(python3 - <<'PY'
+          from datetime import datetime, timedelta, timezone
+
+          print((datetime.now(timezone.utc) - timedelta(hours=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+          PY
+          )"
           for attempt in $(seq 1 12); do
-            runs="$(gh api "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100")"
+            runs="$(gh api --method GET --paginate "repos/${GH_REPOSITORY}/actions/runs" \
+              -f event=pull_request_target -f "created=>=${lookup_since}" -f per_page=100)"
             required_run="$(printf '%s\n' "$runs" | jq -r -s --arg head "$PR_HEAD_SHA" --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" '
               [
                 .[].workflow_runs[]

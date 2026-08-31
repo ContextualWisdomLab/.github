@@ -137,10 +137,11 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
     assert 'select(.display_title == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))' in dispatched
     assert "head_sha=${PR_HEAD_SHA}" not in dispatched
-    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target&per_page=100"' in dispatched
-    assert 'gh api --paginate "repos/${GH_REPOSITORY}/actions/runs?event=pull_request_target' not in dispatched
     assert 'select(.event == "pull_request_target")' in dispatched
     assert 'select(.workflow_url | contains("/actions/required_workflows/"))' in dispatched
+    assert "datetime.now(timezone.utc) - timedelta(hours=14)" in dispatched
+    assert '-f "created=>=${lookup_since}"' in dispatched
+    assert 'actions/runs?event=pull_request_target' not in dispatched
 
 
 def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
@@ -155,7 +156,7 @@ def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path)
         f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"$FAKE_CALLS"
-if [[ "$*" == *"actions/runs?"* ]]; then
+if [[ "$*" == *"actions/runs"* && "$*" == *"created=>="* ]]; then
   printf '%s\\n' '{json.dumps({"workflow_runs": [{"id": 42, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}, {"id": 43, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/workflows/10", "status": "completed", "conclusion": "failure"}, {"id": 44, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#8@" + HEAD, "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}, {"id": 45, "head_sha": "trusted-base", "event": "pull_request_target", "name": "Required OpenCode Review", "display_title": "Required OpenCode Review ContextualWisdomLab/example#7@other-head", "path": ".github/workflows/opencode-review.yml", "workflow_url": "https://api.github.com/repos/ContextualWisdomLab/example/actions/required_workflows/9", "status": "completed", "conclusion": "failure"}]})}'
   exit 0
 fi
@@ -180,4 +181,7 @@ exit 1
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "actions/runs/42/rerun-failed-jobs" in calls.read_text(encoding="utf-8")
+    recorded = calls.read_text(encoding="utf-8")
+    assert "actions/runs/42/rerun-failed-jobs" in recorded
+    assert "--method GET --paginate repos/ContextualWisdomLab/example/actions/runs" in recorded
+    assert "created=>=" in recorded
