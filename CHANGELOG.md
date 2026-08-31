@@ -660,6 +660,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Changed
 
+- Require the PR Review Merge Scheduler to observe both GitHub's aggregate
+  `APPROVED` decision and the latest effective non-author, non-OpenCode formal
+  approval bound to the exact live head before direct merge or auto-merge.
+  A later same-head change request revokes that reviewer's earlier approval,
+  and existing auto-merge is disarmed when either authorization is absent.
 - Emit completed repository pull-list requests as they finish in the five-minute
   agent-mention sweep, while retaining the four-worker ceiling, rotation, and
   exact-name dispatch ledger, so one slow repository cannot hide ready sibling
@@ -678,6 +683,15 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Keep the central required-workflow coverage placeholder from superseding a
+  failed repository-dispatch coverage run; coverage retry and merge decisions
+  now use authoritative execution evidence for the central scheduler.
+- Re-dispatch an exact-head OpenCode review after its coverage-only blocker is
+  cleared, selecting the newest coverage rerun by timestamp across workflow
+  names and ignoring only the superseded `opencode-review` failure and central
+  required-workflow placeholder. Conflicting heads and failed sibling jobs in an
+  OpenCode workflow remain fail-closed alongside unresolved threads, Strix,
+  coverage, and unrelated failed checks.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.
