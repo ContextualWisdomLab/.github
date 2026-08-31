@@ -130,6 +130,36 @@ def test_change_request_requires_current_head_opencode_review():
     assert not fix.change_request_is_autofixable(stale_review_pr)
 
 
+def test_change_request_gates_fail_closed_on_unknown_merge_state():
+    """A missing/empty mergeStateStatus must not be treated as CLEAN.
+
+    The GraphQL schema guarantees a non-null mergeStateStatus enum, but the
+    REST fallback path (used when GraphQL is unavailable) can compute an
+    empty string when GitHub's REST mergeable_state is still null right
+    after a push. That must fail closed like every other unrecognized
+    merge state, not fall through as if the PR were confirmed clean.
+    """
+    head = "a" * 40
+    body = "Actionable source-backed finding with suggested diff."
+    review = {
+        "state": "CHANGES_REQUESTED",
+        "author": {"login": "opencode-agent"},
+        "commit": {"oid": head},
+        "body": body,
+    }
+
+    for merge_state in ("", "UNKNOWN"):
+        pr = make_pr(headRefOid=head, mergeStateStatus=merge_state, reviews={"nodes": [review]})
+        assert fix._clean_change_request_body(pr) is None, merge_state
+        assert not fix.change_request_is_autofixable(pr), merge_state
+        assert not fix.change_request_requires_rca(pr), merge_state
+
+    pr_missing_key = make_pr(headRefOid=head, reviews={"nodes": [review]})
+    del pr_missing_key["mergeStateStatus"]
+    assert fix._clean_change_request_body(pr_missing_key) is None
+    assert not fix.change_request_is_autofixable(pr_missing_key)
+
+
 def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     """The queue path dispatches one same-repository autofix."""
     pr = make_pr()

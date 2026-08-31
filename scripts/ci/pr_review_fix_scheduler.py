@@ -155,7 +155,7 @@ def latest_current_head_opencode_review(pr: dict[str, Any]) -> dict[str, Any] | 
 def _clean_change_request_body(pr: dict[str, Any]) -> str | None:
     """Return normalized exact-head OpenCode review text for a clean PR."""
     merge_state = str(pr.get("mergeStateStatus") or "").upper()
-    if merge_state and merge_state not in {"CLEAN", "HAS_HOOKS"}:
+    if merge_state not in {"CLEAN", "HAS_HOOKS"}:
         return None
     review = latest_current_head_opencode_review(pr)
     if review is None:
