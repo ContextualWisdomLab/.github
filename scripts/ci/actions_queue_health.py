@@ -368,22 +368,40 @@ def collect_snapshot(
         pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
         runs_by_id: dict[int, dict[str, Any]] = {}
         try:
-            runs = _list_payload(
-                github_json(
-                    f"repos/{repository}/actions/runs?per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                    paginate=True,
-                    runner=runner,
-                ),
-                "workflow_runs",
-                max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
-            )
-            for run in runs:
-                status = str(run.get("status") or "").upper()
-                if status not in QUEUE_STATES | {"WAITING"}:
-                    continue
+            active_statuses = ("in_progress", "pending", "queued", "requested", "waiting")
+            snapshots: list[dict[int, dict[str, Any]]] = []
+            for status_order in (active_statuses, tuple(reversed(active_statuses))):
+                snapshot: dict[int, dict[str, Any]] = {}
+                for status in status_order:
+                    runs = _list_payload(
+                        github_json(
+                            f"repos/{repository}/actions/runs?status={status}"
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                            paginate=True,
+                            runner=runner,
+                        ),
+                        "workflow_runs",
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * MAX_API_PAGES,
+                    )
+                    for run in runs:
+                        run_id = run.get("id")
+                        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                            raise QueueHealthError("workflow run id must be a positive integer")
+                        snapshot[run_id] = run
+                snapshots.append(snapshot)
+            first_snapshot, second_snapshot = snapshots
+            first_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in first_snapshot.items()
+            }
+            second_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in second_snapshot.items()
+            }
+            if first_states != second_states:
+                raise QueueHealthError("active workflow run snapshot changed during collection")
+            for run_id, run in second_snapshot.items():
                 run_id = run.get("id")
-                if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
-                    raise QueueHealthError("workflow run id must be a positive integer")
                 candidate = _normalise_run(repository, run, [])
                 identity, _ = _run_identity(candidate, pull_requests_by_number)
                 if identity != "current_head" or candidate["status"] not in {

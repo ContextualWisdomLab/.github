@@ -480,6 +480,12 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         "repos/owner/repo/actions/runs?per_page=50": [queued_current, current, unlinked],
         "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
     }
+    for status in ("in_progress", "pending", "queued", "requested", "waiting"):
+        responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = [
+            run
+            for run in responses["repos/owner/repo/actions/runs?per_page=50"]
+            if run["status"] == status
+        ]
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
@@ -516,7 +522,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     assert bad_snapshot["collection_errors"][0]["repository"] == "owner/repo"
 
     invalid_run_responses = dict(responses)
-    invalid_run_responses["repos/owner/repo/actions/runs?per_page=50"] = [
+    invalid_run_responses["repos/owner/repo/actions/runs?status=queued&per_page=50"] = [
         {"id": 0, "status": "queued"}
     ]
 
@@ -599,6 +605,10 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
         "repos/owner/repo/actions/runs?per_page=50": [queued_current],
     }
+    for status in ("in_progress", "pending", "queued", "requested", "waiting"):
+        responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = (
+            [queued_current] if status == "queued" else []
+        )
     empty_identity_pull = pull_request()
     empty_identity_pull["head"] = {"sha": ""}
     retry_calls = 0
@@ -662,6 +672,10 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
             "jobs": [job(700, runner_id=9, runner_name="runner-9")]
         },
     }
+    for status in ("in_progress", "pending", "queued", "requested", "waiting"):
+        responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = (
+            [pull_request_target_run] if status == "in_progress" else []
+        )
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
@@ -688,7 +702,7 @@ def test_collect_snapshot_isolates_repository_errors_and_reports_incomplete_evid
             payload: object = {"default_branch": "main"}
         elif path == "repos/good/repo/pulls?state=open&per_page=100":
             payload = []
-        elif path == "repos/good/repo/actions/runs?per_page=50":
+        elif "/actions/runs?status=" in path:
             payload = []
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
@@ -731,7 +745,7 @@ def test_build_report_rejects_malformed_collection_errors(collection_errors: obj
 
 
 def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
-    """Avoid oversized Actions run responses while retaining bounded pagination."""
+    """Ignore large historical totals while retaining bounded active-run pagination."""
     requested_paths: list[str] = []
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
@@ -743,20 +757,13 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
         elif path == "repos/owner/repo/pulls?state=open&per_page=100":
             payload = []
         elif path == "repos/owner/repo/actions/runs?per_page=50":
-            statuses = (
-                "completed",
-                "in_progress",
-                "pending",
-                "queued",
-                "requested",
-                "waiting",
-            )
+            payload = {"total_count": 2_001, "workflow_runs": []}
+        elif "/actions/runs?status=" in path:
+            status = path.split("status=", 1)[1].split("&", 1)[0]
+            run_id = ("in_progress", "pending", "queued", "requested", "waiting").index(status)
             payload = {
-                "total_count": len(statuses),
-                "workflow_runs": [
-                    workflow_run(100 + index, status=status)
-                    for index, status in enumerate(statuses)
-                ],
+                "total_count": 1,
+                "workflow_runs": [workflow_run(100 + run_id, status=status)],
             }
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
@@ -768,8 +775,18 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
         ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
     )
 
-    run_paths = [path for path in requested_paths if "/actions/runs?" in path]
-    assert run_paths == ["repos/owner/repo/actions/runs?per_page=50"]
+    run_paths = [path for path in requested_paths if "/actions/runs?status=" in path]
+    assert "repos/owner/repo/actions/runs?per_page=50" not in requested_paths
+    assert run_paths == [
+        *[
+            f"repos/owner/repo/actions/runs?status={status}&per_page=50"
+            for status in ("in_progress", "pending", "queued", "requested", "waiting")
+        ],
+        *[
+            f"repos/owner/repo/actions/runs?status={status}&per_page=50"
+            for status in ("waiting", "requested", "queued", "pending", "in_progress")
+        ],
+    ]
     assert {run["status"] for run in snapshot["repositories"][0]["runs"]} == {
         "IN_PROGRESS",
         "PENDING",
@@ -777,6 +794,38 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
         "REQUESTED",
         "WAITING",
     }
+
+    queued_reads = 0
+
+    def changing_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Expose a queue transition between the two bounded status sweeps."""
+        nonlocal queued_reads
+        path = args[-1]
+        if path == "repos/owner/repo":
+            payload: object = {"default_branch": "main"}
+        elif path == "repos/owner/repo/pulls?state=open&per_page=100":
+            payload = []
+        elif "/actions/runs?status=" in path:
+            status = path.split("status=", 1)[1].split("&", 1)[0]
+            if status == "queued":
+                queued_reads += 1
+                payload = [workflow_run(900, status=status)] if queued_reads == 1 else []
+            else:
+                payload = []
+        else:  # pragma: no cover - a new endpoint must be explicitly governed
+            raise AssertionError(f"unexpected endpoint: {path}")
+        if "--paginate" in args:
+            payload = [payload]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    changing_snapshot = queue_health.collect_snapshot(["owner/repo"], runner=changing_runner)
+    assert changing_snapshot["repositories"] == []
+    assert changing_snapshot["collection_errors"] == [
+        {
+            "repository": "owner/repo",
+            "error": "active workflow run snapshot changed during collection",
+        }
+    ]
 
 
 def test_load_snapshot_and_identity_helpers(tmp_path: Path) -> None:
