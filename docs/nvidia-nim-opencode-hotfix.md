@@ -17,12 +17,19 @@ this repo's "append a dated note, don't rewrite history" documentation
 convention (see `docs/doctoring/direct-nvidia-nim-communication-removal.md`
 for the sibling record of the *code* that implemented an unrelated,
 already-dead direct-NIM resolver). The `nvidia-nim` provider block still
-declared in root `opencode.jsonc` (unused by the CI dispatch path, which
-generates its own provider list) is a deliberate, still-tested fallback
-capability for `scripts/ci/run_opencode_review_model_pool.sh`
-(`is_nvidia_nim_candidate`, exercised by `tests/test_opencode_model_pool_runner.py`),
-not orphaned code — removing it is a separate resilience-tradeoff decision,
-not a documentation fix, and is out of scope here. See
+declared in root `opencode.jsonc` is excluded from every `enabled_providers`
+list this repo currently renders (both the root config and the CI dispatch
+path's own embedded config), so it is not a currently usable fallback --
+nothing in production ever supplies a `nvidia-nim/*` candidate today.
+`scripts/ci/run_opencode_review_model_pool.sh`'s own candidate-handling logic
+for that prefix (`is_nvidia_nim_candidate`, skip-if-no-key, timeout capping)
+is exercised by `tests/test_opencode_model_pool_runner.py`, but those tests
+fake the `opencode` invocation itself, so they prove the script's own
+handling of such a candidate, not that the real OpenCode binary would still
+successfully reach NVIDIA's API with this block's current model ids if one
+were ever supplied. Not orphaned code -- re-enabling and re-verifying it, or
+removing it outright, is a separate resilience-tradeoff decision, not a
+documentation fix, and is out of scope here. See
 `docs/product-technical-gap-baseline.md`'s "Direct-NIM-communication audit"
 entry (2026-08-31) for the full investigation this correction closes out.
 

@@ -8,11 +8,12 @@ Semantic Versioning where the repository publishes a release.
 - Mark `docs/nvidia-nim-opencode-hotfix.md` rolled back and historical: the
   six-model NIM prefix it described was removed from
   `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` by `f8823a54`
-  (#1364) over a month ago, but the note itself was never updated per its own
-  "delete this note once restored" instruction. No code changed; this closes
-  out the "worth a follow-up doc cleanup" item recorded in
-  `docs/product-technical-gap-baseline.md`'s 2026-08-31 direct-NIM-communication
-  audit entry.
+  (#1364, 2026-08-27), but the note itself was never updated per its own
+  "delete this note once restored" instruction and stayed factually stale
+  for about a month (last touched 2026-07-31, per #682) until this
+  correction. No code changed; this closes out the "worth a follow-up doc
+  cleanup" item recorded in `docs/product-technical-gap-baseline.md`'s
+  2026-08-31 direct-NIM-communication audit entry.
 - Fix the root cause of `noema-review`'s four consecutive `TimeoutError`
   failures on `contextual-orchestrator#946` (enumerated in
   `contextual-orchestrator#974`), then correct that fix per Devin's follow-up
