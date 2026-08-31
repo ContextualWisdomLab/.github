@@ -84,7 +84,7 @@ independent family-cap default.
 The ten-second route timeout is a startup-admission budget: a route that does
 not answer the bounded readiness probe quickly enough is excluded before
 healthz. It must not also bound the real review request. The serving
-`ModelClient` now uses the 9,600-second review budget used by the
+`ModelClient` now uses the 120-second transport budget already used by the
 Noema review gate, while retaining zero retries and the same output-token and
 temperature policy. The launcher test constructs both client policies and
 asserts their distinct timeouts; it does not infer the contract from duplicate
