@@ -456,6 +456,30 @@ def _binary_documentation_evidence_confirms(
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
 
 
+def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int) -> bytes:
+    """Reconstruct one PNG scanline for bounded indexed-pixel validation."""
+
+    reconstructed = bytearray(len(filtered))
+    for index, value in enumerate(filtered):
+        left = reconstructed[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+        above = previous[index] if previous else 0
+        upper_left = previous[index - bytes_per_pixel] if previous and index >= bytes_per_pixel else 0
+        if filter_type == 0:
+            predictor = 0
+        elif filter_type == 1:
+            predictor = left
+        elif filter_type == 2:
+            predictor = above
+        elif filter_type == 3:
+            predictor = (left + above) // 2
+        else:
+            estimate = left + above - upper_left
+            distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+            predictor = (left, above, upper_left)[distances.index(min(distances))]
+        reconstructed[index] = (value + predictor) & 0xFF
+    return bytes(reconstructed)
+
+
 def _is_complete_png(raw: bytes) -> bool:
     """Validate one bounded PNG including its null- or Adam7-interlaced stream."""
 
@@ -463,7 +487,7 @@ def _is_complete_png(raw: bytes) -> bool:
         return False
     offset = len(PNG_SIGNATURE)
     header: tuple[int, int, int, int, int] | None = None
-    palette_seen = False
+    palette_entries = 0
     image_data: list[bytes] = []
     image_data_closed = False
     while offset + 12 <= len(raw):
@@ -500,12 +524,12 @@ def _is_complete_png(raw: bytes) -> bool:
         elif chunk_type == b"IHDR":
             return False
         elif chunk_type == b"PLTE":
-            if palette_seen or image_data or length == 0 or length > 768 or length % 3:
+            if palette_entries or image_data or length == 0 or length > 768 or length % 3:
                 return False
             _width, _height, bit_depth, color_type, _interlace = header
             if color_type == 3 and length // 3 > 1 << bit_depth:
                 return False
-            palette_seen = True
+            palette_entries = length // 3
         elif chunk_type == b"IDAT":
             if image_data_closed:
                 return False
@@ -514,8 +538,8 @@ def _is_complete_png(raw: bytes) -> bool:
             if length != 0 or not image_data or chunk_end != len(raw):
                 return False
             width, height, bit_depth, color_type, interlace = header
-            if (color_type == 3 and not palette_seen) or (
-                color_type in {0, 4} and palette_seen
+            if (color_type == 3 and not palette_entries) or (
+                color_type in {0, 4} and palette_entries
             ):
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
@@ -524,7 +548,7 @@ def _is_complete_png(raw: bytes) -> bool:
                  (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
                 if interlace else ((0, 0, 1, 1),)
             )
-            scanlines: list[tuple[int, int]] = []
+            scanlines: list[tuple[int, int, int]] = []
             expected_size = 0
             for x_start, y_start, x_step, y_step in passes:
                 if width <= x_start or height <= y_start:
@@ -535,7 +559,7 @@ def _is_complete_png(raw: bytes) -> bool:
                 expected_size += pass_height * (row_bytes + 1)
                 if expected_size > MAX_RESPONSE_BYTES:
                     return False
-                scanlines.append((pass_height, row_bytes))
+                scanlines.append((pass_height, row_bytes, pass_width))
             decoder = zlib.decompressobj()
             try:
                 decoded = decoder.decompress(b"".join(image_data), expected_size + 1)
@@ -547,10 +571,25 @@ def _is_complete_png(raw: bytes) -> bool:
             ):
                 return False
             decoded_offset = 0
-            for row_count, row_bytes in scanlines:
+            for row_count, row_bytes, pass_width in scanlines:
+                previous = b""
                 for _ in range(row_count):
-                    if decoded[decoded_offset] > 4:
+                    filter_type = decoded[decoded_offset]
+                    if filter_type > 4:
                         return False
+                    filtered = decoded[decoded_offset + 1 : decoded_offset + row_bytes + 1]
+                    if color_type == 3:
+                        reconstructed = _png_unfilter_row(filtered, previous, filter_type, 1)
+                        mask = (1 << bit_depth) - 1
+                        for pixel in range(pass_width):
+                            bit_offset = pixel * bit_depth
+                            palette_index = (
+                                reconstructed[bit_offset // 8]
+                                >> (8 - bit_depth - bit_offset % 8)
+                            ) & mask
+                            if palette_index >= palette_entries:
+                                return False
+                        previous = reconstructed
                     decoded_offset += row_bytes + 1
             return decoded_offset == len(decoded)
         elif chunk_type[0] & 0x20 == 0:

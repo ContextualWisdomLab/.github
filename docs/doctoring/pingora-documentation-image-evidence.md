@@ -7,7 +7,7 @@ an active edge runtime.
 
 ADR-0019 now admits documentation PNG screenshots only when the bounded final
 file is a complete CRC-valid PNG chunk stream ending at IEND with no trailing
-payload, conforming chunk names and palette bounds, and bounded null- or
+payload, conforming chunk names, palette bounds and indices, and bounded null- or
 Adam7-interlaced decompressed scanlines that match IHDR. A signature or
 CRC-valid arbitrary IDAT is insufficient. Files in a runtime path, malformed signatures,
 unsupported binary formats, and unavailable evidence continue to fail closed.

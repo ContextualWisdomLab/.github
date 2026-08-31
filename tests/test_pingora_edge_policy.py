@@ -490,6 +490,23 @@ def test_png_semantic_validation_fails_closed() -> None:
     def png(header: bytes, *chunks: bytes) -> bytes:
         return policy.PNG_SIGNATURE + chunk(b"IHDR", header) + b"".join(chunks)
 
+    def indexed_png(
+        width: int,
+        height: int,
+        bit_depth: int,
+        palette_entries: int,
+        decoded: bytes,
+        *,
+        interlace: int = 0,
+    ) -> bytes:
+        header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes((bit_depth, 3, 0, 0, interlace))
+        return png(
+            header,
+            chunk(b"PLTE", b"\0\0\0" * palette_entries),
+            chunk(b"IDAT", zlib.compress(decoded)),
+            chunk(b"IEND", b""),
+        )
+
     rgba = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 0))
     indexed = (1).to_bytes(4, "big") * 2 + bytes((8, 3, 0, 0, 0))
     gray = (1).to_bytes(4, "big") * 2 + bytes((8, 0, 0, 0, 0))
@@ -518,6 +535,17 @@ def test_png_semantic_validation_fails_closed() -> None:
     assert not policy._is_complete_png(
         png(indexed_one_bit, chunk(b"PLTE", b"\0" * 9), chunk(b"IDAT", zlib.compress(b"\0\0")), end)
     )
+    for filter_type in range(5):
+        second_row = b"\1\0" if filter_type == 0 else b"\1\xff"
+        assert policy._is_complete_png(
+            indexed_png(2, 2, 8, 2, bytes((filter_type, 0, 1, filter_type)) + second_row)
+        )
+    assert not policy._is_complete_png(indexed_png(2, 1, 8, 1, b"\0\0\1"))
+    assert not policy._is_complete_png(indexed_png(2, 2, 8, 2, b"\0\0\1\4\2\xfe"))
+    assert policy._is_complete_png(indexed_png(2, 1, 1, 2, b"\0\x40"))
+    assert not policy._is_complete_png(indexed_png(2, 1, 1, 1, b"\0\x40"))
+    assert policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\0", interlace=1))
+    assert not policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\1", interlace=1))
     assert not policy._is_complete_png(png(gray, chunk(b"PLTE", b"\0\0\0"), chunk(b"IDAT", zlib.compress(b"\0\0")), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", b"not-zlib"), end))
     assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
