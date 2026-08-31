@@ -216,6 +216,13 @@ def test_fetch_diff_round_trips_special_current_and_previous_filenames(monkeypat
     }
 
 
+def test_parse_diff_path_rejects_non_string_json(monkeypatch):
+    """A malformed decoder result cannot become a trusted changed-file path."""
+    monkeypatch.setattr(noema.json, "loads", lambda _value: None)
+
+    assert noema.parse_diff_path('"a/file.py"', "a/") == ""
+
+
 def test_fetch_diff_marks_unavailable_patch_as_truncated(monkeypatch):
     """A file without GitHub patch text remains visible but incomplete."""
     response = json.dumps([[{"filename": "removed.bin", "status": "removed"}]])
