@@ -810,6 +810,16 @@ def rest_check_node(check: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def rest_status_node(status: dict[str, Any]) -> dict[str, Any]:
+    """Convert a REST classic commit-status payload into the GraphQL status rollup shape."""
+
+    return {
+        "context": status.get("context"),
+        "state": (status.get("state") or "").upper(),
+        "targetUrl": status.get("target_url"),
+    }
+
+
 def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     """Convert a REST pull request payload into the GraphQL shape used by the scheduler."""
 
@@ -819,6 +829,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head_repo = head.get("repo") or {}
     reviews = gh_api_json(f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    statuses = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/statuses?per_page=100")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
         str(pr.get("mergeable_state") or "").lower(),
@@ -847,6 +858,10 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
                 "nodes": [
                     rest_check_node(check)
                     for check in (checks.get("check_runs") or [])
+                ]
+                + [
+                    rest_status_node(status)
+                    for status in (statuses or [])
                 ]
             }
         },

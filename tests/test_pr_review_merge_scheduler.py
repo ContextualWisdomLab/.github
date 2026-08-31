@@ -561,6 +561,13 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
                 }
             ]
         },
+        "repos/owner/repo/commits/abc123/statuses?per_page=100": [
+            {
+                "context": "strix",
+                "state": "success",
+                "target_url": "https://github.com/owner/repo/actions/runs/3",
+            }
+        ],
         "repos/owner/repo/pulls/42/files?per_page=20": [
             {"filename": "scripts/ci/pr_review_merge_scheduler.py"},
         ],
@@ -593,6 +600,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert calls == [
         "repos/owner/repo/pulls/42/reviews?per_page=100",
         "repos/owner/repo/commits/abc123/check-runs?per_page=100",
+        "repos/owner/repo/commits/abc123/statuses?per_page=100",
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]
     assert node["number"] == 42
@@ -605,6 +613,20 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
     assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
     assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
+    # A classic commit status (e.g. a same-head manual `workflow_dispatch`
+    # Strix run's evidence) must survive the REST fallback too -- omitting
+    # it here would silently erase that evidence for every caller, since
+    # `check-runs` alone never includes classic statuses (regression for a
+    # Devin Review finding: "REST fallback loses manual evidence").
+    classic_nodes = [n for n in node["statusCheckRollup"]["contexts"]["nodes"] if "context" in n]
+    assert classic_nodes == [
+        {
+            "context": "strix",
+            "state": "SUCCESS",
+            "targetUrl": "https://github.com/owner/repo/actions/runs/3",
+        }
+    ]
+    assert sched.strix_evidence_state(node) == "complete"
 
 
 def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):

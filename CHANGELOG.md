@@ -5,6 +5,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a Devin Review finding on PR #1456: the REST fallback path
+  (`rest_pr_node`, used when GraphQL is unavailable) only ever fetched a
+  head commit's CheckRuns (`commits/{sha}/check-runs`), never its classic
+  commit statuses (`commits/{sha}/statuses`), so a same-head manual
+  `workflow_dispatch` Strix run's classic-status evidence silently
+  disappeared under REST fallback -- `strix_evidence_state()` would see no
+  Strix evidence at all and could never reach `"complete"` through that
+  identity, exactly the loss of manual evidence the two preceding fixes on
+  this PR were built to preserve. `rest_pr_node` now also fetches classic
+  statuses and folds them into the same `statusCheckRollup.contexts.nodes`
+  list via a new `rest_status_node` shape converter, alongside the existing
+  CheckRun conversion. Added a regression assertion that a classic status
+  survives the REST fallback and that `strix_evidence_state()` sees it as
+  `"complete"` end-to-end.
 - Fix a second, immediately-following Devin Review finding on PR #1456
   (`strix_evidence_state()`), which directly refined the previous entry's
   fix: making a required-workflow CheckRun the sole authority whenever
