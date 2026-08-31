@@ -50,7 +50,7 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert 'select(.name == "Required Noema Review")' in cleanup
     assert "CLOSED_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
-    assert "actions/workflows/noema-review.yml/runs?per_page=100" in cleanup
+    assert "actions/runs?per_page=100" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
 
 
@@ -1530,7 +1530,11 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "0", "--expected-head", "a" * 40]
         )
-    with pytest.raises(SystemExit, match="--expected-head must be an exact"):
+    with pytest.raises(SystemExit, match="--expected-head must be a canonical lowercase"):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "bad"]
+        )
+    with pytest.raises(SystemExit, match="--expected-head must be a canonical lowercase"):
+        noema.main(
+            ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )

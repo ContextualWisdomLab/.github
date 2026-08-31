@@ -55,6 +55,8 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_from_one_snapshot(
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"--paginate"* ]]; then
+  [[ "$*" != *"/actions/workflows/"* ]] || exit 99
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
   cat "$FAKE_RUNS_FILE"
 else
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
@@ -81,6 +83,8 @@ fi
     )
     assert result.returncode == 0, result.stderr
     calls = calls_file.read_text(encoding="utf-8")
+    assert "actions/runs?per_page=100" in calls
+    assert "/actions/workflows/" not in calls
     assert "/actions/runs/101/cancel" in calls
     assert "/actions/runs/102/cancel" not in calls
     assert "/actions/runs/103/cancel" not in calls
@@ -239,29 +243,22 @@ def _run_stale_trigger_step(
     )
 
 
-def test_stale_trigger_step_compares_expected_head_case_insensitively(
+def test_stale_trigger_step_rejects_noncanonical_uppercase_head(
     tmp_path: Path,
 ) -> None:
-    """An uppercase EXPECTED_HEAD must not be rejected against GitHub's lowercase live SHA.
-
-    Devin Review finding on PR #1507: this bash-side stale-trigger guard
-    accepts uppercase hex (its own regex allows it, matching
-    ``--expected-head``'s Python-side validation) but used to compare
-    case-sensitively against the live PR head GitHub's API always reports in
-    lowercase, rejecting every valid uppercase-cased dispatch as stale.
-    """
+    """Reject caller-controlled uppercase SHA before any model work."""
     sha = "a" * 40
     result = _run_stale_trigger_step(tmp_path, expected_head=sha.upper(), live_head=sha)
-    assert result.returncode == 0, result.stderr
-    assert "is stale" not in result.stdout
+    assert result.returncode == 1
+    assert "canonical lowercase exact head SHA" in result.stdout
 
 
 def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
     tmp_path: Path,
 ) -> None:
-    """A truly stale trigger (different commit, any case) is still rejected."""
+    """A canonical but genuinely different trigger head is still rejected."""
     result = _run_stale_trigger_step(
-        tmp_path, expected_head="A" * 40, live_head="b" * 40
+        tmp_path, expected_head="a" * 40, live_head="b" * 40
     )
     assert result.returncode == 1
     assert "Noema trigger is stale" in result.stdout

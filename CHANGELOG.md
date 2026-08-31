@@ -9,7 +9,10 @@ Semantic Versioning where the repository publishes a release.
   their pull request closes, preventing abandoned model calls from consuming
   runner capacity for the two-hour review window. Cleanup uses one workflow-run
   snapshot and the PR-specific structured run title, avoiding status-transition
-  gaps and accidental cancellation of a different PR that shares the same SHA.
+  gaps and accidental cancellation of a different PR that shares the same SHA;
+  the general Actions endpoint also covers centrally supplied workflows.
+- Reject caller-controlled uppercase Noema trigger SHAs before model work so
+  equivalent SHA casing cannot create concurrent duplicate reviews.
 - Bind Noema workflow concurrency to the triggering PR head so a delayed
   OpenCode/Strix completion from an older head cannot cancel the current-head
   review run. The trigger head is also checked against the live PR before

@@ -911,12 +911,9 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
 def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review.
 
-    ``expected_head`` is normalized to lowercase before both stale-head
-    comparisons below. ``--expected-head`` is validated as 40 hex characters
-    of either case (``main``'s regex accepts uppercase), but GitHub's API
-    always reports ``headRefOid`` in lowercase; without normalizing, a valid
-    uppercase-cased trigger would be misdetected as stale and every such
-    review would be silently skipped (Devin Review finding on PR #1507).
+    ``expected_head`` is normalized defensively before both stale-head
+    comparisons below. The CLI and workflow require canonical lowercase SHA
+    input so equivalent casing cannot split the workflow concurrency group.
     """
     expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
@@ -963,8 +960,10 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", args.expected_head):
-        raise SystemExit("--expected-head must be an exact 40-character Git SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
+        raise SystemExit(
+            "--expected-head must be a canonical lowercase 40-character Git SHA"
+        )
     return inspect_and_review(args.repo, args.pr_number, args.expected_head)
 
 
