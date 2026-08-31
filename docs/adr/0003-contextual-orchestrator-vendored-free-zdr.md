@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`30c6d71680e659f25a0a433d4726ad0d437f9757` today) into `RUNNER_TEMP`. The
+   (`c107e3e52371993aa9c326fcc245e01c41fc3850` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -70,9 +70,10 @@ all five, and auto-optimize routing by cost.
    primary, and the admitted priced tier remains fallback-only.
    `scripts/ci/contextual_orchestrator_review_policy.py` turns the discovery
    report into a free-first, cost-evidence-ranked, ZDR-prioritized,
-   provider-family-diverse agents catalog (primary/secondary NVIDIA keys share
-   one outage-domain family), capped in size, in the orchestrator's own
-   `ModelAgent` schema.
+   credential-account-diverse agents catalog, capped in size, in the
+   orchestrator's own `ModelAgent` schema. Every KV credential is an independent
+   account; vendor or endpoint identity does not imply model equivalence. Only
+   explicit `model_group` membership may share routing evidence.
 4. **Wiring**: `pr-review-autofix.yml` and the Required OpenCode dispatch
    provision the sidecar with the five secrets before OpenCode runs and point
    every model/diagnosis candidate at `contextual-orchestrator/orchestrator/free`;
@@ -176,3 +177,16 @@ all five, and auto-optimize routing by cost.
   exists in `contextual_orchestrator_review_policy.py`/the sidecar for any
   other caller that opts into it explicitly — this amendment only removes it
   as Strix's default and as an accepted Strix override value.
+- **Monitoring evidence for the accepted risk above:** `scripts/ci/contextual_orchestrator_review_policy.py`
+  now reports `free_account_diversity` in the catalog report — the count of
+  independently credentialed accounts (see `provider_account`) among
+  *all* discovered free routes, independent of which pool is requested. This
+  was drafted (in a now-superseded addendum proposing to gate the `free`
+  decision on this evidence rather than making it directly) before the
+  2026-08-30 amendment above settled the question outright; the owner chose
+  to accept the risk rather than wait. The evidence itself remains useful
+  regardless: it is exactly the live signal for when "the free-catalog's
+  stale-model and provider-diversity gaps documented alongside this
+  amendment" (above) are closed, without requiring a manual re-audit.
+  `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
+  records that PR's own reasoning trail.

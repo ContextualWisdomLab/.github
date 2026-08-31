@@ -12,7 +12,7 @@ The difference from ``review_gateway.main()`` is the agent pool: discovery runs
 in-process (so the KV-backed credentials are visible to it), the zero-cost
 ("free") routes are collected into a report, and
 ``scripts/ci/contextual_orchestrator_review_policy.py`` turns that report into a
-ZDR-prioritized, provider-family-diverse catalog for ``orchestrator/free``.
+ZDR-prioritized, credential-account-diverse catalog for ``orchestrator/free``.
 Keeping the decision logic in that stdlib-only module lets every branch of the
 ZDR policy be tested offline in this repository while ``orchestrator/free``
 still resolves from authentically zero-priced models discovered by the
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -580,6 +581,59 @@ def _preflight_with_fallback(
         return viable, report, True
 
 
+def _log_preflight_rejections(report: dict[str, object]) -> None:
+    """Print one bounded diagnostic line per rejected preflight route to stderr.
+
+    ``report["routes"]`` rows are already sanitized by ``_preflight_review_agents``
+    (stable route identity, a bounded exception class name, an optional numeric
+    HTTP status -- never provider response bodies, exception messages, URLs,
+    prompts, or credentials). Before this, that bounded evidence reached only
+    the ``--preflight-out`` artifact file, invisible in the job log an operator
+    reads first, so a real "every free route rejected" failure was
+    indistinguishable from any other cause of ``review sidecar preflight
+    failed`` in normal CI output. This is printed to stderr (not stdout) so it
+    reaches the sidecar's sanitized stderr stream the same way discovery and
+    gateway diagnostics already do.
+    """
+    primary_attempt = report.get("primary_attempt")
+    if isinstance(primary_attempt, dict):
+        _log_preflight_rejections(primary_attempt)
+    routes = report.get("routes")
+    if not isinstance(routes, list):
+        return
+    for row in routes:
+        if not isinstance(row, dict) or row.get("status") != "rejected":
+            continue
+        # Re-validate rather than trust the caller's own sanitization: this
+        # print reaches the sidecar's sanitized stderr stream unchanged, so an
+        # out-of-contract value here (not a plain identifier) must degrade to
+        # a safe placeholder instead of ever being formatted into the line.
+        provider_value = row.get("provider")
+        provider = (
+            provider_value
+            if isinstance(provider_value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider_value)
+            else "unknown"
+        )
+        error_type_value = row.get("error_type")
+        error_type = (
+            error_type_value
+            if isinstance(error_type_value, str) and error_type_value.isidentifier() and len(error_type_value) <= 64
+            else "UnknownError"
+        )
+        http_status = row.get("http_status")
+        if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
+            print(
+                f"preflight_route_rejected provider={provider} "
+                f"error_type={error_type} http_status={http_status}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"preflight_route_rejected provider={provider} error_type={error_type}",
+                file=sys.stderr,
+            )
+
+
 def _write_json(path: str, payload: object) -> None:
     """Write one deterministic UTF-8 JSON evidence file."""
     Path(path).write_text(
@@ -612,9 +666,23 @@ def _bounded_fallback_catalog_limit(
 
 
 def _with_discovery_counts(
-    report: dict[str, object], rows: list[dict[str, Any]]
+    report: dict[str, object],
+    rows: list[dict[str, Any]],
+    *,
+    provider_account: Any,
 ) -> dict[str, object]:
-    """Copy a stage report while restoring full discovery-tier counts."""
+    """Copy a stage report while restoring full discovery-tier counts.
+
+    ``free_account_diversity`` is recomputed here from the full discovery-wide
+    ``rows``, not trusted from the stage report: the primary ``auto``-pool
+    stage may have selected only ZDR-admitted free rows (undercounting
+    diversity whenever ``--require-zdr`` excludes some free routes) and the
+    priced-fallback stage selects only priced rows (so its own internally
+    computed diversity is always zero) -- either stage report's
+    ``free_account_diversity``, as returned by ``build_zdr_prioritized_catalog``
+    from whatever narrower row set it was given, would otherwise contradict
+    that field's documented "among *all* discovered free routes" contract.
+    """
     enriched = dict(report)
     enriched.update(
         {
@@ -622,6 +690,13 @@ def _with_discovery_counts(
             "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
+            "free_account_diversity": len(
+                {
+                    provider_account(str(row["provider"]))
+                    for row in rows
+                    if row.get("cost_evidence") == "free"
+                }
+            ),
         }
     )
     return enriched
@@ -705,6 +780,7 @@ def main(argv: list[str] | None = None) -> int:
         build_zdr_prioritized_catalog,
         is_zdr_model,
         parse_discovery_report,
+        provider_account,
     )
 
     registered = register_review_credentials(os.environ)
@@ -772,12 +848,14 @@ def main(argv: list[str] | None = None) -> int:
     result = build_zdr_prioritized_catalog(
         primary_rows,
         limit=primary_limit,
-        family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+        account_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
     )
-    result["report"] = _with_discovery_counts(result["report"], normalized_rows)
+    result["report"] = _with_discovery_counts(
+        result["report"], normalized_rows, provider_account=provider_account
+    )
     Path(args.catalog_out).write_text(
         json.dumps({"agents": result["agents"]}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -801,7 +879,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
                 limit=fallback_limit,
-                family_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_FAMILY_CAP", "4")),
+                account_cap=int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",
@@ -810,7 +888,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows
+                fallback_result["report"], normalized_rows, provider_account=provider_account
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"
@@ -833,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
+        _log_preflight_rejections(exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
     if fallback_used and fallback_result is not None:
         Path(args.catalog_out).write_text(
