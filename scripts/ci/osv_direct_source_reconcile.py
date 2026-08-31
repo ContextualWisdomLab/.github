@@ -280,7 +280,12 @@ def reconcile_groups_for_retained_vulnerabilities(
         return
     if not isinstance(groups, list):
         raise TypeError("OSV package groups evidence is malformed")
-    retained_ids = {str(vulnerability.get("id") or "") for vulnerability in retained}
+    retained_ids: set[str] = set()
+    for vulnerability in retained:
+        vulnerability_id = vulnerability.get("id")
+        if not isinstance(vulnerability_id, str) or not vulnerability_id:
+            raise TypeError("OSV retained vulnerability identity is malformed")
+        retained_ids.add(vulnerability_id)
     filtered_groups: list[dict[str, Any]] = []
     for group in groups:
         if not isinstance(group, dict):

@@ -251,6 +251,14 @@ class DirectSourceReconcileTests(unittest.TestCase):
                     {"groups": groups}, retained
                 )
 
+        with self.assertRaisesRegex(
+            TypeError, "OSV retained vulnerability identity is malformed"
+        ):
+            OSV.reconcile_groups_for_retained_vulnerabilities(
+                {"groups": [{"ids": ["", "GHSA-removed"], "aliases": []}]},
+                [{"aliases": []}],
+            )
+
     def test_mixed_group_drops_removed_aliases_and_aggregate_severity(self) -> None:
         """Do not attribute a reconciled advisory's aliases or severity to a survivor."""
         removed = vulnerability("GHSA-removed", "< 0.20.2")
