@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import re
 import sys
+import zlib
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -390,7 +391,9 @@ def test_evaluate_pull_request_exempts_a_real_documentation_png() -> None:
         if "/pulls/15/files" in url:
             return [{"filename": "docs/screenshots/dashboard.png", "status": "added"}]
         assert "/contents/docs/screenshots/dashboard.png" in url
-        raw = b"\x89PNG\r\n\x1a\nsynthetic"
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
         return {
             "type": "file",
             "encoding": "base64",
@@ -427,6 +430,54 @@ def test_evaluate_pull_request_rejects_a_fake_documentation_png() -> None:
         opener=opener,
     )
     assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_rejects_png_with_appended_runtime_text() -> None:
+    """A valid image prefix cannot hide bytes appended after the IEND chunk."""
+
+    image = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/17/files" in url:
+            return [{"filename": "docs/screenshots/forged.png", "status": "added"}]
+        raw = image + b"\ncat /etc/nginx/nginx.conf\n"
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=17,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+
+def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
+    """Every malformed PNG boundary returns false without parsing past bounds."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    signature = policy.PNG_SIGNATURE
+    header = chunk(b"IHDR", b"\0" * 13)
+    assert not policy._is_complete_png(b"not-png")
+    assert not policy._is_complete_png(signature)
+    assert not policy._is_complete_png(
+        signature + (99).to_bytes(4, "big") + b"IHDR" + b"\0" * 4
+    )
+    assert not policy._is_complete_png(signature + header[:-1] + b"\0")
+    assert not policy._is_complete_png(signature + chunk(b"TEXT", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"IEND", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
 
 
 def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:

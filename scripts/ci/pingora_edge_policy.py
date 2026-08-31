@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Callable, Mapping, Sequence
@@ -42,6 +43,7 @@ BINARY_DOCUMENT_MAGIC = {
     ".pdf": (b"%PDF-",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
+PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -448,7 +450,40 @@ def _binary_documentation_evidence_confirms(
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     except ContentSizeExceededError:
         return PurePosixPath(changed.path).suffix.lower() == ".pdf"
-    return raw.startswith(BINARY_DOCUMENT_MAGIC[PurePosixPath(changed.path).suffix.lower()])
+    suffix = PurePosixPath(changed.path).suffix.lower()
+    if suffix == ".png":
+        return _is_complete_png(raw)
+    return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+
+
+def _is_complete_png(raw: bytes) -> bool:
+    """Validate a complete PNG chunk stream with no appended payload."""
+
+    if not raw.startswith(PNG_SIGNATURE):
+        return False
+    offset = len(PNG_SIGNATURE)
+    saw_header = False
+    saw_image_data = False
+    while offset + 12 <= len(raw):
+        length = int.from_bytes(raw[offset : offset + 4], "big")
+        chunk_end = offset + 12 + length
+        if chunk_end > len(raw):
+            return False
+        chunk_type = raw[offset + 4 : offset + 8]
+        chunk_data = raw[offset + 8 : offset + 8 + length]
+        expected_crc = int.from_bytes(raw[offset + 8 + length : chunk_end], "big")
+        if zlib.crc32(chunk_type + chunk_data) != expected_crc:
+            return False
+        if not saw_header:
+            if chunk_type != b"IHDR" or length != 13:
+                return False
+            saw_header = True
+        elif chunk_type == b"IDAT":
+            saw_image_data = True
+        elif chunk_type == b"IEND":
+            return length == 0 and saw_image_data and chunk_end == len(raw)
+        offset = chunk_end
+    return False
 
 
 def _needs_content_scan(changed: ChangedFile) -> bool:
