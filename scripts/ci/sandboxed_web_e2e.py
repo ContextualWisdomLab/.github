@@ -27,7 +27,6 @@ if __package__ in (None, ""):
 
 from scripts.ci import sandboxed_verify
 
-
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 SANDBOX_MOUNT = "/workspace"
 
@@ -59,15 +58,49 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "and clean up services."
         )
     )
-    parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
-    parser.add_argument("--backend-cmd", required=True, help="Shell command that starts the backend service.")
-    parser.add_argument("--frontend-cmd", required=True, help="Shell command that starts the frontend service.")
-    parser.add_argument("--e2e-cmd", required=True, help="Shell command that runs the E2E test.")
-    parser.add_argument("--backend-ready-url", default="", help="Backend readiness URL to poll before E2E.")
-    parser.add_argument("--frontend-ready-url", default="", help="Frontend readiness URL to poll before E2E.")
-    parser.add_argument("--startup-timeout", type=int, default=120, help="Seconds to wait for readiness URLs.")
-    parser.add_argument("--e2e-timeout", type=int, default=600, help="Seconds to allow the E2E command to run.")
-    parser.add_argument("--keep-sandbox", action="store_true", help="Keep the temporary sandbox after execution.")
+    parser.add_argument(
+        "--repo-root", default=".", help="Repository root to copy into the sandbox."
+    )
+    parser.add_argument(
+        "--backend-cmd",
+        required=True,
+        help="Shell command that starts the backend service.",
+    )
+    parser.add_argument(
+        "--frontend-cmd",
+        required=True,
+        help="Shell command that starts the frontend service.",
+    )
+    parser.add_argument(
+        "--e2e-cmd", required=True, help="Shell command that runs the E2E test."
+    )
+    parser.add_argument(
+        "--backend-ready-url",
+        default="",
+        help="Backend readiness URL to poll before E2E.",
+    )
+    parser.add_argument(
+        "--frontend-ready-url",
+        default="",
+        help="Frontend readiness URL to poll before E2E.",
+    )
+    parser.add_argument(
+        "--startup-timeout",
+        type=int,
+        default=120,
+        help="Seconds to wait for readiness URLs.",
+    )
+    parser.add_argument(
+        "--e2e-timeout",
+        type=int,
+        default=600,
+        help="Seconds to allow the E2E command to run.",
+    )
+    parser.add_argument(
+        "--keep-sandbox",
+        action="store_true",
+        help="Keep the temporary sandbox after execution.",
+    )
     parser.add_argument(
         "--isolation",
         choices=("required", "disabled"),
@@ -118,7 +151,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def _require_parseable_command(parser: argparse.ArgumentParser, flag: str, value: str) -> None:
+def _require_parseable_command(
+    parser: argparse.ArgumentParser, flag: str, value: str
+) -> None:
     """Reject a command that fails to shell-tokenize or tokenizes to nothing.
 
     ``isolated_command`` performs this exact ``shlex.split`` validation
@@ -207,7 +242,9 @@ def _probe_isolation_capability(backend: str) -> None:
     bind_args: list[str] = []
     for root in _bind_roots():
         bind_args.extend(("--ro-bind", str(root), str(root)))
-    with tempfile.TemporaryDirectory(prefix="sandboxed-web-e2e-probe-") as probe_workspace:
+    with tempfile.TemporaryDirectory(
+        prefix="sandboxed-web-e2e-probe-"
+    ) as probe_workspace:
         probe_command = [
             backend,
             "--die-with-parent",
@@ -239,10 +276,13 @@ def _probe_isolation_capability(backend: str) -> None:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                shell=False,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
+            raise RuntimeError(
+                f"bubblewrap capability probe could not run: {exc}"
+            ) from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit code {result.returncode}"
         raise RuntimeError(f"bubblewrap cannot create required namespaces: {detail}")
@@ -253,7 +293,9 @@ def isolation_backend(mode: str) -> str | None:
     if mode == "disabled":
         return None
     if platform.system() != "Linux":
-        raise RuntimeError("required isolation is only supported on Linux with bubblewrap")
+        raise RuntimeError(
+            "required isolation is only supported on Linux with bubblewrap"
+        )
     backend = shutil.which("bwrap")
     if backend is None:
         raise RuntimeError("required isolation needs bubblewrap (bwrap) on PATH")
@@ -272,7 +314,8 @@ def _sandbox_environment(env: dict[str, str], sandbox_root: Path) -> dict[str, s
     path_value = mapped.get("PATH")
     if path_value:
         mapped["PATH"] = os.pathsep.join(
-            _translate_sandbox_path_entry(entry, source) for entry in path_value.split(os.pathsep)
+            _translate_sandbox_path_entry(entry, source)
+            for entry in path_value.split(os.pathsep)
         )
     return mapped
 
@@ -295,7 +338,9 @@ def _translate_sandbox_path_entry(entry: str, source: str) -> str:
     return entry
 
 
-def _which_relative_to_cwd(argv0: str, *, cwd: Path, sandbox_root: Path, path: str | None) -> Path | None:
+def _which_relative_to_cwd(
+    argv0: str, *, cwd: Path, sandbox_root: Path, path: str | None
+) -> Path | None:
     """Search ``PATH`` for ``argv0`` like ``shutil.which``, anchoring relative entries at ``cwd``.
 
     ``shutil.which`` joins every ``PATH`` entry -- relative or absolute --
@@ -400,9 +445,13 @@ def isolated_command(
         argv[0], cwd=cwd, sandbox_root=sandbox_root, path=env.get("PATH")
     )
     if executable_path is None:
-        raise RuntimeError(f"executable could not be resolved for isolation validation: {argv[0]}")
+        raise RuntimeError(
+            f"executable could not be resolved for isolation validation: {argv[0]}"
+        )
     if executable_path.is_relative_to(Path.home()):
-        raise RuntimeError("commands from the host home directory are not allowed in isolation")
+        raise RuntimeError(
+            "commands from the host home directory are not allowed in isolation"
+        )
     if not (
         executable_path.is_relative_to(sandbox_root)
         or any(executable_path.is_relative_to(root) for root in bind_roots)
@@ -412,7 +461,14 @@ def isolated_command(
         )
     if Path(argv[0]).is_absolute() and executable_path.is_relative_to(sandbox_root):
         argv[0] = str(Path(SANDBOX_MOUNT) / executable_path.relative_to(sandbox_root))
-    args = [backend, "--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/"]
+    args = [
+        backend,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-pid",
+        "--tmpfs",
+        "/",
+    ]
     for root in bind_roots:
         args.extend(("--ro-bind", str(root), str(root)))
     for path in (
@@ -446,7 +502,9 @@ def isolated_command(
     return shlex.join([*args, *argv])
 
 
-def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs_dir: Path) -> Service:
+def start_service(
+    label: str, command: str, cwd: Path, env: dict[str, str], logs_dir: Path
+) -> Service:
     """Start a service command in its own process group."""
     log_path = logs_dir / f"{label}.log"
     log_file = log_path.open("w", encoding="utf-8")
@@ -485,7 +543,7 @@ def _require_resolved_loopback_hostname(hostname: str) -> None:
     if not results:
         raise ValueError(f"URL cannot target unresolved hostname: {hostname}")
     for result in results:
-        _require_loopback_ip_text(result[4][0], hostname)
+        _require_loopback_ip_text(str(result[4][0]), hostname)
 
 
 def require_loopback_readiness_url(url: str) -> None:
@@ -548,7 +606,11 @@ def require_unoccupied_readiness_port(url: str) -> None:
     """
     parsed = urllib.parse.urlparse(url)
     hostname = parsed.hostname or "127.0.0.1"
-    port = parsed.port if parsed.port is not None else (443 if parsed.scheme.lower() == "https" else 80)
+    port = (
+        parsed.port
+        if parsed.port is not None
+        else (443 if parsed.scheme.lower() == "https" else 80)
+    )
     try:
         with socket.create_connection((hostname, port), timeout=0.2):
             pass
@@ -575,7 +637,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
         return True
     require_loopback_readiness_url(url)
     deadline = time.monotonic() + timeout
-    opener = urllib.request.build_opener(NoRedirectHandler(), urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(
+        NoRedirectHandler(), urllib.request.ProxyHandler({})
+    )
     while time.monotonic() < deadline:
         if service.process.poll() is not None:
             return False
@@ -589,7 +653,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     return False
 
 
-def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def run_shell(
+    command: str, cwd: Path, env: dict[str, str], timeout: int
+) -> subprocess.CompletedProcess[str]:
     """Run a shell command and capture its output."""
     return subprocess.run(
         shlex.split(command),
@@ -672,7 +738,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     start = time.monotonic()
     try:
         try:
-            copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+            copied_repo = sandboxed_verify.copy_workspace(
+                Path(args.repo_root), sandbox, args.ignore
+            )
         except ValueError as exc:
             print(f"sandboxed-web-e2e: workspace copy rejected: {exc}", file=sys.stderr)
             exit_code = 125
@@ -688,7 +756,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.isolation_backend = backend or "disabled"
         print(f"sandboxed-web-e2e: cwd={copied_repo}")
         if args.allow_env:
-            print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            print(
+                f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}"
+            )
         if args.network != "default":
             print(f"sandboxed-web-e2e: network={args.network}")
         command_env = _sandbox_environment(env, sandbox) if backend else env
@@ -727,7 +797,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else args.e2e_cmd
             )
         except (RuntimeError, ValueError) as exc:
-            print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
+            print(
+                f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr
+            )
             exit_code = 126
             return exit_code
         try:
@@ -741,11 +813,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
             exit_code = 125
             return exit_code
-        services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
-        services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
+        services.append(
+            start_service("backend", backend_cmd, copied_repo, command_env, logs_dir)
+        )
+        services.append(
+            start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir)
+        )
         try:
-            backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
-            frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
+            backend_ready = wait_for_url(
+                args.backend_ready_url, args.startup_timeout, services[0]
+            )
+            frontend_ready = wait_for_url(
+                args.frontend_ready_url, args.startup_timeout, services[1]
+            )
         except ValueError as exc:
             print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
             exit_code = 125
@@ -768,8 +848,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
+                print(
+                    stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr
+                )
+            print(
+                f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s",
+                file=sys.stderr,
+            )
             exit_code = 124
             return exit_code
     finally:
