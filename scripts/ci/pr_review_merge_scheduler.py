@@ -1216,44 +1216,54 @@ def strix_evidence_state(pr: dict[str, Any]) -> str:
     """Return missing, running, failed, or complete for current-head Strix evidence.
 
     "complete" requires authoritative success (CheckRun conclusion or classic
-    commit-status state of SUCCESS). Any other terminal outcome -- failure,
-    error, cancelled, timed out, skipped, neutral, action_required, stale,
-    startup_failure -- is reported as "failed" rather than "complete" so
-    callers fail closed instead of unlocking on non-passing evidence. Only
-    the latest attempt per Strix CheckRun identity is evaluated, so a stale
-    failed attempt cannot outlive a later successful retry.
+    commit-status state of SUCCESS) from *any* Strix identity present -- a
+    CheckRun and a classic commit-status context are both accepted, and
+    either one succeeding is sufficient. This repo documents that a same-head
+    manual `workflow_dispatch` Strix run, which posts a classic commit
+    status, "may supply review evidence but does not replace required PR
+    checks": it can unlock this internal review-dispatch gate even when the
+    `pull_request_target` CheckRun failed or cannot correctly evaluate a
+    self-modifying `.github` PR (that CheckRun runs the *base* branch's
+    trusted scripts, which a PR editing those very scripts can legitimately
+    fail against) -- but it never substitutes for GitHub's own independently
+    enforced required CheckRun at actual merge time, which this function
+    does not touch. Symmetrically, a stale classic-status failure left over
+    from an unrelated manual run must never keep this gate "failed" forever
+    once the real, retryable CheckRun evidence succeeds -- `dispatch_strix_evidence`
+    has no way to clear a classic status, only to rerun a CheckRun's Actions
+    job, so treating a lingering classic failure as still blocking once a
+    CheckRun has already succeeded would force an endless, pointless rerun
+    loop.
 
-    A required-workflow Strix CheckRun, when present, is the sole authority:
-    a classic commit-status context (e.g. a same-head manual
-    `workflow_dispatch` Strix run) is evaluated only when no CheckRun exists
-    at all. This matches this repo's documented policy that a manual run
-    "may supply review evidence but does not replace required PR checks" --
-    without it, a stale manual-status failure that `dispatch_strix_evidence`
-    has no way to clear (it can only rerun a CheckRun's Actions job) would
-    keep this gate "failed" forever even after the real, retryable CheckRun
-    evidence succeeds, forcing an endless, pointless rerun loop.
+    Only when *no* identity reports success is this "failed" (every present
+    terminal outcome -- failure, error, cancelled, timed out, skipped,
+    neutral, action_required, stale, startup_failure -- counts as
+    non-passing) or "running" (something is still in flight and nothing has
+    succeeded yet), so callers fail closed instead of unlocking on evidence
+    that never actually passed anywhere. Only the latest attempt per Strix
+    CheckRun identity is evaluated, so a stale failed attempt cannot outlive
+    a later successful retry.
     """
     strix_nodes = [node for node in latest_check_run_attempts(context_nodes(pr)) if is_strix_context(node)]
     if not strix_nodes:
         return "missing"
-    check_run_present = any(node.get("__typename") == "CheckRun" for node in strix_nodes)
-    saw_failure = False
+    saw_running = False
     for node in strix_nodes:
         is_check_run = node.get("__typename") == "CheckRun"
-        if check_run_present and not is_check_run:
-            continue
         status = (node.get("status") or node.get("state") or "").upper()
         if status in RUNNING_CHECK_STATES:
-            return "running"
+            saw_running = True
+            continue
         if is_check_run:
             if status != "COMPLETED":
-                return "running"
+                saw_running = True
+                continue
             conclusion = (node.get("conclusion") or "").upper()
-            if conclusion not in _STRIX_SUCCESS_CONCLUSIONS:
-                saw_failure = True
-        elif status not in _STRIX_SUCCESS_CONCLUSIONS:
-            saw_failure = True
-    return "failed" if saw_failure else "complete"
+            if conclusion in _STRIX_SUCCESS_CONCLUSIONS:
+                return "complete"
+        elif status in _STRIX_SUCCESS_CONCLUSIONS:
+            return "complete"
+    return "running" if saw_running else "failed"
 
 
 def unresolved_thread_count(pr: dict[str, Any]) -> int:

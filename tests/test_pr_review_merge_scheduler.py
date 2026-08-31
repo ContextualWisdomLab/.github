@@ -1058,13 +1058,13 @@ def test_context_review_and_check_helpers(monkeypatch):
     classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
     assert sched.strix_evidence_state(classic_success) == "complete"
 
-    # A required-workflow CheckRun, when present, is the sole authority: a
-    # stale classic-status failure left over from an unrelated same-head
-    # manual `workflow_dispatch` Strix run must not keep the gate "failed"
-    # forever once the real CheckRun evidence succeeds -- `dispatch_strix_evidence`
-    # can only rerun a CheckRun's Actions job, so a classic status it cannot
-    # touch must never be what perpetually blocks this gate (regression for
-    # the endless-rerun loop this would otherwise cause).
+    # Either Strix identity succeeding is sufficient: a stale classic-status
+    # failure left over from an unrelated same-head manual `workflow_dispatch`
+    # Strix run must not keep the gate "failed" forever once the real
+    # CheckRun evidence succeeds -- `dispatch_strix_evidence` can only rerun
+    # a CheckRun's Actions job, so a classic status it cannot touch must
+    # never be what perpetually blocks this gate (regression for the
+    # endless-rerun loop this would otherwise cause).
     checkrun_success_classic_failure = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1076,9 +1076,15 @@ def test_context_review_and_check_helpers(monkeypatch):
         }
     )
     assert sched.strix_evidence_state(checkrun_success_classic_failure) == "complete"
-    # The reverse direction stays correctly gated: a genuinely failing
-    # CheckRun is not excused by an unrelated classic-status success, since
-    # the CheckRun is the retryable evidence this gate exists to protect.
+    # The reverse direction is also "complete": a same-head manual
+    # `workflow_dispatch` Strix run's classic-status success may supply
+    # review evidence even when the `pull_request_target` CheckRun failed --
+    # e.g. a self-modifying `.github` PR whose CheckRun runs the *base*
+    # branch's trusted scripts and can legitimately fail against a PR
+    # editing those very scripts, while a trusted same-head manual dispatch
+    # correctly evaluates the new code. This never substitutes for GitHub's
+    # own independently enforced required CheckRun at actual merge time,
+    # which this function does not touch.
     checkrun_failure_classic_success = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1089,10 +1095,10 @@ def test_context_review_and_check_helpers(monkeypatch):
             }
         }
     )
-    assert sched.strix_evidence_state(checkrun_failure_classic_success) == "failed"
-    # A CheckRun still in progress is not undermined by a stale classic
-    # failure either -- the classic status is ignored entirely once any
-    # CheckRun is present, including while that CheckRun is still running.
+    assert sched.strix_evidence_state(checkrun_failure_classic_success) == "complete"
+    # A CheckRun still in progress and no success anywhere yet correctly
+    # stays "running" rather than prematurely "failed", even beside a stale
+    # classic failure.
     checkrun_running_classic_failure = make_pr(
         statusCheckRollup={
             "contexts": {
@@ -1104,6 +1110,18 @@ def test_context_review_and_check_helpers(monkeypatch):
         }
     )
     assert sched.strix_evidence_state(checkrun_running_classic_failure) == "running"
+    # Only when *no* identity ever succeeds is the gate genuinely "failed".
+    checkrun_failure_classic_failure = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {"context": "strix", "state": "FAILURE"},
+                    strix_check(conclusion="FAILURE"),
+                ]
+            }
+        }
+    )
+    assert sched.strix_evidence_state(checkrun_failure_classic_failure) == "failed"
 
     # A stale failed attempt must not outlive a later successful retry, and a
     # later failed attempt must override an earlier success -- only the

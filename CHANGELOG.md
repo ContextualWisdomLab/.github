@@ -5,6 +5,28 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a second, immediately-following Devin Review finding on PR #1456
+  (`strix_evidence_state()`), which directly refined the previous entry's
+  fix: making a required-workflow CheckRun the sole authority whenever
+  present also meant a genuinely failing CheckRun could never be excused by
+  a same-head manual `workflow_dispatch` Strix run's classic-status
+  success -- but this repo documents exactly that as intended: a manual run
+  "may supply review evidence but does not replace required PR checks",
+  precisely for a self-modifying `.github` PR whose `pull_request_target`
+  CheckRun runs the *base* branch's trusted scripts and can legitimately
+  fail against a PR editing those very scripts, while a trusted same-head
+  manual dispatch correctly evaluates the new code. `strix_evidence_state()`
+  now treats either Strix identity's authoritative success as sufficient
+  for "complete" (never substituting for GitHub's own independently
+  enforced required CheckRun at actual merge time, which this function does
+  not touch); only when *no* identity ever succeeds does it report "failed".
+  This still resolves the original endless-rerun-loop defect (a stale
+  classic failure can no longer block a since-succeeded CheckRun) while
+  also letting a genuine same-head manual success unblock review when the
+  CheckRun itself is the one that's wrong. Updated the previous round's
+  regression test asserting the reverse case as "failed" to the corrected
+  "complete", and added a fourth case (both identities failing, still
+  correctly "failed") to keep every combination covered.
 - Fix a Devin Review finding on PR #1456: `strix_evidence_state()` treated a
   classic commit-status Strix context (e.g. a same-head manual
   `workflow_dispatch` run) as equally authoritative to a required-workflow
