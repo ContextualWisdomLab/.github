@@ -78,7 +78,10 @@ def test_noema_handoff_returns_current_terminal_state() -> None:
         {
             "commit_id": head,
             "user": {"login": handoff.NOEMA_REVIEW_AUTHOR},
-            "body": handoff.NOEMA_REVIEW_MARKER,
+            "body": (
+                f"- Head SHA: `{head}`\n"
+                f"<!-- noema-review-gate head_sha={head} decision=approve -->"
+            ),
             "state": "approved",
         }
     ]
