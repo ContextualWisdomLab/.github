@@ -20,6 +20,8 @@ gate_script="$repo_root/scripts/ci/strix_quick_gate.sh"
 full_gate_test="$repo_root/scripts/ci/test_strix_quick_gate.sh"
 sidecar_script="$repo_root/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 token_loader_script="$repo_root/scripts/ci/load_contextual_orchestrator_token.sh"
+decision_record="$repo_root/docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
+agent_policy="$repo_root/AGENTS.md"
 
 failures=0
 
@@ -35,6 +37,24 @@ assert_file_contains() {
 
 	if ! grep -Fq -- "$needle" "$file_path"; then
 		record_failure "$message (missing '$needle')"
+	fi
+}
+
+assert_file_contains_exactly_one_of() {
+	local file_path="$1"
+	local first_needle="$2"
+	local second_needle="$3"
+	local message="$4"
+	local normalized
+	local match_count
+
+	normalized="$(sed -E 's/^[[:space:]]+//' "$file_path")"
+	match_count="$(
+		printf '%s\n' "$normalized" |
+			grep -Fxc -e "$first_needle" -e "$second_needle" || true
+	)"
+	if [ "$match_count" != "1" ]; then
+		record_failure "$message (expected exactly one allowlisted route, found $match_count)"
 	fi
 }
 
@@ -160,7 +180,12 @@ assert_file_contains "$full_gate_test" "assert_strix_workflow_pr_trigger_hardene
 
 assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "Strix workflow provisions the trusted contextual-orchestrator gateway"
 assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" "Strix workflow binds target visibility to the gateway ZDR policy"
-assert_file_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/free" "Strix defaults every scan to the contextual-orchestrator free pool"
+active_strix_models="$(sed -n -E 's/^[[:space:]]*STRIX_MODEL:[[:space:]]*([^#[:space:]]+)[[:space:]]*$/\1/p' "$workflow_file")"
+[ "$active_strix_models" = "contextual-orchestrator/orchestrator/free" ] || record_failure "Strix must define exactly one active zero-cost free default model"
+assert_file_not_contains "$workflow_file" "STRIX_MODEL: contextual-orchestrator/orchestrator/auto" "Strix must not retain the paid-inclusive auto default route"
+assert_file_contains "$decision_record" "2026-08-30 amendment: Strix uses \`orchestrator/free\`" "The binding ADR amendment records the owner's explicit free-only override"
+assert_file_contains "$decision_record" "Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets" "The binding ADR preserves private-target privacy"
+assert_file_contains "$agent_policy" "Strix uses the zero-cost \`orchestrator/free\`" "Repository guidance agrees with the binding Strix route"
 assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "Strix workflow selects the contextual-orchestrator provider mode"
 assert_file_contains "$workflow_file" "STRIX_FALLBACK_MODELS: \"\"" "Strix delegates provider discovery and failover to the gateway"
 assert_file_not_contains "$workflow_file" "Resolve live NVIDIA NIM Strix models" "Strix does not resolve a direct provider outside the gateway"

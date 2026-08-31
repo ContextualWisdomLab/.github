@@ -289,11 +289,11 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "strix workflow provisions the central contextual-orchestrator sidecar"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "strix workflow uses the sidecar base URL"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "strix workflow uses the sidecar token"
-	assert_file_contains "$workflow_file" "timeout-minutes: 120" "strix workflow job budget preserves full-hour scans and artifact publication margin"
-	assert_file_contains "$workflow_file" "timeout-minutes: 100" "strix workflow scan step permits legitimate 90-minute repository reviews"
+	assert_file_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job budget preserves multi-hour scans and artifact publication margin"
+	assert_file_contains "$workflow_file" "timeout-minutes: 170" "strix workflow scan step permits legitimate 150-minute repository reviews"
 	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
-	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"' "strix workflow preserves a 95-minute bounded total Strix budget"
-	assert_file_contains "$workflow_file" 'process_budget_seconds="5400"' "strix workflow gives a legitimate scan up to 90 minutes"
+	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=9300"' "strix workflow preserves a 155-minute bounded total Strix budget"
+	assert_file_contains "$workflow_file" 'process_budget_seconds="9000"' "strix workflow gives a legitimate scan up to 150 minutes"
 	assert_file_contains "$workflow_file" 'Error code:[[:space:]]*500[^[:cntrl:]]*internal_error' "strix workflow retries contextual-orchestrator internal provider failures"
 	assert_file_contains "$workflow_file" 'strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log' "strix workflow preserves partial console output after failures and timeouts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "gate-last-attempt.log" "strix gate preserves the last partial attempt before runtime cleanup"
@@ -327,6 +327,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables pnpm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["YARN_ENABLE_SCRIPTS"] = "false"' "strix gate child process disables yarn lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"' "strix gate child env narrowly filters the known third-party Pydantic serializer warning"
+	assert_file_contains "$GATE_SCRIPT" 'if is_contextual_orchestrator_api_base "$llm_api_base_value"; then' "strix gate scopes the non-streaming opt-in to the contextual-orchestrator loopback gateway"
+	assert_file_contains "$GATE_SCRIPT" 'STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming"' "strix gate threads the streaming opt-in through to the child process environment"
+	assert_file_contains "$GATE_SCRIPT" 'child_env["LLM_DISABLE_STREAMING"] = "true"' "strix gate disables Strix's own SDK streaming for the contextual-orchestrator gateway, which rejects stream_options.include_usage alongside tools"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]' "strix gate detects nested backend Python files for PR-scoped import context"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
@@ -3289,7 +3292,7 @@ set -euo pipefail
 printf '%s\n' "${STRIX_LLM:-}" >> "${FAKE_STRIX_CALL_LOG:?}"
 printf '%s\n' "${LLM_API_BASE:-<unset>}" >> "${FAKE_STRIX_API_BASE_LOG:?}"
 if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
-	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s\n' \
+	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s;LLM_DISABLE_STREAMING=%s\n' \
 		"${LLM_TIMEOUT:-<unset>}" \
 		"${STRIX_MEMORY_COMPRESSOR_TIMEOUT:-<unset>}" \
 		"${STRIX_REASONING_EFFORT:-<unset>}" \
@@ -3299,7 +3302,8 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${NPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${PNPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${YARN_ENABLE_SCRIPTS:-<unset>}" \
-		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
+		"${UNRELATED_SECRET:-<unset>}" \
+		"${LLM_DISABLE_STREAMING:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
 target_path=""
@@ -3739,7 +3743,7 @@ REPORT
 			;;
 		esac
 		;;
-	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success)
+	vertex-primary-api-connection-retry-same-model-success|github-models-internal-server-connection-retry-same-model-success|internal-server-error-unrelated-output-nonretryable|internal-server-error-many-blocks-retry-same-model-success)
 		case "${STRIX_LLM:-}" in
 		gemini/retry-api-connection-primary|vertex_ai/retry-api-connection-primary|openai/openai/retry-api-connection-primary)
 			attempt="0"
@@ -3750,9 +3754,35 @@ REPORT
 			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
 			if [ "$attempt" -eq 1 ]; then
 				if [ "${STRIX_LLM:-}" = "openai/openai/retry-api-connection-primary" ]; then
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-unrelated-output-nonretryable" ]; then
+						echo "Error: litellm.InternalServerError: upstream request failed"
+						for filler in 1 2 3 4 5 6; do
+							echo "target application diagnostic $filler"
+						done
+						echo "Internal Server Error"
+						exit 1
+					fi
+					if [ "${FAKE_STRIX_SCENARIO:?}" = "internal-server-error-many-blocks-retry-same-model-success" ]; then
+						# Regression for the SIGPIPE race (Devin finding on
+						# PR #1394): emit enough matching
+						# litellm.InternalServerError blocks that the bounded
+						# awk scan's piped output exceeds a single pipe
+						# buffer, so a `grep -q` that stops reading at the
+						# first match cannot SIGPIPE the still-writing awk
+						# producer into a false non-match under
+						# `set -o pipefail`.
+						for _ in $(seq 1 2000); do
+							echo "line filler some unrelated target application output padding padding padding"
+							echo "Error: litellm.InternalServerError: upstream request failed"
+							echo "Internal Server Error"
+							echo "more filler after context one"
+							echo "more filler after context two"
+						done
+						exit 1
+					fi
 					echo "LLM CONNECTION FAILED"
 					echo "Could not establish connection to the language model."
-					echo "Error: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+					echo "Error: litellm.InternalServerError: upstream request failed"
 				else
 					echo "LLM CONNECTION FAILED"
 					echo "litellm.APIConnectionError: GeminiException - Server disconnected without sending a response."
@@ -5929,12 +5959,29 @@ PY
 			"$runtime_env_log" \
 			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;UNRELATED_SECRET=<unset>" \
 			"scenario=$scenario runtime env forwarding"
+		# Non-contextual-orchestrator providers (gemini here) never see the
+		# stream-disabling opt-in: it is scoped narrowly to the gateway that
+		# rejects stream_options.include_usage alongside tools.
+		assert_file_contains \
+			"$runtime_env_log" \
+			"LLM_DISABLE_STREAMING=<unset>" \
+			"scenario=$scenario non-gateway providers keep real streaming"
 	fi
 	if [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
 		assert_file_contains \
 			"$runtime_env_log" \
 			"STRIX_REASONING_EFFORT=minimal" \
 			"scenario=$scenario custom compatible endpoint effort"
+	fi
+	if [ "$scenario" = "contextual-orchestrator-gateway-model-qualification" ]; then
+		# contextual-orchestrator rejects stream_options.include_usage=true
+		# alongside tools; Strix's agent loop always sends both, so the gate
+		# routes this gateway through Strix's own LLM_DISABLE_STREAMING opt-in
+		# (single non-streaming get_response per turn) instead of streaming.
+		assert_file_contains \
+			"$runtime_env_log" \
+			"LLM_DISABLE_STREAMING=true" \
+			"scenario=$scenario contextual-orchestrator gateway disables SDK streaming to avoid the stream_options+tools rejection"
 	fi
 
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
@@ -6576,6 +6623,48 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"__SAME_AS_FALLBACK_MODELS__" \
 			"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
+			"1"
+		;;
+	github-models-internal-server-connection-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+		"openai/openai/retry-api-connection-primary" \
+		"" \
+		"0" \
+		"scan ok after same-model api connection retry" \
+		"2" \
+		"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+		"https://models.github.ai/inference|https://models.github.ai/inference" \
+		"openai" \
+		"https://models.github.ai/inference" \
+		"" \
+		"1"
+		;;
+	internal-server-error-unrelated-output-nonretryable)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
+			"0"
+		;;
+	internal-server-error-many-blocks-retry-same-model-success)
+		run_gate_case_allow_provider_signal "$STRIX_TEST_CASE_FILTER" \
+			"openai/openai/retry-api-connection-primary" \
+			"" \
+			"0" \
+			"scan ok after same-model api connection retry" \
+			"2" \
+			"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+			"https://models.github.ai/inference|https://models.github.ai/inference" \
+			"openai" \
+			"https://models.github.ai/inference" \
+			"" \
 			"1"
 		;;
 	endpoint-in-excluded-dir)
@@ -10070,6 +10159,36 @@ run_gate_case_allow_provider_signal "vertex-primary-api-connection-retry-same-mo
 	"1"
 
 run_gate_case_allow_provider_signal "github-models-internal-server-connection-retry-same-model-success" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"0" \
+	"scan ok after same-model api connection retry" \
+	"2" \
+	"openai/openai/retry-api-connection-primary|openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference|https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"1"
+
+run_gate_case_allow_provider_signal "internal-server-error-unrelated-output-nonretryable" \
+	"openai/openai/retry-api-connection-primary" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/openai/retry-api-connection-primary" \
+	"https://models.github.ai/inference" \
+	"openai" \
+	"https://models.github.ai/inference" \
+	"" \
+	"0"
+
+# Bug: large provider logs (many matching litellm.InternalServerError
+# blocks) must not suppress a legitimate same-model retry via SIGPIPE on the
+# bounded awk scan under `set -o pipefail`. See PR #1394 Devin finding
+# "Large provider logs suppress retries".
+run_gate_case_allow_provider_signal "internal-server-error-many-blocks-retry-same-model-success" \
 	"openai/openai/retry-api-connection-primary" \
 	"" \
 	"0" \
