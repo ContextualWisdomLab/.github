@@ -12,10 +12,20 @@ from pathlib import Path
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
-def test_noema_close_cleanup_selects_only_the_closed_pr_from_one_snapshot(
+def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles(
     tmp_path: Path,
 ) -> None:
-    """Execute cleanup against shared-SHA runs and cancel only the closed PR."""
+    """Execute cleanup against a shared-head-SHA fixture and cancel only the closed PR.
+
+    Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
+    (unrelated, open) both have runs on the same head commit; only #7's
+    matches the PR-scoped `display_title` prefix cancel_runs selects on,
+    and a `completed` PR #7 run must not be re-cancelled. The fake `gh`
+    below filters its fixture by the `status=` query parameter, mirroring
+    GitHub's own server-side status filtering, because the workflow's
+    cancel_runs deliberately relies on that filtering (see the run block's
+    own comment) rather than fetching everything and filtering client-side.
+    """
     script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
@@ -57,7 +67,10 @@ set -euo pipefail
 if [[ "$*" == *"--paginate"* ]]; then
   [[ "$*" != *"/actions/workflows/"* ]] || exit 99
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
-  cat "$FAKE_RUNS_FILE"
+  url="$3"
+  status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
+  jq --arg status "$status" '{workflow_runs: [.workflow_runs[] | select(.status == $status)]}' \\
+    "$FAKE_RUNS_FILE"
 else
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
 fi
@@ -72,7 +85,6 @@ fi
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
             "CLOSED_PR_NUMBER": "7",
-            "CLOSED_PR_HEAD_SHA": "a" * 40,
             "CURRENT_RUN_ID": "999",
             "FAKE_RUNS_FILE": str(runs_file),
             "FAKE_CALLS_FILE": str(calls_file),
@@ -83,7 +95,9 @@ fi
     )
     assert result.returncode == 0, result.stderr
     calls = calls_file.read_text(encoding="utf-8")
-    assert "actions/runs?per_page=100" in calls
+    # Repository-scoped, status-server-filtered -- never the workflow-file-
+    # scoped endpoint, which does not resolve for sibling-repository runs.
+    assert "actions/runs?status=" in calls
     assert "/actions/workflows/" not in calls
     assert "/actions/runs/101/cancel" in calls
     assert "/actions/runs/102/cancel" not in calls

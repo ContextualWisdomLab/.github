@@ -1,7 +1,12 @@
 import base64
 import hashlib
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -50,8 +55,246 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert 'select(.name == "Required Noema Review")' in cleanup
     assert "CLOSED_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
-    assert "actions/runs?per_page=100" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
+    # Devin Review finding on PR #1507 (bug 1): a bare head_sha match let
+    # closing one PR cancel a different open PR's still-needed run whenever
+    # the two happened to share a head commit. Selection is PR-scoped only,
+    # via this workflow's own generated display_title (not GitHub's
+    # pull_requests[] array, which is documented to come back empty for
+    # cross-fork runs).
+    assert ".head_sha == $head_sha" not in cleanup
+    assert "--arg head_sha" not in cleanup
+    assert (
+        '((.display_title // "") | startswith("Required Noema Review " + '
+        '$target + "#" + $pr + "@"))'
+    ) in cleanup
+    # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
+    # across the five active statuses could miss a run that transitioned
+    # between statuses mid-sweep. Re-scan until a pass converges, bounded.
+    # actions/runs (repo-wide, status server-filtered) is kept rather than
+    # an unfiltered actions/workflows/noema-review.yml/runs snapshot: that
+    # workflow-file-scoped endpoint is not guaranteed to resolve for
+    # sibling-repository runs, since noema-review.yml is never itself
+    # committed to those repositories (it applies there only through the
+    # organization's required-workflow ruleset).
+    assert 'runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"' in cleanup
+    assert "max_passes=3" in cleanup
+    assert 'while [ "$pass" -le "$max_passes" ]; do' in cleanup
+    assert 'if [ "$pass" -ge 2 ] && [ "$pass_matches" -eq 0 ] && [ "$found_any" -eq 0 ]; then' in cleanup
+
+
+def _extract_run_block(workflow_text: str, step_name: str) -> str:
+    """Extract one step's ``run: |`` body from workflow YAML by indentation.
+
+    Matches the extraction helper already used by
+    ``tests/test_opencode_workflow_shell_syntax.py`` and
+    ``tests/test_strix_repository_visibility_contract.py`` for the same
+    purpose: find the named step, locate its ``run: |`` block, and collect
+    lines until indentation returns to (or below) the block's own level --
+    which correctly stops at the end of the block even when, as here, the
+    step is the last (only) one in its job and the next line at the step's
+    own indentation belongs to a different job entirely.
+    """
+    lines = workflow_text.splitlines()
+    step_index = next(
+        index for index, line in enumerate(lines) if line.strip() == f"- name: {step_name}"
+    )
+    run_index = next(
+        index
+        for index in range(step_index + 1, len(lines))
+        if lines[index].strip() == "run: |"
+    )
+    run_indent = len(lines[run_index]) - len(lines[run_index].lstrip())
+    block_lines: list[str] = []
+    for line in lines[run_index + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= run_indent:
+            break
+        block_lines.append(line[run_indent + 2 :] if len(line) >= run_indent + 2 else "")
+    return "\n".join(block_lines) + "\n"
+
+
+def _close_cleanup_script() -> str:
+    """Extract the close-cleanup step's real bash body from the workflow."""
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    return _extract_run_block(
+        workflow, "Cancel queued and running Noema reviews for the closed pull request"
+    )
+
+
+def _write_fake_gh(tmp_path: Path, *, body: str) -> dict[str, str]:
+    """Write a fake `gh` executable and return a PATH-prefixed env base for it."""
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n", encoding="utf-8")
+    fake_gh.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "GH_TOKEN": "synthetic-token",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "CLOSED_PR_NUMBER": "42",
+        "CURRENT_RUN_ID": "999",
+    }
+
+
+def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path) -> None:
+    """Real jq execution: a shared head SHA must not leak cancellation across PRs.
+
+    Devin Review finding on PR #1507 (bug 1). Two open pull requests (#42,
+    the one closing, and #43, unrelated) share one head commit -- a real,
+    if uncommon, GitHub scenario (e.g. a duplicate PR opened from the same
+    branch against a different target). Only PR #42's run may be cancelled;
+    PR #43's run, identical except for its PR association, must survive
+    untouched. This pipes representative run JSON through the workflow's
+    actual jq selector rather than grep-matching the YAML text. The fake
+    `gh` here answers every status query with the same fixture (status
+    filtering is not what this test is about); the status-filtering
+    contract is covered separately below.
+    """
+    shared_head = "d" * 40
+    fixture = {
+        "workflow_runs": [
+            {
+                "id": 100,
+                "name": "Required Noema Review",
+                "display_title": (
+                    f"Required Noema Review ContextualWisdomLab/example#42@{shared_head}"
+                ),
+            },
+            {
+                "id": 200,
+                "name": "Required Noema Review",
+                "display_title": (
+                    f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
+                ),
+            },
+        ]
+    }
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    cancel_log = tmp_path / "cancelled-run-ids.txt"
+    cancel_log.write_text("", encoding="utf-8")
+
+    env = _write_fake_gh(
+        tmp_path,
+        body=textwrap.dedent(
+            f"""\
+            if [ "$1" = api ] && [ "$2" = --paginate ]; then
+              cat {shlex.quote(str(fixture_path))}
+              exit 0
+            elif [ "$1" = api ] && [ "$2" = --method ] && [ "$3" = POST ]; then
+              run_id="$(printf '%s' "$4" | sed -E 's#.*/runs/([0-9]+)/cancel#\\1#')"
+              printf '%s\\n' "$run_id" >> {shlex.quote(str(cancel_log))}
+              exit 0
+            fi
+            echo "unexpected gh invocation: $*" >&2
+            exit 1
+            """
+        ),
+    )
+
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    result = subprocess.run(  # noqa: S603
+        [bash_executable, "-c", _close_cleanup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    cancelled_ids = {
+        line.strip() for line in cancel_log.read_text(encoding="utf-8").splitlines() if line.strip()
+    }
+    assert cancelled_ids == {"100"}, (
+        f"expected only PR #42's run (100) cancelled, got {cancelled_ids}; "
+        f"stderr={result.stderr}"
+    )
+
+
+def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
+    tmp_path: Path,
+) -> None:
+    """Real bash execution: a run that changes status mid-sweep is still cancelled.
+
+    Devin Review finding on PR #1507 (bug 2). A run for the closed PR is not
+    yet visible under any active status on the sweep's first pass (modeling
+    it being "requested" when the already-fetched "queued" list was read,
+    then becoming "queued" moments later, after the loop had already moved
+    past checking "queued" for that pass) and only becomes visible, under
+    "queued", starting with the *second* query for that status. A single
+    sequential sweep (the pre-fix behavior) would find zero matches and
+    leave this run running forever; the fixed multi-pass sweep must still
+    cancel it. This also exercises the status query parameter end to end
+    (the fake `gh` here filters by it, unlike the test above).
+    """
+    fixture = {
+        "workflow_runs": [
+            {
+                "id": 300,
+                "name": "Required Noema Review",
+                "display_title": (
+                    f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
+                ),
+            }
+        ]
+    }
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    cancel_log = tmp_path / "cancelled-run-ids.txt"
+    cancel_log.write_text("", encoding="utf-8")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    env = _write_fake_gh(
+        tmp_path,
+        body=textwrap.dedent(
+            f"""\
+            if [ "$1" = api ] && [ "$2" = --paginate ]; then
+              url="$3"
+              status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
+              counter_file={shlex.quote(str(state_dir))}"/count-${{status}}"
+              count=0
+              [ -f "$counter_file" ] && count="$(cat "$counter_file")"
+              count=$((count + 1))
+              printf '%s' "$count" > "$counter_file"
+              if [ "$status" = queued ] && [ "$count" -eq 2 ]; then
+                cat {shlex.quote(str(fixture_path))}
+              else
+                echo '{{"workflow_runs": []}}'
+              fi
+              exit 0
+            elif [ "$1" = api ] && [ "$2" = --method ] && [ "$3" = POST ]; then
+              run_id="$(printf '%s' "$4" | sed -E 's#.*/runs/([0-9]+)/cancel#\\1#')"
+              printf '%s\\n' "$run_id" >> {shlex.quote(str(cancel_log))}
+              exit 0
+            fi
+            echo "unexpected gh invocation: $*" >&2
+            exit 1
+            """
+        ),
+    )
+
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    result = subprocess.run(  # noqa: S603
+        [bash_executable, "-c", _close_cleanup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    cancelled_ids = {
+        line.strip() for line in cancel_log.read_text(encoding="utf-8").splitlines() if line.strip()
+    }
+    assert cancelled_ids == {"300"}, (
+        f"the status-transitioning run must still be cancelled; got {cancelled_ids}; "
+        f"stderr={result.stderr}"
+    )
+    # Prove the race is real: pass 1 alone (the pre-fix, single-sweep
+    # behavior) found nothing, so only the fixed multi-pass loop caught it.
+    assert "pass 1/3 matched 0 run(s)" in result.stderr
+    assert "pass 2/3 matched 1 run(s)" in result.stderr
 
 
 def fake_secret(*parts: str) -> str:

@@ -1925,6 +1925,102 @@ docstring coverage on `scripts/ci/`.
 
 PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
 
+## 2026-08-31 noema-review-gate close-cleanup job: bare head_sha match, single-pass status sweep, and a
+workflow-file-scoped endpoint that does not resolve for the sibling repositories the job exists to clean up
+
+Devin Review's pass on the `cancel-closed-pr-runs` job (the job that cancels still-active "Required Noema
+Review" runs when their pull request closes) found two real bugs plus a test-quality gap. Verified against
+a fresh clone of `fix/noema-review-gate-json-parse-crash` at commit `03117b7` (the commit that introduced
+this job) -- neither was fixed yet at that point. While this session was building its own fix, a concurrent
+session landed `e0f542f` ("fix: scope Noema cleanup to closed PR") addressing both findings with a
+different mechanism; this session's mandatory pre-push `git fetch && git rebase` surfaced it. Rather than
+push a duplicate/conflicting fix, this session verified `e0f542f` independently, found its Bug 2 mechanism
+introduces a new regression specific to this job's cross-repository use case, and landed a corrected
+version on top of it (`git reset --hard` to `e0f542f` locally, since this session's own prior commit had
+never been pushed, then a fresh commit) rather than a competing rewrite.
+
+**Bug 1 (confirmed real, and correctly fixed by `e0f542f`): bare `head_sha` match let one PR's close
+cancel a different PR's still-needed run.** The jq selector's match condition was an OR of three clauses,
+the first a bare `.head_sha == $head_sha` with no PR association required. Two different open PRs can
+share one head commit (e.g. a duplicate PR opened from the same branch against a different target);
+closing one would match and cancel the *other*, unrelated PR's run purely because of the shared commit.
+`e0f542f` dropped the bare `head_sha` OR-branch (and the `pull_requests[]` branch alongside it), keeping
+only the `display_title` `"target#pr@"` prefix match -- this workflow's own generated run-name, itself
+derived from the same PR-number resolution chain the job's other env vars use, so it identifies the
+correct PR without depending on GitHub's `pull_requests[]` array (documented empty for cross-fork PRs).
+This session's independent re-derivation reached the same conclusion and kept this exact selector logic
+unchanged.
+
+**Bug 2 (confirmed real; `e0f542f`'s fix introduces a different regression for this job's primary use
+case): a run could transition between the five active statuses faster than a sequential per-status sweep
+could see it.** The original `cancel_runs` was called once per status in a fixed loop, each call issuing
+its own `gh api` fetch at a different moment; a run that is e.g. `requested` when the already-fetched
+`queued` list was read, then becomes `queued` moments later -- after the loop has already moved past
+checking `queued` for that pass -- is a genuine GitHub Actions run lifecycle race that could let an
+abandoned run escape cancellation entirely. `e0f542f` fixed this by switching to one unfiltered snapshot
+(`.../actions/workflows/noema-review.yml/runs`, no `status` filter, filtered client-side by jq instead),
+which does eliminate the race for a query targeting the *central* `.github` repository. It does not for the
+job's actual primary case: `noema-review.yml` runs against **sibling** repositories only through the
+organization's required-workflow ruleset (`README.md`'s "또 같이" / "siblings call it" section: "GitHub
+runs the trusted workflows from `ContextualWisdomLab/.github@main` in that sibling's repository context")
+and is never itself committed to those repositories' own `.github/workflows/`. GitHub's `List repository
+workflows` / `List workflow runs for a workflow` endpoint family is documented (and, per public reporting
+on the predecessor "required workflows" feature's retirement, confirmed to differ) to enumerate workflow
+files that exist in that specific repository's own tree; there is no documentation stating a ruleset-only
+required workflow sourced from a different repository is addressable this way in the target repository's
+context, and this repository's own established pattern for the identical cross-repo cleanup problem
+(`strix.yml`'s sibling `cancel-closed-pr-runs` job) deliberately uses the repository-wide, `.name`-filtered
+`/actions/runs` endpoint rather than a workflow-file-scoped one. If unresolved for a sibling repository,
+`gh api`'s failure is caught by this job's existing fail-open `::warning::...leaving runs unchanged; exit
+0` handling, so the job would not error -- it would silently no-op cleanup for every sibling repository,
+which is the majority of this job's real invocations and exactly the outcome the whole feature exists to
+prevent (the original `03117b7` commit message: abandoned model calls consuming runner capacity for the
+two-hour review window). Fixed by keeping `e0f542f`'s selector (display_title-only PR scoping) but
+restoring the repository-wide, `status`-server-filtered `/actions/runs` endpoint, and replacing the
+original single sequential sweep with a bounded multi-pass re-scan instead of one unfiltered snapshot:
+the five-status sweep always runs at least two full passes (a run missed by every status query in pass 1
+has, by definition, settled into a checkable status by the time pass 2 re-queries it), and a third pass
+runs only when either of the first two found something to cancel, capped at three passes total. Status
+stays a *server-side* filter deliberately -- `noema-review.yml` is this org's central, highest-volume
+review workflow (fan-out across every sibling PR event plus every OpenCode/Strix completion), and an
+unfiltered fetch of its entire run history on every PR close, filtered only client-side, is a real
+rate-limit and latency concern this repository's own `gh api --help`/REST docs give no server-side
+multi-status filter to avoid; the bounded-retry, status-filtered design keeps every individual query small
+(only the currently active runs) while still closing the race across passes.
+
+**Test-quality finding (addressed): existing coverage only grep-matched workflow YAML text, never
+executed the jq selector or the cancellation loop.** `e0f542f` had already added one such test
+(`test_noema_close_cleanup_selects_only_the_closed_pr_from_one_snapshot` in
+`tests/test_noema_orchestrator_workflow_contract.py`) executing the real extracted bash against a fake
+`gh`; because its fake `gh` answered every call with the same fixture regardless of the requested status,
+it implicitly assumed client-side status filtering and needed updating to filter by the `status=` query
+parameter (mirroring GitHub's real server-side behavior) once server-side filtering was restored --
+renamed to `test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles` with that
+fix, its shared-head-SHA/different-PR-number assertions otherwise unchanged. Two further tests were added
+to `tests/test_noema_review_gate.py`, both executing the workflow's real bash via this repo's established
+`_extract_run_block`-plus-`subprocess.run`-with-a-fake-`gh` idiom (matching
+`tests/test_noema_orchestrator_workflow_contract.py`'s pattern for this same job):
+`test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped` proves, with two synthetic runs sharing one
+head SHA but different PR numbers (42 closing, 43 open), that only PR #42's run is cancelled; and
+`test_close_cleanup_survives_a_run_transitioning_between_active_statuses` proves, with a stateful fake
+`gh` that only reveals a run under `queued` starting on that status's *second* query, that the fixed
+multi-pass sweep still cancels it, and that pass 1 alone finds nothing (`"pass 1/3 matched 0 run(s)"` in
+the captured log) -- demonstrating the original single-sweep design would have missed it. All three tests
+were confirmed to fail both against the pre-`03117b7` state and, independently, against `e0f542f` alone
+(the status-transitioning-run test errors out on `e0f542f`'s workflow-scoped, no-`status`-param URL, which
+this test's status-aware fake `gh` cannot resolve into a per-status result -- itself supporting evidence
+for the endpoint regression above) before passing against this session's corrected version.
+
+Validation: `coverage run -m pytest tests -q` -- 2169 passed, 1 skipped, 21 subtests passed; `coverage
+report` -- 100% on `scripts/ci/` (no `.py` production files touched; the fix and its tests are entirely in
+`.github/workflows/noema-review.yml` and `tests/`); `interrogate` -- 100% docstring coverage (minimum
+100.0%, actual 100.0%). The workflow file re-parses clean with `yaml.safe_load`, and the touched `run:`
+block passes `bash -n` both as extracted at edit time and as exercised end-to-end by the new subprocess
+tests. Full validation was re-run after this PR's isolated-clone protocol's pre-push
+`git fetch && git rebase`, given the branch's ongoing concurrent commit velocity.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

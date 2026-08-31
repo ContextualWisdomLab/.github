@@ -53,33 +53,105 @@ jobs:
         run: |
           set -euo pipefail
 
-          runs_url="repos/${TARGET_REPOSITORY}/actions/runs?per_page=100"
-          if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/noema-close-gh-error)"; then
-            echo "::warning::Noema close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
-            sed 's/^/  /' /tmp/noema-close-gh-error >&2 || true
-            exit 0
-          fi
-          if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg current "$CURRENT_RUN_ID" \
-            --arg target "$TARGET_REPOSITORY" '
-              .workflow_runs[]
-              | select((.id | tostring) != $current)
-              | select(.name == "Required Noema Review")
-              | select(.status == "queued" or .status == "in_progress" or .status == "requested" or .status == "waiting" or .status == "pending")
-              | select((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-              | .id
-            ' <<<"$runs_json")"; then
-            echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
-            exit 0
-          fi
-          while IFS= read -r run_id; do
-            [ -n "$run_id" ] || continue
-            if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/noema-close-cancel-error; then
-              echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}."
-            else
-              echo "::warning::Noema close cleanup could not cancel run ${run_id}; it may have finished or the token lacks Actions write access."
-              sed 's/^/  /' /tmp/noema-close-cancel-error >&2 || true
+          # cancel_runs prints the number of runs it matched for $1's status
+          # on stdout (its only stdout output) so the multi-pass loop below
+          # can tell whether a pass found anything; all human-facing log
+          # lines go to stderr so they don't pollute that count.
+          #
+          # The runs list is scoped to this repository, not to a specific
+          # workflow file: noema-review.yml runs against sibling
+          # repositories only through the organization's required-workflow
+          # ruleset (README.md's "또 같이" / "siblings call it" section) and
+          # is never itself committed to those repositories, so
+          # actions/workflows/noema-review.yml/runs is not guaranteed to
+          # resolve there -- GitHub's List repository workflows family
+          # enumerates workflow files that exist in that repository's own
+          # tree. actions/runs plus the existing `.name == "Required Noema
+          # Review"` filter is this repo's own already-proven pattern for
+          # this exact cross-repo cleanup (see strix.yml's identical job).
+          # Status stays a server-side filter -- bounding each query to only
+          # the currently active runs -- rather than an unfiltered
+          # per-workflow fetch filtered client-side, since noema-review.yml
+          # is this org's central, highest-volume review workflow and an
+          # unbounded history walk on every PR close is a real rate-limit
+          # and latency risk here.
+          cancel_runs() {
+            local status="$1"
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/noema-close-gh-error)"; then
+              echo "::warning::Noema close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
+              sed 's/^/  /' /tmp/noema-close-gh-error >&2 || true
+              echo 0
+              return 0
             fi
-          done <<<"$run_ids"
+            local run_ids
+            # PR-scoped only, by the display_title this same workflow's own
+            # run-name derives from the triggering event's PR number (see
+            # run-name above) -- not by head_sha, which two different open
+            # PRs can share (e.g. a duplicate PR opened from the same branch
+            # against another target), and which would let closing one
+            # cancel the other's still-needed run. Matching by PR number
+            # rather than by the closed PR's current head SHA also means
+            # historical-head runs from earlier pushes to this same PR are
+            # still caught.
+            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" \
+              --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(.name == "Required Noema Review")
+                | select((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                | .id
+              ' <<<"$runs_json")"; then
+              echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
+              echo 0
+              return 0
+            fi
+            local matched=0
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              matched=$((matched + 1))
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/noema-close-cancel-error; then
+                echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}." >&2
+              else
+                echo "::warning::Noema close cleanup could not cancel run ${run_id}; it may have finished or the token lacks Actions write access." >&2
+                sed 's/^/  /' /tmp/noema-close-cancel-error >&2 || true
+              fi
+            done <<<"$run_ids"
+            echo "$matched"
+          }
+
+          # A run can transition between the five active statuses between
+          # one status's fetch and the next (e.g. it is "requested" when the
+          # already-fetched "queued" list was read, then becomes "queued"
+          # moments later, after this pass has already moved past checking
+          # "queued") -- a real GitHub Actions run lifecycle race, not a
+          # hypothetical. A single sequential sweep can let such a run
+          # escape cancellation entirely. Re-scan every active status for up
+          # to three passes: always run at least two full passes (a run that
+          # slips through every status query in pass 1 has, by definition,
+          # settled into a checkable status by the time pass 2 queries it
+          # again), and only skip the third when both prior passes matched
+          # nothing, bounding the retries so API flakiness cannot loop this
+          # forever.
+          max_passes=3
+          pass=1
+          found_any=0
+          while [ "$pass" -le "$max_passes" ]; do
+            pass_matches=0
+            for active_status in queued in_progress requested waiting pending; do
+              matched="$(cancel_runs "$active_status")"
+              pass_matches=$((pass_matches + matched))
+            done
+            echo "Noema close cleanup pass ${pass}/${max_passes} matched ${pass_matches} run(s) across active statuses." >&2
+            if [ "$pass_matches" -gt 0 ]; then
+              found_any=1
+            fi
+            if [ "$pass" -ge 2 ] && [ "$pass_matches" -eq 0 ] && [ "$found_any" -eq 0 ]; then
+              break
+            fi
+            pass=$((pass + 1))
+          done
 
   noema-review:
     name: noema-review
