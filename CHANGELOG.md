@@ -12,11 +12,11 @@ Semantic Versioning where the repository publishes a release.
   `ModuleNotFoundError: No module named 'scripts'` when the script is run
   directly (`python3 scripts/ci/noema_review_gate.py ...`, `sys.path[0]`
   being the script's own directory rather than the repository root). This
-  was a live, org-wide Noema review outage (confirmed in `contextual-orchestrator`
-  PR #946, run `33370760438`, job `noema-review`) until PR #1501 fixed the
-  active incident by changing `noema-review.yml`'s call site to `python3 -m
-  scripts.ci.noema_review_gate ...`, which also resolves the absolute
-  import. This change is complementary defense-in-depth, not an active-outage
+  was a live, org-wide Noema review outage (confirmed in
+  `ContextualWisdomLab/contextual-orchestrator#946`, run `33370760438`, job
+  `noema-review`) until PR #1501 fixed the active incident by changing
+  `noema-review.yml`'s call site to `python3 -m scripts.ci.noema_review_gate
+  ...`, which also resolves the absolute import. This change is complementary defense-in-depth, not an active-outage
   fix: it applies the same `if __package__: ... else: ...` conditional-import
   fallback already used by `noema_review_handoff.py` directly to
   `noema_review_gate.py`, so the script also runs correctly as a bare script
