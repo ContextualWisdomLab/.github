@@ -15,10 +15,13 @@ def test_org_queue_sweep_is_hourly_not_quarter_hourly() -> None:
 
 
 def test_org_queue_sweep_wall_clock_fallback_matches_hourly_cadence() -> None:
-    """Fallback rotation must advance once per hourly sweep, not four offsets at once."""
+    """Fallback rotation and its maintenance comments must match hourly cadence."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert workflow.count("$(date -u +%s) / 3600") == 2
     assert "$(date -u +%s) / 900" not in workflow
+    assert "900s window" not in workflow
+    assert "900s)" not in workflow
+    assert "pending */15 sweep" not in workflow
 
 
 def test_repository_scheduler_keeps_event_driven_wakes() -> None:
