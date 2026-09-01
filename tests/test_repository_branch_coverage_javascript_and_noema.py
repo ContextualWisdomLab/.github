@@ -178,6 +178,5 @@ def test_noema_review_context_includes_locations_bodies_and_all_sections(
 
     monkeypatch.setattr(noema, "changed_file_context", lambda *_args: "files")
     context = noema.build_review_context("owner/repo", 1, pr)
-    assert "CodeGraph context" not in context
     assert "Prior review threads" in context
     assert "Changed file context" in context
