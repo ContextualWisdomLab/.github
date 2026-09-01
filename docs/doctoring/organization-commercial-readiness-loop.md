@@ -55,7 +55,8 @@ env:
 jobs:
   develop:
     steps:
-      - run: |
+      - name: Invoke the repository product agent
+        run: |
           # cwl-ddd-prompt-binding: v1
           product-agent \
             --prompt-env CWL_PRODUCT_AGENT_PROMPT \

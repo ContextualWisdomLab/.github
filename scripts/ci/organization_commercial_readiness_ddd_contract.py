@@ -86,6 +86,46 @@ def _block_scalars(source: str, key: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
+def _step_run_blocks(source: str) -> tuple[str, ...]:
+    """Return block ``run`` values structurally nested below job steps."""
+    lines = source.splitlines()
+    candidates = _block_scalars(source, "run")
+    accepted: list[str] = []
+    candidate_index = 0
+    header = re.compile(_BLOCK_HEADER_TEMPLATE.format(key="run"))
+    for index, line in enumerate(lines):
+        match = header.fullmatch(line)
+        if match is None:
+            continue
+        block = candidates[candidate_index]
+        candidate_index += 1
+        run_indent = len(match.group("indent"))
+        ancestors: list[tuple[int, str]] = []
+        ceiling = run_indent
+        for previous in reversed(lines[:index]):
+            if not previous.strip():
+                continue
+            indent = len(previous) - len(previous.lstrip(" "))
+            if indent < ceiling:
+                ancestors.append((indent, previous.strip()))
+                ceiling = indent
+                if indent == 0:
+                    break
+        for ancestor_index, steps in enumerate(ancestors):
+            remaining = ancestors[ancestor_index + 1 :]
+            if len(remaining) < 2:
+                break
+            job, jobs = remaining[:2]
+            if (
+                steps[1] == "steps:"
+                and job[1].endswith(":")
+                and jobs == (0, "jobs:")
+            ):
+                accepted.append(block)
+                break
+    return tuple(accepted)
+
+
 def _contract_version(environment: str) -> str | None:
     """Return the unique scalar contract version from a root environment body."""
     matches = [
@@ -154,8 +194,12 @@ def _executable(tokens: tuple[str, ...]) -> str | None:
 
 def _has_bound_agent_invocation(source: str) -> bool:
     """Return whether one nontrivial command receives both contract inputs."""
-    for run_block in _block_scalars(source, "run"):
+    for run_block in _step_run_blocks(source):
         if DDD_PROMPT_BINDING_MARKER not in run_block:
+            continue
+        if "<<" in run_block or re.search(
+            r"(?m)^\s*(?:if|case|while|until)\b", run_block
+        ):
             continue
         for tokens in _shell_segments(run_block):
             executable = _executable(tokens)

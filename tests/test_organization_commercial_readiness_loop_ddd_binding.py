@@ -250,12 +250,44 @@ def test_rejects_marker_and_flags_distributed_across_run_blocks() -> None:
     )
 
 
+def test_rejects_non_step_and_unreachable_agent_bindings() -> None:
+    """Only directly reachable job-step commands may bind the contract."""
+    source = _source()
+    run_block = next(iter(contract._step_run_blocks(source)))
+    for prefix in ("env:\n", "metadata:\n"):
+        inert = source.replace("jobs:\n", f"{prefix}  run: |\n" + "\n".join(
+            f"    {line}" for line in run_block.splitlines()
+        ) + "\njobs:\n", 1)
+        inert = inert.replace("        run: |", "        notes: |", 1)
+        assert not coordinator.has_domain_driven_development_contract(inert)
+
+    heredoc = _replace_command(
+        source,
+        "cat <<'INERT'\n"
+        "          product-agent --prompt-env CWL_PRODUCT_AGENT_PROMPT "
+        "--architecture-contract-env CWL_DDD_CONTRACT_CAPABILITIES\n"
+        "          INERT",
+    )
+    assert not coordinator.has_domain_driven_development_contract(heredoc)
+
+    skipped = _replace_command(
+        source,
+        "if false; then\n"
+        "          product-agent --prompt-env CWL_PRODUCT_AGENT_PROMPT "
+        "--architecture-contract-env CWL_DDD_CONTRACT_CAPABILITIES\n"
+        "          fi",
+    )
+    assert not coordinator.has_domain_driven_development_contract(skipped)
+
+
 def test_private_command_edges_and_compatibility_script_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cover assignment-only, trailing-operator, and direct-script boundaries."""
     assert contract._executable(("env", "MODE=bounded")) is None
     assert list(contract._shell_segments("product-agent ;")) == [("product-agent",)]
+    assert contract._step_run_blocks("run: |\n  product-agent") == ()
+    assert contract._step_run_blocks("jobs:\n\n  run: |\n    product-agent") == ()
 
     path = Path(coordinator.__file__)
     monkeypatch.setattr(sys, "argv", [str(path), "--organization", "invalid/name"])
