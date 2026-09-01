@@ -21,23 +21,32 @@ PROBE_FIELDS = {
 }
 
 
-def class_evidence(kind: str, *, path: str, line: int, side: str | None = None):
-    reference = {"path": path, "line": line}
-    if side is not None:
-        reference["side"] = side
-    return {field: dict(reference) for field in PROBE_FIELDS[kind]}
+def class_evidence(kind: str, *, path: str, line: int) -> dict[str, str]:
+    """Build three distinct, field-tagged semantic observations for one probe class."""
+    return {
+        field: f"{field} observed a concrete {kind} result at {path}:{line}"
+        for field in PROBE_FIELDS[kind]
+    }
+
+
+def evidence_with_witnesses(kind: str, *, path: str, line: int) -> tuple[dict[str, str], str]:
+    """Return semantic witnesses and the parent evidence that binds them verbatim."""
+    witnesses = class_evidence(kind, path=path, line=line)
+    evidence = "; ".join(f"{field}={observation}" for field, observation in witnesses.items())
+    return witnesses, evidence
 
 
 def opencode_probe(kind: str, line: int):
     path = "scripts/ci/example.py"
+    witnesses, evidence = evidence_with_witnesses(kind, path=path, line=line)
     return {
         "path": path,
         "line": line,
         "probe_kind": kind,
-        "class_evidence": class_evidence(kind, path=path, line=line),
+        "class_evidence": witnesses,
         "hypothesis": f"Observed {kind} failure shape can violate the changed invariant.",
         "attack_or_counterexample": f"Exercise the {kind} counterexample at line {line}.",
-        "evidence": f"Source-backed outcome for {kind} at {path}:{line}.",
+        "evidence": evidence,
         "outcome": "falsified",
     }
 
@@ -86,13 +95,13 @@ def test_opencode_requires_distinct_observed_classes_for_material_changes(monkey
     assert "requires at least 2 distinct probe_kind values" in error
 
 
-def test_opencode_rejects_class_witness_borrowed_from_another_line(monkeypatch):
-    """A class label cannot borrow witness coordinates from unrelated evidence."""
+def test_opencode_rejects_coordinate_only_class_evidence(monkeypatch):
+    """Source references alone cannot masquerade as class-specific observations."""
     patch_opencode_probe_dependencies(monkeypatch)
     bad = opencode_probe("test_oracle", 7)
-    bad["class_evidence"]["negative_control"] = {
-        "path": "scripts/ci/example.py",
-        "line": 8,
+    bad["class_evidence"] = {
+        field: {"path": bad["path"], "line": bad["line"]}
+        for field in PROBE_FIELDS["test_oracle"]
     }
     error = opencode.adversarial_validation_error(
         {
@@ -103,11 +112,48 @@ def test_opencode_rejects_class_witness_borrowed_from_another_line(monkeypatch):
         result="APPROVE",
         findings=[],
     )
-    assert "class_evidence.negative_control must bind to the probe location" in error
+    assert "class_evidence.assertion_under_test requires a concrete observation" in error
 
 
-def test_opencode_accepts_two_source_bound_observed_classes(monkeypatch):
-    """Distinct, source-bound observed classes remain publishable."""
+def test_opencode_rejects_witness_not_bound_into_parent_evidence(monkeypatch):
+    """A relabeled witness must be present in the independently validated evidence text."""
+    patch_opencode_probe_dependencies(monkeypatch)
+    bad = opencode_probe("authority_boundary", 7)
+    bad["class_evidence"]["external_authority"] = (
+        "external_authority observed a different host-owned decision at scripts/ci/example.py:7"
+    )
+    error = opencode.adversarial_validation_error(
+        {
+            "status": "passed",
+            "probes": [bad, opencode_probe("dependency_context", 8)],
+            "residual_risk": "Bounded review evidence cannot model every runtime interleaving.",
+        },
+        result="APPROVE",
+        findings=[],
+    )
+    assert "class_evidence.external_authority must be quoted in probe evidence" in error
+
+
+def test_opencode_rejects_vacuous_class_observation(monkeypatch):
+    """A class field cannot use the same generic review conclusion as all witnesses."""
+    patch_opencode_probe_dependencies(monkeypatch)
+    bad = opencode_probe("coercion_boundary", 7)
+    bad["class_evidence"]["raw_value"] = "works as expected"
+    bad["evidence"] += "; raw_value=works as expected"
+    error = opencode.adversarial_validation_error(
+        {
+            "status": "passed",
+            "probes": [bad, opencode_probe("execution_identity", 8)],
+            "residual_risk": "Bounded review evidence cannot model every runtime interleaving.",
+        },
+        result="APPROVE",
+        findings=[],
+    )
+    assert "class_evidence.raw_value is vacuous" in error
+
+
+def test_opencode_accepts_two_semantically_bound_observed_classes(monkeypatch):
+    """Distinct observed classes with field-specific evidence remain publishable."""
     patch_opencode_probe_dependencies(monkeypatch)
     error = opencode.adversarial_validation_error(
         {
@@ -126,15 +172,16 @@ def test_opencode_accepts_two_source_bound_observed_classes(monkeypatch):
 
 def noema_probe(kind: str, *, line: int, side: str = "RIGHT"):
     path = "example.py"
+    witnesses, evidence = evidence_with_witnesses(kind, path=path, line=line)
     return {
         "path": path,
         "line": line,
         "side": side,
         "probe_kind": kind,
-        "class_evidence": class_evidence(kind, path=path, line=line, side=side),
+        "class_evidence": witnesses,
         "hypothesis": f"Observed {kind} failure shape can violate the changed invariant.",
         "attack_or_counterexample": f"Exercise the {kind} counterexample at line {line}.",
-        "evidence": f"Source trace falsifies {kind} at {path}:{line}.",
+        "evidence": evidence,
         "outcome": "falsified",
     }
 
@@ -190,3 +237,36 @@ def test_noema_rejects_missing_observed_probe_kind_when_enabled(monkeypatch):
     verdict = noema_verdict([first, noema_probe("authority_boundary", line=8)])
     with pytest.raises(noema.NoemaModelOutputError, match="requires probe_kind from the observed defect taxonomy"):
         noema.validate_substantive_verdict(verdict, noema_diff(), ("example.py",))
+
+
+def test_noema_rejects_coordinate_only_class_evidence_when_enabled(monkeypatch):
+    """Noema also rejects labels backed only by repeated source coordinates."""
+    monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "1")
+    first = noema_probe("cross_contract", line=7)
+    first["class_evidence"] = {
+        field: {"path": first["path"], "line": first["line"], "side": first["side"]}
+        for field in PROBE_FIELDS["cross_contract"]
+    }
+    verdict = noema_verdict([first, noema_probe("test_oracle", line=8)])
+    with pytest.raises(noema.NoemaModelOutputError, match="class_evidence.first_contract requires a concrete observation"):
+        noema.validate_substantive_verdict(verdict, noema_diff(), ("example.py",))
+
+
+def test_noema_rejects_boolean_changed_line_alias(monkeypatch):
+    """JSON true cannot impersonate integer changed line 1 through Python equality."""
+    monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "1")
+    verdict = noema_verdict(
+        [noema_probe("mutable_alias", line=7), noema_probe("execution_identity", line=8)]
+    )
+    verdict["reviewed_lines"][0]["line"] = True
+    with pytest.raises(noema.NoemaModelOutputError, match="canonical positive integer line"):
+        noema.validate_substantive_verdict(verdict, noema_diff(), ("example.py",))
+
+
+def test_noema_accepts_two_semantically_bound_observed_classes(monkeypatch):
+    """Noema accepts distinct classes only when semantic witnesses bind into evidence."""
+    monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "1")
+    verdict = noema_verdict(
+        [noema_probe("mutable_alias", line=7), noema_probe("execution_identity", line=8)]
+    )
+    noema.validate_substantive_verdict(verdict, noema_diff(), ("example.py",))
