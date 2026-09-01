@@ -17,16 +17,19 @@ jobs:
         with:
           ref: fix/strix-control-plane-supersession-20260901
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Reconcile current main and patch exact-head Strix admission contract
+        id: patch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           writer_ref='refs/heads/fix/strix-control-plane-supersession-20260901'
           starting_head="$GITHUB_SHA"
+          echo "starting_head=$starting_head" >>"$GITHUB_OUTPUT"
           remote_head="$(git ls-remote origin "$writer_ref" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$starting_head"
@@ -63,7 +66,11 @@ jobs:
               return dollar + '{{ ' + body + ' }}'
 
           def validation_step(name: str, *, publication: bool = False) -> str:
-              condition = expression("always() && github.event_name == 'pull_request_target'") if publication else "github.event_name == 'pull_request_target'"
+              condition = (
+                  expression("always() && github.event_name == 'pull_request_target'")
+                  if publication
+                  else "github.event_name == 'pull_request_target'"
+              )
               step_id = '        id: live_publication\n' if publication else ''
               output = '          echo "current=true" >>"$GITHUB_OUTPUT"\n' if publication else ''
               return (
@@ -77,7 +84,10 @@ jobs:
                   f'          EXPECTED_HEAD_SHA: {expression("github.event.pull_request.head.sha")}\n'
                   '        run: |\n'
                   '          set -euo pipefail\n'
-                  '          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"\n'
+                  '          if ! live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then\n'
+                  '            echo "::error::Could not look up the live pull request; refusing stale-event admission."\n'
+                  '            exit 1\n'
+                  '          fi\n'
                   '          live_state="$(printf \'%s\' "$live_pr" | jq -r \'.state // empty\')"\n'
                   '          live_head_sha="$(printf \'%s\' "$live_pr" | jq -r \'.head.sha // empty\')"\n'
                   '          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then\n'
@@ -88,7 +98,7 @@ jobs:
                   '            echo "::error::Strix event no longer matches the live open pull request head."\n'
                   '            exit 1\n'
                   '          fi\n'
-                  f'{output}\n'
+                  f'{output}'
               )
 
           early_name = 'Validate live pull request before Strix setup'
@@ -96,7 +106,11 @@ jobs:
               marker = '    steps:\n      - name: Harden runner\n'
               if marker not in workflow:
                   raise SystemExit('missing Strix first-step marker')
-              workflow = workflow.replace(marker, '    steps:\n' + validation_step(early_name) + '      - name: Harden runner\n', 1)
+              workflow = workflow.replace(
+                  marker,
+                  '    steps:\n' + validation_step(early_name) + '      - name: Harden runner\n',
+                  1,
+              )
 
           provider_name = 'Revalidate live pull request before provider execution'
           if provider_name not in workflow:
@@ -110,10 +124,20 @@ jobs:
               marker = '      - name: Collect Strix reports for artifact upload\n'
               if marker not in workflow:
                   raise SystemExit('missing publication marker')
-              workflow = workflow.replace(marker, validation_step(publication_name, publication=True) + marker, 1)
+              workflow = workflow.replace(
+                  marker,
+                  validation_step(publication_name, publication=True) + marker,
+                  1,
+              )
 
           collect_old = '        if: ' + expression("always() && steps.gate.outputs.enabled == 'true'") + '\n'
-          collect_new = '        if: ' + expression("always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true')") + '\n'
+          collect_new = (
+              '        if: '
+              + expression(
+                  "always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true')"
+              )
+              + '\n'
+          )
           collect_marker = '      - name: Collect Strix reports for artifact upload\n'
           collect_start = workflow.index(collect_marker)
           upload_start = workflow.index('      - name: Upload Strix reports artifact\n', collect_start)
@@ -174,7 +198,11 @@ jobs:
           good_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
           if bad_timeout in quick_gate:
               quick_gate = quick_gate.replace(bad_timeout, good_timeout, 1)
-          for forbidden in (stale_cleanup.rstrip('\n'), stale_recovery.rstrip('\n'), bad_timeout.rstrip('\n')):
+          for forbidden in (
+              stale_cleanup.rstrip('\n'),
+              stale_recovery.rstrip('\n'),
+              bad_timeout.rstrip('\n'),
+          ):
               if forbidden in quick_gate:
                   raise SystemExit(f'stale Strix quick-gate assertion remains: {forbidden}')
           if good_timeout.rstrip('\n') not in quick_gate:
@@ -193,4 +221,20 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m 'fix(strix): revalidate live PR state before expensive evidence'
-          git push origin HEAD:fix/strix-control-plane-supersession-20260901
+
+      - name: Push repaired head with event-capable credential
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          STARTING_HEAD: ${{ steps.patch.outputs.starting_head }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::No event-capable branch-write credential is configured; refusing a GITHUB_TOKEN push that would suppress exact-head checks."
+            exit 1
+          fi
+          writer_branch='fix/strix-control-plane-supersession-20260901'
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${writer_branch}" --jq '.object.sha')"
+          test -n "$remote_head"
+          test "$remote_head" = "$STARTING_HEAD"
+          gh auth setup-git
+          git push origin HEAD:"$writer_branch"
