@@ -1,0 +1,134 @@
+name: One-shot PR 1568 live-state regression repair
+
+on:
+  push:
+    branches: [fix/opencode-review-draft-poll-exemption]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify this run still owns the exact PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          live_head="$(gh api repos/ContextualWisdomLab/.github/pulls/1568 --jq .head.sha)"
+          test "$live_head" = "$RUN_HEAD"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/opencode-review-draft-poll-exemption
+          fetch-depth: 0
+
+      - name: Repair stale regression fixtures against the live-state contract
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_opencode_required_verdict_regression.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_helper = '''def _write_refusing_gh(bin_dir: Path) -> None:\n    """Install a fake ``gh`` on PATH that fails loudly if it is ever invoked.\n\n    Used to prove an early-exit branch never reaches the Reviews API call.\n    """\n    fake_gh = bin_dir / "gh"\n    fake_gh.write_text(\n        "#!/usr/bin/env bash\\n"\n        "echo 'unexpected gh invocation: the early-exit should have short-circuited' >&2\\n"\n        "exit 17\\n",\n        encoding="utf-8",\n    )\n    fake_gh.chmod(fake_gh.stat().st_mode | 0o111)\n'''
+          new_helper = '''def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:\n    """Serve the authoritative live PR lookup, then reject downstream GitHub I/O."""\n    fake_gh = bin_dir / "gh"\n    fake_gh.write_text(\n        "#!/usr/bin/env bash\\n"\n        "set -euo pipefail\\n"\n        "if [[ \\\"$*\\\" == \\\"api repos/ContextualWisdomLab/example/pulls/1437\\\" ]]; then\\n"\n        "  printf '%s' \\\"$LIVE_PR_JSON\\\"\\n"\n        "  exit 0\\n"\n        "fi\\n"\n        "echo 'unexpected gh invocation after live-state validation' >&2\\n"\n        "exit 17\\n",\n        encoding="utf-8",\n    )\n    fake_gh.chmod(fake_gh.stat().st_mode | 0o111)\n'''
+          if old_helper not in text:
+              raise SystemExit('expected refusing-gh helper not found')
+          text = text.replace(old_helper, new_helper, 1)
+          text = text.replace('_write_refusing_gh(bin_dir)', '_write_live_pr_then_refusing_gh(bin_dir)')
+
+          fail_env = '''            "PR_DRAFT": pr_draft,\n'''
+          fail_replacement = '''            "PR_DRAFT": pr_draft,\n            "LIVE_PR_JSON": json.dumps(\n                {"draft": pr_draft.lower() == "true", "head": {"sha": head_sha}}\n            ),\n'''
+          if text.count(fail_env) != 1:
+              raise SystemExit('expected fail-closed PR_DRAFT environment entry not found exactly once')
+          text = text.replace(fail_env, fail_replacement, 1)
+
+          request_env = '''            "WORKFLOW_SHA": "c" * 40,\n'''
+          request_replacement = '''            "WORKFLOW_SHA": "c" * 40,\n            "LIVE_PR_JSON": json.dumps(\n                {"draft": pr_draft.lower() == "true", "head": {"sha": HEAD}}\n            ),\n'''
+          if text.count(request_env) != 1:
+              raise SystemExit('expected request-step workflow SHA entry not found exactly once')
+          text = text.replace(request_env, request_replacement, 1)
+
+          text = text.replace(
+              'assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout',
+              'assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout',
+          )
+          text = text.replace(
+              'assert "PR is a draft; a current-head OpenCode review is not requested" in result.stdout',
+              'assert "PR is still a draft on the live exact head; a current-head OpenCode review is not requested" in result.stdout',
+          )
+          text = text.replace(
+              'assert "unexpected gh invocation" in result.stderr',
+              'assert "unexpected gh invocation after live-state validation" in result.stderr',
+          )
+          text = text.replace(
+              'This proves the request step now\n    exits before any API call -- helper-source fetch included -- when',
+              'This proves the request step now performs only the authoritative live-state lookup, then\n    exits before helper-source, review, token, or dispatch API calls when',
+          )
+
+          old_fake = '''if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then\n  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"\n'''
+          new_fake = '''if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then\n  printf '%s' "$LIVE_PR_JSON"\nelif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then\n  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"\n'''
+          if old_fake not in text:
+              raise SystemExit('scheduler-wake fake gh block not found')
+          text = text.replace(old_fake, new_fake, 1)
+
+          scheduler_env = '''        "GH_TOKEN": "token",\n'''
+          scheduler_replacement = '''        "GH_TOKEN": "token",\n        "LIVE_PR_JSON": json.dumps({"draft": False, "head": {"sha": HEAD}}),\n'''
+          if text.count(scheduler_env) != 1:
+              raise SystemExit('scheduler wake GH_TOKEN environment entry not found exactly once')
+          text = text.replace(scheduler_env, scheduler_replacement, 1)
+          path.write_text(text, encoding='utf-8')
+
+          live_path = Path('tests/test_opencode_live_draft_state_regression.py')
+          live_text = live_path.read_text(encoding='utf-8')
+          old_message = 'assert "head moved while validating draft" in result.stdout'
+          if live_text.count(old_message) != 1:
+              raise SystemExit('moved-head assertion not found exactly once')
+          live_path.write_text(
+              live_text.replace(old_message, 'assert "head moved while validating live" in result.stdout', 1),
+              encoding='utf-8',
+          )
+
+          queue_path = Path('tests/test_required_workflow_queue_contract.py')
+          queue_text = queue_path.read_text(encoding='utf-8')
+          old_trigger = 'types: [opened, synchronize, reopened, ready_for_review, closed]'
+          new_trigger = 'types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]'
+          if queue_text.count(old_trigger) != 1:
+              raise SystemExit('legacy OpenCode trigger assertion not found exactly once')
+          queue_path.write_text(queue_text.replace(old_trigger, new_trigger, 1), encoding='utf-8')
+          PY
+
+      - name: Run focused and full exact-head tests
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_opencode_required_verdict_regression.py \
+            tests/test_opencode_live_draft_state_regression.py \
+            tests/test_required_workflow_queue_contract.py
+          python -m pytest -q tests
+
+      - name: Commit repair and remove this one-shot workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/source-fix-1568-live-state-regressions.yml
+          git diff --check
+          git add tests/conftest.py \
+            tests/test_opencode_required_verdict_regression.py \
+            tests/test_opencode_live_draft_state_regression.py \
+            tests/test_required_workflow_queue_contract.py \
+            .github/workflows/source-fix-1568-live-state-regressions.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'test(ci): align live-state regressions with admission contract'
+          live_head="$(gh api repos/ContextualWisdomLab/.github/pulls/1568 --jq .head.sha)"
+          test "$live_head" = "$RUN_HEAD"
+          git push origin HEAD:fix/opencode-review-draft-poll-exemption
