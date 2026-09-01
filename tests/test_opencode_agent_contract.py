@@ -1107,9 +1107,9 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         "ALLOWED_DISPATCH_TARGETS": (
             "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
         ),
-        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
-        "PR_NUMBER": "1085",
-    }
+            "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+            "PR_NUMBER": "1085",
+        }
 
     authorized = subprocess.run(
         ["bash", "-c", shell],
@@ -1897,7 +1897,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
     assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
+        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "11700"'
         in workflow
     )
     assert (
@@ -1975,7 +1975,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 325", workflow)
+    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 305", workflow)
     assert "timeout-minutes: 12" in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
@@ -1984,7 +1984,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert (
@@ -2020,7 +2020,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
@@ -2030,15 +2030,15 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
         in workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "11700"' in workflow
     assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
+    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
     assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
@@ -2340,6 +2340,27 @@ def test_opencode_job_timeout_contains_full_sequential_review_budget():
         "opencode-review-target can terminate before publishing the bounded "
         f"current-head result: job={job_timeout}m required={required_timeout}m"
     )
+
+
+def test_contextual_orchestrator_uses_outer_pool_budget() -> None:
+    """Do not impose a shorter per-process cutoff on orchestration."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    model_pool = workflow.split("      - name: Run OpenCode PR Review model pool", 1)[
+        1
+    ].split("      - name: Exchange OpenCode app token for review writes", 1)[0]
+    timeout_variables = (
+        "OPENCODE_RUN_TIMEOUT_SECONDS",
+        "OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS",
+        "OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS",
+        "OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS",
+        "OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS",
+        "OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS",
+        "OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS",
+    )
+    for variable in timeout_variables:
+        assert f'{variable}: "11700"' in model_pool
 
 
 def test_opencode_approval_gate_shell_is_parseable():
@@ -2661,6 +2682,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
     assert 'mismatches+=("head_sha")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ]' in metadata_step
+    assert "proceeding with the live head" not in metadata_step
+    assert "head_sha=%s\\n' \"$live_head_sha\"" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in metadata_step
