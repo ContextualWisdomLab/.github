@@ -31,21 +31,44 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          expr_open = "$" + "{{"
+          expr_close = "}" + "}"
+
           workflow_path = Path(".github/workflows/strix.yml")
           workflow = workflow_path.read_text(encoding="utf-8")
 
           permissions_marker = "# Scorecard Token-Permissions (alert #43): keep the workflow-level token\n"
           if workflow.count(permissions_marker) != 1:
               raise SystemExit("unexpected Strix permissions marker cardinality")
-          top_concurrency = '''# Same-PR predecessor retirement must happen in GitHub's control plane before\n# runner allocation. Synchronize/closed events replace the prior run for that PR;\n# unrelated PRs and repository_dispatch retries keep independent workflow runs.\nconcurrency:\n  group: strix-workflow-${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.event.pull_request.base.repo.full_name || github.repository, github.event.pull_request.number) || format('run-{0}', github.run_id) }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed') }}\n\n'''
+          top_concurrency = (
+              "# Same-PR predecessor retirement must happen in GitHub's control plane before\n"
+              "# runner allocation. Synchronize/closed events replace the prior run for that PR;\n"
+              "# unrelated PRs and repository_dispatch retries keep independent workflow runs.\n"
+              "concurrency:\n"
+              "  group: strix-workflow-"
+              + expr_open
+              + " github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.event.pull_request.base.repo.full_name || github.repository, github.event.pull_request.number) || format('run-{0}', github.run_id) "
+              + expr_close
+              + "\n  cancel-in-progress: "
+              + expr_open
+              + " github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed') "
+              + expr_close
+              + "\n\n"
+          )
           workflow = workflow.replace(permissions_marker, top_concurrency + permissions_marker)
 
           cleanup_start = workflow.index("  cancel-superseded-pr-runs:\n")
           strix_start = workflow.index("  strix:\n", cleanup_start)
           workflow = workflow[:cleanup_start] + workflow[strix_start:]
 
-          old_comment = '''    # Keep provider-backed scans serial per repository and event class while\n    # allowing the trusted cleanup job above to retire an obsolete head now.\n'''
-          new_comment = '''    # Keep provider-backed scans serial per repository and event class. Same-PR\n    # predecessor/closed runs are retired by workflow-level concurrency above.\n'''
+          old_comment = (
+              "    # Keep provider-backed scans serial per repository and event class while\n"
+              "    # allowing the trusted cleanup job above to retire an obsolete head now.\n"
+          )
+          new_comment = (
+              "    # Keep provider-backed scans serial per repository and event class. Same-PR\n"
+              "    # predecessor/closed runs are retired by workflow-level concurrency above.\n"
+          )
           if workflow.count(old_comment) != 1:
               raise SystemExit("unexpected Strix scan concurrency comment")
           workflow = workflow.replace(old_comment, new_comment)
@@ -56,7 +79,7 @@ jobs:
 
           first = tests.index("def test_strix_serializes_provider_evidence_per_repository() -> None:\n")
           first_end = tests.index("\ndef test_strix_install_normalizes_executable_permissions_before_hashing()", first)
-          replacement = '''def test_strix_serializes_provider_evidence_per_repository() -> None:\n    """Retire predecessor PR runs before runners while preserving provider serialization."""\n    workflow = workflow_text("strix.yml")\n    pre_jobs = workflow.split("jobs:", 1)[0]\n    strix_job = workflow.split("  strix:", 1)[1]\n    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(\n        "runs-on:", 1\n    )[0]\n\n    assert "strix-workflow-${{" in pre_jobs\n    assert "github.event.pull_request.base.repo.full_name" in pre_jobs\n    assert "github.event.pull_request.number" in pre_jobs\n    assert "github.event.pull_request.head.sha" not in pre_jobs\n    assert "github.event.action == 'synchronize'" in pre_jobs\n    assert "github.event.action == 'closed'" in pre_jobs\n    assert "cancel-in-progress: ${{" in pre_jobs\n    assert "cancel-superseded-pr-runs:" not in workflow\n\n    assert "github.event.client_payload.target_repository" in concurrency_contract\n    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract\n    assert "github.repository" in concurrency_contract\n    assert (\n        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "\n        "github.event.pull_request.base.repo.full_name || github.repository)"\n    ) in concurrency_contract\n    assert (\n        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"\n        in concurrency_contract\n    )\n    assert "github.event.pull_request.number" not in concurrency_contract\n    assert "github.event.pull_request.head.sha" not in concurrency_contract\n    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract\n    assert "cancel-in-progress: false" in concurrency_contract\n    assert "queue: max" not in workflow\n\n'''
+          replacement = '''def test_strix_serializes_provider_evidence_per_repository() -> None:\n    """Retire predecessor PR runs before runners while preserving provider serialization."""\n    workflow = workflow_text("strix.yml")\n    pre_jobs = workflow.split("jobs:", 1)[0]\n    strix_job = workflow.split("  strix:", 1)[1]\n    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(\n        "runs-on:", 1\n    )[0]\n\n    assert "strix-workflow-__EO__" in pre_jobs\n    assert "github.event.pull_request.base.repo.full_name" in pre_jobs\n    assert "github.event.pull_request.number" in pre_jobs\n    assert "github.event.pull_request.head.sha" not in pre_jobs\n    assert "github.event.action == 'synchronize'" in pre_jobs\n    assert "github.event.action == 'closed'" in pre_jobs\n    assert "cancel-in-progress: __EO__" in pre_jobs\n    assert "cancel-superseded-pr-runs:" not in workflow\n\n    assert "github.event.client_payload.target_repository" in concurrency_contract\n    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract\n    assert "github.repository" in concurrency_contract\n    assert (\n        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "\n        "github.event.pull_request.base.repo.full_name || github.repository)"\n    ) in concurrency_contract\n    assert (\n        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"\n        in concurrency_contract\n    )\n    assert "github.event.pull_request.number" not in concurrency_contract\n    assert "github.event.pull_request.head.sha" not in concurrency_contract\n    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract\n    assert "cancel-in-progress: false" in concurrency_contract\n    assert "queue: max" not in workflow\n\n'''.replace("__EO__", expr_open)
           tests = tests[:first] + replacement + tests[first_end + 1:]
 
           cleanup_tests_start = tests.index("def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:\n")
@@ -64,13 +87,13 @@ jobs:
           tests = tests[:cleanup_tests_start] + tests[close_test_start:]
 
           old_strix_branch = '''        if filename == "strix.yml":\n            assert "cancel-superseded-pr-runs:" in workflow\n            assert "Cancel queued and running scans for superseded or closed pull request heads" in workflow\n            assert (\n                "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "\n                "|| github.token"\n            ) in workflow\n            assert "DISPATCH_REPOSITORY" not in workflow\n            assert "TARGET_PR_HEAD_SHA" in workflow\n            assert 'select(.event == "pull_request_target")' in workflow\n            assert 'select(.event == "repository_dispatch")' not in workflow\n            assert "(.pull_requests // [])" in workflow\n            assert ".head.sha // \\\"\\\"" in workflow\n            assert "leaving runs unchanged" in workflow\n            assert (\n                "for active_status in queued in_progress requested waiting pending"\n                in workflow\n            )\n            cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(\n                "  strix:", 1\n            )[0]\n'''
-          new_strix_branch = '''        if filename == "strix.yml":\n            pre_jobs = workflow.split("jobs:", 1)[0]\n            assert "strix-workflow-${{" in pre_jobs\n            assert "github.event.pull_request.number" in pre_jobs\n            assert "github.event.action == 'synchronize'" in pre_jobs\n            assert "github.event.action == 'closed'" in pre_jobs\n            assert "cancel-in-progress: ${{" in pre_jobs\n            assert "cancel-superseded-pr-runs:" not in workflow\n'''
+          new_strix_branch = '''        if filename == "strix.yml":\n            pre_jobs = workflow.split("jobs:", 1)[0]\n            assert "strix-workflow-__EO__" in pre_jobs\n            assert "github.event.pull_request.number" in pre_jobs\n            assert "github.event.action == 'synchronize'" in pre_jobs\n            assert "github.event.action == 'closed'" in pre_jobs\n            assert "cancel-in-progress: __EO__" in pre_jobs\n            assert "cancel-superseded-pr-runs:" not in workflow\n'''.replace("__EO__", expr_open)
           if tests.count(old_strix_branch) != 1:
               raise SystemExit("unexpected close-event Strix contract")
           tests = tests.replace(old_strix_branch, new_strix_branch)
 
           old_tail = '''    strix_workflow = workflow_text("strix.yml")\n    # Strix serializes scans per repository while cleanup stays outside that\n    # queue so synchronize and close events can immediately retire old work.\n    assert "cancel-in-progress: false" in strix_workflow\n    assert "Keep provider-backed scans serial per repository" in strix_workflow\n'''
-          new_tail = '''    strix_workflow = workflow_text("strix.yml")\n    pre_jobs = strix_workflow.split("jobs:", 1)[0]\n    assert "cancel-in-progress: ${{" in pre_jobs\n    assert "cancel-in-progress: false" in strix_workflow.split("  strix:", 1)[1]\n    assert "Keep provider-backed scans serial per repository" in strix_workflow\n'''
+          new_tail = '''    strix_workflow = workflow_text("strix.yml")\n    pre_jobs = strix_workflow.split("jobs:", 1)[0]\n    assert "cancel-in-progress: __EO__" in pre_jobs\n    assert "cancel-in-progress: false" in strix_workflow.split("  strix:", 1)[1]\n    assert "Keep provider-backed scans serial per repository" in strix_workflow\n'''.replace("__EO__", expr_open)
           if tests.count(old_tail) != 1:
               raise SystemExit("unexpected Strix close-event tail contract")
           tests = tests.replace(old_tail, new_tail)
