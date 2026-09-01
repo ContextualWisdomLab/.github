@@ -1,0 +1,130 @@
+name: One-shot Noema refreshed identity repair
+
+on:
+  push:
+    branches:
+      - fix/noema-refreshed-app-identity-binding
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.ref == 'refs/heads/fix/noema-refreshed-app-identity-binding'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact repair head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prove RED, apply the contract repair, and prove GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > tests/test_noema_refreshed_app_identity.py <<'PY'
+          """Regression coverage for refreshed Noema GitHub App credentials."""
+
+          import os
+          import sys
+          import unittest
+          from pathlib import Path
+          from unittest.mock import patch
+
+          ROOT = Path(__file__).resolve().parents[1]
+          if str(ROOT) not in sys.path:
+              sys.path.insert(0, str(ROOT))
+
+          from scripts.ci import noema_review_gate as noema
+
+          WORKFLOW = ROOT / ".github" / "workflows" / "noema-review.yml"
+          PUBLICATION_MARKER = "      - name: Publish prepared Noema verdict on the exact live head\n"
+          CANONICAL_APP_SOURCE = "source == 'github-app' && 'noema-review-github-app'"
+          REFRESH_ALIAS = "noema-review-github-app-refresh"
+
+
+          class RefreshedAppIdentityContractTests(unittest.TestCase):
+              """Keep token renewal separate from the trusted reviewer identity class."""
+
+              def test_publication_emits_the_canonical_github_app_source(self):
+                  workflow = WORKFLOW.read_text(encoding="utf-8")
+                  self.assertIn(PUBLICATION_MARKER, workflow)
+                  publication = workflow.split(PUBLICATION_MARKER, 1)[1]
+                  self.assertNotIn(REFRESH_ALIAS, publication)
+                  self.assertIn(CANONICAL_APP_SOURCE, publication)
+
+              def test_gate_accepts_the_canonical_bound_app_identity(self):
+                  environment = {
+                      "NOEMA_REVIEW_ACTOR": "cwl-noema-review[bot]",
+                      "NOEMA_REVIEW_INSTALLATION_ID": "146401636",
+                      "NOEMA_REVIEW_TOKEN_SOURCE": "noema-review-github-app",
+                  }
+                  with patch.dict(os.environ, environment, clear=False):
+                      self.assertEqual(noema.current_actor(), "cwl-noema-review[bot]")
+
+              def test_gate_still_rejects_an_unrecognized_source_alias(self):
+                  environment = {
+                      "NOEMA_REVIEW_ACTOR": "cwl-noema-review[bot]",
+                      "NOEMA_REVIEW_INSTALLATION_ID": "146401636",
+                      "NOEMA_REVIEW_TOKEN_SOURCE": REFRESH_ALIAS,
+                  }
+                  with patch.dict(os.environ, environment, clear=False):
+                      with self.assertRaisesRegex(
+                          RuntimeError,
+                          "Noema GitHub App identity binding is invalid",
+                      ):
+                          noema.current_actor()
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+          set +e
+          python3 tests/test_noema_refreshed_app_identity.py >/tmp/noema-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/noema-red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo "::error::Regression test unexpectedly passed before the production repair."
+            exit 1
+          fi
+          grep -F "noema-review-github-app-refresh" /tmp/noema-red.log >/dev/null || {
+            echo "::error::RED evidence did not fail for the confirmed refreshed-source mismatch."
+            exit 1
+          }
+          echo "RED confirmed: publication emits an identity-source alias rejected by the gate."
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/noema-review.yml")
+          text = workflow.read_text(encoding="utf-8")
+          old = "noema-review-github-app-refresh"
+          new = "noema-review-github-app"
+          if text.count(old) != 1:
+              raise SystemExit(
+                  f"expected exactly one refreshed-source alias, found {text.count(old)}"
+              )
+          workflow.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          python3 tests/test_noema_refreshed_app_identity.py
+          git diff --check
+          echo "GREEN confirmed: canonical publication source and strict gate both pass."
+
+      - name: Commit the verified repair and remove this one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -- .github/workflows/noema-repair-1648.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/noema-review.yml tests/test_noema_refreshed_app_identity.py .github/workflows/noema-repair-1648.yml
+          git diff --cached --check
+          git commit -m "fix(noema): align refreshed app publication identity"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
