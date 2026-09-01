@@ -6,6 +6,7 @@ import asyncio
 import importlib.metadata
 import importlib.util
 from pathlib import Path
+import runpy
 import sys
 import types
 
@@ -308,3 +309,87 @@ def test_installer_main_composes_validation_install_and_publication(monkeypatch,
     assert calls[1] == ("validate", (executable, scripts_root, expected))
     assert calls[2] == ("install", (source, scripts_root))
     assert calls[3] == ("publish", (github_env, installed, scripts_root))
+
+
+
+def test_installer_rejects_absent_github_environment(tmp_path) -> None:
+    """Publishing without the workflow environment file must fail closed."""
+    installer = _load_installer()
+
+    with pytest.raises(RuntimeError, match="GITHUB_ENV is required"):
+        installer._append_github_environment(None, tmp_path / "launcher", tmp_path)
+
+
+def test_installer_script_entrypoint_runs_bound_cli(monkeypatch, tmp_path) -> None:
+    """The real installer entrypoint validates and publishes bound file identities."""
+    installer = _load_installer()
+    scripts_root = tmp_path / "scripts"
+    scripts_root.mkdir()
+    source = tmp_path / "launcher.py"
+    source.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
+    executable = scripts_root / "strix"
+    executable.write_bytes(b"reviewed-strix")
+    github_env = tmp_path / "github-env"
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.5.3")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(INSTALLER),
+            "--launcher",
+            str(source),
+            "--strix-executable",
+            str(executable),
+            "--scripts-root",
+            str(scripts_root),
+            "--expected-sha256",
+            installer._sha256(executable),
+            "--github-env",
+            str(github_env),
+        ],
+    )
+
+    runpy.run_path(str(INSTALLER), run_name="__main__")
+
+    installed = scripts_root / installer.LAUNCHER_NAME
+    assert installed.is_file()
+    assert f"STRIX_EXECUTABLE_PATH={installed.resolve()}" in github_env.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_launcher_script_entrypoint_enters_patched_strix(monkeypatch) -> None:
+    """The real launcher entrypoint installs compatibility before entering Strix."""
+    calls: list[str] = []
+    strix_package = types.ModuleType("strix")
+    core_package = types.ModuleType("strix.core")
+    interface_package = types.ModuleType("strix.interface")
+    inputs_module = types.ModuleType("strix.core.inputs")
+    scan_setup_module = types.ModuleType("strix.interface.scan_setup")
+    main_module = types.ModuleType("strix.interface.main")
+    inputs_module.make_model_settings = lambda *args, **kwargs: kwargs
+    scan_setup_module.asyncio = asyncio
+    main_module.asyncio = asyncio
+    main_module.main = lambda: calls.append("main")
+    core_package.inputs = inputs_module
+    interface_package.scan_setup = scan_setup_module
+    interface_package.main = main_module
+    strix_package.core = core_package
+    strix_package.interface = interface_package
+    monkeypatch.setitem(sys.modules, "strix", strix_package)
+    monkeypatch.setitem(sys.modules, "strix.core", core_package)
+    monkeypatch.setitem(sys.modules, "strix.core.inputs", inputs_module)
+    monkeypatch.setitem(sys.modules, "strix.interface", interface_package)
+    monkeypatch.setitem(
+        sys.modules,
+        "strix.interface.scan_setup",
+        scan_setup_module,
+    )
+    monkeypatch.setitem(sys.modules, "strix.interface.main", main_module)
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.5.3")
+    monkeypatch.setenv("LLM_TIMEOUT", "300")
+    monkeypatch.setenv("LLM_STREAM_IDLE_TIMEOUT", "300")
+
+    runpy.run_path(str(LAUNCHER), run_name="__main__")
+
+    assert calls == ["main"]
