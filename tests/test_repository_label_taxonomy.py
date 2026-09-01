@@ -36,9 +36,12 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "issue": 20,
             "type": "documentation",
         },
+        {"repository": "ThreadWeave", "issue": 37, "type": "documentation"},
         {"repository": "RankWeave", "issue": 40, "type": "documentation"},
         {"repository": "fast-mlsirm", "issue": 1717, "type": "documentation"},
+        {"repository": "fast-mlsirm", "issue": 1716, "type": "documentation"},
         {"repository": "EgressWeave", "issue": 231, "type": "documentation"},
+        {"repository": "EgressWeave", "issue": 190, "type": "documentation"},
         {
             "repository": "psychometrics-commons",
             "issue": 442,
@@ -77,6 +80,7 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "noema", "issue": 530, "type": "feature"},
         {"repository": "bandscope", "issue": 1125, "type": "documentation"},
         {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
+        {"repository": "saju-caldav", "issue": 42, "type": "documentation"},
         {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
         {
             "repository": "semantic-data-portal",
@@ -90,11 +94,18 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         },
         {"repository": "clearfolio", "issue": 538, "type": "documentation"},
         {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
+        {"repository": "pg-erd-cloud", "issue": 1040, "type": "documentation"},
         {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
+        {"repository": "DiagramWeave", "issue": 33, "type": "documentation"},
         {"repository": "keyverse", "issue": 103, "type": "feature"},
         {
             "repository": "mhtml-etl-gateway",
             "issue": 56,
+            "type": "documentation",
+        },
+        {
+            "repository": "mhtml-etl-gateway",
+            "issue": 44,
             "type": "documentation",
         },
         {"repository": "j-planner", "issue": 2, "type": "documentation"},
@@ -132,11 +143,24 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
         {"repository": "life-os", "issue": 211, "type": "documentation"},
         {"repository": "scopeweave", "issue": 650, "type": "documentation"},
+        {"repository": "scopeweave", "issue": 625, "type": "documentation"},
         {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
         {"repository": "kaefa", "issue": 81, "type": "documentation"},
         {"repository": "kaefa", "issue": 82, "type": "documentation"},
         {"repository": "aFIPC", "issue": 261, "type": "documentation"},
         {"repository": "nonnest2", "issue": 115, "type": "documentation"},
+        {"repository": "wardnet", "issue": 130, "type": "documentation"},
+        {"repository": "four-pillars", "issue": 31, "type": "documentation"},
+        {
+            "repository": "enterprise-architecture-core",
+            "issue": 18,
+            "type": "documentation",
+        },
+        {
+            "repository": "enterprise-architecture-core",
+            "issue": 37,
+            "type": "documentation",
+        },
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
 
