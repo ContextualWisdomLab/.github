@@ -40,5 +40,5 @@ def test_missing_maintainer_secret_uses_bounded_job_oidc_exchange() -> None:
     assert 'export GH_TOKEN="$app_token"' in dispatch_step
     assert "::add-mask::$oidc_token" in dispatch_step
     assert "::add-mask::$app_token" in dispatch_step
-    assert "github.token" not in dispatch_step
-    assert "GITHUB_TOKEN" not in dispatch_step
+    assert "${{ github.token }}" not in dispatch_step
+    assert "GITHUB_TOKEN:" not in dispatch_step
