@@ -1,0 +1,64 @@
+name: Isolated PR 1589 RED writer
+
+on:
+  push:
+    branches:
+      - automation/repair-1589-red-20260901-2120
+    paths:
+      - .github/workflows/repair-1589-red.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Reconcile current main, retire target writers, add RED only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+          EXPECTED_HEAD: d1bb9de3d9c8761cbb72e357735e9ce0908a787f
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git fetch origin "$TARGET_BRANCH" main
+          git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-edit -X theirs origin/main
+
+          test -n "$(git grep -n 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py)"
+          test -n "$(git grep -n 'OBSERVED_REVIEW_PROBE_KINDS' -- scripts/ci/noema_review_gate.py)"
+
+          mapfile -t stale_writers < <(find .github/workflows -maxdepth 1 -type f -name 'source-fix-1589*.yml' -print | sort)
+          if ((${#stale_writers[@]})); then
+            git rm -- "${stale_writers[@]}"
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_noema_observed_defect_probe_taxonomy.py')
+          text = path.read_text(encoding='utf-8')
+          marker = '\ndef test_material_verdict_requires_distinct_observed_probe_classes() -> None:\n'
+          if 'test_generic_boilerplate_class_evidence_does_not_authorize_diversity' in text:
+              raise SystemExit('RED regression already exists unexpectedly')
+          test = '''\n\ndef test_generic_boilerplate_class_evidence_does_not_authorize_diversity() -> None:\n    \"\"\"Generic text cannot masquerade as class-specific source evidence.\"\"\"\n    verdict = _verdict(first_kind=\"mutable_alias\", second_kind=\"execution_identity\")\n    for probe in verdict[\"adversarial_validation\"][\"probes\"]:\n        probe_kind = probe[\"probe_kind\"]\n        probe[\"class_evidence\"] = {\n            field: \"generic source-traced witness\"\n            for field in CLASS_EVIDENCE_FIELDS[probe_kind]\n        }\n    with pytest.raises(RuntimeError, match=\"class_evidence\"):\n        gate.validate_substantive_verdict(verdict, DIFF, [\"tool.py\"])\n'''
+          if marker not in text:
+              raise SystemExit('RED insertion marker missing')
+          path.write_text(text.replace(marker, test + marker, 1), encoding='utf-8')
+          PY
+
+          test -z "$(find .github/workflows -maxdepth 1 -type f -name 'source-fix-1589*.yml' -print -quit)"
+          git diff --check
+          git add -A
+          git diff --cached --check
+          git commit -m "test(noema): reject boilerplate probe witnesses"
+          git push origin "HEAD:${TARGET_BRANCH}"
