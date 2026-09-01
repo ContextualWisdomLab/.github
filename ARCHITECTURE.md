@@ -137,11 +137,15 @@ sequenceDiagram
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
-- LLM and scheduled agents route through the vendored contextual-orchestrator gateway
-  (`contextual-orchestrator/orchestrator/free`), which auto-discovers upstream models from five
-  KV-registered provider secrets (Bytez, `NVIDIA_NIM_API_KEY` ×2, OpenRouter, OpenAI) rather than
-  binding any one of them directly. They never use `COPILOT_GITHUB_TOKEN`. Existing
-  review-agent key schemes stay unchanged.
+- Every LLM-bearing review and scheduled-repair workflow routes model traffic
+  through the vendored contextual-orchestrator gateway. OpenCode and Noema remain
+  independent read-only verdict controls with their existing credential mappings,
+  while the write-capable scheduled repair worker uses
+  `contextual-orchestrator/orchestrator/free`; sharing the gateway does not merge
+  their credentials, privileges, or verdict authority. The gateway discovers
+  eligible upstream routes from the credentials actually available to that
+  workflow instead of binding a provider directly. None of these paths uses
+  `COPILOT_GITHUB_TOKEN`.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 - Downloaded SBOM and distribution bytes are inert. The signing job does
