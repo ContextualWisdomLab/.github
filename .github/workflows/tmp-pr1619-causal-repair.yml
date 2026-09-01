@@ -36,12 +36,13 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          expr = '$' + '{{'
           workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
           workflow = workflow_path.read_text(encoding='utf-8')
-          old_token = "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}"
-          new_token = "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}"
-          old_source = "OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}"
-          new_source = "OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}"
+          old_token = f"GH_TOKEN: {expr} secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}}}"
+          new_token = f"GH_TOKEN: {expr} needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}}}"
+          old_source = f"OPENCODE_STATUS_TOKEN_SOURCE: {expr} secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}}}"
+          new_source = f"OPENCODE_STATUS_TOKEN_SOURCE: {expr} needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}}}"
           if workflow.count(old_token) != 1 or workflow.count(old_source) != 1:
               raise SystemExit('unexpected dispatch workflow credential shape; refusing mutation')
           workflow = workflow.replace(old_token, new_token, 1).replace(old_source, new_source, 1)
@@ -51,8 +52,8 @@ jobs:
 
           test_path = Path('tests/test_opencode_agent_contract.py')
           test_text = test_path.read_text(encoding='utf-8')
-          old_assert = '''    assert (\n        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step\n'''
-          new_assert = '''    assert (\n        "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == "\n        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert (\n        "OPENCODE_STATUS_TOKEN_SOURCE: ${{ "\n        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "\n        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && "\n        "'PR_REVIEW_MERGE_TOKEN'"\n    ) in status_step\n'''
+          old_assert = '''    assert (\n        "GH_TOKEN: __OPEN__ secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step\n'''.replace('__OPEN__', expr)
+          new_assert = '''    assert (\n        "GH_TOKEN: __OPEN__ needs.validate-pr-metadata.outputs.target_repository == "\n        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert (\n        "OPENCODE_STATUS_TOKEN_SOURCE: __OPEN__ "\n        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "\n        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && "\n        "'PR_REVIEW_MERGE_TOKEN'"\n    ) in status_step\n'''.replace('__OPEN__', expr)
           if test_text.count(old_assert) != 1:
               raise SystemExit('unexpected OpenCode contract assertion shape; refusing mutation')
           test_path.write_text(test_text.replace(old_assert, new_assert, 1), encoding='utf-8')
