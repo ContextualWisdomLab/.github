@@ -453,11 +453,39 @@ def test_gateway_preflight_has_no_inference_timeout() -> None:
 def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    assert '--max-time 15 "https://openrouter.ai/api/v1/endpoints/zdr"' not in sidecar
-    assert '--connect-timeout' not in sidecar
-    assert '--max-time 5' not in sidecar
-    assert '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz"' in sidecar
-    assert 'if [ "$i" -ge 180 ]' not in sidecar
+    lines = sidecar.splitlines()
+
+    def curl_command(url: str) -> tuple[str, int]:
+        index = next(index for index, line in enumerate(lines) if url in line)
+        start = index
+        while start and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        command = " ".join(line.strip().removesuffix("\\") for line in lines[start : end + 1])
+        assert re.search(r"\bcurl\b", command)
+        return command, end
+
+    timeout_option = re.compile(
+        r"(?:^|\s)(?:-m(?:\s|$)|--[a-z-]*(?:time|timeout)[a-z-]*(?:=|\s|$))"
+    )
+    zdr_command, _ = curl_command("https://openrouter.ai/api/v1/endpoints/zdr")
+    health_command, health_command_end = curl_command(
+        'http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz'
+    )
+    for command in (zdr_command, health_command):
+        assert timeout_option.search(command) is None
+        assert re.search(r"(?:^|\s)timeout(?:\s|$)", command) is None
+
+    health_loop = "\n".join(lines[health_command_end + 1 :]).split("\ndone", 1)[0]
+    assert 'kill -0 "$sidecar_pid"' in health_loop
+    assert health_loop.count("fail ") == 1
+    assert health_loop.index('kill -0 "$sidecar_pid"') < health_loop.index("fail ")
+    assert not re.search(
+        r"\b(?:break|exit|timeout)\b|\s-(?:ge|gt|le|lt)\s|\bif\s+\(\(",
+        health_loop,
+    )
 
 
 def test_gateway_preflight_retries_transport_failures_up_to_a_bounded_attempt_count() -> None:

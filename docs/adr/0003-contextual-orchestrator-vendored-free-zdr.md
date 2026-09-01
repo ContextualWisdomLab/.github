@@ -208,7 +208,8 @@ all five, and auto-optimize routing by cost.
   like Noema, provision the pinned contextual-orchestrator sidecar and use
   `orchestrator/free`. The bootstrap still checks out no PR code and binds no
   Actions secret.
-- **2026-08-31 amendment: model inference has no fixed wall-clock timeout.**
+- **2026-08-31 amendment: model inference has no repository- or
+  application-configured fixed wall-clock timeout.**
   OpenCode, Noema, Strix, and their contextual-orchestrator sidecar MUST NOT
   impose a fixed wall-clock timeout on model inference, including an initial
   completion ping, warm-up, retry, repair verdict, or substantive review call.
@@ -218,5 +219,10 @@ all five, and auto-optimize routing by cost.
   fixed wall-clock limits on loopback `/healthz`, DNS/TLS establishment, ZDR
   metadata, or provider model-list discovery: those prerequisites can be slow
   and a short bound can discard an otherwise usable route before inference.
+  A hosting platform or runner termination is an external capacity constraint,
+  not model-unavailability or review evidence. Such an interrupted run is
+  incomplete and non-authoritative: it MUST NOT approve, merge, or classify the
+  model as unavailable, and the exact head MUST be retried or resumed on a
+  runner capable of completing the work.
   This amendment supersedes all fixed readiness and inference-attempt budgets
   in ADR 0005.
