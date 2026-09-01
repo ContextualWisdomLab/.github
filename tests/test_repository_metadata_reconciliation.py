@@ -52,3 +52,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert contracts["pages"] is True
     assert "interoperability" in contracts["topics"]
     assert "cloudevents" in contracts["topics"]
+
+    threadweave = repositories["ThreadWeave"]
+    assert threadweave["description"] == "ThreadWeave — standards-grounded, deterministic email conversation threading for Python."
+    assert threadweave["deepwiki"] is True
+    assert threadweave["pages"] is True
+    assert "rfc5256" in threadweave["topics"]
+    assert "python" in threadweave["topics"]
