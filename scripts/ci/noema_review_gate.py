@@ -116,6 +116,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       isDraft
       state
       headRefOid
+      baseRefOid
       reviewDecision
       reviewThreads(first: 100) {
         nodes {
@@ -415,8 +416,14 @@ def truncate_text(text: str, limit: int) -> str:
     return f"{text[:limit]}\n[truncated {omitted} characters]"
 
 
-def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
-    """Fetch changed file paths for the pull request."""
+def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
+    """Fetch changed paths and statuses without corrupting whitespace in paths.
+
+    The Files API is projected to one JSON-encoded two-element array per file.
+    JSON escaping preserves tabs, newlines, and edge spaces inside ``filename``
+    while keeping pagination output line-delimited and parseable. Malformed
+    records fail closed instead of being reinterpreted as another path/status.
+    """
     output = run(
         [
             "gh",
@@ -424,16 +431,34 @@ def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
             f"repos/{repo}/pulls/{number}/files",
             "--paginate",
             "--jq",
-            ".[].filename",
+            r'.[] | [.filename, .status] | @json',
         ]
     )
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    files: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("GitHub changed-file response was malformed") from exc
+        if (
+            not isinstance(record, list)
+            or len(record) != 2
+            or type(record[0]) is not str
+            or not record[0]
+            or type(record[1]) is not str
+            or not record[1]
+        ):
+            raise RuntimeError("GitHub changed-file response was malformed")
+        files.append((record[0], record[1]))
+    return files
 
 
-def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
-    """Fetch a changed file's current-head text content through the GitHub API."""
+def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
+    """Fetch one repository text file at an exact Git ref through GitHub."""
     encoded_path = urllib.parse.quote(path, safe="/")
-    encoded_ref = urllib.parse.quote(head_sha, safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
         [
             "gh",
@@ -449,17 +474,102 @@ def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
     return base64.b64decode(compact).decode("utf-8", errors="replace")
 
 
-def changed_file_context(repo: str, number: int, head_sha: str) -> str:
-    """Build bounded changed-file context for cross-file review reasoning."""
+def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
+    """Return the immutable merge-base SHA for the current base/head pair."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+        raise RuntimeError("PR base SHA was unavailable or malformed")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
+        raise RuntimeError("PR head SHA was unavailable or malformed")
+    merge_base = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/compare/{base_sha}...{head_sha}",
+            "--jq",
+            ".merge_base_commit.sha // empty",
+        ]
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", merge_base):
+        raise RuntimeError("GitHub compare response did not contain a valid merge-base SHA")
+    return merge_base.lower()
+
+
+def removed_file_context_section(
+    repo: str,
+    path: str,
+    merge_base_sha: str,
+    merge_base_error: str = "",
+) -> str:
+    """Build review context for a file deleted relative to the merge base.
+
+    A deleted path does not exist at the PR head. Its relevant pre-deletion
+    evidence is therefore the immutable merge base shared by the current base
+    and reviewed head, not the moving tip of the base branch. When merge-base
+    discovery or content retrieval is unavailable, the context records that
+    bounded evidence failure explicitly rather than inventing head content.
+    """
+    if merge_base_error:
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Merge-base lookup unavailable: {merge_base_error}"
+        )
+    if not merge_base_sha:
+        return (
+            f"### {path}\n[File removed in this PR — no head-side content applicable; "
+            "merge-base SHA unavailable for pre-deletion content.]"
+        )
+    try:
+        content = fetch_file_content_at_ref(repo, path, merge_base_sha)
+    except RuntimeError as exc:
+        reason = scrub_sensitive_data(str(exc)) or "unknown error"
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Unavailable from merge-base content API: {reason}"
+        )
+    if not content:
+        return (
+            f"### {path}\n[File removed in this PR — no UTF-8 text content "
+            "available from merge-base content API.]"
+        )
+    return (
+        f"### {path}\n[File removed in this PR. Pre-deletion content at merge base "
+        f"`{merge_base_sha}`:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+    )
+
+
+def changed_file_context(
+    repo: str,
+    number: int,
+    head_sha: str,
+    base_sha: str = "",
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded changed-file context from one status-preserving snapshot."""
     if not head_sha:
         return "Changed file context unavailable: missing PR head SHA."
-    paths = fetch_changed_file_paths(repo, number)
-    if not paths:
+    files = list(changed_files) if changed_files is not None else fetch_changed_files(repo, number)
+    if not files:
         return "Changed file context unavailable: PR reported no changed files."
-    sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+
+    merge_base_sha = ""
+    merge_base_error = ""
+    if any(status == "removed" for _path, status in files[:MAX_CONTEXT_FILES]):
         try:
-            content = fetch_head_file_content(repo, path, head_sha)
+            merge_base_sha = fetch_merge_base_sha(repo, base_sha, head_sha)
+        except RuntimeError as exc:
+            merge_base_error = scrub_sensitive_data(str(exc)) or "unknown error"
+
+    sections: list[str] = []
+    for path, status in files[:MAX_CONTEXT_FILES]:
+        if status == "removed":
+            sections.append(
+                removed_file_context_section(
+                    repo, path, merge_base_sha, merge_base_error
+                )
+            )
+            continue
+        try:
+            content = fetch_file_content_at_ref(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
             sections.append(f"### {path}\nUnavailable from head content API: {reason}")
@@ -468,8 +578,8 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
             sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
-    if len(paths) > MAX_CONTEXT_FILES:
-        sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
+    if len(files) > MAX_CONTEXT_FILES:
+        sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
 
 
@@ -495,13 +605,24 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
-    """Build bounded non-diff context for the Noema reviewer."""
+def build_review_context(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded non-diff context from review threads and changed files."""
     sections: list[str] = []
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
-    files = changed_file_context(repo, number, str(pr.get("headRefOid") or ""))
+    files = changed_file_context(
+        repo,
+        number,
+        str(pr.get("headRefOid") or ""),
+        str(pr.get("baseRefOid") or ""),
+        changed_files,
+    )
     if files:
         sections.append("## Changed file context\n" + files)
     return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
@@ -1211,8 +1332,9 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    changed_paths = fetch_changed_file_paths(repo, number)
-    review_context = build_review_context(repo, number, pr)
+    changed_files = fetch_changed_files(repo, number)
+    changed_paths = tuple(path for path, _status in changed_files)
+    review_context = build_review_context(repo, number, pr, changed_files)
     try:
         verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     except StaleHeadDuringRepairRetryError:
