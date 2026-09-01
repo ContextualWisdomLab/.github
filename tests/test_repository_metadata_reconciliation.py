@@ -69,6 +69,8 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
+        "EgressWeave": ("ssrf", "python"),
+        "psychometrics-commons": ("psychometrics", "rust"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
