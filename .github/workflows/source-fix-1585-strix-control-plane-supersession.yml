@@ -62,12 +62,12 @@ jobs:
           workflow = workflow[:cleanup_start] + workflow[strix_start:]
 
           old_comment = (
-              "    # Keep provider-backed scans serial per repository and event class while\n"
-              "    # allowing the trusted cleanup job above to retire an obsolete head now.\n"
+              "      # Keep provider-backed scans serial per repository and event class while\n"
+              "      # allowing the trusted cleanup job above to retire an obsolete head now.\n"
           )
           new_comment = (
-              "    # Keep provider-backed scans serial per repository and event class. Same-PR\n"
-              "    # predecessor/closed runs are retired by workflow-level concurrency above.\n"
+              "      # Keep provider-backed scans serial per repository and event class. Same-PR\n"
+              "      # predecessor/closed runs are retired by workflow-level concurrency above.\n"
           )
           if workflow.count(old_comment) != 1:
               raise SystemExit("unexpected Strix scan concurrency comment")
