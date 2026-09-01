@@ -71,6 +71,20 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "fast-mlsirm": ("psychometrics", "rust"),
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
+        "keyverse": ("identity", "openid-connect"),
+        "OriginWeave": ("browser-automation", "ai-agents"),
+        "accounting-information-platform": ("accounting", "ledger"),
+        "pg-erd-cloud": ("erd", "postgresql"),
+        "clearfolio": ("document-viewer", "document-conversion"),
+        "DiagramWeave": ("diagram-editor", "plantuml"),
+        "semantic-data-portal": ("data-catalog", "semantic-search"),
+        "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "mhtml-etl-gateway": ("mhtml", "etl"),
+        "PolicyWeave": ("privacy-policy", "typescript"),
+        "supply-chain-control-plane": ("supply-chain", "rust"),
+        "learning-management-platform": ("learning-management-system", "rust"),
+        "learning-content-studio": ("lcms", "content-authoring"),
+        "learning-record-store": ("learning-record-store", "xapi"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
@@ -227,7 +241,7 @@ def test_pages_and_docs_probes(monkeypatch) -> None:
 
     responses = iter(
         [
-            completed(out='{"type": "file"}'),
+            completed(out='{"type":"file"}'),
             completed(code=1, out="Not Found"),
             completed(code=1, err="boom"),
         ]

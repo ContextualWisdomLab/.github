@@ -54,11 +54,15 @@ The fleet loop is deliberately non-blocking. Every repository or label assignmen
 
 ## Desired-state fleet in this increment
 
-The repository metadata manifest currently covers eight repositories selected because their public-surface work already has a concrete leaf source or active writer: `CalendarWeave`, `ConceptWeave`, `context-graph-contracts`, `ThreadWeave`, `RankWeave`, `fast-mlsirm`, `EgressWeave`, and `psychometrics-commons`. EgressWeave and Psychometrics Commons joined the fleet after their exact-cased DeepWiki badges and bounded `docs/index.md` Pages sources reached their protected default branches.
+The repository metadata manifest covers 22 reviewed repositories whose public-surface work has a concrete leaf source or active writer: `CalendarWeave`, `ConceptWeave`, `context-graph-contracts`, `ThreadWeave`, `RankWeave`, `fast-mlsirm`, `EgressWeave`, `psychometrics-commons`, `keyverse`, `OriginWeave`, `accounting-information-platform`, `pg-erd-cloud`, `clearfolio`, `DiagramWeave`, `semantic-data-portal`, `contextual-orchestrator`, `mhtml-etl-gateway`, `PolicyWeave`, `supply-chain-control-plane`, `learning-management-platform`, `learning-content-studio`, and `learning-record-store`.
+
+EgressWeave and Psychometrics Commons joined the original fleet after their exact-cased DeepWiki badges and bounded `docs/index.md` Pages sources reached their protected default branches. Later entries are deliberately declared before live convergence only when an owned leaf lane exists for the required badge and Pages source. Until those prerequisites reach each protected default branch, that repository fails closed while sibling repositories remain independently actionable. The `semantic-data-portal` desired description also removes the internal `(PRD/TRD draft implementation)` qualifier rather than propagating it to the customer-facing repository surface.
+
+The newest cohort has explicit source ownership: `ContextualWisdomLab/PolicyWeave#1` carries its exact-cased badge and `docs/index.md`; `ContextualWisdomLab/supply-chain-control-plane#1` carries its exact badge and bounded Pages landing source on the active product writer; `ContextualWisdomLab/learning-management-platform#1` owns the product-first README badge and `docs/index.md`; `ContextualWisdomLab/learning-content-studio#1` now owns its product-first README, exact badge, Apache-2.0 grant, and the `docs/index.md` content folded from closed child #8; and `ContextualWisdomLab/learning-record-store#1` now owns its product-first README, exact badge, Apache-2.0 grant, and the bounded `docs/index.md` content folded from closed child #7. The closed child PRs retain discussion history but no longer own unique public-surface source. Their live repositories still report Pages disabled until protected integration and trusted reconciliation complete.
 
 An Actions-backed repository is not enrolled merely because `pages_mode: workflow` is supported. Enrollment requires an explicit reviewed manifest change after the repository's standard Pages workflow and live `build_type: workflow` configuration both exist. This preserves the deployment architecture of repositories such as ScopeWeave instead of silently rewriting them to legacy `/docs`.
 
-The explicit label assignments now cover 19 evidence-backed targets: `.github#1582`, `CalendarWeave#1`, `ConceptWeave#1`, `context-graph-contracts#20`, `RankWeave#40`, `fast-mlsirm#1717`, `EgressWeave#231`, `psychometrics-commons#442`, `contextual-orchestrator#994`, `contextual-orchestrator#1003`, `appguardrail#1077`, `naruon#1513`, `LineageWeave#908`, `ContextualWisdomLab.github.io#203`, `TEPP#435`, `semantic-data-portal#72`, `Orgmetra#160`, `learning-interoperability-contracts#1`, and `noema#530`. The assignment reconciler preserves richer repository-local labels such as priority, status, and `type: maintenance` when those labels are outside the managed semantic set.
+The explicit label assignments on protected main remain a separate reviewed taxonomy lane. Richer repository-local labels such as priority, status, and `type: maintenance` are preserved when those labels are outside the centrally managed semantic set.
 
 ## Verification contract
 
@@ -72,7 +76,7 @@ A central source commit is not completion. After protected integration and apply
 6. the Pages status is `built`, its URL remains under `https://contextualwisdomlab.github.io`, and the published endpoint returns non-empty content before publication is claimed;
 7. reviewed issue/PR targets carry the desired managed label while unrelated labels remain intact.
 
-GitHub's current REST Pages contract supports `build_type` values `legacy` and `workflow`, and branch sources with `/` or `/docs`. Legacy desired-state records continue to use `/docs`. The explicit workflow mode exists to preserve a repository whose deployment is already owned by a reviewed GitHub Actions workflow; it is not a central creation/conversion mechanism.
+GitHub's current REST Pages contract supports `build_type` values `legacy` and `workflow`, and branch sources with `/` or `/docs`. Current fleet entries use the legacy `/docs` contract unless an entry explicitly declares `pages_mode: workflow`. The workflow mode exists to preserve a repository whose deployment is already owned by a reviewed GitHub Actions workflow; it is not a central creation/conversion mechanism.
 
 ## Workflow-mode operating procedure
 
@@ -86,4 +90,4 @@ GitHub's current REST Pages contract supports `build_type` values `legacy` and `
 
 ## Known integration boundary
 
-Until the central PR is merged through normal governance or a verified queue-saturation chicken-and-egg exception, the workflow-mode preservation contract cannot run from trusted `.github/main`; leaf PRs whose badge or Pages source is still branch-only also remain repository-local precondition blockers. These are integration states, not reasons to stop independent repository work. The same run should continue classifying labels, preparing other leaf public surfaces, and re-checking earlier lanes when exact-head evidence becomes available.
+Until this 22-repository desired-state extension reaches protected `.github/main`, its additional settings reconciliation cannot run from the trusted control plane. Leaf PRs whose badge or Pages source is still branch-only remain repository-local precondition blockers. These are integration states, not reasons to idle the fleet: continue eligible siblings, labels, and independent public-surface work while blocked leaves fail closed.
