@@ -11,6 +11,7 @@ on:
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_solo_maintainer_ruleset_policy.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
+      - "tests/test_pr_governance_audit_contract.py"
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ permissions:
 jobs:
   focused-contract:
     name: Focused solo-maintainer ruleset contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact pushed head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -50,4 +51,5 @@ jobs:
           python -m pytest -q \
             tests/test_central_required_workflow_ruleset_audit.py \
             tests/test_solo_maintainer_ruleset_policy.py \
-            tests/test_ruleset_audit_completeness_regression.py
+            tests/test_ruleset_audit_completeness_regression.py \
+            tests/test_pr_governance_audit_contract.py
