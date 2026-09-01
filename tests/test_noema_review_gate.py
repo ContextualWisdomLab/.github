@@ -1308,7 +1308,7 @@ def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatc
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
 
     def fake_call_llm(*args, **kwargs):
         raise noema.StaleHeadDuringRepairRetryError(
@@ -1751,15 +1751,15 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
         noema.current_actor()
 
 
-def test_review_context_builders_include_threads_and_files(monkeypatch):
+def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
-    original_fetch_files = noema.fetch_changed_files
+    original_fetch_changed_files = noema.fetch_changed_files
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
-    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_files)
+    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_changed_files)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
     calls = []
@@ -1768,11 +1768,10 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
-            return (
-                '["src/a.py", "modified"]\n'
-                '["README.md", "modified"]\n'
-                '["empty.txt", "modified"]\n'
-            )
+            return "\n".join(
+                json.dumps([path, "modified"])
+                for path in ("src/a.py", "README.md", "empty.txt")
+            ) + "\n"
         if "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
@@ -1814,9 +1813,13 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
     assert any("/files" in call[2] for call in calls)
 
 
-def test_review_context_reports_omitted_files(monkeypatch):
-    files = [(f"src/file_{index}.py", "modified") for index in range(noema.MAX_CONTEXT_FILES + 1)]
-    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: files)
+def test_review_context_reports_omitted_files(monkeypatch, tmp_path):
+    paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
+    monkeypatch.setattr(
+        noema,
+        "fetch_changed_files",
+        lambda repo, number: [(path, "modified") for path in paths],
+    )
     monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
 
     context = noema.changed_file_context("owner/repo", 7, "head")
@@ -2058,7 +2061,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
@@ -2153,7 +2156,7 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
@@ -2192,7 +2195,7 @@ def test_head_movement_stops_before_review_publication(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
         noema,
         "call_llm",
@@ -2215,7 +2218,7 @@ def test_closed_during_model_stops_before_review_publication(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
     monkeypatch.setattr(
         noema,
@@ -2234,7 +2237,7 @@ def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     calls = []
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
@@ -2251,7 +2254,7 @@ def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
         noema,
         "call_llm",
@@ -2273,7 +2276,7 @@ def test_inspect_and_review_rechecks_head_before_publication(monkeypatch):
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files: "context")
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: submitted.append(args))
 
