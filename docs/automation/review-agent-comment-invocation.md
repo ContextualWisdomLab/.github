@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-09-02
+Updated: 2026-08-22
 
 ## Purpose
 
@@ -45,7 +45,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 - The two agent-specific wrapper workflows receive only job-scoped `actions: read` and `contents: write`; their workflow defaults remain `contents: read`.
 - `actions: read` permits exact-name artifact inventory checks. Artifact upload uses the workflow artifact service and is pinned to immutable `actions/upload-artifact` v7.0.1.
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
-- The organization sweep uses the same established cross-repository credential selected for target-repository reads when it dispatches the central review workflows. A repository-scoped `GITHUB_TOKEN` from `ContextualWisdomLab/.github` is not used as sibling-repository dispatch authority.
+- The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
 - An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are bound into the OpenCode invocation claim and hardcoded in the wrapper. GitHub's create-repository-dispatch endpoint allows at most 10 top-level `client_payload` properties (HTTP 422 otherwise), so those review-only constants are not copied onto the first-hop mention payload. The wrapper's merge-scheduler forward keeps those three flags and explicitly sends `trigger_reviews=true`, together with repository, PR, head/base SHA, base branch, and the invocation key. The source comment remains bound and auditable in the verified invocation claim and durable ledger; it is not repeated to the scheduler, which does not consume it.
 - Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
@@ -73,7 +73,7 @@ Rollback is deletion of the four mention-router workflows, the two Python helper
 
 ## References
 
-GitHub. (n.d.). *Available rules for rulesets*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges/in-your-repository/managing-rulesets/available-rules-for-rulesets
+GitHub. (n.d.). *Available rules for rulesets*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets
 
 GitHub. (n.d.). *Events that trigger workflows*. GitHub Docs. Retrieved August 6, 2026, from https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
