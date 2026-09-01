@@ -10,19 +10,24 @@ Semantic Versioning where the repository publishes a release.
   `noema-review` and `strix` both succeeded on a fresh head, with the job
   log confirming a real, complete sidecar cycle (not a vacuous pass). This
   is not the same as the outage being fully closed: two further,
-  independent, still-open defects were separately found and verified.
-  First, a run on `.github`'s own `main` (job `99247611184`) failed
-  because Strix's OpenAI Agents SDK client sends
-  `stream_options.include_usage=true` with `tools`/`response_format`,
-  rejected by at least one `orchestrator/free` candidate with `HTTP 400
-  invalid_stream_options`, exhausting the pool — a fix is proposed in
-  `ContextualWisdomLab/contextual-orchestrator#924` but that PR is not
-  merged yet. Second, a separate run
-  (`ContextualWisdomLab/.github#1441` job `99249903390`)
-  got past that stage entirely and instead hung for the full 120s `curl`
-  timeout with zero bytes back on the sidecar's post-`healthz` gateway
-  smoke request; cause unconfirmed. See the 2026-08-30 gap-baseline entry
-  for the full evidence and remaining caveats on both gaps, the two
+  independent defects were separately found and verified — both since
+  fixed by later, already-merged PRs (confirmed directly against their
+  merged diffs during this rebase, not assumed). First, a run on
+  `.github`'s own `main` (job `99247611184`) failed because Strix's OpenAI
+  Agents SDK client sent `stream_options.include_usage=true` with
+  `tools`/`response_format`, rejected by at least one `orchestrator/free`
+  candidate with `HTTP 400 invalid_stream_options`, exhausting the pool —
+  fixed by `.github#1448` (commit `702392a2`), which scopes Strix's
+  `LLM_DISABLE_STREAMING` opt-in to the contextual-orchestrator loopback so
+  that combination is never sent to it. Second, a separate run
+  (`ContextualWisdomLab/.github#1441` job `99249903390`) got past that
+  stage entirely and instead hung for the full 120s `curl` timeout with
+  zero bytes back on the sidecar's post-`healthz` gateway smoke request —
+  fixed by `.github#1452` (commit `1ff82682`, implementing ADR-0005), which
+  retries that request up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` (3) on
+  a transport failure instead of failing closed after one single-shot
+  attempt. See the 2026-08-30 gap-baseline entry (and its 2026-09-01
+  update) for the full evidence on both gaps and their fixes, the two
   permanently-retired `gemma-3` model ids still admitted into the pool,
   and the live-catalog-freshness fix that remains the more complete
   answer if 8 candidates ever proves insufficient again.

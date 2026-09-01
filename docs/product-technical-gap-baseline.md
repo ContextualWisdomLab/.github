@@ -1410,6 +1410,34 @@ the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
   in this pass; it means "the outage is over" would overclaim, while "the
   two diagnosed root causes are fixed and verified, two further known
   gaps remain open elsewhere" is accurate.
+- **Update (2026-09-01, Devin Review finding on `.github#1444`, verified
+  directly against the merged diffs rather than trusted from the finding
+  text alone): both of the two "further, independent, unfixed gaps" in the
+  conclusion above are now closed.** Neither fix existed yet when this
+  entry (or PR #1444, which restates it) was originally written, so this is
+  a genuine update, not a contradiction of the historical narrative above.
+  (1) The `stream_options.include_usage=true` + `tools`/`response_format`
+  rejection is fixed by `.github#1448` (commit `702392a2`, merged
+  2026-08-30T12:15:28Z): `strix_quick_gate.sh` now scopes Strix's
+  `LLM_DISABLE_STREAMING` opt-in to the contextual-orchestrator loopback, so
+  Strix's always-tools turns against that gateway never send
+  `stream_options.include_usage=true` in the first place — the exact
+  combination at least one `orchestrator/free` candidate was rejecting with
+  `HTTP 400 invalid_stream_options`. `contextual-orchestrator#924` (cited
+  above as the proposed, not-yet-merged fix) remains open and is superseded
+  by this Strix-side fix for this specific symptom; other providers in
+  Strix's fallback chain keep real SSE streaming. (2) The
+  120s-timeout-with-zero-bytes gap is fixed by `.github#1452` (commit
+  `1ff82682`, merged 2026-08-30T14:54:45Z, implementing ADR-0005): the
+  sidecar's own code comments now cite a live reproduction of this exact
+  failure class (`ContextualWisdomLab/.github#1449`, job `99253418179`,
+  `curl` timing out at exactly 120002ms with zero bytes received — the same
+  symptom as this entry's job `99249903390`), and the post-`healthz` gateway
+  smoke request is now retried up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS`
+  (default 3) on a transport failure or non-2xx status instead of failing
+  closed after one single-shot 120s attempt. The two permanently-retired
+  `gemma-3` model ids gap (see the family-cap entry above) is unrelated to
+  either fix and remains open.
 
 ## 2026-08-30 PR #1347 Devin Review 6건 검증: 4건 실재 결함 수정, 2건 확인 후 해소
 
