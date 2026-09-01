@@ -235,6 +235,18 @@ Semantic Versioning where the repository publishes a release.
   coincidence, just at 8 instead of 4. `guarantee_domain_coverage=True`
   now applies to both `build_zdr_prioritized_catalog` call sites in
   `main()`.
+- `guarantee_domain_coverage`'s two admission passes now run strictly
+  within one admission-priority tier at a time, in tier order, instead of
+  across `ordered_rows` as a whole (Devin Review: "domain coverage defeats
+  ZDR priority") -- without this, a worse-tier row could win a first-pass
+  "guaranteed representation" seat for its domain ahead of a better-tier
+  row from an already-represented domain (e.g. two free/ZDR routes in one
+  domain plus one free/non-ZDR route in an independent domain, `limit=2`,
+  wrongly admitted one row from each instead of both free/ZDR routes).
+  This is the same tier-boundary discipline `_fair_admission_order`
+  already enforces for its own reordering, now applied one level up; the
+  cumulative-representation and `account_cap` accounting across tiers is
+  unchanged.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer

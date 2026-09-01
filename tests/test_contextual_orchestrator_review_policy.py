@@ -1114,6 +1114,39 @@ def test_build_catalog_guarantee_domain_coverage_caps_at_limit_when_domains_outn
     assert len(providers) == 3
 
 
+def test_build_catalog_guarantee_domain_coverage_never_crosses_a_tier_boundary() -> None:
+    """Regression for Devin Review's "domain coverage defeats ZDR priority" finding.
+
+    Two free/ZDR routes in one domain (openrouter) and one free/non-ZDR
+    route in an independent domain (bytez), ``limit=2``: the unguarded
+    first pass used to admit one row from *each* domain (one guaranteed
+    seat apiece) before the domain already represented ever got a second
+    look, wrongly seating the worse-tier bytez row ahead of openrouter's
+    second free/ZDR row. Both admitted rows must stay free/ZDR.
+    """
+    zdr_endpoints = frozenset({"openrouter/zdr-a", "openrouter/zdr-b"})
+    report = {
+        "models": [
+            {"provider": "openrouter", "model": "zdr-a", "agent_id": "or_zdr_a", "is_free": True, **FREE_PRICE},
+            {"provider": "openrouter", "model": "zdr-b", "agent_id": "or_zdr_b", "is_free": True, **FREE_PRICE},
+            {"provider": "bytez", "model": "not-zdr", "agent_id": "bytez_not_zdr", "is_free": True, **FREE_PRICE},
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows,
+        limit=2,
+        account_cap=4,
+        pool="auto",
+        zdr_endpoints=zdr_endpoints,
+        guarantee_domain_coverage=True,
+    )
+    agents = result["agents"]
+    assert len(agents) == 2
+    assert all(agent["provider_name"] == "openrouter" for agent in agents)
+    assert all("zdr" in agent["tags"] for agent in agents)
+
+
 def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {

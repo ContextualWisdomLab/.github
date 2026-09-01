@@ -560,6 +560,25 @@ def build_zdr_prioritized_catalog(
     a second candidate from an already-represented domain is the more
     useful preflight order, not merely a side effect of the two-pass
     implementation.
+
+    Both passes run strictly *within* one admission-priority tier at a
+    time, in tier order (Devin Review: "domain coverage defeats ZDR
+    priority") -- the same tier-boundary discipline :func:`_fair_admission_order`
+    already enforces for its own reordering, applied here too, because
+    ``ordered_rows`` mixes every tier when this flag is used at a catalog's
+    primary (not fallback-only) stage. Without it, a worse-tier row could
+    win a first-pass "guaranteed representation" seat for its domain ahead
+    of a better-tier row from an already-represented domain -- e.g. two
+    free/ZDR rows in domain A and one free/non-ZDR row in domain B with
+    ``limit=2`` would wrongly admit one row from each domain instead of
+    both of A's free/ZDR rows. Processing tier-by-tier (finishing a tier's
+    own first *and* second pass before ever looking at the next, worse
+    tier) makes tier priority non-negotiable here exactly as it already is
+    in :func:`_fair_admission_order`, while ``covered_domains`` and
+    ``per_domain`` still accumulate across tiers: a domain already given a
+    seat in a better tier does not claim a second guaranteed seat in a
+    worse one, and ``account_cap`` bounds a domain's total admissions
+    across the whole catalog, not per tier.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
@@ -590,26 +609,45 @@ def build_zdr_prioritized_catalog(
     ordered_rows = _fair_admission_order(eligible_rows, zdr_endpoints=zdr_endpoints)
     if guarantee_domain_coverage:
         covered_domains: set[str] = set()
-        for row in ordered_rows:
-            if len(picked) >= limit:
-                break
-            domain = _outage_domain(row)
-            if domain in covered_domains or per_domain[domain] >= account_cap:
-                continue
-            covered_domains.add(domain)
-            per_domain[domain] += 1
-            picked.append(row)
-        first_pass_ids = {id(row) for row in picked}
-        for row in ordered_rows:
-            if len(picked) >= limit:
-                break
-            if id(row) in first_pass_ids:
-                continue
-            domain = _outage_domain(row)
-            if per_domain[domain] >= account_cap:
-                continue
-            per_domain[domain] += 1
-            picked.append(row)
+        tier_start = 0
+        total = len(ordered_rows)
+        while tier_start < total and len(picked) < limit:
+            tier = _admission_priority_key(
+                ordered_rows[tier_start], zdr_endpoints=zdr_endpoints
+            )[:2]
+            tier_end = tier_start + 1
+            while (
+                tier_end < total
+                and _admission_priority_key(
+                    ordered_rows[tier_end], zdr_endpoints=zdr_endpoints
+                )[:2]
+                == tier
+            ):
+                tier_end += 1
+            tier_rows = ordered_rows[tier_start:tier_end]
+            tier_start = tier_end
+
+            first_pass_ids: set[int] = set()
+            for row in tier_rows:
+                if len(picked) >= limit:
+                    break
+                domain = _outage_domain(row)
+                if domain in covered_domains or per_domain[domain] >= account_cap:
+                    continue
+                covered_domains.add(domain)
+                per_domain[domain] += 1
+                picked.append(row)
+                first_pass_ids.add(id(row))
+            for row in tier_rows:
+                if len(picked) >= limit:
+                    break
+                if id(row) in first_pass_ids:
+                    continue
+                domain = _outage_domain(row)
+                if per_domain[domain] >= account_cap:
+                    continue
+                per_domain[domain] += 1
+                picked.append(row)
     else:
         for row in ordered_rows:
             domain = _outage_domain(row)
