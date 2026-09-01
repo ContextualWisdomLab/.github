@@ -313,12 +313,50 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
         _gh_api("DELETE", f"repos/{ORGANIZATION}/{repository}/pages")
 
 
+def verify_repository(repository: str, desired: dict[str, Any]) -> None:
+    """Re-read live public state and fail unless it exactly matches desired state."""
+
+    repository_payload = json.loads(
+        _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
+    )
+    default_branch = repository_payload.get("default_branch")
+    if type(default_branch) is not str or not default_branch:
+        raise RuntimeError(f"default branch could not be resolved for {repository}")
+    if repository_payload.get("description") != desired["description"]:
+        raise RuntimeError(f"description did not converge for {repository}")
+
+    current_topics = json.loads(
+        _gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")
+    ).get("names", [])
+    if set(current_topics) != set(desired["topics"]):
+        raise RuntimeError(f"topics did not converge for {repository}")
+
+    badge_exists = _deepwiki_badge_exists(repository, default_branch)
+    if badge_exists != desired["deepwiki"]:
+        raise RuntimeError(f"DeepWiki state did not converge for {repository}")
+    if desired["pages"] and not _docs_index_exists(repository, default_branch):
+        raise RuntimeError(f"Pages source did not converge for {repository}")
+
+    pages_exists = _pages_exists(repository)
+    if desired["pages"]:
+        if not pages_exists:
+            raise RuntimeError(f"GitHub Pages was not published for {repository}")
+        if not _pages_configuration_matches(
+            _pages_configuration(repository), default_branch
+        ):
+            raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
+    elif pages_exists:
+        raise RuntimeError(f"GitHub Pages remained published for {repository}")
+
+
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for validation or apply mode."""
+    """Parse command-line arguments for validation, apply, or verification mode."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--validate-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--validate-only", action="store_true")
+    mode.add_argument("--verify-only", action="store_true")
     parser.add_argument("--repository", action="append", default=[])
     return parser.parse_args()
 
@@ -349,20 +387,21 @@ def _select_repositories(
 
 
 def main() -> int:
-    """Validate desired state and reconcile every independent repository possible."""
+    """Validate, reconcile, or verify every independent repository possible."""
 
     args = parse_args()
     repositories = load_manifest(args.manifest)
     if args.validate_only:
         return 0
     if not os.environ.get("GH_TOKEN"):
-        raise RuntimeError("GH_TOKEN is required in apply mode")
+        raise RuntimeError("GH_TOKEN is required outside validation mode")
     selected = _select_repositories(args.repository, repositories)
+    operation = verify_repository if getattr(args, "verify_only", False) else reconcile_repository
 
     failures: list[str] = []
     for repository in selected:
         try:
-            reconcile_repository(repository, repositories[repository])
+            operation(repository, repositories[repository])
         except (
             ManifestError,
             RuntimeError,
@@ -371,11 +410,11 @@ def main() -> int:
         ) as exc:
             failures.append(f"{repository}: {exc}")
             print(
-                f"repository metadata reconciliation failed for {repository}: {exc}",
+                f"repository metadata operation failed for {repository}: {exc}",
                 file=sys.stderr,
             )
     if failures:
-        raise RuntimeError("metadata reconciliation failed: " + "; ".join(failures))
+        raise RuntimeError("metadata operation failed: " + "; ".join(failures))
     return 0
 
 
