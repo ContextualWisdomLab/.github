@@ -74,15 +74,15 @@ on:
         type: string
   schedule:
     - cron: "*/30 * * * *"
-    # Every-15-minutes org-wide sweep cadence for the org-queue-sweep job below. Target
+    # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
     # repositories only receive scheduler runs on PR events, review/security
     # workflow completion, and protected-branch pushes; a PR whose approval or
     # required checks land AFTER its last event has no later trigger and sits
     # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat. Runs every 15 minutes so an approval or
+    # that gap on a fixed heartbeat. Runs hourly so an approval or
     # required check that lands after a PR's last event is auto-updated/merged
-    # within ~15 minutes instead of sitting idle for up to an hour.
-    - cron: "*/15 * * * *"
+    # within about an hour without adding quarter-hourly runner pressure.
+    - cron: "0 * * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -136,7 +136,7 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        github.event.schedule != '*/15 * * * *'
+        github.event.schedule != '0 * * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -587,7 +587,7 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-24.04
@@ -917,7 +917,7 @@ jobs:
                 ORG_SWEEP_ROTATION_INDEX="$counter_next"
               else
                 echo "::warning::read ${counter_variable_name}=${counter_current} but could not PATCH it; falling back to a wall-clock rotation tick for this run only"
-                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
               fi
             elif gh api "repos/${GITHUB_REPOSITORY}/actions/variables" \
                    -X POST -f "name=${counter_variable_name}" -f "value=1" >/dev/null 2>&1; then
@@ -930,7 +930,7 @@ jobs:
               ORG_SWEEP_ROTATION_INDEX=1
             else
               echo "::warning::could not read/write ${counter_variable_name}; falling back to a wall-clock rotation tick for this run only"
-              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
             fi
           fi
           if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then
