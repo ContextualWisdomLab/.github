@@ -1,0 +1,961 @@
+name: One-shot observed-defect review repair
+
+on:
+  push:
+    branches:
+      - fix/review-observed-defect-corpus-20260902
+    paths:
+      - .github/workflows/review-observed-defect-writer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/review-observed-defect-corpus-20260902
+          fetch-depth: 0
+
+      - name: Install repository-declared review test dependencies
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: RED regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > tests/test_review_observed_defect_corpus.py <<'PY'
+          """RED regressions for observed reviewer false-negative classes."""
+          from __future__ import annotations
+
+          import pytest
+
+          from scripts.ci import noema_review_gate as noema
+          from scripts.ci import opencode_review_normalize_output as opencode
+
+
+          DIFF = """diff --git a/tool.py b/tool.py
+          new file mode 100644
+          --- /dev/null
+          +++ b/tool.py
+          @@ -0,0 +1,2 @@
+          +first = True
+          +second = True
+          """
+
+
+          def _probe(line: int, suffix: str) -> dict[str, object]:
+              return {
+                  "path": "tool.py",
+                  "line": line,
+                  "side": "RIGHT",
+                  "hypothesis": f"hypothesis {suffix}",
+                  "attack_or_counterexample": f"attack {suffix}",
+                  "evidence": f"observed evidence {suffix}",
+                  "outcome": "falsified",
+              }
+
+
+          def _noema_approval() -> dict[str, object]:
+              return {
+                  "decision": "approve",
+                  "summary": "bounded review",
+                  "reviewed_lines": [
+                      {"path": "tool.py", "line": 1, "side": "RIGHT", "analysis": "checked"}
+                  ],
+                  "adversarial_validation": {
+                      "status": "passed",
+                      "residual_risk": "bounded",
+                      "probes": [_probe(1, "one"), _probe(2, "two")],
+                  },
+                  "findings": [],
+              }
+
+
+          def test_noema_rejects_boolean_line_alias(monkeypatch):
+              """JSON true must not impersonate exact changed line 1."""
+              monkeypatch.delenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", raising=False)
+              verdict = _noema_approval()
+              verdict["reviewed_lines"][0]["line"] = True
+              with pytest.raises(RuntimeError, match="positive integer line"):
+                  noema.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+          def test_noema_comment_cannot_bypass_required_evidence(monkeypatch):
+              """A completed comment review cannot escape production evidence admission."""
+              monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              with pytest.raises(RuntimeError, match="reviewed changed line"):
+                  noema.validate_substantive_verdict(
+                      {"decision": "comment", "summary": "looks fine", "findings": []},
+                      DIFF,
+                      ["tool.py"],
+                  )
+
+
+          def test_opencode_requires_distinct_observed_probe_classes(monkeypatch):
+              """Two generic probes are not two independent defect-class attacks."""
+              monkeypatch.setenv("OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              monkeypatch.setattr(opencode, "required_adversarial_probe_count", lambda: 2)
+              monkeypatch.setattr(opencode, "current_changed_files", lambda: ["tool.py"])
+              monkeypatch.setattr(opencode, "adversarial_probe_location_error", lambda *_: "")
+              monkeypatch.setattr(opencode, "unreceipted_runtime_tool_claim", lambda *_: "")
+              monkeypatch.setattr(opencode, "adversarial_evidence_rejection_reason", lambda *_: "")
+              monkeypatch.setattr(opencode, "adversarial_probe_source_receipt_error", lambda *_: "")
+              probes = []
+              for line, suffix in ((1, "one"), (2, "two")):
+                  probe = _probe(line, suffix)
+                  probe.pop("side")
+                  probes.append(probe)
+              result = opencode.adversarial_validation_error(
+                  {"status": "passed", "residual_risk": "bounded", "probes": probes},
+                  result="APPROVE",
+                  findings=[],
+              )
+              assert "probe_kind" in result
+          PY
+
+          red_tests=(
+            test_noema_rejects_boolean_line_alias
+            test_noema_comment_cannot_bypass_required_evidence
+            test_opencode_requires_distinct_observed_probe_classes
+          )
+          for red_test in "${red_tests[@]}"; do
+            echo "Expecting RED: ${red_test}"
+            if PYTHONPATH=. python3 -m pytest -q "tests/test_review_observed_defect_corpus.py::${red_test}"; then
+              echo "::error::${red_test} unexpectedly passed before production repair"
+              exit 1
+            fi
+          done
+
+      - name: Apply smallest causal GREEN repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+          from textwrap import dedent
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one marker, found {count}: {old[:80]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          taxonomy_module = dedent('''\
+          """Shared observed defect taxonomy for Noema and OpenCode review gates.
+
+          The taxonomy is grounded in executable, externally demonstrated defect shapes.
+          It is intentionally reviewer-neutral: it does not encode proprietary wording or
+          make comparative quality claims about any third-party reviewer.
+          """
+
+          from __future__ import annotations
+
+          import os
+          from typing import Any
+
+          OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+              "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+              "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+              "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+              "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+              "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+              "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+              "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+              "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+              "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+          }
+          OBSERVED_REVIEW_PROBE_KINDS = frozenset(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS)
+
+
+          def observed_probe_taxonomy_required(env_name: str) -> bool:
+              """Return whether a trusted workflow enables observed-class admission."""
+              return os.environ.get(env_name, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+          def observed_probe_taxonomy_prompt() -> str:
+              """Return compact class-to-witness guidance shared by both review reasoners."""
+              return "; ".join(
+                  f"{kind}=[{','.join(fields)}]"
+                  for kind, fields in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS.items()
+              )
+
+
+          def observed_probe_class_evidence_error(
+              probe: dict[str, Any],
+              *,
+              index: int,
+              path: str,
+              line: int,
+              side: str | None = None,
+          ) -> str:
+              """Validate one class witness against the probe's exact source location.
+
+              Every named witness must carry its own concrete observation as well as the
+              source coordinate. Requiring distinct observations prevents a reviewer from
+              satisfying class diversity with repeated coordinates plus vacuous labels.
+              """
+              probe_kind = probe.get("probe_kind")
+              if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+                  return f"adversarial probe {index} requires probe_kind from the observed defect taxonomy"
+              required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+              class_evidence = probe.get("class_evidence")
+              if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+                  expected = ", ".join(required_fields)
+                  return (
+                      f"adversarial probe {index} class_evidence for {probe_kind} "
+                      f"must contain exactly: {expected}"
+                  )
+              expected_keys = {"path", "line", "observation"}
+              if side is not None:
+                  expected_keys.add("side")
+              observations: set[str] = set()
+              for field in required_fields:
+                  witness = class_evidence.get(field)
+                  if not isinstance(witness, dict) or set(witness) != expected_keys:
+                      return (
+                          f"adversarial probe {index} class_evidence.{field} requires "
+                          "an exact source-bound observation"
+                      )
+                  witness_path = witness.get("path")
+                  witness_line = witness.get("line")
+                  witness_side = witness.get("side") if side is not None else None
+                  observation = witness.get("observation")
+                  if witness_path != path or type(witness_line) is not int or witness_line != line:
+                      return (
+                          f"adversarial probe {index} class_evidence.{field} must bind "
+                          "to the probe path and positive integer line"
+                      )
+                  if side is not None and witness_side != side:
+                      return (
+                          f"adversarial probe {index} class_evidence.{field} must bind "
+                          "to the probe side"
+                      )
+                  if not isinstance(observation, str) or not observation.strip():
+                      return f"adversarial probe {index} class_evidence.{field} requires observation"
+                  normalized = " ".join(observation.split()).casefold()
+                  if normalized in observations:
+                      return (
+                          f"adversarial probe {index} class_evidence observations "
+                          "must be materially distinct"
+                      )
+                  observations.add(normalized)
+              return ""
+          ''')
+          Path("scripts/ci/review_probe_taxonomy.py").write_text(taxonomy_module, encoding="utf-8")
+
+          # Noema: import shared taxonomy helpers.
+          noema_path = Path("scripts/ci/noema_review_gate.py")
+          noema_text = noema_path.read_text(encoding="utf-8")
+          import_marker = "from scripts.ci.opencode_review_normalize_output import changed_file_is_material\n"
+          if import_marker not in noema_text:
+              raise SystemExit("Noema import marker missing")
+          noema_text = noema_text.replace(
+              import_marker,
+              import_marker
+              + "from scripts.ci.review_probe_taxonomy import (\n"
+              + "    OBSERVED_REVIEW_PROBE_KINDS,\n"
+              + "    observed_probe_class_evidence_error,\n"
+              + "    observed_probe_taxonomy_prompt,\n"
+              + "    observed_probe_taxonomy_required,\n"
+              + ")\n",
+              1,
+          )
+
+          start = noema_text.index("def validate_substantive_verdict(\n")
+          end = noema_text.index("def truncate_text(", start)
+          noema_validator = dedent('''\
+          def _canonical_changed_location(record: dict[str, Any], label: str) -> tuple[str, int, str]:
+              """Return one exact changed-side location without bool/int aliasing."""
+              path_value = record.get("path")
+              line_value = record.get("line")
+              side_value = record.get("side")
+              if not isinstance(path_value, str) or not path_value.strip():
+                  raise RuntimeError(f"{label} requires a canonical changed-side path")
+              if type(line_value) is not int or line_value <= 0:
+                  raise RuntimeError(f"{label} requires a canonical positive integer line")
+              if side_value not in {"LEFT", "RIGHT"}:
+                  raise RuntimeError(f"{label} requires canonical LEFT/RIGHT side")
+              return (path_value, line_value, side_value)
+
+
+          def validate_substantive_verdict(
+              verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
+          ) -> None:
+              """Reject completed verdicts without exact-line and observed-class evidence."""
+              decision = str(verdict.get("decision") or "").strip().lower()
+              require_observed = observed_probe_taxonomy_required(
+                  "NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY"
+              )
+              if decision == "comment" and not require_observed:
+                  return
+              evidence_decision = "approve" if decision == "comment" else decision
+              locations = changed_diff_locations(diff)
+              if not locations:
+                  raise RuntimeError("Noema formal verdict requires parseable changed-line evidence")
+
+              reviewed_lines = verdict.get("reviewed_lines")
+              if not isinstance(reviewed_lines, list) or not reviewed_lines:
+                  raise RuntimeError("Noema formal verdict requires at least one reviewed changed line")
+              for index, reviewed in enumerate(reviewed_lines, start=1):
+                  if not isinstance(reviewed, dict):
+                      raise RuntimeError(f"Noema reviewed line {index} must be an object")
+                  location = _canonical_changed_location(reviewed, f"Noema reviewed line {index}")
+                  if location not in locations:
+                      raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+                  analysis = reviewed.get("analysis")
+                  if not isinstance(analysis, str) or not analysis.strip():
+                      raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
+
+              validation = verdict.get("adversarial_validation")
+              if not isinstance(validation, dict):
+                  raise RuntimeError("Noema formal verdict requires adversarial_validation")
+              status = validation.get("status")
+              expected_status = "passed" if evidence_decision == "approve" else "failed"
+              if status != expected_status:
+                  raise RuntimeError(
+                      f"Noema {decision} requires adversarial_validation.status={expected_status}"
+                  )
+              residual_risk = validation.get("residual_risk")
+              if not isinstance(residual_risk, str) or not residual_risk.strip():
+                  raise RuntimeError("Noema adversarial validation requires residual_risk")
+              probes = validation.get("probes")
+              all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
+              required_probes = 2 if any(
+                  changed_file_is_material(path) for path in all_changed_paths
+              ) else 1
+              if not isinstance(probes, list) or len(probes) < required_probes:
+                  raise RuntimeError(
+                      f"Noema adversarial validation requires at least {required_probes} concrete probe(s)"
+                  )
+
+              confirmed: set[tuple[str, int, str]] = set()
+              identities: set[tuple[Any, ...]] = set()
+              probe_kinds: set[str] = set()
+              for index, probe in enumerate(probes, start=1):
+                  if not isinstance(probe, dict):
+                      raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+                  location = _canonical_changed_location(probe, f"Noema adversarial probe {index}")
+                  if location not in locations:
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} is not an exact changed-side line"
+                      )
+                  if require_observed:
+                      class_error = observed_probe_class_evidence_error(
+                          probe,
+                          index=index,
+                          path=location[0],
+                          line=location[1],
+                          side=location[2],
+                      )
+                      if class_error:
+                          raise RuntimeError(f"Noema {class_error}")
+                      probe_kinds.add(str(probe["probe_kind"]))
+                  for field in ("hypothesis", "attack_or_counterexample", "evidence"):
+                      value = probe.get(field)
+                      if not isinstance(value, str) or not value.strip():
+                          raise RuntimeError(f"Noema adversarial probe {index} requires {field}")
+                  outcome = probe.get("outcome")
+                  if outcome not in {"falsified", "confirmed"}:
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} outcome must be falsified or confirmed"
+                      )
+                  identity = (
+                      *location,
+                      probe["hypothesis"].strip().casefold(),
+                      probe["attack_or_counterexample"].strip().casefold(),
+                  )
+                  if identity in identities:
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} duplicates an earlier probe"
+                      )
+                  identities.add(identity)
+                  if outcome == "confirmed":
+                      confirmed.add(location)
+
+              if require_observed and len(probe_kinds) < required_probes:
+                  raise RuntimeError(
+                      f"Noema {decision} requires at least {required_probes} distinct probe_kind values"
+                  )
+              if evidence_decision == "approve" and confirmed:
+                  raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+              if evidence_decision == "request_changes":
+                  finding_locations: set[tuple[str, int, str]] = set()
+                  for index, finding in enumerate(verdict.get("findings") or [], start=1):
+                      if not isinstance(finding, dict):
+                          continue
+                      finding_location = _canonical_changed_location(
+                          {
+                              "path": finding.get("file"),
+                              "line": finding.get("line"),
+                              "side": finding.get("side"),
+                          },
+                          f"Noema finding {index}",
+                      )
+                      if finding_location not in locations:
+                          raise RuntimeError(
+                              f"Noema finding {index} is not an exact changed-side line"
+                          )
+                      finding_locations.add(finding_location)
+                  if not confirmed or not confirmed.intersection(finding_locations):
+                      raise RuntimeError(
+                          "Noema request_changes requires a confirmed probe on a published finding"
+                      )
+
+
+          ''')
+          noema_text = noema_text[:start] + noema_validator + noema_text[end:]
+
+          old_probe_shape = '''                                    **location_example,
+                                              "hypothesis": "...",
+                                              "attack_or_counterexample": "...",
+                                              "evidence": "observed or source-traced result",
+                                              "outcome": "falsified|confirmed",
+          '''
+          # Preserve indentation from the live source while adding a concrete class example.
+          shape_pattern = re.compile(
+              r'(\s+\*\*location_example,\n)'
+              r'(\s+"hypothesis": "\.\.\.",\n)'
+              r'(\s+"attack_or_counterexample": "\.\.\.",\n)'
+              r'(\s+"evidence": "observed or source-traced result",\n)'
+              r'(\s+"outcome": "falsified\|confirmed",\n)'
+          )
+          shape_match = shape_pattern.search(noema_text)
+          if not shape_match:
+              raise SystemExit("Noema probe JSON shape marker missing")
+          indent = re.match(r"\s+", shape_match.group(2)).group(0)
+          class_example = (
+              shape_match.group(1)
+              + f'{indent}"probe_kind": "mutable_alias",\n'
+              + f'{indent}"class_evidence": {{\n'
+              + f'{indent}    "alias_origin": {{**location_example, "observation": "caller-owned reference observed"}},\n'
+              + f'{indent}    "mutation_attempt": {{**location_example, "observation": "post-validation mutation attempted"}},\n'
+              + f'{indent}    "post_validation_observation": {{**location_example, "observation": "post-mutation invariant observed"}},\n'
+              + f'{indent}}},\n'
+              + shape_match.group(2)
+              + shape_match.group(3)
+              + shape_match.group(4)
+              + shape_match.group(5)
+          )
+          noema_text = noema_text[:shape_match.start()] + class_example + noema_text[shape_match.end():]
+          guidance_marker = (
+              '                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",\n'
+          )
+          if guidance_marker not in noema_text:
+              raise SystemExit("Noema prompt guidance marker missing")
+          noema_text = noema_text.replace(
+              guidance_marker,
+              guidance_marker
+              + '                "Choose independent probe_kind values and populate every class_evidence witness with the exact probe path/line/side plus a concrete, distinct observation. Observed defect taxonomy: " + observed_probe_taxonomy_prompt(),\n',
+              1,
+          )
+          noema_path.write_text(noema_text, encoding="utf-8")
+
+          # OpenCode: share the same taxonomy while retaining its existing cryptographic
+          # source-line receipt and trusted-artifact validation.
+          opencode_path = Path("scripts/ci/opencode_review_normalize_output.py")
+          opencode_text = opencode_path.read_text(encoding="utf-8")
+          typing_marker = "from typing import Any\n\n"
+          if typing_marker not in opencode_text:
+              raise SystemExit("OpenCode typing import marker missing")
+          opencode_text = opencode_text.replace(
+              typing_marker,
+              typing_marker
+              + "try:\n"
+              + "    from review_probe_taxonomy import (\n"
+              + "        observed_probe_class_evidence_error,\n"
+              + "        observed_probe_taxonomy_required,\n"
+              + "    )\n"
+              + "except ModuleNotFoundError:  # pragma: no cover - package import path\n"
+              + "    from scripts.ci.review_probe_taxonomy import (\n"
+              + "        observed_probe_class_evidence_error,\n"
+              + "        observed_probe_taxonomy_required,\n"
+              + "    )\n\n",
+              1,
+          )
+          identities_marker = (
+              "    confirmed_locations: set[tuple[str, int]] = set()\n"
+              "    probe_identities: set[tuple[str, int, str, str, str, str]] = set()\n"
+          )
+          if identities_marker not in opencode_text:
+              raise SystemExit("OpenCode probe identity marker missing")
+          opencode_text = opencode_text.replace(
+              identities_marker,
+              identities_marker
+              + "    probe_kinds: set[str] = set()\n"
+              + "    require_observed = observed_probe_taxonomy_required(\n"
+              + '        "OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY"\n'
+              + "    )\n",
+              1,
+          )
+          location_marker = (
+              "        if location_error:\n"
+              "            return f\"adversarial probe {index} {location_error}\"\n"
+              "        for field in (\"hypothesis\", \"attack_or_counterexample\", \"evidence\"):\n"
+          )
+          if location_marker not in opencode_text:
+              raise SystemExit("OpenCode location marker missing")
+          opencode_text = opencode_text.replace(
+              location_marker,
+              "        if location_error:\n"
+              "            return f\"adversarial probe {index} {location_error}\"\n"
+              "        if require_observed:\n"
+              "            class_error = observed_probe_class_evidence_error(\n"
+              "                probe, index=index, path=path, line=line\n"
+              "            )\n"
+              "            if class_error:\n"
+              "                return class_error\n"
+              "            probe_kinds.add(str(probe[\"probe_kind\"]))\n"
+              "        for field in (\"hypothesis\", \"attack_or_counterexample\", \"evidence\"):\n",
+              1,
+          )
+          result_marker = '    if result == "APPROVE":\n'
+          result_pos = opencode_text.find(result_marker, opencode_text.find("def adversarial_validation_error("))
+          if result_pos < 0:
+              raise SystemExit("OpenCode result marker missing")
+          distinct_block = (
+              "    if require_observed and len(probe_kinds) < minimum_probes:\n"
+              "        return (\n"
+              "            f\"adversarial_validation requires at least {minimum_probes} \"\n"
+              "            \"distinct probe_kind values from the observed defect taxonomy\"\n"
+              "        )\n\n"
+          )
+          opencode_text = opencode_text[:result_pos] + distinct_block + opencode_text[result_pos:]
+          opencode_path.write_text(opencode_text, encoding="utf-8")
+
+          # Trusted workflows enable the new admission rule; tests and direct legacy
+          # imports remain backward-compatible unless they explicitly opt in.
+          workflow_path = Path(".github/workflows/opencode-review.yml")
+          workflow_text = workflow_path.read_text(encoding="utf-8")
+          if "OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY" in workflow_text:
+              raise SystemExit("OpenCode observed taxonomy env already exists unexpectedly")
+          workflow_text, workflow_count = re.subn(
+              r'^(\s*)OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"$',
+              r'\1OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION: "true"\n\1OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY: "true"',
+              workflow_text,
+              flags=re.MULTILINE,
+          )
+          if workflow_count < 1:
+              raise SystemExit("OpenCode adversarial validation env marker missing")
+          workflow_path.write_text(workflow_text, encoding="utf-8")
+
+          noema_workflow_path = Path(".github/workflows/noema-review.yml")
+          noema_workflow = noema_workflow_path.read_text(encoding="utf-8")
+          if "NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY" in noema_workflow:
+              raise SystemExit("Noema observed taxonomy env already exists unexpectedly")
+          model_marker = '          export NOEMA_LLM_MODEL="orchestrator/free"\n'
+          if model_marker not in noema_workflow:
+              raise SystemExit("Noema orchestrator/free model marker missing")
+          noema_workflow = noema_workflow.replace(
+              model_marker,
+              model_marker + '          export NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY="true"\n',
+              1,
+          )
+          noema_workflow_path.write_text(noema_workflow, encoding="utf-8")
+
+          # OpenCode model prompt actively attacks the same externally observed classes.
+          prompt_path = Path("scripts/ci/opencode_review_prompt_template.md")
+          prompt = prompt_path.read_text(encoding="utf-8")
+          execution_marker = "\n\nExecution provenance is mandatory."
+          if execution_marker not in prompt:
+              raise SystemExit("OpenCode execution provenance marker missing")
+          taxonomy_paragraph = (
+              "\n\nThe trusted workflow also requires observed-defect class diversity for production review. "
+              "Every adversarial probe must set `probe_kind` to one of `mutable_alias`, "
+              "`time_of_check_time_of_use`, `execution_identity`, `coercion_boundary`, "
+              "`test_oracle`, `cross_contract`, `authority_boundary`, `dependency_context`, or "
+              "`state_machine_race`. Material changes require at least two distinct classes. "
+              "Populate `class_evidence` with exactly the class-specific witness names: "
+              "mutable_alias=[alias_origin,mutation_attempt,post_validation_observation]; "
+              "time_of_check_time_of_use=[check_observation,intervening_change,use_observation]; "
+              "execution_identity=[incoming_identity,retained_identity,mismatch_guard]; "
+              "coercion_boundary=[raw_value,conversion_path,canonicality_guard]; "
+              "test_oracle=[assertion_under_test,negative_control,distinguishing_observation]; "
+              "cross_contract=[first_contract,second_contract,contradiction_or_alignment]; "
+              "authority_boundary=[component_authority,external_authority,enforcement_boundary]; "
+              "dependency_context=[dependency,omitted_or_included_context,causal_effect]; "
+              "state_machine_race=[initial_state,event_order,invariant_observation]. Each witness "
+              "must repeat the probe's exact path and positive line and add a concrete `observation`; "
+              "the observations within one probe must be distinct. These labels are not evidence by "
+              "themselves: preserve the existing exact current-head source-line SHA-256 receipt and "
+              "independent proof requirements."
+          )
+          prompt = prompt.replace(execution_marker, taxonomy_paragraph + execution_marker, 1)
+          prompt_path.write_text(prompt, encoding="utf-8")
+
+          # Durable corpus: observable defect shapes only, with provenance to public PRs.
+          fixture_dir = Path("tests/fixtures")
+          fixture_dir.mkdir(parents=True, exist_ok=True)
+          corpus = [
+              {"id": "noema-528-mutable-alias", "probe_kind": "mutable_alias", "observable_case": "caller-owned mutable state remains aliased after validation and can invalidate an invariant", "source": "ContextualWisdomLab/noema#528"},
+              {"id": "noema-528-changing-getter", "probe_kind": "time_of_check_time_of_use", "observable_case": "a changing getter or Proxy can return a different value between validation and use", "source": "ContextualWisdomLab/noema#528"},
+              {"id": "noema-528-execution-identity", "probe_kind": "execution_identity", "observable_case": "lifecycle state can retain one execution identity while a later request supplies another", "source": "ContextualWisdomLab/noema#528"},
+              {"id": "github-1589-bool-line", "probe_kind": "coercion_boundary", "observable_case": "JSON true can compare equal to integer line 1 unless exact integer canonicality is enforced", "source": "ContextualWisdomLab/.github#1589"},
+              {"id": "noema-528-substring-oracle", "probe_kind": "test_oracle", "observable_case": "a substring assertion can pass because released is contained inside unreleased", "source": "ContextualWisdomLab/noema#528"},
+              {"id": "noema-528-doc-contract", "probe_kind": "cross_contract", "observable_case": "two changed documents can assert incompatible operating contracts while each looks locally plausible", "source": "ContextualWisdomLab/noema#528"},
+              {"id": "github-1623-review-authority", "probe_kind": "authority_boundary", "observable_case": "target-repository reviewer authority must not be reused as central control-plane mutation authority", "source": "ContextualWisdomLab/.github#1623"},
+              {"id": "github-1589-merge-base-context", "probe_kind": "dependency_context", "observable_case": "base-tip versus head context can omit the causal merge-base dependency scope required to explain a change", "source": "ContextualWisdomLab/.github#1589"},
+              {"id": "github-1589-workflow-lifecycle", "probe_kind": "state_machine_race", "observable_case": "temporary repair workflow creation, execution, deletion, and superseding pushes can race and leave active capacity or stale authority", "source": "ContextualWisdomLab/.github#1589"},
+          ]
+          Path("tests/fixtures/review_observed_defect_cases.json").write_text(
+              json.dumps(corpus, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+          )
+
+          # Replace the RED-only file with the durable GREEN regression suite.
+          final_tests = dedent('''\
+          """Executable corpus for independently observed review false-negative classes."""
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+
+          import pytest
+
+          from scripts.ci import noema_review_gate as noema
+          from scripts.ci import opencode_review_normalize_output as opencode
+          from scripts.ci.review_probe_taxonomy import (
+              OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS,
+              OBSERVED_REVIEW_PROBE_KINDS,
+              observed_probe_class_evidence_error,
+          )
+
+          ROOT = Path(__file__).resolve().parents[1]
+          DIFF = """diff --git a/tool.py b/tool.py
+          new file mode 100644
+          --- /dev/null
+          +++ b/tool.py
+          @@ -0,0 +1,2 @@
+          +first = True
+          +second = True
+          """
+
+
+          def _class_evidence(kind: str, line: int, *, side: str | None = "RIGHT") -> dict[str, object]:
+              evidence: dict[str, object] = {}
+              for index, field in enumerate(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[kind], start=1):
+                  witness: dict[str, object] = {
+                      "path": "tool.py",
+                      "line": line,
+                      "observation": f"{kind} witness {index} observed",
+                  }
+                  if side is not None:
+                      witness["side"] = side
+                  evidence[field] = witness
+              return evidence
+
+
+          def _probe(line: int, kind: str, *, side: str | None = "RIGHT") -> dict[str, object]:
+              probe: dict[str, object] = {
+                  "path": "tool.py",
+                  "line": line,
+                  "probe_kind": kind,
+                  "class_evidence": _class_evidence(kind, line, side=side),
+                  "hypothesis": f"{kind} can violate the intended invariant",
+                  "attack_or_counterexample": f"exercise the {kind} counterexample",
+                  "evidence": f"bounded source or execution proof falsified {kind}",
+                  "outcome": "falsified",
+              }
+              if side is not None:
+                  probe["side"] = side
+              return probe
+
+
+          def _noema_approval() -> dict[str, object]:
+              return {
+                  "decision": "approve",
+                  "summary": "bounded review",
+                  "reviewed_lines": [
+                      {"path": "tool.py", "line": 1, "side": "RIGHT", "analysis": "checked"}
+                  ],
+                  "adversarial_validation": {
+                      "status": "passed",
+                      "residual_risk": "bounded",
+                      "probes": [
+                          _probe(1, "mutable_alias"),
+                          _probe(2, "time_of_check_time_of_use"),
+                      ],
+                  },
+                  "findings": [],
+              }
+
+
+          def _patch_opencode_evidence(monkeypatch) -> None:
+              monkeypatch.setenv("OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              monkeypatch.setattr(opencode, "required_adversarial_probe_count", lambda: 2)
+              monkeypatch.setattr(opencode, "current_changed_files", lambda: ["tool.py"])
+              monkeypatch.setattr(opencode, "adversarial_probe_location_error", lambda *_: "")
+              monkeypatch.setattr(opencode, "unreceipted_runtime_tool_claim", lambda *_: "")
+              monkeypatch.setattr(opencode, "adversarial_evidence_rejection_reason", lambda *_: "")
+              monkeypatch.setattr(opencode, "adversarial_probe_source_receipt_error", lambda *_: "")
+
+
+          def test_corpus_covers_every_closed_observed_defect_class():
+              corpus = json.loads(
+                  (ROOT / "tests/fixtures/review_observed_defect_cases.json").read_text(encoding="utf-8")
+              )
+              assert {case["probe_kind"] for case in corpus} == OBSERVED_REVIEW_PROBE_KINDS
+              assert all(case["observable_case"].strip() and case["source"].strip() for case in corpus)
+
+
+          def test_noema_rejects_boolean_line_alias(monkeypatch):
+              monkeypatch.delenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", raising=False)
+              verdict = _noema_approval()
+              verdict["reviewed_lines"][0]["line"] = True
+              with pytest.raises(RuntimeError, match="positive integer line"):
+                  noema.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+          def test_noema_comment_cannot_bypass_required_evidence(monkeypatch):
+              monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              with pytest.raises(RuntimeError, match="reviewed changed line"):
+                  noema.validate_substantive_verdict(
+                      {"decision": "comment", "summary": "looks fine", "findings": []},
+                      DIFF,
+                      ["tool.py"],
+                  )
+
+
+          def test_noema_requires_two_distinct_classes_for_material_change(monkeypatch):
+              monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              verdict = _noema_approval()
+              verdict["adversarial_validation"]["probes"] = [
+                  _probe(1, "mutable_alias"),
+                  _probe(2, "mutable_alias"),
+              ]
+              with pytest.raises(RuntimeError, match="distinct probe_kind"):
+                  noema.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+          def test_noema_accepts_two_source_bound_observed_classes(monkeypatch):
+              monkeypatch.setenv("NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY", "true")
+              noema.validate_substantive_verdict(_noema_approval(), DIFF, ["tool.py"])
+
+
+          def test_open_code_rejects_generic_probe_diversity(monkeypatch):
+              _patch_opencode_evidence(monkeypatch)
+              probes = []
+              for line in (1, 2):
+                  probe = {
+                      "path": "tool.py",
+                      "line": line,
+                      "hypothesis": f"generic {line}",
+                      "attack_or_counterexample": f"generic attack {line}",
+                      "evidence": f"generic evidence {line}",
+                      "outcome": "falsified",
+                  }
+                  probes.append(probe)
+              error = opencode.adversarial_validation_error(
+                  {"status": "passed", "residual_risk": "bounded", "probes": probes},
+                  result="APPROVE",
+                  findings=[],
+              )
+              assert "probe_kind" in error
+
+
+          def test_open_code_rejects_relabelled_single_class(monkeypatch):
+              _patch_opencode_evidence(monkeypatch)
+              probes = [
+                  _probe(1, "mutable_alias", side=None),
+                  _probe(2, "mutable_alias", side=None),
+              ]
+              error = opencode.adversarial_validation_error(
+                  {"status": "passed", "residual_risk": "bounded", "probes": probes},
+                  result="APPROVE",
+                  findings=[],
+              )
+              assert "distinct probe_kind" in error
+
+
+          def test_open_code_accepts_distinct_source_bound_classes(monkeypatch):
+              _patch_opencode_evidence(monkeypatch)
+              error = opencode.adversarial_validation_error(
+                  {
+                      "status": "passed",
+                      "residual_risk": "bounded",
+                      "probes": [
+                          _probe(1, "mutable_alias", side=None),
+                          _probe(2, "test_oracle", side=None),
+                      ],
+                  },
+                  result="APPROVE",
+                  findings=[],
+              )
+              assert error == ""
+
+
+          def test_class_witnesses_require_distinct_observations():
+              probe = _probe(1, "state_machine_race")
+              for witness in probe["class_evidence"].values():
+                  witness["observation"] = "same repeated sentence"
+              error = observed_probe_class_evidence_error(
+                  probe, index=1, path="tool.py", line=1, side="RIGHT"
+              )
+              assert "materially distinct" in error
+
+
+          def test_trusted_workflows_enable_observed_taxonomy():
+              opencode_workflow = (ROOT / ".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+              noema_workflow = (ROOT / ".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+              assert 'OPENCODE_REQUIRE_OBSERVED_PROBE_TAXONOMY: "true"' in opencode_workflow
+              assert 'export NOEMA_REQUIRE_OBSERVED_PROBE_TAXONOMY="true"' in noema_workflow
+
+
+          def test_both_reasoners_receive_the_shared_taxonomy_guidance():
+              noema_source = (ROOT / "scripts/ci/noema_review_gate.py").read_text(encoding="utf-8")
+              opencode_prompt = (ROOT / "scripts/ci/opencode_review_prompt_template.md").read_text(encoding="utf-8")
+              assert "observed_probe_taxonomy_prompt()" in noema_source
+              for kind in OBSERVED_REVIEW_PROBE_KINDS:
+                  assert f"`{kind}`" in opencode_prompt
+          ''')
+          Path("tests/test_review_observed_defect_corpus.py").write_text(final_tests, encoding="utf-8")
+
+          doctoring = dedent('''\
+          # Observed-defect review corpus
+
+          ## Decision
+
+          Noema and OpenCode production review admission must attack independently observed
+          defect shapes, not merely emit two differently worded generic probes. The shared
+          taxonomy is executable policy in `scripts/ci/review_probe_taxonomy.py`; the corpus in
+          `tests/fixtures/review_observed_defect_cases.json` records observable public cases and
+          provenance without copying proprietary reviewer language or claiming benchmark
+          superiority.
+
+          ## Current classes
+
+          The closed set covers mutable aliases, validation/use TOCTOU, execution identity,
+          coercion/canonicality boundaries, weak test oracles, cross-contract contradictions,
+          authority boundaries, omitted dependency context, and state-machine races. Material
+          changes require two distinct classes when the trusted workflow enables the policy.
+
+          Each class carries three named witnesses. Every witness repeats the exact probe source
+          coordinate and adds a distinct concrete observation. These labels supplement, rather
+          than replace, OpenCode's current-head changed-file manifest and SHA-256 source-line
+          receipt or Noema's exact changed-side diff coordinate.
+
+          ## Observable regression sources
+
+          The initial corpus is grounded in public review evidence from
+          `ContextualWisdomLab/noema#528`, `ContextualWisdomLab/.github#1589`, and
+          `ContextualWisdomLab/.github#1623`. These sources demonstrated mutable aliasing,
+          changing-getter/Proxy TOCTOU, execution identity confusion, a weak substring oracle,
+          cross-document contradiction, bool/int line coercion, missing merge-base dependency
+          context, reviewer/control-plane authority confusion, and workflow lifecycle races.
+          The corpus means only that these defect shapes must be attacked; it does not assert
+          that any reviewer is universally better than another.
+
+          ## Failure semantics
+
+          Missing/unknown classes, repeated classes on a material approval, malformed or bool
+          line coordinates, vacuous/repeated class observations, or class witnesses detached
+          from the exact probe location fail closed. Production Noema comment verdicts also pass
+          the same completed-review evidence admission instead of bypassing it. A confirmed
+          defect still requires a source-bound finding; labels never manufacture a finding.
+          ''')
+          Path("docs/doctoring/review-observed-defect-corpus.md").write_text(doctoring, encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          changelog_marker = "## [Unreleased]\n"
+          changelog_entry = (
+              "- **Require observed-defect diversity in production Noema/OpenCode review.** "
+              "A shared closed taxonomy and executable corpus now turn public external-review "
+              "cases into active probes for mutable aliases, TOCTOU, identity confusion, "
+              "coercion boundaries, weak test oracles, cross-contract contradictions, authority "
+              "boundaries, missing dependency context, and state-machine races. Material reviews "
+              "need two distinct source-bound classes; Noema also rejects bool-as-line aliases and "
+              "production comment verdicts can no longer bypass completed-review evidence.\n"
+          )
+          if changelog_marker not in changelog_text:
+              raise SystemExit("CHANGELOG Unreleased marker missing")
+          changelog.write_text(
+              changelog_text.replace(changelog_marker, changelog_marker + changelog_entry, 1),
+              encoding="utf-8",
+          )
+
+          baseline = Path("docs/product-technical-gap-baseline.md")
+          baseline_text = baseline.read_text(encoding="utf-8")
+          baseline_marker = "\n## 1. 근거와 범위\n"
+          baseline_entry = dedent('''
+
+          ## 2026-09-02 Noema/OpenCode observed-defect review-quality gap
+
+          **Live owner state at repair start:** protected `.github/main` was
+          `e0f3766114fd1f066c81f30e7ccf2f38377dab3a`. Open #1589 contained a broad earlier
+          attempt but was 68 commits behind live main and merge-conflicted, so its stale whole-file
+          architecture was not copied over protected-main changes. Instead this successor carries
+          only the current-main causal review-admission repair.
+
+          **Observed gap:** current main required two adversarial probes for material changes but
+          accepted two generic differently worded probes. Noema additionally compared Python tuple
+          locations without exact integer canonicality, so JSON `true` could alias line `1`, and a
+          `decision=comment` returned before substantive evidence validation. Public external review
+          evidence in noema#528 and .github#1589/#1623 supplies durable defect shapes covering
+          mutable aliasing, TOCTOU/changing getters, execution identity, weak/vacuous oracles,
+          cross-contract contradiction, authority boundaries, dependency context, and lifecycle
+          races.
+
+          **Repair contract:** `scripts/ci/review_probe_taxonomy.py` is the shared closed taxonomy.
+          Trusted Noema/OpenCode workflows enable class admission; material verdicts require at least
+          two distinct classes, every class witness is exact-source-bound with a distinct observation,
+          and all earlier cryptographic/source evidence remains mandatory. No proprietary reviewer
+          language is copied and no benchmark superiority is claimed. The executable corpus is
+          `tests/fixtures/review_observed_defect_cases.json` plus
+          `tests/test_review_observed_defect_corpus.py`.
+          ''')
+          if baseline_marker not in baseline_text:
+              raise SystemExit("product gap section marker missing")
+          baseline.write_text(
+              baseline_text.replace(baseline_marker, baseline_entry + baseline_marker, 1),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Remove temporary writer and verify GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/review-observed-defect-writer.yml
+          test ! -e .github/workflows/review-observed-defect-writer.yml
+
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_review_observed_defect_corpus.py \
+            tests/test_noema_review_gate.py \
+            tests/test_opencode_review_normalize_output.py \
+            tests/test_opencode_existing_approval_gate.py \
+            tests/test_opencode_agent_contract.py \
+            tests/test_required_workflow_queue_contract.py
+
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_*.py \
+            tests/test_opencode_*.py
+
+          python3 -m compileall -q scripts/ci tests
+          interrogate --fail-under=100 scripts/ci/review_probe_taxonomy.py
+          git diff --check
+          test ! -e .github/workflows/review-observed-defect-writer.yml
+
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .github/workflows/review-observed-defect-writer.yml
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(review): enforce observed defect probe diversity"
+          git push origin HEAD:fix/review-observed-defect-corpus-20260902
