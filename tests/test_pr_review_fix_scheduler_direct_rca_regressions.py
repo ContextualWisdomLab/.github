@@ -143,3 +143,93 @@ def test_process_queue_completes_check_pages_before_rca_decision(
     assert payload["decisions"][0]["reasons"] == [
         "current-head failed check(s) require RCA: Security Scan"
     ]
+
+
+def test_process_queue_isolates_one_pagination_failure(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    """One incomplete rollup waits while another PR still dispatches repair."""
+    blocked = make_pr()
+    blocked["number"] = 1
+    repairable = make_pr()
+    repairable["number"] = 2
+    paginated: list[int] = []
+    dispatched: list[int] = []
+
+    def complete_pages(repo: str, candidate: dict[str, Any]) -> None:
+        paginated.append(int(candidate["number"]))
+        if candidate["number"] == 1:
+            raise RuntimeError("status rollup pagination unavailable")
+
+    monkeypatch.setattr(
+        fix,
+        "fetch_open_prs",
+        lambda repo, max_prs: [blocked, repairable],
+    )
+    monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, candidate, **kwargs: dispatched.append(int(candidate["number"])),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, candidate, dry_run: None)
+    args = fix.parse_args(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--max-dispatches",
+            "2",
+            "--dry-run",
+        ]
+    )
+
+    assert fix.process_queue(args) == 0
+
+    assert paginated == [1, 2]
+    assert dispatched == [2]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    decisions = {entry["pr"]: entry for entry in payload["decisions"]}
+    assert decisions[1]["action"] == "wait"
+    assert "status-context pagination failed" in decisions[1]["reasons"][0]
+    assert decisions[2]["action"] == "dispatch"
+
+
+def test_process_queue_does_not_paginate_out_of_scope_pr(
+    monkeypatch: Any, capsys: Any
+) -> None:
+    """Base-filtered PRs do not spend status-rollup pagination requests."""
+    out_of_scope = make_pr()
+    out_of_scope["number"] = 1
+    out_of_scope["baseRefName"] = "develop"
+    in_scope = make_pr()
+    in_scope["number"] = 2
+    paginated: list[int] = []
+
+    def complete_pages(repo: str, candidate: dict[str, Any]) -> None:
+        paginated.append(int(candidate["number"]))
+        if candidate["number"] == 1:
+            raise AssertionError("out-of-scope PR must not be paginated")
+
+    monkeypatch.setattr(
+        fix,
+        "fetch_open_prs",
+        lambda repo, max_prs: [out_of_scope, in_scope],
+    )
+    monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "dispatch_autofix", lambda *args, **kwargs: None)
+    monkeypatch.setattr(fix, "create_fix_marker", lambda *args, **kwargs: None)
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    )
+
+    assert fix.process_queue(args) == 0
+
+    assert paginated == [2]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    decisions = {entry["pr"]: entry for entry in payload["decisions"]}
+    assert decisions[1]["action"] == "skip"
+    assert decisions[2]["action"] == "dispatch"
