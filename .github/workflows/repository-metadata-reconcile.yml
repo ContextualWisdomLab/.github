@@ -131,14 +131,42 @@ jobs:
           python scripts/ci/reconcile_repository_labels.py \
             --taxonomy config/repository-label-taxonomy.json
           label_apply_status=$?
-          python scripts/ci/reconcile_repository_metadata.py \
-            --manifest config/repository-metadata.json \
-            --verify-only
-          metadata_verify_status=$?
           python scripts/ci/reconcile_repository_labels.py \
             --taxonomy config/repository-label-taxonomy.json \
             --verify-only
           label_verify_status=$?
+
+          metadata_verify_status=1
+          metadata_verify_attempt=1
+          metadata_verify_limit=12
+          while (( metadata_verify_attempt <= metadata_verify_limit )); do
+            metadata_verify_output="$(
+              python scripts/ci/reconcile_repository_metadata.py \
+                --manifest config/repository-metadata.json \
+                --verify-only 2>&1
+            )"
+            metadata_verify_status=$?
+            printf '%s\n' "${metadata_verify_output}"
+            if (( metadata_verify_status == 0 )); then
+              break
+            fi
+
+            metadata_failure_lines="$(
+              printf '%s\n' "${metadata_verify_output}" \
+                | grep '^repository metadata reconciliation failed for ' || true
+            )"
+            if [[ -z "${metadata_failure_lines}" ]] \
+              || printf '%s\n' "${metadata_failure_lines}" \
+                | grep -Evq 'GitHub Pages (was not published|configuration did not converge|is not built|is not reachable)'; then
+              break
+            fi
+            if (( metadata_verify_attempt == metadata_verify_limit )); then
+              break
+            fi
+            sleep 15
+            ((metadata_verify_attempt += 1))
+          done
+
           set -e
           if (( metadata_apply_status != 0 \
                 || label_apply_status != 0 \
