@@ -14,12 +14,11 @@ A second edge existed when a ready PR was converted back to draft while a poll w
 ## Repair
 
 - Add `converted_to_draft` to the `pull_request_target` trigger set.
-- Exit the request-review step immediately when `PR_DRAFT=true`, before any GitHub API or token exchange.
-- Exit the required-verdict polling step immediately for drafts.
+- Both the request-review and required-verdict polling steps first make one unconditional, authoritative `gh api` live PR lookup (added after the initial fix, per Devin Review on this PR: a stale event-payload `PR_DRAFT`/head cannot be trusted on its own) and fail closed on a lookup error or an exact-head mismatch. Only after that live lookup confirms the PR is still draft on the live exact head does each step exit -- before any *further* GitHub API call or token exchange.
 - Preserve `ready_for_review` behavior and the separate explicit marker-backed draft-review path.
 - Keep the existing PR-scoped `cancel-in-progress: true` concurrency behavior so the converted-to-draft event replaces a stale non-draft poll.
 
-Executable regressions cover the trigger, request-step no-I/O exemption, verdict-step exemption, closed-event precedence, and unchanged non-draft behavior.
+Executable regressions cover the trigger, the request-step and verdict-step live-state-then-exit exemptions, closed-event precedence, moved-head fail-closed behavior, and unchanged non-draft behavior.
 
 ## Reconciliation
 
