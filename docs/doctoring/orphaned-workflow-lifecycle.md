@@ -70,13 +70,17 @@ For a live read-only sweep, run:
 ```bash
 python3 scripts/ci/inventory_orphaned_workflows.py --live \
   --output /tmp/workflow-lifecycle-ledger.json \
-  --receipt-output /tmp/workflow-lifecycle-api-receipts.json
+  --receipt-output /tmp/workflow-lifecycle-api-receipts.json \
+  --failure-output /tmp/workflow-lifecycle-failure.json
 ```
 
 The protected-default-branch integration is
 `.github/workflows/workflow-lifecycle-inventory.yml`. Its scheduled runs have
 read-only repository permissions, verify the checked-out SHA, and
-retain both immutable artifacts for 30 days. It contains no disable endpoint;
+retain completed API receipts plus either the immutable ledger or structured
+failure evidence for 30 days. The live collector proves fleet completeness by
+matching the paginated repository list to authenticated organization-wide
+public/private totals; pagination alone is not accepted. It contains no disable endpoint;
 operator mutation remains a later reviewed action.
 
 For fixture verification, feed a JSON payload with `organization`, `observed_at`,
@@ -94,8 +98,9 @@ python3 scripts/ci/inventory_orphaned_workflows.py \
   --output /tmp/workflow-lifecycle-ledger.json
 ```
 
-The scanner never mutates. The separate `disable_confirmed_orphan` operator
-primitive accepts only an immutable `orphan_active` record and an identical
+The scanner never exports a write primitive. The separately reviewed
+`scripts/ci/workflow_lifecycle_operator.py` module's
+`disable_confirmed_orphan` primitive accepts only an immutable `orphan_active` record and an identical
 fresh head SHA, then addresses its exact numeric workflow ID. After a reviewed
 operator pass, rerun the organization sweep and retain both receipt sets.
 Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live

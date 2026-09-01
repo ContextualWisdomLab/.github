@@ -889,7 +889,11 @@ Semantic Versioning where the repository publishes a release.
 
 - Require orphan-workflow lifecycle fixtures to prove complete organization
   repository visibility before emitting an audit ledger, preventing partial
-  inventories from overstating fleet coverage.
+  inventories from overstating fleet coverage. Live collection now verifies
+  authenticated organization-wide repository totals, retries one explicit
+  HTTP 5xx once, rejects every malformed Git tree member, preserves partial
+  read receipts and structured failure evidence, gates completeness before
+  classification, and isolates disable/issue writes in the operator module.
 - Add a live, paginated organization workflow inventory with content-bound API
   receipts, exact default-head revalidation, and a separately reviewed,
   ledger-bound operator disable primitive.

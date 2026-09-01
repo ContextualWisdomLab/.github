@@ -59,7 +59,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python scripts/ci/inventory_orphaned_workflows.py --live \
             --output "$RUNNER_TEMP/workflow-lifecycle-ledger.json" \
-            --receipt-output "$RUNNER_TEMP/workflow-lifecycle-api-receipts.json"
+            --receipt-output "$RUNNER_TEMP/workflow-lifecycle-api-receipts.json" \
+            --failure-output "$RUNNER_TEMP/workflow-lifecycle-failure.json"
           python -m json.tool "$RUNNER_TEMP/workflow-lifecycle-ledger.json" >/dev/null
           python -m json.tool "$RUNNER_TEMP/workflow-lifecycle-api-receipts.json" >/dev/null
 
@@ -71,5 +72,6 @@ jobs:
           path: |
             ${{ runner.temp }}/workflow-lifecycle-ledger.json
             ${{ runner.temp }}/workflow-lifecycle-api-receipts.json
+            ${{ runner.temp }}/workflow-lifecycle-failure.json
           if-no-files-found: error
           retention-days: 30

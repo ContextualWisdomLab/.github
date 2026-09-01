@@ -84,31 +84,48 @@ class GitHubTransport(Protocol):
         """Return the decoded JSON response for one bounded request."""
 
 
-def _live_get(client: GitHubTransport, path: str, receipts: list[dict[str, Any]]) -> Any:
+def _live_get(
+    client: GitHubTransport, path: str, receipts: list[dict[str, Any]]
+) -> Any:
     """Read one endpoint and append a content-bound API receipt."""
     try:
         body = client.request(path)
-    except Exception as exc:
-        raise InventoryError(f"live GitHub visibility failed for {path}: {type(exc).__name__}") from exc
+    except Exception as first_exc:
+        if not re.search(r"\(HTTP 5\d\d\)", str(first_exc)):
+            raise InventoryError(
+                f"live GitHub visibility failed for {path}: {type(first_exc).__name__}"
+            ) from first_exc
+        try:
+            body = client.request(path)
+        except Exception as retry_exc:
+            raise InventoryError(
+                f"live GitHub visibility failed for {path}: {type(retry_exc).__name__}"
+            ) from retry_exc
     encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-    receipts.append({"method": "GET", "path": path, "sha256": hashlib.sha256(encoded).hexdigest()})
+    receipts.append(
+        {"method": "GET", "path": path, "sha256": hashlib.sha256(encoded).hexdigest()}
+    )
     return body
 
 
 def collect_live_organization(
     client: GitHubTransport,
     organization: str = "ContextualWisdomLab",
+    *,
+    receipts: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Collect a complete live fleet payload with exact-head revalidation."""
     if organization != "ContextualWisdomLab":
         raise InventoryError("organization must be ContextualWisdomLab")
-    receipts: list[dict[str, Any]] = []
+    receipts = [] if receipts is None else receipts
     repositories: list[Mapping[str, Any]] = []
     page = 1
     while True:
         path = f"/orgs/{organization}/repos?type=all&sort=full_name&per_page=100&page={page}"
         batch = _live_get(client, path, receipts)
-        if not isinstance(batch, list) or any(not isinstance(item, Mapping) for item in batch):
+        if not isinstance(batch, list) or any(
+            not isinstance(item, Mapping) for item in batch
+        ):
             raise InventoryError("repository inventory response is malformed")
         repositories.extend(batch)
         if len(batch) < 100:
@@ -116,6 +133,26 @@ def collect_live_organization(
         page += 1
     if not repositories:
         raise InventoryError("live repository inventory is empty")
+    organization_body = _live_get(client, f"/orgs/{organization}", receipts)
+    if not isinstance(organization_body, Mapping):
+        raise InventoryError("organization visibility proof is malformed")
+    public_repos = organization_body.get("public_repos")
+    private_repos = organization_body.get("total_private_repos")
+    if (
+        not isinstance(public_repos, int)
+        or public_repos < 0
+        or not isinstance(private_repos, int)
+        or private_repos < 0
+    ):
+        raise InventoryError("organization-wide visibility proof is unavailable")
+    visible_names = {item.get("full_name") for item in repositories}
+    if (
+        len(visible_names) != len(repositories)
+        or len(repositories) != public_repos + private_repos
+    ):
+        raise InventoryError(
+            "organization-wide visibility proof does not match repository inventory"
+        )
     records: list[dict[str, Any]] = []
     for repository in repositories:
         name = repository.get("name")
@@ -127,7 +164,11 @@ def collect_live_organization(
         if archived is True:
             records.append({"name": name, "archived": True})
             continue
-        if archived is not False or not isinstance(default_branch, str) or not default_branch:
+        if (
+            archived is not False
+            or not isinstance(default_branch, str)
+            or not default_branch
+        ):
             raise InventoryError(f"{name} repository metadata is incomplete")
         branch = quote(default_branch, safe="")
         commit_path = f"/repos/{full_name}/commits/{branch}"
@@ -135,26 +176,50 @@ def collect_live_organization(
         start_sha = start.get("sha") if isinstance(start, Mapping) else None
         if not is_exact_sha(start_sha):
             raise InventoryError(f"{name} default-branch SHA is invalid")
-        tree_body = _live_get(client, f"/repos/{full_name}/git/trees/{start_sha}?recursive=1", receipts)
-        if not isinstance(tree_body, Mapping) or tree_body.get("truncated") is not False:
-            raise InventoryError(f"{name} default-branch tree is truncated or malformed")
+        tree_body = _live_get(
+            client, f"/repos/{full_name}/git/trees/{start_sha}?recursive=1", receipts
+        )
+        if (
+            not isinstance(tree_body, Mapping)
+            or tree_body.get("truncated") is not False
+        ):
+            raise InventoryError(
+                f"{name} default-branch tree is truncated or malformed"
+            )
         tree = tree_body.get("tree")
         if not isinstance(tree, list):
             raise InventoryError(f"{name} default-branch tree is malformed")
-        tree_paths = [item.get("path") for item in tree if isinstance(item, Mapping) and item.get("type") == "blob"]
-        if any(not isinstance(path, str) for path in tree_paths):
-            raise InventoryError(f"{name} default-branch tree path is malformed")
+        tree_paths: list[str] = []
+        for item in tree:
+            if not isinstance(item, Mapping):
+                raise InventoryError(
+                    f"{name} default-branch tree entry is not an object"
+                )
+            item_type = item.get("type")
+            path = item.get("path")
+            if (
+                item_type not in {"blob", "tree", "commit"}
+                or not isinstance(path, str)
+                or not path
+            ):
+                raise InventoryError(f"{name} default-branch tree entry is malformed")
+            if item_type == "blob":
+                tree_paths.append(path)
         workflow_pages: list[dict[str, Any]] = []
         workflow_page = 1
         while True:
             workflow_path = f"/repos/{full_name}/actions/workflows?per_page=100&page={workflow_page}"
             body = _live_get(client, workflow_path, receipts)
-            if not isinstance(body, dict) or not isinstance(body.get("workflows"), list):
+            if not isinstance(body, dict) or not isinstance(
+                body.get("workflows"), list
+            ):
                 raise InventoryError(f"{name} workflow inventory is malformed")
             total = body.get("total_count")
             if not isinstance(total, int) or total < 0:
                 raise InventoryError(f"{name} workflow total_count is malformed")
-            consumed = sum(len(item["workflows"]) for item in workflow_pages) + len(body["workflows"])
+            consumed = sum(len(item["workflows"]) for item in workflow_pages) + len(
+                body["workflows"]
+            )
             has_next = consumed < total
             workflow_pages.append({**body, "_link_next": has_next})
             if not has_next:
@@ -165,8 +230,26 @@ def collect_live_organization(
         end = _live_get(client, commit_path, receipts)
         end_sha = end.get("sha") if isinstance(end, Mapping) else None
         assert_default_branch_bound(start_sha, end_sha)
-        records.append({"name": name, "archived": False, "default_branch": default_branch, "default_branch_sha": start_sha, "default_branch_sha_after": end_sha, "tree_paths": tree_paths, "workflow_pages": workflow_pages})
-    return ({"organization": organization, "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "repository_inventory_complete": True, "repositories": records}, receipts)
+        records.append(
+            {
+                "name": name,
+                "archived": False,
+                "default_branch": default_branch,
+                "default_branch_sha": start_sha,
+                "default_branch_sha_after": end_sha,
+                "tree_paths": tree_paths,
+                "workflow_pages": workflow_pages,
+            }
+        )
+    return (
+        {
+            "organization": organization,
+            "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "repository_inventory_complete": True,
+            "repositories": records,
+        },
+        receipts,
+    )
 
 
 def reject_forbidden_token(name: str) -> None:
@@ -478,19 +561,17 @@ def inventory_organization(payload: Mapping[str, Any]) -> dict[str, Any]:
     repositories = payload.get("repositories")
     if not isinstance(repositories, list) or not repositories:
         raise InventoryError("repositories must be a non-empty list")
+    if payload.get("repository_inventory_complete") is not True:
+        raise InventoryError(
+            "repository inventory is incomplete; caller must prove full visibility"
+        )
     inventories: list[dict[str, Any]] = []
     for record in repositories:
         if not isinstance(record, Mapping):
             raise InventoryError("repository record is not an object")
         inventories.append(inventory_repository(record))
-    if payload.get("repository_inventory_complete") is not True:
-        raise InventoryError(
-            "repository inventory is incomplete; caller must prove full visibility"
-        )
     records = [
-        item
-        for inventory in inventories
-        for item in inventory.get("records", [])
+        item for inventory in inventories for item in inventory.get("records", [])
     ]
     counts = {name: 0 for name in CLASSIFICATIONS}
     for item in records:
@@ -524,71 +605,6 @@ def write_ledger(ledger: Mapping[str, Any], output: Path | None) -> str:
     return text
 
 
-def disable_confirmed_orphan(
-    client: GitHubTransport,
-    record: Mapping[str, Any],
-    *,
-    confirmed_head_sha: str,
-) -> None:
-    """Disable only one reviewed, ledger-bound orphan after a fresh head check."""
-    if record.get("classification") != "orphan_active":
-        raise InventoryError("operator may disable only a ledger orphan_active record")
-    repository = record.get("repository")
-    workflow_id = record.get("workflow_id")
-    ledger_sha = record.get("default_branch_sha")
-    if not isinstance(repository, str) or not isinstance(workflow_id, int):
-        raise InventoryError("operator record identity is malformed")
-    assert_default_branch_bound(ledger_sha, confirmed_head_sha)
-    try:
-        client.request(
-            f"/repos/ContextualWisdomLab/{repository}/actions/workflows/{workflow_id}/disable",
-            method="PUT",
-        )
-    except Exception as exc:
-        raise InventoryError(f"operator disable failed closed: {type(exc).__name__}") from exc
-
-
-def publish_owner_issue(
-    client: GitHubTransport,
-    record: Mapping[str, Any],
-    *,
-    ledger_sha256: str,
-) -> str:
-    """Create or update the bounded owner issue for one confirmed orphan."""
-    if record.get("classification") != "orphan_active" or HEX_SHA256.fullmatch(ledger_sha256) is None:
-        raise InventoryError("issue publication requires an orphan_active and ledger digest")
-    repository = record.get("repository")
-    if not isinstance(repository, str) or REPO_SLUG.fullmatch(repository) is None:
-        raise InventoryError("issue publication repository is malformed")
-    issue = owner_issue_for(repository)
-    body = (
-        "<!-- cwl-workflow-lifecycle -->\n"
-        f"Exact workflow registry evidence: `{record.get('workflow_id')}` / "
-        f"`{record.get('path')}` at `{record.get('default_branch_sha')}`.\n"
-        f"Ledger SHA-256: `{ledger_sha256}`.\n"
-    )
-    try:
-        if issue is not None:
-            number = issue.rsplit("#", 1)[1]
-            client.request(
-                f"/repos/ContextualWisdomLab/{repository}/issues/{number}/comments",
-                method="POST",
-                payload={"body": body},
-            )
-            return issue
-        created = client.request(
-            f"/repos/ContextualWisdomLab/{repository}/issues",
-            method="POST",
-            payload={"title": "Disable orphaned workflow registry identity", "body": body},
-        )
-    except Exception as exc:
-        raise InventoryError(f"owner issue publication failed closed: {type(exc).__name__}") from exc
-    number = created.get("number") if isinstance(created, Mapping) else None
-    if not isinstance(number, int) or number <= 0:
-        raise InventoryError("owner issue creation returned no issue number")
-    return f"ContextualWisdomLab/{repository}#{number}"
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Load a fixture payload, emit a ledger, and optionally fail on orphans."""
     parser = argparse.ArgumentParser(
@@ -596,9 +612,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--payload", help="JSON inventory fixture")
-    source.add_argument("--live", action="store_true", help="collect the live organization inventory")
+    source.add_argument(
+        "--live", action="store_true", help="collect the live organization inventory"
+    )
     parser.add_argument("--output", help="optional ledger output path")
-    parser.add_argument("--receipt-output", help="required API receipt output for --live")
+    parser.add_argument(
+        "--receipt-output", help="required API receipt output for --live"
+    )
+    parser.add_argument(
+        "--failure-output", help="structured failure evidence for --live"
+    )
     parser.add_argument(
         "--fail-on-orphan-active",
         action="store_true",
@@ -615,6 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except InventoryError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
+    live_receipts: list[dict[str, Any]] = []
     try:
         if args.live:
             if not args.receipt_output:
@@ -632,7 +656,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise InventoryError(
                     f"live GitHub credential unavailable: {type(exc).__name__}"
                 ) from exc
-            payload, receipts = collect_live_organization(client)
+            payload, receipts = collect_live_organization(
+                client, receipts=live_receipts
+            )
             Path(args.receipt_output).write_text(
                 json.dumps(receipts, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
@@ -647,6 +673,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"ERROR: unable to read payload: {exc}", file=sys.stderr)
         return 2
     except InventoryError as exc:
+        if args.live:
+            if args.receipt_output:
+                Path(args.receipt_output).write_text(
+                    json.dumps(live_receipts, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            if args.failure_output:
+                Path(args.failure_output).write_text(
+                    json.dumps(
+                        {
+                            "capability": CAPABILITY,
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     try:
@@ -658,7 +704,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(text)
     orphan_active = ledger["counts"]["orphan_active"]
     if args.fail_on_orphan_active and orphan_active:
-        print(f"FAIL: {orphan_active} orphan_active workflow identit(y/ies)", file=sys.stderr)
+        print(
+            f"FAIL: {orphan_active} orphan_active workflow identit(y/ies)",
+            file=sys.stderr,
+        )
         return 1
     print(
         f"PASS: inventoried {len(ledger['records'])} identities "
