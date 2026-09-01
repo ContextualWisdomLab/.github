@@ -1,0 +1,167 @@
+name: One-shot PR 1588 Strix stale-event contract reconciliation
+
+on:
+  push:
+    branches:
+      - fix/strix-control-plane-supersession-20260901
+    paths:
+      - .github/workflows/source-fix-1588-stale-event-contract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install exact hash-verified test runner dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/strix-repair-requirements.txt" <<'EOF'
+          coverage==7.15.2 --hash=sha256:b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install --only-binary=:all: --require-hashes -r "${RUNNER_TEMP}/strix-repair-requirements.txt"
+
+      - name: Reconcile stale Strix queue contracts, verify, and retire workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/strix-control-plane-supersession-20260901
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          tests_path = Path("tests/test_required_workflow_queue_contract.py")
+          tests = tests_path.read_text(encoding="utf-8")
+
+          first = tests.index("def test_strix_serializes_provider_evidence_per_repository() -> None:\n")
+          first_end = tests.index("\ndef test_strix_install_normalizes_executable_permissions_before_hashing()", first)
+          replacement = '''def test_strix_serializes_provider_evidence_per_repository() -> None:
+              """Keep provider serialization while delegating stale-run retirement safely."""
+              workflow = workflow_text("strix.yml")
+              pre_jobs = workflow.split("jobs:", 1)[0]
+              strix_job = workflow.split("  strix:", 1)[1]
+              concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
+                  "runs-on:", 1
+              )[0]
+
+              # GitHub concurrency groups are unordered. Same-PR native cancellation
+              # would let a delayed synchronize/closed delivery cancel newer evidence.
+              assert "strix-workflow-${{" not in pre_jobs
+              assert "cancel-in-progress:" not in pre_jobs
+              assert "cancel-superseded-pr-runs:" not in workflow
+
+              # The expensive provider path remains serialized by repository/event class.
+              assert "github.event.client_payload.target_repository" in concurrency_contract
+              assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+              assert "github.repository" in concurrency_contract
+              assert (
+                  "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
+                  "github.event.pull_request.base.repo.full_name || github.repository)"
+                  in concurrency_contract
+              )
+              assert (
+                  "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
+                  in concurrency_contract
+              )
+              assert "github.event.pull_request.number" not in concurrency_contract
+              assert "github.event.pull_request.head.sha" not in concurrency_contract
+              assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+              assert "cancel-in-progress: false" in concurrency_contract
+              assert "queue: max" not in workflow
+
+              # Stale predecessor retirement is owned by the trusted scheduler, which
+              # operates on a freshly fetched live PR object and has Actions-write scope.
+              scheduler_workflow = workflow_text("pr-review-merge-scheduler.yml")
+              scan_job = scheduler_workflow.split("  scan-pr-queue:", 1)[1].split(
+                  "\\n  org-queue-sweep:", 1
+              )[0]
+              scheduler_source = (
+                  REPO_ROOT / "scripts" / "ci" / "pr_review_merge_scheduler.py"
+              ).read_text(encoding="utf-8")
+              assert "actions: write" in scan_job
+              assert "cancel_stale_pr_runs(repo, pr, dry_run=dry_run)" in scheduler_source
+          '''.replace("              ", "")
+          tests = tests[:first] + replacement + tests[first_end + 1:]
+
+          close_start = tests.index("def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:\n")
+          close_end = tests.index("\ndef test_close_empty_pr_metadata_lookup_retries_and_fails_open()", close_start)
+          close_block = tests[close_start:close_end]
+          close_block = close_block.replace(
+              "def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:\n"
+              "    \\\"\\\"\\\"Close events should cancel old runs without starting expensive jobs.\\\"\\\"\\\"\n",
+              "def test_pull_request_close_events_avoid_heavy_jobs_and_unsafe_strix_cancellation() -> None:\n"
+              "    \\\"\\\"\\\"Close events must not start heavy work or let stale Strix events cancel newer runs.\\\"\\\"\\\"\n",
+          )
+          old_branch = '''        if filename == "strix.yml":
+              pre_jobs = workflow.split("jobs:", 1)[0]
+              assert "strix-workflow-${{" in pre_jobs
+              assert "github.event.pull_request.number" in pre_jobs
+              assert "github.event.action == 'synchronize'" in pre_jobs
+              assert "github.event.action == 'closed'" in pre_jobs
+              assert "cancel-in-progress: ${{" in pre_jobs
+              assert "cancel-superseded-pr-runs:" not in workflow
+          '''.replace("              ", "")
+          new_branch = '''        if filename == "strix.yml":
+              pre_jobs = workflow.split("jobs:", 1)[0]
+              assert "strix-workflow-${{" not in pre_jobs
+              assert "cancel-in-progress:" not in pre_jobs
+              assert "cancel-superseded-pr-runs:" not in workflow
+              assert "github.event.action != 'closed'" in workflow
+          '''.replace("              ", "")
+          if close_block.count(old_branch) != 1:
+              raise SystemExit("unexpected Strix close-event contract")
+          close_block = close_block.replace(old_branch, new_branch, 1)
+          old_tail = '''    strix_workflow = workflow_text("strix.yml")
+              pre_jobs = strix_workflow.split("jobs:", 1)[0]
+              assert "cancel-in-progress: ${{" in pre_jobs
+              assert "cancel-in-progress: false" in strix_workflow.split("  strix:", 1)[1]
+              assert "Keep provider-backed scans serial per repository" in strix_workflow
+          '''.replace("              ", "")
+          new_tail = '''    strix_workflow = workflow_text("strix.yml")
+              pre_jobs = strix_workflow.split("jobs:", 1)[0]
+              assert "cancel-in-progress:" not in pre_jobs
+              assert "cancel-in-progress: false" in strix_workflow.split("  strix:", 1)[1]
+              assert "trusted merge scheduler" in strix_workflow
+          '''.replace("              ", "")
+          if close_block.count(old_tail) != 1:
+              raise SystemExit("unexpected Strix close-event tail contract")
+          close_block = close_block.replace(old_tail, new_tail, 1)
+          tests = tests[:close_start] + close_block + tests[close_end:]
+          tests_path.write_text(tests, encoding="utf-8")
+          PY
+
+          python -m pytest -q tests/test_strix_control_plane_supersession.py tests/test_required_workflow_queue_contract.py
+          bash scripts/ci/test_strix_quick_gate.sh
+          git diff --check
+
+          git rm .github/workflows/source-fix-1588-stale-event-contract.yml
+          git add tests/test_required_workflow_queue_contract.py
+          git diff --cached --check
+          git status --short
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(strix): align queue contracts with live-head cancellation"
+          git push origin "HEAD:${TARGET_BRANCH}"
