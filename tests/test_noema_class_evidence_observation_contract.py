@@ -35,7 +35,9 @@ def _class_evidence(
         witness = _location()
         if observations:
             if repeated:
-                witness["observation"] = "same generic observation"
+                witness["observation"] = (
+                    "The `new` assignment preserves one repeated runtime relationship."
+                )
             elif generic_but_different:
                 witness["observation"] = (
                     f"Generic {field.replace('_', ' ')} concern appears in this area."
