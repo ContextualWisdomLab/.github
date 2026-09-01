@@ -1433,6 +1433,32 @@ def test_fallback_escalation_budget_is_shared_across_full_admitted_catalog() -> 
     assert len(client.calls) == len(primary_agents) + len(fallback_agents) + max_escalations
 
 
+
+def test_every_budget_starved_route_gets_its_own_escalation() -> None:
+    """Catalog order cannot deny a candidate its own evidence-bearing retry."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents = [
+        SimpleNamespace(
+            id=f"starved_{index}", provider_name="openrouter", model=f"starved/{index}"
+        )
+        for index in range(6)
+    ]
+    starved = {
+        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+    }
+    client = _ProbeClient({agent.id: dict(starved) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    rows = failure.value.report["routes"]
+    assert [row["attempts"] for row in rows] == [2] * len(agents)
+    assert all(row.get("error_type") != "escalation_budget_exhausted" for row in rows)
+    assert failure.value.report["escalations_used"] == len(agents)
+    assert len(client.calls) == 2 * len(agents)
+
+
 def test_preflight_keeps_more_than_twelve_admitted_primary_routes() -> None:
     """Admission cardinality cannot crash or truncate runtime preflight."""
     namespace = _load_launcher()
