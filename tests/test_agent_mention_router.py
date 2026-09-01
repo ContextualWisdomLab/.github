@@ -272,20 +272,88 @@ def test_exact_mentions_rejects_trailing_path_continuation(body: str) -> None:
     ],
 )
 def test_exact_mentions_rejects_trailing_query_string(body: str) -> None:
-    """A query string glued directly onto the alias is not a mention.
+    """A query string glued directly onto the bare slash alias is not a mention.
 
-    Seventh-round finding on #1537's successor PR (CodeRabbit): the shared
-    trailing boundary excluded a following letter, digit, underscore,
-    hyphen, or slash, but not a following ``?``, so a query string with no
-    separator (``/oc?mode=docs``, ``/opencode?next=x``) still matched as a
-    complete mention — the same "alias text is a complete match, but
-    something non-word continues right after it" shape as the sixth-round
-    trailing-slash finding, just with ``?`` instead of ``/``. The fix adds
-    ``?`` to the same shared trailing exclusion.
+    Seventh-round finding on #1537's successor PR (CodeRabbit): the bare
+    ``/opencode``/``/oc`` forms' trailing boundary excluded a following
+    letter, digit, underscore, hyphen, or slash, but not a following ``?``,
+    so a query string with no separator (``/oc?mode=docs``,
+    ``/opencode?next=x``) still matched as a complete mention. The fix adds
+    ``?`` to that alternative's own trailing exclusion only — see
+    ``test_exact_mentions_accepts_ordinary_punctuation_after_at_mentions``
+    for why this must NOT be shared with the ``@``-mention alternatives.
     """
 
     module = load_module()
     assert "opencode-agent" not in module.exact_mentions(body)
+
+
+def test_exact_mentions_accepts_ordinary_punctuation_after_at_mentions() -> None:
+    """A trailing "?" after an @-mention is ordinary punctuation, not a mention.
+
+    Ninth-round finding on #1537's successor PR (Devin), a regression from
+    the eighth-round fix above: excluding a trailing ``?`` was applied to
+    the whole ``opencode-agent`` alternation instead of scoped to only the
+    bare-slash forms it was meant for, so a maintainer ending a sentence
+    with ``@opencode-agent?`` (or the ``@cwl-noema-review/@opencode-agent``
+    separator followed by ``?``) silently stopped dispatching. Each
+    alternative now carries its own trailing lookahead instead of one
+    shared across the alternation, so the bare-slash forms' ``?`` exclusion
+    no longer leaks onto the ``@``-mention forms.
+    """
+
+    module = load_module()
+    assert module.exact_mentions("@opencode-agent?") == ("opencode-agent",)
+    assert module.exact_mentions("@cwl-noema-review/@opencode-agent?") == (
+        "cwl-noema-review",
+        "opencode-agent",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "https://example.com/#/oc",
+        "https://example.com/#/opencode",
+        "/oc.json",
+        "/opencode.json",
+        "/océan",
+    ],
+)
+def test_exact_mentions_rejects_fragment_dotted_and_unicode_continuations(
+    body: str,
+) -> None:
+    """A URL fragment, dotted filename, or Unicode word continuation is not a mention.
+
+    Eighth-round finding on #1537's successor PR (Devin): the bare
+    ``/opencode``/``/oc`` forms' boundary excluded neither a preceding
+    ``#`` (a URL fragment identifier, ``https://example.com/#/oc``) nor a
+    following ``.`` (a dotted filename continuation, ``/oc.json``), and
+    used a plain ASCII character class for the trailing boundary, which
+    does not exclude a following non-ASCII word character (``/océan``,
+    where ``é`` is a Unicode letter but not in ``[A-Za-z0-9_/?-]``). The fix
+    adds ``#`` and ``.`` to that alternative's own leading/trailing
+    exclusion set and switches every boundary in this module from an
+    ASCII-only character class to Python's Unicode-aware ``\\w``.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+def test_exact_mentions_rejects_unicode_embedded_at_mentions() -> None:
+    """A Unicode word character directly touching an @-mention is not a mention.
+
+    Companion case to the eighth-round Unicode finding above, for the
+    ``@``-mention alternatives rather than the bare-slash forms: switching
+    their boundaries to Unicode-aware ``\\w`` closes the same class of gap
+    (a preceding or following accented letter that a plain ASCII character
+    class would not have excluded).
+    """
+
+    module = load_module()
+    assert module.exact_mentions("café@opencode-agent") == ()
+    assert module.exact_mentions("@opencode-agenté") == ()
 
 
 @pytest.mark.parametrize(

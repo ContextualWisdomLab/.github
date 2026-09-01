@@ -21,47 +21,58 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # accepts them as aliases of the same @opencode-agent request rather than
 # forcing commenters to learn a locally-invented mention instead.
 #
-# None of the three alternatives below may be preceded by a bare "/": a
-# preceding slash almost always means the match is embedded in a URL path
-# (e.g. https://opencode.ai/docs, https://youtube.com/@opencode-agent) or an
-# ordinary path segment (docs/@opencode-agent), not a deliberate trigger. The
-# one deliberate exception is a maintainer separating both supported agent
-# requests with a bare slash and no space (@cwl-noema-review/@opencode-agent).
-# That case is matched as one combined literal — "@cwl-noema-review/@opencode-agent"
-# — guarded by the same left-boundary exclusion as the standalone
-# "@opencode-agent" alternative. A boundary check on the trailing slash alone
-# is not enough: it would still fire for invalid pasted text where
-# "@cwl-noema-review" is itself embedded in a larger token (e.g.
-# foo@cwl-noema-review/@opencode-agent, docs/@cwl-noema-review/@opencode-agent)
-# without checking that the Noema mention has a valid left boundary of its own.
-# The bare /opencode and /oc forms additionally exclude a preceding "=": a
-# URL query string (?next=/opencode, ?redirect=/oc) shares the same "not
-# preceded by a word character" shape as a deliberate standalone command.
+# Boundary model (each alternative below carries its own leading and
+# trailing lookaround, not a lookahead shared across the alternation, so
+# each form's exclusions can differ where the false-positive classes
+# differ):
 #
-# The shared trailing boundary after any of the three alternatives also
-# excludes a following "/": without it, a root-relative path continuation
-# right after the alias (/oc/config, /opencode/docs, @opencode-agent/config,
-# @cwl-noema-review/@opencode-agent/foo) still matched, since the alias text
-# itself is a complete, valid match and nothing in the original trailing
-# lookahead treated "/" as a word character. This mirrors the
-# leading-boundary "/" exclusion already applied above and closes the same
-# false-positive class from the trailing side, for every alternative rather
-# than only the bare /opencode and /oc forms. It also excludes a following
-# "?": a query string glued directly onto the alias with no separator
-# (/oc?mode=docs, /opencode?next=x) is a URL path with a query component,
-# not a standalone command, and shares the exact same "alias text is a
-# complete match, but something non-word continues right after it" shape.
+# - "@opencode-agent" and the combined "@cwl-noema-review/@opencode-agent"
+#   separator each exclude a preceding/following Unicode word character
+#   (\w — this also covers accented and other non-ASCII letters, not just
+#   ASCII), hyphen, or slash. The leading "/" exclusion rejects URL/path
+#   embedding (https://youtube.com/@opencode-agent, docs/@opencode-agent);
+#   the trailing "/" exclusion rejects a root-relative path glued directly
+#   onto the alias (@opencode-agent/config,
+#   @cwl-noema-review/@opencode-agent/foo). Ordinary sentence punctuation
+#   (a trailing "?", ".", "!") is deliberately NOT excluded here: a
+#   maintainer ending a sentence with "@opencode-agent?" is a legitimate
+#   request, not a URL continuation — rejecting it (an early version of
+#   this exclusion did, by mistake, when a query-string fix below was
+#   applied to every alternative instead of only the one it targeted) is a
+#   worse failure mode than never seeing the rare literal "@opencode-agent"
+#   immediately followed by junk with no separating space.
+# - The "@cwl-noema-review/@opencode-agent" separator's own left boundary
+#   is on the combined literal as a whole, not just the trailing slash: a
+#   boundary check on the slash alone would still fire for invalid pasted
+#   text where "@cwl-noema-review" is itself embedded in a larger token
+#   (foo@cwl-noema-review/@opencode-agent,
+#   docs/@cwl-noema-review/@opencode-agent) without checking that the
+#   Noema mention has a valid left boundary of its own.
+# - The bare "/opencode"/"/oc" forms are the most URL/path-context-prone,
+#   so both sides exclude the full set of characters that continue a
+#   URL/path/filename token: a Unicode word character, ".", "/", "?", "=",
+#   "#", or "-". This rejects, on the leading side, a query string
+#   (?next=/opencode) and a URL fragment identifier
+#   (https://example.com/#/oc); and on the trailing side, a root-relative
+#   path (/oc/config), a dotted filename continuation (/oc.json), a query
+#   string glued on with no separator (/oc?mode=docs), and a Unicode word
+#   continuation (/océan) that a plain ASCII character class would miss.
+# - "@cwl-noema-review" on its own additionally excludes a preceding "/"
+#   (closing the same URL/path-embedding class as "@opencode-agent" above)
+#   but deliberately NOT a trailing "/": that would break recognition of
+#   its own mention inside the "@cwl-noema-review/@opencode-agent"
+#   separator, where a "/" legitimately follows it.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
-        r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
+        r"(?<![\w/-])@cwl-noema-review(?![\w-])",
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
         r"(?:"
-        r"(?<![A-Za-z0-9_/-])@opencode-agent"
-        r"|(?<![A-Za-z0-9_/-])@cwl-noema-review/@opencode-agent"
-        r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
-        r")(?![A-Za-z0-9_/?-])",
+        r"(?<![\w/-])@opencode-agent(?![\w/-])"
+        r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
+        r"|(?<![\w./?=#-])(?:/opencode|/oc)(?![\w./?=#-])"
+        r")",
         re.IGNORECASE,
     ),
 }
