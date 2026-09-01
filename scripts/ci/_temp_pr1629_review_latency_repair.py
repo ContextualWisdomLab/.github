@@ -72,7 +72,7 @@ def repair_docs() -> None:
     text = replace_once(text, old, new, "ADR-0003 monitoring contract")
     adr3.write_text(text, encoding="utf-8")
 
-    adr5 = Path("docs/adr/0005-contextual-orchestrator-review-preflight-budget.md")
+    adr5 = Path("docs/adr/0005-sidecar-preflight-token-budget.md")
     text = adr5.read_text(encoding="utf-8")
     heading = "## 2026-09-02 startup-latency amendment"
     if heading not in text:
