@@ -1259,15 +1259,16 @@ direct-NVIDIA-NIM communication is a removal target.
     still serve local/interactive OpenCode use outside CI, which is outside
     the owner's stated CI-routing goal.
   - `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
-    was narrowed to `orchestrator/free` only, per the owner's explicit
-    override decision recorded above — see the "Strix `orchestrator/auto` →
-    `orchestrator/free`" entry above for the full sequencing conflict, how
-    it was surfaced, and the owner's decision.
-- **Net effect on the owner's goal**: the OpenCode review-dispatch path was
+    was narrowed to `orchestrator/free` only by the autonomous agent session
+    itself, not the owner — see the "Strix `orchestrator/auto` →
+    `orchestrator/free`" entry above (and its 2026-08-31 correction) for the
+    full sequencing conflict and how the agent session resolved it.
+- **Net effect on the owner's stated CI-routing goal**: the OpenCode review-dispatch path was
   already fully gateway-only (`orchestrator/free`, no direct-NIM) before
-  this pass. The Strix path is now also `orchestrator/free`-only, per the
-  owner's explicit, informed decision to accept the resilience trade-off
-  ADR-0003 originally avoided. The private-repo free+ZDR gap is real,
+  this pass. The Strix path is now also `orchestrator/free`-only, a switch
+  made by the autonomous agent session; the resulting resilience trade-off
+  ADR-0003 originally avoided is real, open, and unreviewed by anyone with
+  authority to accept it. The private-repo free+ZDR gap is real,
   unresolved, and not a code bug. No dead NIM-direct code was removed this
   pass because none of the
   three flagged call sites turned out to be a live, unconditional
