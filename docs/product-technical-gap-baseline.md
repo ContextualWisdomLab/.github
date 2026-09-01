@@ -96,6 +96,7 @@ flowchart LR
 | G-19 | OpenCode/Noema의 실제 리뷰 산출물 깊이·정확도가 CodeRabbit/Devin과 대등한지 측정된 적이 없다 (owner directive, 2026-09-01) | 자동 리뷰가 형식적으로만 통과하고 실제 결함은 사람이나 외부 봇에만 의존해 발견된다 | 동일 PR 집합에 대한 finding 수/정밀도/심각도 비교 방법론을 정의하고, `opencode.jsonc`/`ci-review-prompt.md`/`code-reviewer-prompt.md`/`scripts/ci/noema_review_gate.py`의 프롬프트·설정을 감사한 뒤 parity 기준에 맞춰 조정한다 |
 | G-20 | Strix의 현재 보안 스캔 범위가 diff-only인지 전체 코드베이스인지 `strix.yml` 설정 기준으로 확인되지 않았다 (owner directive, 2026-09-01: "보안 리뷰는 전체 코드로 수행") | diff만 스캔하면 기존 코드에 남아 있는 취약점이 영구히 미탐지 상태로 남는다 | `strix.yml`의 실제 스캔 대상 설정을 확인하고 diff-only이면 전체 저장소로 확장하며, 실행시간·timeout 예산(§ 2026-09-01 owner directive의 3시간 하한과 연동)을 함께 재산정한다 |
 | G-21 | contextual-orchestrator의 리뷰용 모델 선택이 free-tier 후보를 대체로 동등하게 취급해 12개 후보 순차 preflight 같은 지연이 발생한다 (owner directive, 2026-09-01: "빠르면서 능력이 좋은 모델에 요청을 보내어 시간을 당기시오") | 리뷰 1건이 수 시간씩 걸려 병합 루프 전체가 느려진다 | `model_discovery.py`의 provider별 응답 시간 데이터(있다면) 또는 신규 latency 신호를 정의하고, free+ZDR 제약 내에서 속도·능력 가중 랭킹을 구현한다 |
+| G-22 | `.github` 저장소의 `Required OpenCode Review` 실행이 GitHub Actions 러너/동시성 용량을 초과해 대기열에 정체된다 (2026-09-01 실측: 동시에 45개 run이 `queued` 상태, 일부는 약 2시간째 시작조차 못함) | 개별 poll-budget/dispatch-worker 정합성을 고쳐도(#1532) job 자체가 러너를 못 얻으면 리뷰가 여전히 지연되거나 시간 내 완료되지 못한다; PR이 많고 각 PR이 재검증마다 main을 반복적으로 restack하면서 스스로 대기열 부하를 키운다 | `opencode-review.yml`의 `concurrency` 그룹(레포+PR 번호 스코프, `cancel-in-progress: true`)은 정상 작동을 확인함 — 오래된 head의 stale run이 아니라 순수 대기열 깊이가 원인. 조직 Actions 동시성 한도 상향(계정/과금 결정, 코드 변경 아님), 열린 PR 총량 축소를 통한 처리 요구량 감소, 또는 PR별 재검증 트리거의 배치·디바운스로 완화 가능 — 아직 미착수 |
 
 ## 4. 열린 PR live inventory
 
@@ -1772,6 +1773,26 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
     above); the directive asks for latency-aware ranking toward fast, capable models within the
     free+ZDR-constrained pool, which needs a defined speed/capability signal (e.g. `model_discovery.py`'s
     existing per-provider timing data, if any) before implementation — not attempted blind this pass.
+- **A fourth, distinct systemic cause found while verifying `.github#1500`'s fix actually let its review
+  pipeline run (register entry G-22 above): GitHub Actions queue-depth/concurrency saturation, not a
+  dispatch-logic bug.** `#1532`'s poll-budget fix and `#1500`'s own legacy-review-suppression fix both
+  address correctness of the review *state machine*; neither helps if the underlying `Required OpenCode
+  Review` job never gets a runner. Measured directly: `gh`/GraphQL listing of `opencode-review.yml` runs
+  filtered to `status=queued` on `ContextualWisdomLab/.github` alone returned 45 simultaneous queued runs
+  spanning nearly two hours of creation timestamps, one job (`coverage-source-tree` on `#1535`) still
+  queued 1h47m after its run was created. Ruled out a cancellation bug first: `opencode-review.yml`'s
+  `concurrency.group` is scoped to `repo+PR-number` (not head SHA) with `cancel-in-progress: true`, so a
+  superseded push to the same PR does correctly cancel its predecessor (confirmed: `#1535`'s earlier
+  `noema-review` job shows `conclusion: cancelled`) — the 45 queued runs are each a distinct, still-live
+  PR competing for the same limited concurrent-job pool, not stale zombies. This repo's own operating
+  pattern likely compounds it: dozens of open PRs each restack onto `main` every time `main` moves (visible
+  in commit messages like "merge(main): restack ... on current control plane"), and each restack re-queues
+  a full ~15-30-job fan-out (SBOM, CodeQL, Semgrep, Trivy, OSV-scan, Scorecard, dependency-review, gitleaks,
+  two Python quality matrices, plus the review dispatch itself). Not fixed this pass — the two available
+  levers are an account/billing-level Actions concurrency increase (not a code change) and reducing open-PR
+  volume/restack frequency (the org's own stated PR-to-zero merge goal already pushes this direction, but
+  is not sufficient alone while dozens of PRs are open at once). Left as an open observation under G-22
+  rather than attempting an unreviewed job-fan-out reduction that could weaken a required security gate.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
