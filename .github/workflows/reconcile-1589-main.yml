@@ -1,0 +1,62 @@
+name: One-shot PR 1589 exact-main reconciliation
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/reconcile-1589-main.yml
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Reconcile exact live main, verify, and self-remove
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+          TEMP_WORKFLOW: .github/workflows/reconcile-1589-main.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch origin +main:refs/remotes/origin/main
+          main_head="$(git rev-parse refs/remotes/origin/main)"
+          branch_head="$(git rev-parse HEAD)"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-commit --no-ff -X ours refs/remotes/origin/main
+          git rm "$TEMP_WORKFLOW"
+
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_observed_probe_doctoring.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_removed_file_context.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py \
+            tests/test_required_workflow_queue_contract.py
+          PYTHONPATH=. python3 -m pytest -q tests
+          interrogate --fail-under=100 scripts/ci/noema_review_gate.py
+          python3 -m compileall -q scripts/ci tests
+          git diff --cached --check
+          test ! -e "$TEMP_WORKFLOW"
+
+          remote_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          remote_branch="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          test "$remote_main" = "$main_head"
+          test "$remote_branch" = "$branch_head"
+
+          git commit -m "merge protected main into Noema defect-probe repair"
+          git push origin "HEAD:${TARGET_BRANCH}"
