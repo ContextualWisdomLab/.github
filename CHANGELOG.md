@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix the `opencode-review` required check's verdict poll budget
+  (`timeout-minutes: 100`, 90 minutes of polling) being structurally shorter
+  than the dispatched `opencode-review-dispatch.yml` worker job's own
+  ceiling (`timeout-minutes: 325`, 205 minutes reserved for its model-pool
+  step). The dispatch always succeeded; the poll simply could not outlast a
+  worker job 3.6x its own budget, so a legitimate slow-but-successful review
+  was indistinguishable from a genuinely broken dispatch — confirmed with
+  concrete timestamps across `.github#1500`, `#1506`, and
+  `contextual-orchestrator#968`/`#946`. Raised the poll job to
+  `timeout-minutes: 340` / 660 attempts (~330m), and added
+  `test_verdict_poll_budget_covers_the_dispatched_review_jobs_own_ceiling`
+  so the two workflows' budgets cannot silently drift out of alignment
+  again. Merged via owner-authorized admin bypass (#1532): the fix edits
+  `opencode-review.yml` itself, the exact required-check pipeline it
+  depends on, making normal review of this specific PR structurally
+  impossible under the pre-fix budget.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
