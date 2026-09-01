@@ -14,6 +14,12 @@
       "deepwiki": true,
       "pages": {"enabled": false}
     },
+    "PolicyWeave": {
+      "description": "Local-first privacy policy workspace for structured data practices, review, and publication readiness.",
+      "topics": ["privacy", "privacy-policy", "policy-as-data", "compliance", "react", "typescript", "local-first", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": {"enabled": false}
+    },
     "learning-content-studio": {
       "description": "Author, review, version, and publish accessible learning content across interoperable learning standards.",
       "topics": ["learning-content", "lcms", "authoring", "scorm", "cmi5", "accessibility", "education", "contextualwisdomlab"],
