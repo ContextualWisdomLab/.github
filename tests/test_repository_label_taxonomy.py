@@ -8,102 +8,176 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / "config" / "repository-label-taxonomy.json"
-OPERATING_RECORDS = (
-    ROOT / "docs" / "doctoring" / "repository-public-surface-reconciliation.md",
-    ROOT / "docs" / "doctoring" / "repository-label-taxonomy-wave-3.md",
+OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reconciliation.md"
+OPERATING_RECORD_SUPPLEMENT = (
+    ROOT / "docs" / "doctoring" / "repository-label-taxonomy-wave-3.md"
 )
-EXPECTED_ASSIGNMENTS = [
-    (".github", 1579, "feature"),
-    (".github", 1582, "feature"),
-    (".github", 1622, "feature"),
-    (".github", 1625, "bug"),
-    (".github", 1634, "documentation"),
-    ("CalendarWeave", 1, "documentation"),
-    ("ConceptWeave", 1, "feature"),
-    ("context-graph-contracts", 20, "documentation"),
-    ("ThreadWeave", 37, "documentation"),
-    ("RankWeave", 40, "documentation"),
-    ("fast-mlsirm", 1717, "documentation"),
-    ("fast-mlsirm", 1716, "documentation"),
-    ("EgressWeave", 231, "documentation"),
-    ("EgressWeave", 190, "documentation"),
-    ("psychometrics-commons", 442, "documentation"),
-    ("contextual-orchestrator", 994, "documentation"),
-    ("contextual-orchestrator", 1003, "documentation"),
-    ("appguardrail", 1077, "documentation"),
-    ("naruon", 1513, "documentation"),
-    ("LineageWeave", 908, "documentation"),
-    ("ContextualWisdomLab.github.io", 203, "documentation"),
-    ("TEPP", 435, "documentation"),
-    ("semantic-data-portal", 72, "documentation"),
-    ("Orgmetra", 160, "documentation"),
-    ("learning-interoperability-contracts", 1, "feature"),
-    ("noema", 530, "feature"),
-    ("bandscope", 1125, "documentation"),
-    ("saju-caldav", 44, "documentation"),
-    ("saju-caldav", 42, "documentation"),
-    ("OriginWeave", 274, "documentation"),
-    ("semantic-data-portal", 90, "documentation"),
-    ("accounting-information-platform", 45, "documentation"),
-    ("clearfolio", 538, "documentation"),
-    ("pg-erd-cloud", 1046, "documentation"),
-    ("pg-erd-cloud", 1040, "documentation"),
-    ("DiagramWeave", 34, "documentation"),
-    ("DiagramWeave", 33, "documentation"),
-    ("keyverse", 103, "feature"),
-    ("mhtml-etl-gateway", 56, "documentation"),
-    ("mhtml-etl-gateway", 44, "documentation"),
-    ("j-planner", 2, "documentation"),
-    ("learning-record-store", 1, "documentation"),
-    ("learning-content-studio", 1, "documentation"),
-    ("learning-management-platform", 1, "documentation"),
-    ("metering-billing-platform", 157, "documentation"),
-    ("PolicyWeave", 1, "feature"),
-    ("supply-chain-control-plane", 1, "feature"),
-    ("governance-risk-compliance", 65, "documentation"),
-    ("pingora-gateway", 4, "documentation"),
-    ("life-os", 211, "documentation"),
-    ("scopeweave", 650, "documentation"),
-    ("scopeweave", 625, "documentation"),
-    ("newsdom-api", 782, "documentation"),
-    ("kaefa", 81, "documentation"),
-    ("kaefa", 82, "documentation"),
-    ("aFIPC", 261, "documentation"),
-    ("nonnest2", 115, "documentation"),
-    ("wardnet", 130, "documentation"),
-    ("four-pillars", 31, "documentation"),
-    ("enterprise-architecture-core", 18, "documentation"),
-    ("enterprise-architecture-core", 37, "documentation"),
-]
 
 
 def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
     """Common semantic types and reviewed targets remain explicit and stable."""
 
     payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+
     assert payload["schema_version"] == 1
     assert payload["type"] == {
         "feature": "enhancement",
         "bug": "bug",
         "documentation": "documentation",
     }
+    # Keep assignments exact so reviewed target drift cannot silently escape CI.
     assert payload["assignments"] == [
-        {"repository": repository, "issue": issue, "type": semantic_type}
-        for repository, issue, semantic_type in EXPECTED_ASSIGNMENTS
+        {"repository": ".github", "issue": 1579, "type": "feature"},
+        {"repository": ".github", "issue": 1582, "type": "feature"},
+        {"repository": ".github", "issue": 1622, "type": "feature"},
+        {"repository": ".github", "issue": 1625, "type": "bug"},
+        {"repository": ".github", "issue": 1634, "type": "documentation"},
+        {"repository": "CalendarWeave", "issue": 1, "type": "documentation"},
+        {"repository": "ConceptWeave", "issue": 1, "type": "feature"},
+        {
+            "repository": "context-graph-contracts",
+            "issue": 20,
+            "type": "documentation",
+        },
+        {"repository": "ThreadWeave", "issue": 37, "type": "documentation"},
+        {"repository": "RankWeave", "issue": 40, "type": "documentation"},
+        {"repository": "fast-mlsirm", "issue": 1717, "type": "documentation"},
+        {"repository": "fast-mlsirm", "issue": 1716, "type": "documentation"},
+        {"repository": "EgressWeave", "issue": 231, "type": "documentation"},
+        {"repository": "EgressWeave", "issue": 190, "type": "documentation"},
+        {
+            "repository": "psychometrics-commons",
+            "issue": 442,
+            "type": "documentation",
+        },
+        {
+            "repository": "contextual-orchestrator",
+            "issue": 994,
+            "type": "documentation",
+        },
+        {
+            "repository": "contextual-orchestrator",
+            "issue": 1003,
+            "type": "documentation",
+        },
+        {"repository": "appguardrail", "issue": 1077, "type": "documentation"},
+        {"repository": "naruon", "issue": 1513, "type": "documentation"},
+        {"repository": "LineageWeave", "issue": 908, "type": "documentation"},
+        {
+            "repository": "ContextualWisdomLab.github.io",
+            "issue": 203,
+            "type": "documentation",
+        },
+        {"repository": "TEPP", "issue": 435, "type": "documentation"},
+        {
+            "repository": "semantic-data-portal",
+            "issue": 72,
+            "type": "documentation",
+        },
+        {"repository": "Orgmetra", "issue": 160, "type": "documentation"},
+        {
+            "repository": "learning-interoperability-contracts",
+            "issue": 1,
+            "type": "feature",
+        },
+        {"repository": "noema", "issue": 530, "type": "feature"},
+        {"repository": "bandscope", "issue": 1125, "type": "documentation"},
+        {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
+        {"repository": "saju-caldav", "issue": 42, "type": "documentation"},
+        {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
+        {
+            "repository": "semantic-data-portal",
+            "issue": 90,
+            "type": "documentation",
+        },
+        {
+            "repository": "accounting-information-platform",
+            "issue": 45,
+            "type": "documentation",
+        },
+        {"repository": "clearfolio", "issue": 538, "type": "documentation"},
+        {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
+        {"repository": "pg-erd-cloud", "issue": 1040, "type": "documentation"},
+        {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
+        {"repository": "DiagramWeave", "issue": 33, "type": "documentation"},
+        {"repository": "keyverse", "issue": 103, "type": "feature"},
+        {
+            "repository": "mhtml-etl-gateway",
+            "issue": 56,
+            "type": "documentation",
+        },
+        {
+            "repository": "mhtml-etl-gateway",
+            "issue": 44,
+            "type": "documentation",
+        },
+        {"repository": "j-planner", "issue": 2, "type": "documentation"},
+        {
+            "repository": "learning-record-store",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-content-studio",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-management-platform",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "metering-billing-platform",
+            "issue": 157,
+            "type": "documentation",
+        },
+        {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
+        {
+            "repository": "supply-chain-control-plane",
+            "issue": 1,
+            "type": "feature",
+        },
+        {
+            "repository": "governance-risk-compliance",
+            "issue": 65,
+            "type": "documentation",
+        },
+        {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
+        {"repository": "life-os", "issue": 211, "type": "documentation"},
+        {"repository": "scopeweave", "issue": 650, "type": "documentation"},
+        {"repository": "scopeweave", "issue": 625, "type": "documentation"},
+        {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
+        {"repository": "kaefa", "issue": 81, "type": "documentation"},
+        {"repository": "kaefa", "issue": 82, "type": "documentation"},
+        {"repository": "aFIPC", "issue": 261, "type": "documentation"},
+        {"repository": "nonnest2", "issue": 115, "type": "documentation"},
+        {"repository": "wardnet", "issue": 130, "type": "documentation"},
+        {"repository": "four-pillars", "issue": 31, "type": "documentation"},
+        {
+            "repository": "enterprise-architecture-core",
+            "issue": 18,
+            "type": "documentation",
+        },
+        {
+            "repository": "enterprise-architecture-core",
+            "issue": 37,
+            "type": "documentation",
+        },
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
-    assert len({(repository, issue) for repository, issue, _ in EXPECTED_ASSIGNMENTS}) == len(
-        EXPECTED_ASSIGNMENTS
-    )
 
 
 def test_repository_label_operating_record_matches_assignment_inventory() -> None:
-    """Operator records must enumerate the exact active taxonomy inventory."""
+    """The operator record must enumerate the exact active taxonomy inventory."""
 
     payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
     assignments = payload["assignments"]
     operating_record = "\n".join(
-        path.read_text(encoding="utf-8") for path in OPERATING_RECORDS
+        (
+            OPERATING_RECORD.read_text(encoding="utf-8"),
+            OPERATING_RECORD_SUPPLEMENT.read_text(encoding="utf-8"),
+        )
     )
 
     assert (
@@ -111,5 +185,7 @@ def test_repository_label_operating_record_matches_assignment_inventory() -> Non
         in operating_record
     )
     for assignment in assignments:
-        target = f"`ContextualWisdomLab/{assignment['repository']}#{assignment['issue']}`"
+        target = (
+            f"`ContextualWisdomLab/{assignment['repository']}#{assignment['issue']}`"
+        )
         assert target in operating_record
