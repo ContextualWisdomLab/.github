@@ -155,6 +155,16 @@
       "repository": "j-planner",
       "issue": 2,
       "type": "documentation"
+    },
+    {
+      "repository": "learning-record-store",
+      "issue": 1,
+      "type": "documentation"
+    },
+    {
+      "repository": "learning-record-store",
+      "issue": 7,
+      "type": "documentation"
     }
   ]
 }
