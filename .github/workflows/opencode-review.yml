@@ -355,7 +355,7 @@ jobs:
           fi
           separator='&'
           [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
-          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDIDC_AUDIENCE}" | jq -r '.value // empty')"
           if [ -z "$oidc_token" ]; then
             echo "::error::OpenCode review dispatch could not obtain its OIDC token."
             exit 1
@@ -422,6 +422,7 @@ jobs:
           live_poll_failures=0
           review_poll_failures=0
           max_poll_transport_failures=3
+          poll_interval_seconds=60
           while :; do
             if ! live_poll_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
               live_poll_failures=$((live_poll_failures + 1))
@@ -430,7 +431,7 @@ jobs:
                 exit 1
               fi
               echo "::warning::Live pull request read failed while polling (${live_poll_failures}/${max_poll_transport_failures}); retrying after revalidation delay."
-              sleep 30
+              sleep "$poll_interval_seconds"
               continue
             fi
             live_poll_failures=0
@@ -457,14 +458,14 @@ jobs:
               echo "PR became draft while waiting for the current-head OpenCode verdict; the poll is no longer required until it is marked ready for review."
               exit 0
             fi
-            if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
+            if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
               review_poll_failures=$((review_poll_failures + 1))
               if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
                 echo "::error::Reviews API read failed ${review_poll_failures} consecutive times while polling; failing closed and releasing the runner."
                 exit 1
               fi
               echo "::warning::Reviews API read failed while polling (${review_poll_failures}/${max_poll_transport_failures}); revalidating live PR state before retry."
-              sleep 30
+              sleep "$poll_interval_seconds"
               continue
             fi
             review_poll_failures=0
@@ -499,7 +500,7 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            sleep 30
+            sleep "$poll_interval_seconds"
           done
           if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
