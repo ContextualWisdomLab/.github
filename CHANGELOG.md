@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a pre-existing SIGPIPE (exit 141) flake in
+  `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`.
+  The test's fake `gh` fixture never drained the JSON piped into it via `--input -` for the
+  dispatches call; under `set -euo pipefail`, the pipeline's writer (`jq`) could be killed by
+  `SIGPIPE` whenever the fake reader exited before `jq` finished writing. Reproduced at roughly a
+  13-60% failure rate over repeated runs in complete isolation (not merely under full-suite load,
+  though full-suite load made it more likely) and eliminated (20-30/20-30 clean runs each
+  verification round) by draining stdin (`cat >/dev/null`) before the fixture writes its own
+  output. Test-only change; no production code touched.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
