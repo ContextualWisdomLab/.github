@@ -60,7 +60,7 @@ def test_review_repair_quality_workflow_has_truthful_identity() -> None:
     assert "schedule:" not in quality
     assert "name: Hourly NVIDIA NIM Review Repair" not in quality
     assert "Hourly cadence, immutable source, NIM credential, and conflict scope" not in quality
-    assert "existing GitHub Actions workflow registry identity" in quality
+    assert "registry identity is updated in place" in quality
     assert ".github/workflows/pr-review-autofix.yml" in quality
     assert "contextual-orchestrator/orchestrator/free" in quality
     assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in quality
