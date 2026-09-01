@@ -311,6 +311,7 @@ def test_installer_main_composes_validation_install_and_publication(monkeypatch,
     assert calls[3] == ("publish", (github_env, installed, scripts_root))
 
 
+
 def test_installer_rejects_absent_github_environment(tmp_path) -> None:
     """Publishing without the workflow environment file must fail closed."""
     installer = _load_installer()
