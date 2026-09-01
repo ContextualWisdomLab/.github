@@ -15,18 +15,20 @@ def function_span(text: str, name: str) -> tuple[int, int]:
 
 
 def add_multiline_probe_kinds(text: str, name: str, kinds: tuple[str, ...]) -> str:
-    """Add ordered probe kinds to multiline probe dictionaries in one test."""
+    """Add one ordered probe kind before each successive hypothesis field."""
     start, end = function_span(text, name)
     block = text[start:end]
     needle = '                    "hypothesis": '
     if block.count(needle) < len(kinds):
         raise SystemExit(f"{name}: expected at least {len(kinds)} multiline probes")
+    cursor = 0
     for kind in kinds:
-        block = block.replace(
-            needle,
-            f'                    "probe_kind": "{kind}",\n{needle}',
-            1,
-        )
+        position = block.find(needle, cursor)
+        if position < 0:
+            raise SystemExit(f"{name}: could not locate the next multiline probe")
+        insertion = f'                    "probe_kind": "{kind}",\n'
+        block = block[:position] + insertion + block[position:]
+        cursor = position + len(insertion) + len(needle)
     return text[:start] + block + text[end:]
 
 
