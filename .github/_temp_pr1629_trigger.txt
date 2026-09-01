@@ -1,1 +1,2 @@
-Temporary trigger for the already-present PR1629 one-shot source repair. Delete after the repair commit lands.
+Temporary trigger for the already-present PR1629 one-shot source repair.
+Triggered from exact predecessor 8d746dd23a05648d282ed5e0df43b07ab66e989c on 2026-09-02; delete after the guarded repair commit lands.
