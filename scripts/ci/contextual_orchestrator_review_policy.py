@@ -242,14 +242,15 @@ def build_zdr_prioritized_catalog(
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Admit every route satisfying explicit pool and evidence predicates.
+    """Compatibility-named admission API; it performs no prioritization.
 
-    ``limit`` and ``account_cap`` remain accepted only so older callers can roll
-    forward without a flag-day. They are intentionally non-authoritative and
-    are not inspected, validated, serialized, or allowed to remove, rank, or
-    prioritize a candidate. The admission set is fully determined by explicit
-    cost evidence, ``orchestrator/free`` credential-source authorization, and
-    the caller's optional ZDR requirement.
+    The historical function name is retained only so existing callers can roll
+    forward without a flag-day. ``limit`` and ``account_cap`` are likewise
+    compatibility-only: they are intentionally non-authoritative and are not
+    inspected, validated, serialized, or allowed to remove, rank, or prioritize
+    a candidate. The admission set is fully determined by explicit cost
+    evidence, ``orchestrator/free`` credential-source authorization, and the
+    caller's optional ZDR requirement.
 
     Input order is preserved only as discovery provenance. Every emitted agent
     has neutral priority, so this module does not convert that serialization
@@ -291,17 +292,22 @@ def build_zdr_prioritized_catalog(
         )
 
     catalog_rows: list[dict[str, Any]] = []
+    normalized_agent_ids: set[str] = set()
     zdr_count = 0
     for row in picked:
         provider = str(row["provider"])
         model = str(row["model"])
         evidence = _cost_evidence(row)
+        agent_id = _normalize_agent_id(str(row["agent_id"]), provider)
+        if agent_id in normalized_agent_ids:
+            raise PolicyError(f"agent id collision after normalization: {agent_id!r}")
+        normalized_agent_ids.add(agent_id)
         zdr = is_zdr_model(provider, model=model, zdr_endpoints=zdr_endpoints)
         if zdr:
             zdr_count += 1
         catalog_rows.append(
             {
-                "id": _normalize_agent_id(str(row["agent_id"]), provider),
+                "id": agent_id,
                 "model": model,
                 "base_url": row["base_url"],
                 "api_key_env": "",
