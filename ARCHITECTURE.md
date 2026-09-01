@@ -41,40 +41,56 @@ dispatch is intentionally absent under the central workflow trust contract.
 flowchart TD
   Desired["reviewed metadata + label desired state"]
   Validate["read-only exact-revision validation"]
-  Preconditions{"leaf README badge / docs source live?"}
+  Preconditions{"README + reviewed Pages source + live mode valid?"}
   Apply["trusted protected-main apply"]
   Repo["description + topics"]
-  Pages["Pages state"]
+  Legacy["legacy /docs create/update/delete"]
+  Workflow["workflow Pages preserve-only"]
   Labels["reviewed issue / PR labels"]
   Verify["live public-state re-read"]
-  Hold["fail this leaf; continue siblings"]
+  Hold["fail this leaf before writes; continue siblings"]
 
   Desired --> Validate
   Validate --> Preconditions
   Preconditions -->|"no"| Hold
   Preconditions -->|"yes"| Apply
   Apply --> Repo
-  Apply --> Pages
+  Apply --> Legacy
+  Apply --> Workflow
   Apply --> Labels
   Repo --> Verify
-  Pages --> Verify
+  Legacy --> Verify
+  Workflow --> Verify
   Labels --> Verify
 ```
 
-The metadata reconciler is convergent: already-correct descriptions/topics and
-legacy default-branch `/docs` Pages sites receive no write; absent or drifted
-Pages state is created/updated, and disabled Pages is deleted. Topic equality
-is set-based so GitHub presentation ordering cannot manufacture drift. Exact
-DeepWiki badge state is a leaf-owned precondition, including a fail-closed
-contradiction when desired state disables DeepWiki while the badge remains
-live. Label reconciliation adds/removes only taxonomy-declared labels through
-individual endpoints, preserving unrelated concurrent priority/status/area
-labels. Metadata and label failures retain independent exit statuses, so a
-blocked metadata leaf does not prevent eligible label work in the same apply.
-Failures aggregate after independent repositories or assignments are attempted,
-so one blocked leaf never serializes the fleet. Scheduled applies share a
-ref-scoped lane and do not cancel active apply work midway. See ADR-0020 and the
-operational baseline for the authority and live-verification contract.
+The metadata reconciler is convergent and mode-aware. Already-correct
+descriptions/topics and legacy default-branch `/docs` Pages sites receive no
+write; absent or drifted legacy Pages state is created/updated, and disabled
+Pages is deleted. An explicit `pages_mode: workflow` instead preserves an
+already-configured Actions-backed site: `.github/workflows/pages.yml` must be a
+regular file on the protected default branch and the live Pages configuration
+must already report `build_type: workflow`. The central control plane never
+creates or converts workflow mode. These source/live-mode preconditions run
+before repository description or topic mutation, so an invalid workflow Pages
+declaration cannot leave a partially applied repository record. Contents API
+source probes accept only a single `type: file` object; directories and listings
+are not valid source evidence.
+
+Topic equality is set-based so GitHub presentation ordering cannot manufacture
+drift. Exact DeepWiki badge state is a leaf-owned precondition, including a
+fail-closed contradiction when desired state disables DeepWiki while the badge
+remains live. Label reconciliation adds/removes only taxonomy-declared labels
+through individual endpoints, preserving unrelated concurrent
+priority/status/area labels. Metadata and label failures retain independent
+exit statuses, so a blocked metadata leaf does not prevent eligible label work
+in the same apply. Failures aggregate after independent repositories or
+assignments are attempted, so one blocked leaf never serializes the fleet.
+Pull-request metadata validation keeps a PR-stable concurrency lineage and
+cancels superseded validations; scheduled protected-main apply is deliberately
+non-cancellable so a newer heartbeat cannot abandon partially updated fleet
+state. See ADR-0020 and the operational baseline for the authority and
+live-verification contract.
 
 ## OriginWeave hourly caller
 
@@ -174,7 +190,9 @@ sequenceDiagram
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
 - Repository public-surface writes execute only from trusted `.github/main`;
   pull-request validation remains read-only and leaf README changes keep their
-  repository-local review boundary.
+  repository-local review boundary. Workflow-backed Pages is preserve-only and
+  must pass its source/live-mode precondition before any repository metadata
+  write.
 - Central Semgrep binds one job-level `SEMGREP_IMAGE` digest for log
   evidence, manifest inspect, and `docker run` so buyers can reconstruct
   the exact scanner that produced SARIF.
@@ -210,7 +228,9 @@ CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
 repository-public-surface workflow additionally holds both reconciliation
 scripts to 100% statement/branch coverage and 100% docstrings before its
-privileged apply job can run.
+privileged apply job can run. Workflow-mode regressions specifically require
+fail-before-write behavior and reject directory/listing responses as Pages
+source evidence.
 The trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
 An exact-base `uv.lock` may additionally expose source from an organization-owned
