@@ -37,12 +37,14 @@ jobs:
           set -euo pipefail
           PYTHONPATH=. python scripts/ci/repair_noema_model_output_1617.py
           PYTHONPATH=. python scripts/ci/repair_noema_wall_clock_1617.py
+          PYTHONPATH=. python scripts/ci/repair_noema_coverage_1617.py
 
       - name: Remove temporary repair machinery before verification
         run: |
           rm -f scripts/ci/repair_noema_model_output_1617.py
           rm -f scripts/ci/repair_noema_timeout_fixture_1617.py
           rm -f scripts/ci/repair_noema_wall_clock_1617.py
+          rm -f scripts/ci/repair_noema_coverage_1617.py
           rm -f .github/workflows/repair-noema-model-output-1617.yml
           test ! -e .github/workflows/repair-noema-model-output-1617.yml
 
@@ -60,6 +62,7 @@ jobs:
           test ! -e scripts/ci/repair_noema_model_output_1617.py
           test ! -e scripts/ci/repair_noema_timeout_fixture_1617.py
           test ! -e scripts/ci/repair_noema_wall_clock_1617.py
+          test ! -e scripts/ci/repair_noema_coverage_1617.py
 
       - name: Commit verified production repair
         run: |
