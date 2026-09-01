@@ -17,12 +17,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - name: Resume RED-GREEN repair and self-remove
+      - name: Reconcile current main and resume RED-GREEN repair
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/no-heuristic-free-review-admission
-          TEMP_WORKFLOW: .github/workflows/source-fix-1591-launcher-caps.yml
-          TEMP_DRIVER: scripts/ci/source_fix_1591_launcher_caps.py
           RESUME_DRIVER: scripts/ci/source_fix_1591_resume.py
         shell: bash
         run: |
@@ -34,25 +32,27 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           branch_head="$(git rev-parse HEAD)"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
           PYTHONPATH=. python3 "$RESUME_DRIVER"
 
-          git rm "$TEMP_WORKFLOW" "$TEMP_DRIVER" "$RESUME_DRIVER"
           git add scripts/ci/contextual_orchestrator_review_policy.py
           git add scripts/ci/contextual_orchestrator_review_launcher.py
           git add scripts/ci/contextual_orchestrator_review_sidecar.sh
           git add tests/test_contextual_orchestrator_no_heuristic_admission.py
+          git add tests/test_contextual_orchestrator_review_policy.py
           git add tests/test_contextual_orchestrator_review_runtime_preflight.py
           git add CHANGELOG.md docs/product-technical-gap-baseline.md
           git diff --cached --check
-          test ! -e "$TEMP_WORKFLOW"
-          test ! -e "$TEMP_DRIVER"
-          test ! -e "$RESUME_DRIVER"
 
           remote_branch="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
           test "$remote_branch" = "$branch_head"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix(review): remove launcher catalog admission caps"
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(review): remove launcher catalog admission caps"
+          fi
           git push origin "HEAD:${TARGET_BRANCH}"
