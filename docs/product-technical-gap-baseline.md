@@ -1745,6 +1745,41 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 naruon backend CI Postgres 서비스 컨테이너 부재 — 남겨둔 후속 과제 완료
+
+**Context**: `ContextualWisdomLab/naruon#1486` 작업 중 처음으로 로컬 PostgreSQL 16 +
+pgvector를 설치해 `@pytest.mark.postgres` 표시가 붙은 real-Postgres 테스트를 실제로
+실행해보니, naruon의 `.github/workflows/app-ci.yml` `backend` job에 Postgres 서비스
+컨테이너가 전혀 구성되어 있지 않아 이 마커가 붙은 모든 테스트(수십 개)가 CI에서 단
+한 번도 실행되지 않고 항상 조용히 skip되어 왔다는 사실이 드러났다. 그렇게 처음으로
+실제 실행해 발견한 결함 20건(신선한 DB에 대한 `alembic upgrade head`가 항상
+크래시하던 critical 버그 1건 + ORM 기본값을 우회하는 raw-SQL 시딩 결함 19건)은
+`ContextualWisdomLab/naruon#1486`의 커밋 `b9b02dd0`에서 고쳤지만, **CI 서비스
+컨테이너 자체를 추가하는 일은 그 PR의 범위 밖으로 명시적으로 남겨두고, 이 문서에
+후속 과제로 기록하기로 그 PR의 `CHANGELOG.md` 항목에 적어두었다.** 이 저장소
+(`ContextualWisdomLab/.github`)의 `main`과 그 시점의 열린 PR을 모두 확인했으나 그
+기록이 실제로 커밋된 적은 없었다 — 이 섹션이 그 후속 과제의 최초 기록이자 완료
+기록이다.
+
+**Fix**: `ContextualWisdomLab/naruon#1502`가 `backend` job에
+`pgvector/pgvector:pg16` 서비스 컨테이너(`test`/`test`/`test_db`, `pg_isready`
+헬스체크)와 일치하는 `DATABASE_URL`을 추가했다. 실제 CI 조건과 동일하게(로컬
+PostgreSQL 16 + pgvector) 처음 돌려보자 `#1486`의 20건과는 별개인 잠복 결함 3건이
+추가로 드러났다 — (1) `0011_email_read_state` 마이그레이션이 여전히 rename 이전의
+레거시 `emails` 테이블을 직접 대상으로 해 신선한 DB에 대한 `alembic upgrade head`를
+깨뜨림, (2) `test_bootstrap_db.py`/`test_data_api.py`의 raw SQL `INSERT INTO
+email_records` 4곳이 `is_read`(ORM Python-side 기본값만 있고 DB 서버측 기본값
+없음)를 빠뜨려 real Postgres에서 `NotNullViolationError`, (3)
+`test_bootstrap_db.py`의 로컬 헬퍼가 가드 없는 예전 백필 루프를 그대로 복제. 세 건
+모두 진짜 RED(실제 real-Postgres 실행 실패)를 먼저 확인한 뒤 고쳤다. 전체 백엔드
+스위트를 real PostgreSQL 16(+pgvector)로 검증: **1837 passed, 2 skipped**(남은
+2개는 `LIVE_BASE_URL` 미설정에 따른 무관한 live-API smoke), `ruff check` clean.
+`CLAUDE.md`/`AGENTS.md`에 이 job이 이제 real-Postgres 테스트를 하드 게이트로
+실행한다는 것을 기록해, 향후 best-effort로 오인되지 않게 했다.
+
+**Status**: 닫힘. `ContextualWisdomLab/naruon#1502` 병합 대기 중이며, 이 문서
+자체는 병합 판단에는 재사용하지 않는다.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
