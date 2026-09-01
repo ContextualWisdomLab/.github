@@ -1,0 +1,124 @@
+name: One-shot PR 1587 free-pool enrichment repair
+
+on:
+  push:
+    branches:
+      - fix/free-pool-credential-admission
+    paths:
+      - .github/workflows/source-fix-1587-free-pool-enrichment.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Verify RED, repair discovery enrichment, verify GREEN, and retire
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/free-pool-credential-admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 -m pip install --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+          if PYTHONPATH=. python3 -m pytest -q \
+            tests/test_contextual_orchestrator_free_pool_enrichment.py; then
+            echo "::error::Expected the committed regression to fail before the source repair."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/contextual_orchestrator_review_launcher.py")
+          text = path.read_text(encoding="utf-8")
+
+          import_marker = "from typing import Any\n"
+          policy_import = (
+              "from scripts.ci.contextual_orchestrator_review_policy import "
+              "FREE_POOL_CREDENTIAL_NAMES\n"
+          )
+          if policy_import not in text:
+              if text.count(import_marker) != 1:
+                  raise SystemExit("unexpected launcher import marker cardinality")
+              text = text.replace(import_marker, import_marker + "\n" + policy_import)
+
+          start = text.index("def _with_discovery_counts(\n")
+          end = text.index("\ndef _zdr_admitted_rows(\n", start)
+          replacement = '''def _with_discovery_counts(
+    report: dict[str, object],
+    rows: list[dict[str, Any]],
+    *,
+    provider_account: Any,
+) -> dict[str, object]:
+    """Copy a stage report while restoring full discovery and free-pool counts.
+
+    Discovery-wide fields are recomputed from ``rows`` because primary and
+    priced-fallback stages may each see narrower subsets. Free-pool fields are
+    likewise recomputed from the same full normalized rows, but only zero-cost
+    rows carrying one of the credential sources authorized by
+    :data:`FREE_POOL_CREDENTIAL_NAMES` contribute to pool capacity. This keeps
+    a priced-only fallback report from erasing discovered free capacity while
+    still excluding globally discovered OpenAI rows from ``orchestrator/free``.
+    """
+    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
+    free_pool_rows = [
+        row
+        for row in free_rows
+        if isinstance(row.get("credential_key"), str)
+        and row["credential_key"] in FREE_POOL_CREDENTIAL_NAMES
+    ]
+    enriched = dict(report)
+    enriched.update(
+        {
+            "total_routes": len(rows),
+            "total_free_routes": len(free_rows),
+            "total_priced_routes": sum(
+                row.get("cost_evidence") == "priced" for row in rows
+            ),
+            "total_unknown_routes": sum(
+                row.get("cost_evidence") == "unknown" for row in rows
+            ),
+            "free_account_diversity": len(
+                {provider_account(str(row["provider"])) for row in free_rows}
+            ),
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": len(
+                {
+                    provider_account(str(row["provider"]))
+                    for row in free_pool_rows
+                }
+            ),
+        }
+    )
+    return enriched
+'''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_contextual_orchestrator_free_pool_enrichment.py \
+            tests/test_contextual_orchestrator_free_credential_admission.py \
+            tests/test_contextual_orchestrator_review_runtime_preflight.py
+          git diff --check
+
+          git rm .github/workflows/source-fix-1587-free-pool-enrichment.yml
+          git add scripts/ci/contextual_orchestrator_review_launcher.py \
+            tests/test_contextual_orchestrator_free_pool_enrichment.py
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(ci): preserve free-pool counts across priced fallback"
+          git push origin "HEAD:${TARGET_BRANCH}"
