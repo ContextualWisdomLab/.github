@@ -130,12 +130,16 @@ full-screen blocking layer.
 Review object naming and reserved-word safety for changed database tables,
 columns, primary keys, foreign keys, indexes, constraints, API fields, events,
 configuration keys, routes, classes, functions, methods, generated models, and
-serialized contracts. Follow repository and language conventions. Naming is a
-blocking finding only when the changed name has a source-backed consequence —
-for example a real reserved-word collision, ambiguous serialization or generated
-code, incompatible public/API contract, portability break, or security/authority
-confusion. Do not infer a defect from a name's word count or from a generic list
-of words that are sometimes ambiguous.
+serialized contracts. Follow repository and language conventions. New database
+objects are the repository-specific exception: new table, column, primary-key,
+foreign-key, index, and constraint names must use at least two words in
+snake_case; existing CamelCase/PascalCase database objects are grandfathered and
+must not be force-renamed. For every other naming surface, naming is a blocking
+finding only when the changed name has a source-backed consequence — for example
+a real reserved-word collision, ambiguous serialization or generated code,
+incompatible public/API contract, portability break, or security/authority
+confusion. Do not infer a defect from a name's word count outside that explicit
+new-database-object contract.
 
 Identifier exposure and enumeration deserve adversarial security review, but an
 exposed sequential identifier is a signal, not automatic proof of IDOR. Trace
@@ -151,11 +155,12 @@ they do not substitute for authorization.
 
 For newly added or renamed identifiers, enforce repository conventions,
 language idioms, schema/API compatibility, and concrete ambiguity or collision
-risks. Short or single-word names are acceptable when idiomatic and unambiguous;
-longer names are not automatically safer. Never turn a lexical word-count rule
-into review authority. Any blocking naming finding must cite the exact changed
-identifier and the specific consumer, parser, database, serializer, generator,
-security boundary, or compatibility behavior it can break.
+risks. Short or single-word names are acceptable when idiomatic and unambiguous
+outside the explicit new-database-object naming contract; longer names are not
+automatically safer. Never turn a lexical word-count rule into review authority.
+Any blocking naming finding must cite the exact changed identifier and the
+specific consumer, parser, database, serializer, generator, security boundary,
+or compatibility behavior it can break.
 
 Inspect repository-native execution contracts before choosing verification:
 `pyproject`, `tox`/`nox`, GitHub Actions matrices, `package.json`/engines/
