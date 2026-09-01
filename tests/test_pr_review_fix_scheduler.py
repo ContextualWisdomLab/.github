@@ -84,6 +84,7 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
         "force_cancel_workflow_runs",
         lambda repo, ids: cancelled.append((repo, ids)),
     )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
 
     assert fix.prepare_autofix_slot(
         "owner/repo",
@@ -127,6 +128,37 @@ def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys
         dry_run=True,
     )
     assert "would force-cancel stale autofix runs 2" in capsys.readouterr().out
+
+
+def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monkeypatch):
+    """A stale scheduler snapshot cannot cancel a newer live-head worker."""
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{'b' * 40}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("advanced head must preserve active workers"),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    )
 
 
 def test_needs_autofix_uses_current_head_evidence():
@@ -710,6 +742,7 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     assert "DRY-RUN: would create autofix marker" in capsys.readouterr().out
 
     fix.create_fix_marker("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
     fix.dispatch_autofix(
         "owner/repo",
         pr,
@@ -736,6 +769,25 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     payload = json.loads(calls[-1][1])
     assert payload["event_type"] == "pr-review-autofix"
     assert payload["client_payload"]["target_repository"] == "owner/repo"
+
+
+def test_dispatch_autofix_rejects_advanced_live_head(monkeypatch):
+    """Revalidate the exact head immediately before repository dispatch."""
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("advanced head must not dispatch"),
+    )
+
+    with pytest.raises(RuntimeError, match="live head changed"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            make_pr(),
+            workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+            workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+            dry_run=False,
+        )
 
 
 def test_is_rate_limit_error_matches_known_github_signatures():

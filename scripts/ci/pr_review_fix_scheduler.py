@@ -83,6 +83,20 @@ def run_json(args: list[str]) -> Any:
     return json.loads(run(["gh", *args]) or "null")
 
 
+def live_head_matches(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether GitHub still reports the scheduler's exact PR head."""
+    payload = run_json(["api", f"repos/{repo}/pulls/{int(pr['number'])}"])
+    if not isinstance(payload, dict) or not isinstance(payload.get("head"), dict):
+        return False
+    live_head = payload["head"].get("sha")
+    expected_head = str(pr.get("headRefOid") or "")
+    return (
+        isinstance(live_head, str)
+        and len(live_head) == 40
+        and live_head.lower() == expected_head.lower()
+    )
+
+
 RATE_LIMIT_ERROR_MARKERS = ("api rate limit exceeded", "secondary rate limit")
 ISSUE_COMMENTS_RETRY_ATTEMPTS = 2
 ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS = 15
@@ -326,6 +340,8 @@ def dispatch_autofix(
     if dry_run:
         print("DRY-RUN:", " ".join(args), json.dumps(payload, sort_keys=True))
         return
+    if not live_head_matches(repo, pr):
+        raise RuntimeError("pull request live head changed before autofix dispatch")
     run(args, stdin=json.dumps(payload))
 
 
@@ -377,6 +393,8 @@ def prepare_autofix_slot(
     if stale_ids:
         if dry_run:
             print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
+        elif not live_head_matches(repo, pr):
+            return True
         else:
             force_cancel_workflow_runs(dispatch_repo, stale_ids)
     return same_head
