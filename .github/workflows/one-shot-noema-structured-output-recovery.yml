@@ -1,0 +1,222 @@
+name: One-shot Noema structured-output recovery
+
+on:
+  push:
+    branches:
+      - fix/noema-structured-output-recovery
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-noema-structured-output-recovery
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github' && github.ref == 'refs/heads/fix/noema-structured-output-recovery'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact writer branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/noema-structured-output-recovery
+          fetch-depth: 0
+
+      - name: Reproduce and repair structured-output recovery
+        shell: bash
+        env:
+          OLD_PIN: 8cd99f139915131ba0239bce12a5d6a5fd85394e
+          NEW_PIN: 4d143601c2904a28e95d091b261c0a15e9a4f283
+          WRITER_WORKFLOW: .github/workflows/one-shot-noema-structured-output-recovery.yml
+        run: |
+          set -euo pipefail
+
+          python -m pip install --disable-pip-version-check --quiet 'pytest==8.4.2'
+
+          cat > tests/test_noema_structured_output_recovery.py <<'PYTEST'
+          """Regression contracts for bounded Noema structured-output recovery."""
+
+          from __future__ import annotations
+
+          import json
+          from pathlib import Path
+          from typing import Any
+
+          from scripts.ci import noema_review_gate as noema
+
+
+          NEW_PIN = "4d143601c2904a28e95d091b261c0a15e9a4f283"
+          OLD_PIN = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
+
+
+          class FakeResponse:
+              """Minimal context-managed HTTP response for the gateway boundary."""
+
+              def __init__(self, payload: dict[str, Any]) -> None:
+                  self._payload = json.dumps(payload).encode("utf-8")
+
+              def __enter__(self) -> "FakeResponse":
+                  return self
+
+              def __exit__(self, *_args: object) -> bool:
+                  return False
+
+              def read(self) -> bytes:
+                  return self._payload
+
+
+          def test_noema_declares_json_object_to_the_orchestrator(monkeypatch) -> None:
+              """Prompt-only JSON instructions cannot activate gateway-owned repair."""
+              requests: list[dict[str, Any]] = []
+              verdict = {
+                  "decision": "comment",
+                  "summary": "Structured-output contract exercised.",
+                  "findings": [],
+              }
+
+              class RecordingOpener:
+                  """Capture the exact OpenAI-compatible request body."""
+
+                  def open(self, request):
+                      requests.append(json.loads(request.data.decode("utf-8")))
+                      return FakeResponse(
+                          {
+                              "choices": [
+                                  {"message": {"content": json.dumps(verdict)}}
+                              ]
+                          }
+                      )
+
+              monkeypatch.setenv(
+                  "NOEMA_LLM_API_URL",
+                  "http://127.0.0.1:18080/v1/chat/completions",
+              )
+              monkeypatch.setenv(
+                  "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+                  "http://127.0.0.1:18080",
+              )
+              monkeypatch.setenv("NOEMA_LLM_API_KEY", "synthetic-test-bearer")
+              monkeypatch.setenv("NOEMA_LLM_MODEL", "orchestrator/free")
+              monkeypatch.setattr(
+                  noema.urllib.request,
+                  "build_opener",
+                  lambda *_handlers: RecordingOpener(),
+              )
+
+              result = noema.call_llm(
+                  "owner/repo",
+                  1,
+                  {"title": "test", "headRefOid": "a" * 40},
+                  "",
+                  False,
+                  "a" * 40,
+              )
+
+              assert result == verdict
+              assert len(requests) == 1
+              assert requests[0]["response_format"] == {"type": "json_object"}
+
+
+          def test_sidecar_pin_contains_virtual_structured_recovery() -> None:
+              """The vendored runtime must include same-model repair and model fallback."""
+              paths = (
+                  Path("scripts/ci/contextual_orchestrator_review_sidecar.sh"),
+                  Path("docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"),
+              )
+              for path in paths:
+                  text = path.read_text(encoding="utf-8")
+                  assert NEW_PIN in text
+                  assert OLD_PIN not in text
+          PYTEST
+
+          set +e
+          python -m pytest -q tests/test_noema_structured_output_recovery.py
+          red_status=$?
+          set -e
+          if [ "$red_status" -ne 1 ]; then
+            echo "::error::Expected the new contract to fail before implementation; pytest exit=$red_status"
+            exit 1
+          fi
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          from pathlib import Path
+
+          old_pin = os.environ["OLD_PIN"]
+          new_pin = os.environ["NEW_PIN"]
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected exactly one replacement target, found {count}"
+                  )
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          replace_once(
+              "scripts/ci/noema_review_gate.py",
+              '    payload = {\n        "model": model,\n        "temperature": 0,\n        "messages": [',
+              '    payload = {\n        "model": model,\n        "temperature": 0,\n        "response_format": {"type": "json_object"},\n        "messages": [',
+          )
+          replace_once(
+              "scripts/ci/contextual_orchestrator_review_sidecar.sh",
+              old_pin,
+              new_pin,
+          )
+          replace_once(
+              "tests/test_contextual_orchestrator_review_sidecar_contract.py",
+              old_pin,
+              new_pin,
+          )
+          replace_once(
+              "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md",
+              old_pin,
+              new_pin,
+          )
+          replace_once(
+              "CHANGELOG.md",
+              "## [Unreleased]\n",
+              """## [Unreleased]
+          - **Activate bounded structured-output recovery for Noema reviews.** The
+            review client now declares `response_format={\"type\":\"json_object\"}` to the
+            process-local contextual-orchestrator and vendors
+            `4d143601c2904a28e95d091b261c0a15e9a4f283`. That runtime validates the
+            final JSON, asks the selected upstream model for one corrected response, and
+            advances to the next eligible virtual-model candidate before failing closed.
+            Noema's existing caller-side one-repair limit remains defense in depth.
+          """,
+          )
+          PY
+
+          python -m pytest -q \
+            tests/test_noema_structured_output_recovery.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_review_orchestrator_ssrf.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py
+          python -m compileall -q \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_structured_output_recovery.py
+          bash -n scripts/ci/contextual_orchestrator_review_sidecar.sh
+          git diff --check
+
+          rm -- "$WRITER_WORKFLOW"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            CHANGELOG.md \
+            docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md \
+            scripts/ci/contextual_orchestrator_review_sidecar.sh \
+            scripts/ci/noema_review_gate.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py \
+            tests/test_noema_structured_output_recovery.py \
+            "$WRITER_WORKFLOW"
+          git commit -m "fix(noema): activate structured-output recovery"
+          git push origin HEAD:fix/noema-structured-output-recovery
