@@ -21,6 +21,18 @@ Semantic Versioning where the repository publishes a release.
   non-closed event against a live-closed PR (both admission steps), live-closed state taking
   precedence over a stale live-draft flag, and each invalid `state` shape failing closed. Full
   suite: 2294 passed, 1 skipped, 21 subtests; `scripts/ci` coverage and docstrings both 100%.
+  A third Devin Review round then found that head-scoping the concurrency group above, while
+  fixing the wrong-direction cancellation, also disabled the legitimate one: a genuine new
+  commit no longer cancels its own PR's now-obsolete previous-head poll, which would otherwise
+  occupy a runner until GitHub's own per-job ceiling. Added a `cancel-superseded-opencode-review-runs`
+  job, scoped to `synchronize` events, mirroring the already-established live-head-validated
+  cleanup pattern in `strix.yml`'s `cancel-superseded-pr-runs` job: it re-verifies the live head
+  immediately before both listing candidates and cancelling each one, so a delayed/stale
+  invocation of this same job cannot itself wrongly cancel a still-authoritative run. New
+  regressions: the embedded run-selection `jq` filter executed against synthetic run payloads
+  (superseded-run selection, current-head/self-run/other-PR/other-workflow exclusion, and
+  `pull_requests[]` metadata matching), plus a structural test for the job's trigger and
+  permissions. Full suite: 2301 passed, 1 skipped, 21 subtests; coverage and docstrings both 100%.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat

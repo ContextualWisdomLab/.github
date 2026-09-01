@@ -111,6 +111,129 @@ def test_runtime_required_verdict_rejects_other_actor() -> None:
     assert runtime_verdict([human]) == ""
 
 
+def cleanup_candidate_run_ids(
+    runs: list[dict[str, object]],
+    *,
+    pr_number: str = "1437",
+    head_sha: str = HEAD,
+    repository: str = "ContextualWisdomLab/example",
+    current_run_id: str = "999",
+) -> list[str]:
+    """Execute the jq program embedded in the superseded-run cleanup job."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup filter")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    marker = (
+        'jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \\\n'
+        '              --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \''
+    )
+    start = workflow.index(marker) + len(marker)
+    end = workflow.index("\n              ' <<<\"$runs_json\")", start)
+    result = subprocess.run(
+        [
+            jq,
+            "-r",
+            "--arg",
+            "pr",
+            pr_number,
+            "--arg",
+            "head_sha",
+            head_sha,
+            "--arg",
+            "repo",
+            repository,
+            "--arg",
+            "current",
+            current_run_id,
+            workflow[start:end],
+        ],
+        input=json.dumps({"workflow_runs": runs}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _cleanup_run(
+    *,
+    run_id: int,
+    head_sha: str = HEAD,
+    name: str = "Required OpenCode Review",
+    event: str = "pull_request_target",
+    display_title: str | None = None,
+    pr_number: int = 1437,
+) -> dict[str, object]:
+    """Build one synthetic workflow-run record for the cleanup filter."""
+    title = (
+        display_title
+        if display_title is not None
+        else f"Required OpenCode Review ContextualWisdomLab/example#{pr_number}@{head_sha}"
+    )
+    return {
+        "id": run_id,
+        "name": name,
+        "event": event,
+        "display_title": title,
+        "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
+    }
+
+
+def test_cleanup_selects_a_superseded_older_head_run() -> None:
+    """An older run for a different, no-longer-live head is selected."""
+    stale = _cleanup_run(run_id=1, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
+
+
+def test_cleanup_excludes_the_current_live_head_run() -> None:
+    """A run already on the live exact head is never selected."""
+    current_head_run = _cleanup_run(run_id=1, head_sha=HEAD)
+    assert cleanup_candidate_run_ids([current_head_run], current_run_id="999") == []
+
+
+def test_cleanup_excludes_the_currently_executing_run_itself() -> None:
+    """The cleanup job's own run is never a cancellation candidate."""
+    self_run = _cleanup_run(run_id=999, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([self_run], current_run_id="999") == []
+
+
+def test_cleanup_excludes_a_different_pull_request() -> None:
+    """A stale-head run for an unrelated PR is left untouched."""
+    other_pr = _cleanup_run(run_id=1, head_sha="b" * 40, pr_number=9999)
+    assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
+
+
+def test_cleanup_excludes_a_differently_named_or_triggered_run() -> None:
+    """A same-PR run for another workflow or trigger is left untouched."""
+    other_workflow = _cleanup_run(run_id=1, head_sha="b" * 40, name="Strix Security Scan")
+    other_event = _cleanup_run(run_id=2, head_sha="b" * 40, event="workflow_dispatch")
+    assert (
+        cleanup_candidate_run_ids([other_workflow, other_event], current_run_id="999")
+        == []
+    )
+
+
+def test_cleanup_matches_by_pull_requests_metadata_when_title_omits_the_suffix() -> None:
+    """A run whose display_title never rendered the head suffix still resolves."""
+    metadata_only = _cleanup_run(
+        run_id=1, head_sha="b" * 40, display_title="Required OpenCode Review"
+    )
+    assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == ["1"]
+
+
+def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
+    """The cleanup job only fires on synchronize and can cancel runs."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow.split("  cancel-superseded-opencode-review-runs:\n", 1)[1]
+    assert (
+        "if: github.event_name == 'pull_request_target' && "
+        "github.event.action == 'synchronize'"
+    ) in job
+    assert "actions: write" in job.split("steps:", 1)[0]
+
+
 def test_required_verdict_has_one_executable_owner() -> None:
     """Tests must execute the workflow gate, not a test-only Python mirror."""
     status_source = STATUS_HELPER.read_text(encoding="utf-8")
