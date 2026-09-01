@@ -9,9 +9,11 @@ on:
       - "scripts/ci/reconcile_repository_labels.py"
       - "tests/test_repository_metadata_reconciliation.py"
       - "tests/test_repository_metadata_convergence.py"
+      - "tests/test_repository_metadata_identity.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - "tests/test_repository_label_convergence.py"
+      - "tests/test_repository_label_identity.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
   schedule:
     - cron: "23 * * * *"
@@ -65,7 +67,9 @@ jobs:
           python -m coverage run \
             --branch \
             --include=scripts/ci/reconcile_repository_metadata.py \
-            -m pytest -q tests/test_repository_metadata_reconciliation.py
+            -m pytest -q \
+            tests/test_repository_metadata_reconciliation.py \
+            tests/test_repository_metadata_identity.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
@@ -76,7 +80,8 @@ jobs:
             --include=scripts/ci/reconcile_repository_labels.py \
             -m pytest -q \
             tests/test_repository_label_reconciliation.py \
-            tests/test_repository_label_convergence.py
+            tests/test_repository_label_convergence.py \
+            tests/test_repository_label_identity.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
@@ -92,7 +97,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     environment: repository-metadata-maintenance
     steps:
       - name: Harden runner
