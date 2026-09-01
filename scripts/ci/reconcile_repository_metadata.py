@@ -102,10 +102,20 @@ def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
     repositories = _require_exact_dict(root["repositories"], field="repositories")
     if not repositories:
         raise ManifestError("manifest must declare at least one repository")
-    return {
-        name: _validate_repository(name, value)
-        for name, value in repositories.items()
-    }
+
+    validated: dict[str, dict[str, Any]] = {}
+    casing_by_identity: dict[str, str] = {}
+    for name, value in repositories.items():
+        state = _validate_repository(name, value)
+        identity = name.casefold()
+        prior = casing_by_identity.get(identity)
+        if prior is not None and prior != name:
+            raise ManifestError(
+                f"repository casing collision: {prior} and {name} identify the same GitHub repository"
+            )
+        casing_by_identity[identity] = name
+        validated[name] = state
+    return validated
 
 
 def _gh_api(
@@ -313,6 +323,31 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _select_repositories(
+    requested: list[str], repositories: dict[str, dict[str, Any]]
+) -> list[str]:
+    """Canonicalize case-insensitive GitHub identities to reviewed repository casing."""
+
+    if not requested:
+        return list(repositories)
+    canonical_by_identity = {name.casefold(): name for name in repositories}
+    selected: list[str] = []
+    seen: set[str] = set()
+    unknown: list[str] = []
+    for candidate in requested:
+        identity = candidate.casefold()
+        canonical = canonical_by_identity.get(identity)
+        if canonical is None:
+            unknown.append(candidate)
+            continue
+        if identity not in seen:
+            seen.add(identity)
+            selected.append(canonical)
+    if unknown:
+        raise ManifestError(f"undeclared repositories requested: {', '.join(sorted(unknown))}")
+    return selected
+
+
 def main() -> int:
     """Validate desired state and reconcile every independent repository possible."""
 
@@ -322,10 +357,7 @@ def main() -> int:
         return 0
     if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GH_TOKEN is required in apply mode")
-    selected = list(dict.fromkeys(args.repository)) if args.repository else list(repositories)
-    unknown = sorted(set(selected) - set(repositories))
-    if unknown:
-        raise ManifestError(f"undeclared repositories requested: {', '.join(unknown)}")
+    selected = _select_repositories(args.repository, repositories)
 
     failures: list[str] = []
     for repository in selected:
