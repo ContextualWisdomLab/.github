@@ -7,6 +7,8 @@ on:
       - ".github/workflows/organization-commercial-readiness-loop.yml"
       - ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
       - "scripts/ci/organization_commercial_readiness_loop.py"
+      - "scripts/ci/organization_commercial_readiness_core.py"
+      - "scripts/ci/organization_commercial_readiness_ddd_contract.py"
       - "organization_commercial_readiness_fixtures.py"
       - "tests/test_organization_commercial_readiness_loop*.py"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
@@ -62,11 +64,13 @@ jobs:
             --branch \
             -m pytest --import-mode=importlib tests/test_organization_commercial_readiness_loop*.py -q
           python -m coverage report \
-            --include='scripts/ci/organization_commercial_readiness_loop.py' \
+            --include='scripts/ci/organization_commercial_readiness_*.py' \
             --show-missing \
             --fail-under=100
           python -m compileall -q \
             scripts/ci/organization_commercial_readiness_loop.py \
+            scripts/ci/organization_commercial_readiness_core.py \
+            scripts/ci/organization_commercial_readiness_ddd_contract.py \
             organization_commercial_readiness_fixtures.py \
             tests/test_organization_commercial_readiness_loop*.py
           git diff --exit-code
