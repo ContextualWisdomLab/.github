@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Close a 99% `scripts/ci` coverage regression on protected main: merged #1546 added an
+  uncovered `live_head_matches` helper, an uncovered no-active/no-stale-runs fall-through in
+  `prepare_autofix_slot`, and an uncovered "current-head autofix run is already queued or
+  running" wait path in `pr_review_fix_scheduler.py::inspect_pr`, while the pre-existing
+  conflicted-draft and conflicted-unauthorized `inspect_pr` returns and the REST
+  `fetch_workflow_names_by_check_suite_rest` pagination/name-filtering/permission-denied paths
+  in `pr_review_merge_scheduler.py` remained untested. Every PR rebasing onto main inherited
+  this failure via the `coverage-evidence` required check regardless of its own diff; this adds
+  test-only coverage for all of the above with no production code change.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
