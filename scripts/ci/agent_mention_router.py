@@ -71,6 +71,17 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #   colon), so excluding it on the trailing side too, in an earlier
 #   version, wrongly rejected ordinary usage like "/oc:" (a colon used as
 #   a label separator after the command, not as part of a URL).
+#   Two further exclusions cannot be expressed as a single trailing/leading
+#   character, because the character that makes them suspicious is not the
+#   one immediately touching the alias: a colon followed by a further word
+#   character (/oc:config) is a colon-delimited path segment, not the
+#   "/oc:" label-separator case just above, where the colon is followed by
+#   a space or nothing; and a percent sign itself preceded by a path
+#   separator (docs/%/oc, /%/opencode) is a literal "%" path segment, not
+#   the "100%/oc" percentage case above, where the percent sign is preceded
+#   by a digit. Both use a fixed-width two-character lookaround instead of
+#   widening the single-character sets above, which would have reopened
+#   one of the two cases each pair is meant to distinguish.
 # - "@cwl-noema-review" on its own additionally excludes a preceding "/"
 #   (closing the same URL/path-embedding class as "@opencode-agent" above)
 #   but deliberately NOT a trailing "/": that would break recognition of
@@ -85,7 +96,7 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![\w/-])@opencode-agent(?![\w/-])"
         r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
-        r"|(?<![\w./?=#:-])(?:/opencode|/oc)(?![\w./?=#%-])"
+        r"|(?<![\w./?=#:-])(?<!/%)(?:/opencode|/oc)(?![\w./?=#%-])(?!:\w)"
         r")",
         re.IGNORECASE,
     ),

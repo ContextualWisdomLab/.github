@@ -421,6 +421,40 @@ def test_exact_mentions_accepts_slash_command_beside_unrelated_punctuation(
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:config",
+        "/opencode:config",
+        "docs/%/oc",
+        "/%/opencode",
+    ],
+)
+def test_exact_mentions_rejects_path_segments_beside_the_same_punctuation(
+    body: str,
+) -> None:
+    """A colon-delimited or percent-delimited path segment is not a mention.
+
+    Twelfth-round finding on #1537's successor PR (Devin): distinguishing
+    ``/oc:`` (accept) from ``/oc:config`` (reject), and ``100%/oc`` (accept)
+    from ``docs/%/oc`` (reject), needs more context than a single
+    leading/trailing character can express — in both accept cases the
+    punctuation sits at a natural boundary (end of string, or preceded by
+    an ordinary word/digit); in both reject cases the SAME punctuation
+    character is itself part of a path/URI structure (a colon immediately
+    followed by more path text, forming a colon-delimited segment; a
+    percent sign immediately preceded by a path separator, forming a
+    literal "%" path segment). The fix adds two fixed-width two-character
+    lookarounds — ``(?<!/%)`` before the alias and ``(?!:\\w)`` after it —
+    on top of the existing single-character exclusion sets, rather than
+    widening those sets (which cannot distinguish the accept case from the
+    reject case sharing the same immediate character).
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
