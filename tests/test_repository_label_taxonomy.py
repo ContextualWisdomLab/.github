@@ -123,6 +123,11 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         },
         {
             "repository": "metering-billing-platform",
+            "issue": 157,
+            "type": "documentation",
+        },
+        {
+            "repository": "metering-billing-platform",
             "issue": 175,
             "type": "documentation",
         },
