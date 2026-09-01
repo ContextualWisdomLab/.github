@@ -5,7 +5,7 @@ from pathlib import Path
 
 CALLER = Path(".github/workflows/quarantine-sandbox-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/quarantine-sandbox-hourly-review-caller.md")
-QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+QUALITY_WORKFLOW = Path(".github/workflows/contextual-orchestrator-review-repair-quality.yml")
 SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
 
 
