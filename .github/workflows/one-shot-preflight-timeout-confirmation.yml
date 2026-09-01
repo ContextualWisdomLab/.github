@@ -40,4 +40,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/ci/one_shot_preflight_timeout_confirmation.py
+          python scripts/ci/run_one_shot_preflight_timeout_confirmation.py
