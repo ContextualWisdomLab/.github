@@ -31,6 +31,18 @@ Semantic Versioning where the repository publishes a release.
   shell-level regression coverage executing each step's actual production
   body, including the new `_run_verdict_step`/`_run_fail_closed_step`
   helpers matching the three-step split.
+- Fix a review-flagged gap in the draft-gate fix above (Devin review on
+  `#1443`): the `Resolve current-head formal OpenCode verdict` step decided
+  closed/draft purely from the triggering event's own stored payload
+  (`github.event.action`/`github.event.pull_request.draft`). A manual
+  re-run of an old workflow run (e.g. a stale `converted_to_draft` run) 
+  replays that event's payload verbatim, so a since-ready, unreviewed PR at
+  the same head SHA could pass this required check on a stale "still draft"
+  reading — a real required-review bypass, not merely a false alarm. The
+  step now fetches the pull request's live state (`gh api
+  repos/.../pulls/<number>`) and decides closed/draft from that instead,
+  failing closed if the lookup itself fails; the two payload-derived `env:`
+  vars (`PR_ACTION`/`PR_DRAFT`) are removed entirely from this step.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

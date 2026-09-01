@@ -264,23 +264,33 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_ACTION: ${{ github.event.action }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
-          if [ "$PR_ACTION" = "closed" ]; then
+          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
+            exit 1
+          fi
+          # Decide closed/draft from the pull request's live state, never from
+          # the triggering event's own stored payload -- a manual re-run of an
+          # old workflow run (e.g. an old converted_to_draft event) replays
+          # that event's github.event.* fields verbatim, which would let a
+          # since-ready, unreviewed PR at the same head SHA pass this required
+          # check on a stale "still draft" reading (Devin review on #1443).
+          if ! pr="$(timeout 25 gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not fetch the pull request's live state; cannot verify a current-head OpenCode verdict."
+            exit 1
+          fi
+          pr_state="$(printf '%s' "$pr" | jq -r '.state // ""')"
+          pr_draft="$(printf '%s' "$pr" | jq -r '.draft // false')"
+          if [ "$pr_state" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$PR_DRAFT" = "true" ]; then
+          if [ "$pr_draft" = "true" ]; then
             echo "PR is a draft; a current-head OpenCode verdict is not required until it is marked ready for review."
             echo "verdict=DRAFT" >>"$GITHUB_OUTPUT"
             exit 0
-          fi
-          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
-            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
-            exit 1
           fi
           if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
             reviews="[]"

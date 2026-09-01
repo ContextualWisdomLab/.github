@@ -211,16 +211,63 @@ def _write_refusing_gh(bin_dir: Path) -> None:
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 
 
-def _write_reviews_gh(bin_dir: Path, reviews: list[dict[str, object]]) -> Path:
-    """Install a fake ``gh`` on PATH that serves a fixed Reviews API page."""
+def _write_reviews_gh(
+    bin_dir: Path,
+    reviews: list[dict[str, object]],
+    *,
+    pr_state: str = "open",
+    pr_draft: bool = False,
+) -> Path:
+    """Install a fake ``gh`` on PATH serving a live PR object, then Reviews API page.
+
+    The production step now fetches the pull request's own live state
+    (``pulls/<number>``, no ``--paginate``) before the paginated Reviews API
+    call, so this fixture dispatches on the presence of ``--paginate`` in the
+    arguments rather than assuming only one ``gh api`` shape is ever called.
+    """
     fake_gh = bin_dir / "gh"
-    fixture = bin_dir / "reviews.json"
-    fixture.write_text(json.dumps(reviews), encoding="utf-8")
+    pr_fixture = bin_dir / "pr.json"
+    reviews_fixture = bin_dir / "reviews.json"
+    pr_fixture.write_text(
+        json.dumps({"state": pr_state, "draft": pr_draft}), encoding="utf-8"
+    )
+    reviews_fixture.write_text(json.dumps(reviews), encoding="utf-8")
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        f"cat {fixture}\n",
+        "if [[ \" $* \" == *' --paginate '* ]]; then\n"
+        f"  cat {reviews_fixture}\n"
+        "else\n"
+        f"  cat {pr_fixture}\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+    return fake_gh
+
+
+def _write_closed_or_draft_gh(bin_dir: Path, *, pr_state: str, pr_draft: bool) -> Path:
+    """Install a fake ``gh`` on PATH that serves only the live PR object.
+
+    Used for closed/draft cases that must short-circuit before any Reviews
+    API call, mirroring ``_write_refusing_gh``'s "prove the early exit"
+    intent but for the live-state call that now precedes it.
+    """
+    fake_gh = bin_dir / "gh"
+    pr_fixture = bin_dir / "pr.json"
+    pr_fixture.write_text(
+        json.dumps({"state": pr_state, "draft": pr_draft}), encoding="utf-8"
+    )
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        "if [[ \" $* \" == *' --paginate '* ]]; then\n"
+        "  echo 'unexpected Reviews API call: the early-exit should have short-circuited' >&2\n"
+        "  exit 17\n"
+        "fi\n"
+        f"cat {pr_fixture}\n",
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
@@ -230,23 +277,27 @@ def _write_reviews_gh(bin_dir: Path, reviews: list[dict[str, object]]) -> Path:
 def _run_verdict_step(
     tmp_path: Path,
     *,
-    event_action: str,
-    draft: str,
     pr_number: str = "",
     head_sha: str = "",
     gh_fixture: str = "refuse",
+    pr_state: str = "open",
+    pr_draft: bool = False,
     reviews: list[dict[str, object]] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the "Resolve current-head formal OpenCode verdict" step body.
 
-    Unlike the old poll-based design, ``PR_ACTION``/``PR_DRAFT`` are passed
-    the same way GitHub Actions passes them in production: as plain ``env:``
-    variables, not inline ``${{ }}`` expressions substituted into the script
-    text. ``gh_fixture`` selects a fake ``gh`` on PATH: ``"refuse"`` fails
-    loudly if invoked (proving an early exit never reaches the Reviews API
-    call), and ``"reviews"`` serves ``reviews`` back from ``gh api``. The
-    step's ``$GITHUB_OUTPUT`` writes are captured in ``tmp_path /
-    "github_output"`` for the caller to inspect.
+    The production step decides closed/draft from the pull request's own
+    live state (a ``gh api repos/.../pulls/<number>`` call), never from the
+    triggering event's own stored payload -- so ``pr_state``/``pr_draft``
+    drive a fake ``gh``'s live-PR-object response, not env vars. ``gh_fixture``
+    selects which fake ``gh`` goes on PATH: ``"refuse"`` fails loudly if
+    invoked at all (proving the missing-PR_NUMBER/HEAD_SHA guard runs before
+    any API call), ``"closed_or_draft"`` serves only the live PR object and
+    fails loudly on a Reviews API call (proving that early exit short-circuits
+    before it), and ``"reviews"`` serves the live PR object and then
+    ``reviews`` from the paginated Reviews API call. The step's
+    ``$GITHUB_OUTPUT`` writes are captured in ``tmp_path / "github_output"``
+    for the caller to inspect.
     """
     bash = shutil.which("bash")
     jq = shutil.which("jq")
@@ -262,8 +313,10 @@ def _run_verdict_step(
     bin_dir.mkdir()
     if gh_fixture == "refuse":
         _write_refusing_gh(bin_dir)
+    elif gh_fixture == "closed_or_draft":
+        _write_closed_or_draft_gh(bin_dir, pr_state=pr_state, pr_draft=pr_draft)
     else:
-        _write_reviews_gh(bin_dir, reviews or [])
+        _write_reviews_gh(bin_dir, reviews or [], pr_state=pr_state, pr_draft=pr_draft)
 
     output_file = tmp_path / "github_output"
     output_file.write_text("", encoding="utf-8")
@@ -274,8 +327,6 @@ def _run_verdict_step(
         "TARGET_REPOSITORY": "ContextualWisdomLab/example",
         "PR_NUMBER": pr_number,
         "HEAD_SHA": head_sha,
-        "PR_ACTION": event_action,
-        "PR_DRAFT": draft,
         "GITHUB_OUTPUT": str(output_file),
     }
     return subprocess.run(
@@ -319,34 +370,44 @@ def test_draft_pr_verdict_step_short_circuits_before_the_reviews_api_call(
 
     The merge scheduler (``scripts/ci/pr_review_merge_scheduler.py``) never
     dispatches a review request for a draft PR, so this required check must
-    not demand a verdict that was never going to be requested. ``PR_NUMBER``
-    and ``HEAD_SHA`` are deliberately left unset here to prove the draft
-    early-exit runs before the "missing PR number or head SHA" fail-closed
-    check that follows it.
+    not demand a verdict that was never going to be requested. The live PR
+    object (not a stale event field) is the source of the draft state, and
+    the fake ``gh`` refuses any Reviews API call to prove the early-exit
+    short-circuits before it.
     """
     result = _run_verdict_step(
         tmp_path,
-        event_action="synchronize",
-        draft="true",
-        gh_fixture="refuse",
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="closed_or_draft",
+        pr_state="open",
+        pr_draft=True,
     )
     assert result.returncode == 0, result.stderr
     assert "PR is a draft" in result.stdout
     assert "verdict=DRAFT" in (tmp_path / "github_output").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    "event_action", ("opened", "synchronize", "reopened", "converted_to_draft")
-)
-def test_draft_pr_verdict_step_short_circuits_on_every_non_closed_event_type(
-    tmp_path: Path, event_action: str
+def test_draft_pr_verdict_step_ignores_the_stale_triggering_event_action(
+    tmp_path: Path,
 ) -> None:
-    """The draft exemption applies uniformly across opened/synchronize/reopened."""
+    """A stale re-run of an old event must not resurrect a bypass.
+
+    Regardless of which event originally triggered this run (opened,
+    synchronize, reopened, converted_to_draft -- even a replayed old run),
+    the verdict step now asks GitHub for the pull request's live state
+    instead of trusting that event's own stored payload, so a live draft PR
+    is exempted the same way no matter which stale action label the
+    original workflow run happened to carry (Devin review on #1443, on the
+    inverse of this case: a stale run must not falsely claim draft either).
+    """
     result = _run_verdict_step(
         tmp_path,
-        event_action=event_action,
-        draft="true",
-        gh_fixture="refuse",
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="closed_or_draft",
+        pr_state="open",
+        pr_draft=True,
     )
     assert result.returncode == 0, result.stderr
     assert "PR is a draft" in result.stdout
@@ -358,11 +419,11 @@ def test_ready_for_review_pr_still_requires_a_current_head_verdict(
     """Once a PR is not a draft, the real gate still runs unchanged."""
     result = _run_verdict_step(
         tmp_path,
-        event_action="ready_for_review",
-        draft="false",
         pr_number="1437",
         head_sha=HEAD,
         gh_fixture="reviews",
+        pr_state="open",
+        pr_draft=False,
         reviews=[review(state="APPROVED")],
     )
     assert result.returncode == 0, result.stderr
@@ -374,11 +435,11 @@ def test_non_draft_pr_without_a_verdict_leaves_the_gate_empty(tmp_path: Path) ->
     """A non-draft PR with no matching review resolves an empty verdict."""
     result = _run_verdict_step(
         tmp_path,
-        event_action="synchronize",
-        draft="false",
         pr_number="1437",
         head_sha=HEAD,
         gh_fixture="reviews",
+        pr_state="open",
+        pr_draft=False,
         reviews=[],
     )
     assert result.returncode == 0, result.stderr
@@ -394,14 +455,56 @@ def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None
     """The pre-existing ``closed`` early-exit still takes precedence over draft."""
     result = _run_verdict_step(
         tmp_path,
-        event_action="closed",
-        draft="true",
-        gh_fixture="refuse",
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="closed_or_draft",
+        pr_state="closed",
+        pr_draft=True,
     )
     assert result.returncode == 0, result.stderr
     assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
     assert "PR is a draft" not in result.stdout
     assert "verdict=CLOSED" in (tmp_path / "github_output").read_text(encoding="utf-8")
+
+
+def test_verdict_step_fails_closed_when_live_pr_state_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A failed live-state lookup fails closed instead of silently proceeding."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow, "Resolve current-head formal OpenCode verdict")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+    output_file = tmp_path / "github_output"
+    output_file.write_text("", encoding="utf-8")
+    result = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "1437",
+            "HEAD_SHA": HEAD,
+            "GITHUB_OUTPUT": str(output_file),
+        },
+    )
+    assert result.returncode == 1
+    assert "Could not fetch the pull request's live state" in result.stdout
 
 
 def test_fail_closed_step_passes_on_draft_verdict() -> None:
