@@ -2237,10 +2237,12 @@ review publication.
 Cancelled upstream review runs exposed a separate same-head race: their
 `workflow_run` notifications entered this concurrency group, cancelled a live
 native Noema review, and then skipped because the upstream conclusion was
-`cancelled`. The group remains shared and head-specific, but its
-`cancel-in-progress` expression now denies cancellation authority to exactly
-those skipped notifications. Successful or failed upstream completions still
-serialize and trigger the intended current-head review.
+`cancelled`. Merely disabling `cancel-in-progress` is insufficient because
+GitHub always replaces the existing pending member of a concurrency group with
+the newest pending run. Cancelled notifications therefore use a run-unique
+suffix and are also denied cancellation authority. All actionable triggers
+remain in the shared head-specific group; successful or failed upstream
+completions still serialize and trigger the intended current-head review.
 
 ## 2026-08-31 noema-review-gate: the live-head re-check added to close the above gap was itself an unguarded API call
 

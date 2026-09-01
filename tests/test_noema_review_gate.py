@@ -66,6 +66,9 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     assert "github.event.pull_request.head.sha" in concurrency
     assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency
     assert "github.event.workflow_run.head_sha" not in concurrency
+    assert "github.event.workflow_run.conclusion == 'cancelled'" in concurrency
+    assert "format('cancelled-{0}', github.run_id)" in concurrency
+    assert "'actionable'" in concurrency
     assert "cancel-in-progress: ${{" in concurrency
     assert "github.event_name != 'workflow_run'" in concurrency
     assert "github.event.workflow_run.conclusion != 'cancelled'" in concurrency
