@@ -181,6 +181,7 @@ OPENCODE_WORKFLOW_NAMES = {
     "Required OpenCode Review",
     "OpenCode Review Dispatch",
 }
+OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
@@ -1331,7 +1332,20 @@ def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
 
 
 def matching_actions_run_id(pr: dict[str, Any], predicate: Any) -> int | None:
-    """Return the latest matching check-run workflow run id, if exposed."""
+    """Return the newest matching check-run's workflow run id, if exposed.
+
+    Devin Review finding on PR #1507 ("Older review run remains blocking"):
+    an earlier version of this function returned the first predicate match
+    found scanning ``context_nodes`` in reverse, which is only the newest
+    match when GitHub happens to return the rollup in chronological order --
+    not guaranteed, and not true for every real payload. With multiple
+    same-purpose check runs present (reruns, or two dispatches racing), that
+    could select an older, already-resolved run while a genuinely newer
+    failure sat unselected and unrerun. This now ranks every match with the
+    same ``check_run_recency_key`` signal ``_newest_check_run_per_identity``
+    uses to resolve reruns elsewhere in this file, so position in the list
+    never decides the winner -- only actual recency does.
+    """
     candidates: list[tuple[tuple[int, datetime, int], int]] = []
     for index, node in enumerate(context_nodes(pr)):
         if node.get("__typename") != "CheckRun" or not predicate(node):
@@ -2605,18 +2619,20 @@ def active_workflow_runs(
     *,
     event: str | None = None,
     created: str | None = None,
+    head_sha: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return workflow runs for a repository, optionally narrowed server-side.
 
-    ``event`` and ``created`` map directly onto GitHub's ``List workflow
-    runs for a repository`` REST query parameters (``event`` selects the
-    triggering webhook event, ``created`` accepts a date/range qualifier
-    such as ``>=2026-08-24T00:00:00Z``). Both are omitted by default so
-    existing callers keep fetching every run for the given statuses
-    unfiltered; a caller with a naturally bounded lookup -- one whose
-    target repository's run history only grows, such as a same-head
-    dispatch search -- should pass them to avoid paginating history it can
-    never use.
+    ``event``, ``created``, and ``head_sha`` map directly onto GitHub's
+    ``List workflow runs for a repository`` REST query parameters (``event``
+    selects the triggering webhook event, ``created`` accepts a date/range
+    qualifier such as ``>=2026-08-24T00:00:00Z``, ``head_sha`` narrows to
+    runs for one exact commit). All three are omitted by default so existing
+    callers keep fetching every run for the given statuses unfiltered; a
+    caller with a naturally bounded lookup -- one whose target repository's
+    run history only grows, such as a same-head dispatch search, or one
+    scoped to a single known commit -- should pass them to avoid paginating
+    history it can never use.
     """
     runs: list[dict[str, Any]] = []
     for status in statuses:
@@ -2637,6 +2653,8 @@ def active_workflow_runs(
             args += ["-f", f"event={event}"]
         if created:
             args += ["-f", f"created={created}"]
+        if head_sha:
+            args += ["-f", f"head_sha={head_sha}"]
         payload = json.loads(run_github_actions(args))
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
@@ -2911,6 +2929,56 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
     return [run_id for _, run_id in stale_refs]
 
 
+def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
+    """Return the current-head Required OpenCode Review run id via a bounded lookup.
+
+    Devin Review finding on PR #1507 ("Large check rollups never wake"):
+    ``matching_actions_run_id`` only sees the GraphQL ``statusCheckRollup``
+    fragment's first 100 status/check contexts
+    (``PULL_REQUEST_FIELDS_FRAGMENT``'s ``contexts(first: 100)``). A pull
+    request already carrying at least 100 contexts -- dozens of CI/security
+    workflows across several pushes and reruns is realistic in this
+    organization -- can push the real Required OpenCode Review check run
+    past that page, so the in-memory scan finds nothing even though the run
+    exists. This is a REST fallback, not a rewrite of that scan: it is
+    scoped server-side to the exact triggering event, the exact workflow
+    file path, and the exact current head SHA (GitHub's ``head_sha`` list
+    filter), so it stays a bounded, targeted lookup -- never an unfiltered
+    history walk -- and finds the run whether it is still queued/running or
+    already completed (the realistic failure mode is a stuck ``failure``
+    conclusion on an otherwise-valid exact-head run).
+    """
+    if not GIT_SHA_RE.fullmatch(head_sha):
+        return None
+    target_repo = validate_github_repository(repo)
+    newest_id: int | None = None
+    newest_started: datetime | None = None
+    for run_data in active_workflow_runs(
+        target_repo,
+        ("queued", "in_progress", "completed"),
+        event="pull_request_target",
+        head_sha=head_sha,
+    ):
+        if run_data.get("path") != OPENCODE_REVIEW_WORKFLOW_PATH:
+            continue
+        if str(run_data.get("head_sha") or "").lower() != head_sha.lower():
+            continue
+        run_id = run_data.get("id")
+        if not run_id:
+            continue
+        started_at = parse_github_datetime(
+            run_data.get("run_started_at") or run_data.get("created_at")
+        )
+        is_newer = started_at is not None and (
+            newest_started is None or started_at > newest_started
+        )
+        if newest_id is None or is_newer:
+            newest_id = int(run_id)
+            if started_at is not None:
+                newest_started = started_at
+    return newest_id
+
+
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch trusted OpenCode for the PR head, or report an active run.
 
@@ -2948,6 +3016,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     }
     complete_paginated_pr_contexts(target_repo, pr)
     required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
+    if required_run_id is None:
+        required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id
     run_github_dispatch(

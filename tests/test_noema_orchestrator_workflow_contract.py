@@ -19,12 +19,18 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
 
     Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
     (unrelated, open) both have runs on the same head commit; only #7's
-    matches the PR-scoped `display_title` prefix cancel_runs selects on,
-    and a `completed` PR #7 run must not be re-cancelled. The fake `gh`
-    below filters its fixture by the `status=` query parameter, mirroring
-    GitHub's own server-side status filtering, because the workflow's
-    cancel_runs deliberately relies on that filtering (see the run block's
-    own comment) rather than fetching everything and filtering client-side.
+    matches the PR-scoped selector cancel_runs applies, and a `completed`
+    PR #7 run must not be re-cancelled. Runs #104/#105 additionally cover
+    Devin Review's "Sibling Noema runs evade cancellation" finding on PR
+    #1507: a required-workflow-ruleset run materialized in a sibling
+    repository whose `display_title` never rendered this workflow's PR/head
+    run-name (a plain PR title instead) must still be matched through
+    GitHub's own `pull_requests[]` array, and only for the closing PR. The
+    fake `gh` below filters its fixture by the `status=` query parameter,
+    mirroring GitHub's own server-side status filtering, because the
+    workflow's cancel_runs deliberately relies on that filtering (see the
+    run block's own comment) rather than fetching everything and filtering
+    client-side.
     """
     script = textwrap.dedent(
         workflow_step(
@@ -32,10 +38,12 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
             "Cancel queued and running Noema reviews for the closed pull request",
         ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
     )
+    workflow_path = ".github/workflows/noema-review.yml"
     runs = {
         "workflow_runs": [
             {
                 "id": 101,
+                "path": workflow_path,
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
@@ -43,6 +51,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
             },
             {
                 "id": 102,
+                "path": workflow_path,
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
                 "head_sha": "a" * 40,
@@ -50,10 +59,29 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
             },
             {
                 "id": 103,
+                "path": workflow_path,
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "completed",
+            },
+            {
+                "id": 104,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Fix an unrelated example bug",
+                "head_sha": "a" * 40,
+                "status": "queued",
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 105,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "A different pull request's title",
+                "head_sha": "a" * 40,
+                "status": "queued",
+                "pull_requests": [{"number": 8}],
             },
         ]
     }
@@ -102,6 +130,14 @@ fi
     assert "/actions/runs/101/cancel" in calls
     assert "/actions/runs/102/cancel" not in calls
     assert "/actions/runs/103/cancel" not in calls
+    # Devin Review finding on PR #1507 ("Sibling Noema runs evade
+    # cancellation"): a required-workflow-ruleset run materialized in a
+    # sibling repository (#104) never renders this workflow's run-name into
+    # display_title, so it must still be matched via GitHub's own
+    # pull_requests[] array; a same-shaped run for an unrelated PR (#105)
+    # must not.
+    assert "/actions/runs/104/cancel" in calls
+    assert "/actions/runs/105/cancel" not in calls
 
 
 def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:

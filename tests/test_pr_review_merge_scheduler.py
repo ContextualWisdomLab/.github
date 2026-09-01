@@ -1484,9 +1484,11 @@ def test_context_review_and_check_helpers(monkeypatch):
     )
     assert sched.matching_actions_job_id(check_jobs, sched.is_opencode_context) == "11"
     assert sched.matching_actions_job_id(check_jobs, sched.is_strix_context) == "22"
-    assert sched.matching_actions_run_id(check_jobs, sched.is_opencode_context) == 1
     no_job_url = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.matching_actions_job_id(no_job_url, sched.is_opencode_context) is None
+
+    assert sched.matching_actions_run_id(check_jobs, sched.is_opencode_context) == 1
+    assert sched.matching_actions_run_id(check_jobs, sched.is_strix_context) == 2
     assert sched.matching_actions_run_id(no_job_url, sched.is_opencode_context) is None
 
     assert sched.parse_github_datetime(None) is None
@@ -1698,6 +1700,186 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.is_opencode_review(opencode_review())
     assert sched.is_opencode_review(opencode_review(login="opencode-agent[bot]"))
     assert not sched.is_opencode_review(opencode_review(login="human"))
+
+
+def test_matching_actions_run_id_selects_by_recency_not_list_position():
+    """Devin Review finding on PR #1507 ("Older review run remains blocking").
+
+    Two same-purpose OpenCode check runs are present, listed *older-first*
+    -- the opposite of the ordering the previous ``reversed(...)``-plus-
+    first-match implementation silently depended on. The genuinely newer
+    run (a later ``checkSuite.createdAt``) must still win, proving
+    selection is driven by ``check_run_recency_key``, not by position in
+    ``context_nodes``.
+    """
+    older_first = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-25T07:05:00Z",
+                        "detailsUrl": "https://github.com/owner/repo/actions/runs/501/job/1",
+                        "checkSuite": {
+                            "createdAt": "2026-06-25T07:00:00Z",
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-06-25T08:05:00Z",
+                        "detailsUrl": "https://github.com/owner/repo/actions/runs/502/job/2",
+                        "checkSuite": {
+                            "createdAt": "2026-06-25T08:00:00Z",
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.matching_actions_run_id(older_first, sched.is_opencode_check_run) == 502
+
+    newer_first = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": list(reversed(older_first["statusCheckRollup"]["contexts"]["nodes"]))}
+        }
+    )
+    assert sched.matching_actions_run_id(newer_first, sched.is_opencode_check_run) == 502
+
+
+def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatch):
+    """Devin Review finding on PR #1507 ("Large check rollups never wake").
+
+    ``matching_actions_run_id`` only sees the first 100 GraphQL rollup
+    contexts. When the required run falls outside that page (simulated
+    here by an empty rollup), ``discover_opencode_required_run_id`` must
+    still find it through a REST lookup scoped server-side to the exact
+    event, workflow path, and head SHA -- never an unfiltered history walk
+    -- and must ignore a same-head run for a different workflow path and a
+    same-path run for a different head.
+    """
+    head_sha = "a" * 40
+    other_head = "b" * 40
+    calls = []
+
+    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+        calls.append((repo, tuple(statuses), event, created, head_sha))
+        return [
+            {
+                "id": 601,
+                "path": ".github/workflows/strix.yml",
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T07:00:00Z",
+            },
+            {
+                "id": 602,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": other_head,
+                "run_started_at": "2026-06-25T07:00:00Z",
+            },
+            {
+                "id": 603,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T06:00:00Z",
+            },
+            {
+                "id": 604,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T09:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 604
+    assert len(calls) == 1
+    repo, statuses, event, created, called_head = calls[0]
+    assert repo == "owner/repo"
+    assert set(statuses) == {"queued", "in_progress", "completed"}
+    assert event == "pull_request_target"
+    assert called_head == head_sha
+
+    assert sched.discover_opencode_required_run_id("owner/repo", "not-a-sha") is None
+    assert len(calls) == 1
+
+
+def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkeypatch):
+    """Cover the recency comparison's edge cases the happy path above does not.
+
+    A matching row with no ``id`` must be skipped entirely (never crash on
+    ``int(None)``); a matching row with no timestamp may still become the
+    first candidate; and a later matching row with an *older* timestamp
+    than the current best must not displace it.
+    """
+    head_sha = "a" * 40
+
+    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+        return [
+            # No timestamp at all: still becomes the first candidate.
+            {"id": 801, "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH, "head_sha": head_sha},
+            # A real timestamp: newer than "no timestamp", becomes the new best.
+            {
+                "id": 802,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-02-01T00:00:00Z",
+            },
+            # Matches path/head but has no id: must be skipped, not crash.
+            {
+                "id": None,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-03-01T00:00:00Z",
+            },
+            # Older than the current best (802): must not displace it.
+            {
+                "id": 803,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 802
+
+
+def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
+    """Scheduler dispatch uses the bounded fallback only when the rollup misses."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    calls = []
+    monkeypatch.setattr(
+        sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], [])
+    )
+    monkeypatch.setattr(sched, "force_cancel_workflow_run_refs", lambda refs: None)
+    monkeypatch.setattr(
+        sched,
+        "discover_opencode_required_run_id",
+        lambda repo, head_sha: calls.append((repo, head_sha)) or 999,
+    )
+    dispatch_calls = []
+    monkeypatch.setattr(
+        sched, "run_github_dispatch", lambda args, stdin=None: dispatch_calls.append(stdin)
+    )
+
+    head_sha = "a" * 40
+    pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+
+    assert result == "dispatched"
+    assert calls == [("owner/repo", head_sha)]
+    assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
 
 
 def test_central_progress_ignores_required_workflow_checkrun_placeholder(
@@ -3941,7 +4123,15 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     ]
     assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[10][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[11] == [
+    # calls[11:14]: the bounded discover_opencode_required_run_id fallback
+    # (matching_actions_run_id found nothing in this PR's empty rollup).
+    for offset, status in enumerate(("queued", "in_progress", "completed")):
+        discover_call = calls[11 + offset]
+        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert f"status={status}" in discover_call
+        assert "event=pull_request_target" in discover_call
+        assert f"head_sha={head_sha}" in discover_call
+    assert calls[14] == [
         "gh",
         "api",
         "-X",
@@ -4196,7 +4386,17 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     ]
     assert calls[6][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[7][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8][0] == [
+    # calls[8:11]: the bounded discover_opencode_required_run_id fallback
+    # (matching_actions_run_id found nothing in the empty rollup), scoped to
+    # the exact head SHA across the three statuses that can hold the
+    # required run.
+    for offset, status in enumerate(("queued", "in_progress", "completed")):
+        discover_call = calls[8 + offset][0]
+        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert f"status={status}" in discover_call
+        assert "event=pull_request_target" in discover_call
+        assert f"head_sha={'a' * 40}" in discover_call
+    assert calls[11][0] == [
         "gh",
         "api",
         "-X",
@@ -4527,16 +4727,6 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert not any("9004/force-cancel" in " ".join(call) for call in calls)
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
-
-
-def test_matching_actions_run_id_uses_check_suite_recency_not_list_order():
-    """Select the newest same-head required run even when GraphQL order conflicts."""
-    older = opencode_check(details_url="https://github.com/owner/repo/actions/runs/41/job/1")
-    newer = opencode_check(details_url="https://github.com/owner/repo/actions/runs/42/job/2")
-    older["checkSuite"]["createdAt"] = "2026-08-31T01:00:00Z"
-    newer["checkSuite"]["createdAt"] = "2026-08-31T02:00:00Z"
-    pr = make_pr(statusCheckRollup={"contexts": {"nodes": [newer, older]}})
-    assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 42
 
 
 def test_complete_paginated_pr_contexts_finds_required_run_after_first_100(monkeypatch):
