@@ -5,6 +5,13 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Dispatch exact-head terminal source-check failures directly to the bounded RCA
+  repair path, ahead of ordinary review feedback. The scheduler now completes
+  paginated check inventories, excludes review/control-plane failures, retains
+  workflow identity through REST fallback, and isolates one PR's metadata
+  failure without blocking other eligible repairs. The worker refetches the
+  live head and failed-check evidence before granting a sealed changed-path
+  scope, so stale or unsupported dispatches fail closed.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
