@@ -2,39 +2,45 @@
 
 ## Incident
 
-On 2026-09-02, exact head `09908aaf56e568420105b81434c6cdd147856657` was reused when Draft pull request #1050 was closed and ready successor #1643 was opened. GitHub exposed two simultaneously queued runs for several expensive workflows on that unchanged branch/head, including Security Scan (`33561053485`, `33561076062`), CodeQL PR (`33561053137`, `33561076168`), Python Security (`33561053333`, `33561076150`), and SAST Semgrep (`33561053180`, `33561076360`). Equivalent duplicate pairs existed for Secret Scan, SBOM Generation, Scorecard PR, and OSV-Scanner PR.
+On 2026-09-02 KST (2026-09-01 UTC), exact head `09908aaf56e568420105b81434c6cdd147856657` was reused when Draft pull request #1050 was closed and ready successor #1643 was opened. GitHub exposed two simultaneously queued runs for several expensive workflows on that unchanged branch/head, including Security Scan (`33561053485`, `33561076062`), CodeQL PR (`33561053137`, `33561076168`), Python Security (`33561053333`, `33561076150`), and SAST Semgrep (`33561053180`, `33561076360`). Equivalent duplicate pairs existed for Secret Scan, SBOM Generation, Scorecard PR, and OSV-Scanner PR.
 
 The live-ref queue-hygiene repair from #1348 correctly prevents stale pull-request payloads from cancelling a newly pushed authoritative head. Its destructive revalidation intentionally preserves any run whose `head_sha` still equals the live branch ref. That safety invariant does not distinguish the sole authoritative current-head run from redundant queued siblings belonging to the same GitHub `workflow_id`. PR recreation therefore exposed a second, orthogonal capacity leak: safe stale-head preservation could retain several same-workflow runs for one current head.
 
 ## Trust boundary
 
-`.github/workflows/current-head-run-coalescer.yml` executes only on `pull_request_target` `opened`, `synchronize`, and `reopened`. It checks out `ContextualWisdomLab/.github` at immutable `github.workflow_sha` with persisted credentials disabled. The job has only `actions: write`, `contents: read`, and `pull-requests: read`; it never checks out or executes the pull-request head.
+`.github/workflows/current-head-run-coalescer.yml` executes on trusted `pull_request_target` events for `opened`, `synchronize`, `reopened`, `ready_for_review`, and `converted_to_draft`. It checks out `ContextualWisdomLab/.github` at immutable `github.workflow_sha` with persisted credentials disabled. The job has only `actions: write`, `contents: read`, and `pull-requests: read`; it never checks out or executes pull-request-head code. Event-derived repository/ref/SHA values are first placed in environment variables and are referenced from the shell only as quoted variables, so PR-controlled branch names are never interpolated directly into executable shell text.
 
-The workflow passes the event's repository, PR number, head repository, head ref, and lowercase 40-character head SHA into `scripts/ci/current_head_run_coalescer.py`. The script immediately re-fetches the live PR before classification. Before every cancellation it re-fetches the candidate run, the live PR, and active runs for the exact head again. Missing, malformed, moved, closed, or ambiguous evidence preserves the candidate.
+The script re-fetches the live PR before classification. It lists all queued and in-progress repository runs rather than filtering only by workflow-run `head_sha`, because `pull_request_target` runs execute on the trusted base and their workflow head is not the PR head. Those runs are instead bound to the associated pull request's head identity. Before every cancellation the script re-fetches the current PR, active siblings, any non-current PR associations, and finally the candidate itself. Missing, malformed, moved, closed, timed-out, or ambiguous evidence preserves the candidate or fails closed.
+
+## Pull-request isolation
+
+A workflow run may authorize cancellation only inside the current PR's evidence boundary. Runs associated with the current PR are eligible when their associated head matches the current live repository/ref/SHA. A run associated with a different **open** PR never authorizes or receives cancellation, even when both PRs share the same branch and commit; those PRs retain independent required-check evidence. A run left behind by a **closed** predecessor may be coalesced into a successor only when the predecessor's live head repository/ref/SHA and base ref match the successor. This preserves the #1050-to-#1643 recreation repair without allowing two simultaneously open PRs to cancel each other's checks.
 
 ## Cancellation invariant
 
 Runs are eligible only when all of the following are true:
 
-1. the run was triggered by `pull_request` or `pull_request_target`;
-2. its head repository, branch, and SHA exactly match the live open PR;
-3. its stable numeric `workflow_id` matches another active exact-head sibling;
-4. the candidate is still `queued` immediately before mutation; and
+1. the run was triggered by `pull_request` or `pull_request_target` and is bound to the current live PR head through the correct event-specific identity;
+2. its PR association belongs either to the current PR or to a proven closed predecessor with the same head identity and base ref;
+3. its stable numeric `workflow_id` matches another active run inside the same PR evidence boundary;
+4. the candidate is still `queued` on the final candidate fetch immediately before mutation; and
 5. a distinct authoritative sibling is still active: either an `in_progress` sibling or a newer queued sibling.
 
-The coalescer never selects an `in_progress` run. If a workflow already has an in-progress run, only queued siblings are redundant. If every matching run is queued, the greatest run ID is retained and older queued siblings are candidates. A candidate for which the authoritative sibling disappears is preserved. Cancellation uses GitHub's ordinary `/cancel` endpoint rather than `force-cancel`.
+The coalescer never selects an `in_progress` run. If a workflow already has an in-progress run, only queued siblings are redundant. If every matching run is queued, the greatest run ID is retained and older queued siblings are candidates. A candidate for which the authoritative sibling disappears is preserved. Cancellation uses GitHub's ordinary `/cancel` endpoint rather than `force-cancel` and shares the same explicit `GH_TOKEN` and per-request timeout contract as every other API call.
 
-This invariant is deliberately separate from old-head cancellation. #1348 remains authoritative for resolving live Git refs before retiring superseded heads; the coalescer handles only redundant queued evidence on the same live head.
+GitHub's REST cancellation endpoint has no conditional `If-Status-Is-Queued` precondition and acknowledges cancellation asynchronously. Therefore no client can make the final GET and POST literally atomic. The implementation closes the controllable race by performing the candidate GET last, after PR/sibling/association validation, and requiring `queued` immediately before the ordinary cancellation POST. The regression suite covers a candidate that changes from queued to in-progress before that final fetch and proves it is preserved. The residual sub-request race between the final GET and GitHub processing the POST is an upstream API limitation; the coalescer never uses force-cancel and does not claim stronger atomicity than the platform exposes.
+
+This invariant is deliberately separate from old-head cancellation. #1348 remains authoritative for resolving live Git refs before retiring superseded heads; the coalescer handles only redundant active evidence for one live PR head.
 
 ## Executable evidence
 
-`tests/test_current_head_run_coalescer.py` pins the source and workflow contract. The regression was committed before either production file existed, so the initial expected failure was the absent coalescer implementation. The final cases cover one-run retention, in-progress preservation, isolation across workflow/head/branch/repository/event, sole-run preservation, moved-head/status fail-closed behavior, trusted-source checkout, PR-stable concurrency, and minimum workflow permissions.
+`tests/test_current_head_run_coalescer.py` pins the source and workflow contract. Coverage includes one-run retention, in-progress preservation, `pull_request_target` base/head separation, isolation between concurrently open PRs, safe closed-predecessor succession, workflow/head/branch/repository/event isolation, moved-head/status fail-closed behavior, per-call timeouts, explicit cancellation authentication, complete pagination, final candidate re-fetch, ready/draft transition triggers, trusted-source checkout, shell-injection resistance, PR-stable concurrency, and minimum workflow permissions.
 
 A one-use read-only branch workflow was attempted solely to capture hosted RED/GREEN evidence; GitHub did not schedule newly introduced branch-only push workflows in this repository, so no hosted result is claimed from that mechanism and it was deleted from the publishable tree. Ordinary protected PR checks and independent review on the exact production head remain authoritative.
 
 ## Recovery and rollback
 
-If the coalescer reports unexpected preservation, inspect the live PR/run/sibling identities before changing policy. Do not weaken the exact-head or authoritative-sibling checks to improve cancellation volume. If a false cancellation is ever observed, disable the `current-head-run-coalescer.yml` trigger first while retaining #1348 stale-head queue hygiene, then reproduce the identity race with a deterministic regression before repair.
+If the coalescer reports unexpected preservation, inspect the live PR/run/sibling identities before changing policy. Do not weaken exact-head, PR-association, base-ref, final-status, or authoritative-sibling checks to improve cancellation volume. If a false cancellation is ever observed, disable the `current-head-run-coalescer.yml` trigger first while retaining #1348 stale-head queue hygiene, then reproduce the identity race with a deterministic regression before repair.
 
 The feature is operability-only: it does not convert cancelled, queued, missing, stale, or predecessor evidence into passing merge evidence, and it does not change required-check, security, review, or branch-protection policy.
 
