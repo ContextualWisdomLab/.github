@@ -351,6 +351,33 @@ def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) ->
     assert calls == [2]
 
 
+def test_refresh_siblings_refetches_only_same_workflow_head_peers(monkeypatch) -> None:
+    """Sibling refresh is bounded to exact-head peers and fails closed without a candidate."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    other_workflow = run_record(102, 11)
+    other_head = run_record(103, 10, head_sha="b" * 40)
+    assert module._refresh_siblings(
+        "o/r", [sibling], 100, repository="ContextualWisdomLab/.github", branch="feature/current", head_sha="a" * 40
+    ) == []
+    assert module._refresh_siblings(
+        "o/r", [{**candidate, "workflow_id": 0}], 100, repository="ContextualWisdomLab/.github", branch="feature/current", head_sha="a" * 40
+    ) == []
+    calls: list[int] = []
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: calls.append(run_id) or sibling)
+    refreshed = module._refresh_siblings(
+        "o/r",
+        [candidate, sibling, other_workflow, other_head],
+        100,
+        repository="ContextualWisdomLab/.github",
+        branch="feature/current",
+        head_sha="a" * 40,
+    )
+    assert [item["id"] for item in refreshed] == [101]
+    assert calls == [101]
+
+
 def test_coalesce_validates_inputs_rechecks_each_candidate_and_preserves_races(monkeypatch, capsys) -> None:
     """The mutation path revalidates live state per candidate and preserves races."""
     module = load_module()
@@ -388,7 +415,11 @@ def test_coalesce_refetches_candidate_last_and_preserves_started_run(monkeypatch
     sibling = run_record(101, 10)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
-    monkeypatch.setattr(module, "_fetch_run", lambda *_args: run_record(100, 10, status="in_progress"))
+
+    def fetch_run(_repo: str, run_id: int):
+        return sibling if run_id == 101 else run_record(100, 10, status="in_progress")
+
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
     assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == []
@@ -402,7 +433,7 @@ def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, cap
     sibling = run_record(101, 10)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
-    monkeypatch.setattr(module, "_fetch_run", lambda *_args: candidate)
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
     assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == [100]
