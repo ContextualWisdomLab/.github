@@ -1,0 +1,58 @@
+name: One-shot PR 1585 regression-scope repair
+
+on:
+  push:
+    branches:
+      - fix/strix-control-plane-supersession-20260901
+    paths:
+      - .github/workflows/source-fix-1585-repair-regression.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Scope stale-run assertion to workflow concurrency and retire
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/strix-control-plane-supersession-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          old = 'assert "github.event.pull_request.head.sha" not in pre_jobs'
+          new = (
+              'assert "github.event.pull_request.head.sha" not in '
+              'pre_jobs.split("concurrency:", 1)[1].split("permissions:", 1)[0]'
+          )
+          paths = (
+              Path("tests/test_strix_control_plane_supersession.py"),
+              Path(".github/workflows/source-fix-1585-strix-control-plane-supersession.yml"),
+          )
+          for path in paths:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"unexpected assertion cardinality in {path}: {count}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          git rm .github/workflows/source-fix-1585-repair-regression.yml
+          git add tests/test_strix_control_plane_supersession.py \
+            .github/workflows/source-fix-1585-strix-control-plane-supersession.yml
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(test): scope stale-run assertion to concurrency group"
+          git push origin "HEAD:${TARGET_BRANCH}"
