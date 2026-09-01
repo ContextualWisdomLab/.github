@@ -78,6 +78,16 @@ def test_formal_material_verdict_rejects_unknown_adversarial_probe_kind() -> Non
         )
 
 
+def test_material_verdict_requires_distinct_observed_probe_classes() -> None:
+    """Two probes of one class must not satisfy the material-change diversity gate."""
+    with pytest.raises(RuntimeError, match="distinct probe_kind"):
+        gate.validate_substantive_verdict(
+            _verdict(first_kind="mutable_alias", second_kind="mutable_alias"),
+            DIFF,
+            ["tool.py"],
+        )
+
+
 def test_formal_material_verdict_accepts_observed_defect_probe_kinds() -> None:
     """Observed mutable-alias and execution-identity attacks remain admissible."""
     gate.validate_substantive_verdict(
