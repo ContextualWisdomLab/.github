@@ -1,0 +1,116 @@
+name: Dependency Review A-B Canary
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: dependency-review-ab-canary-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  compare-auth-context:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact canary head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact canary head
+        env:
+          EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_CHECKOUT_SHA" ]; then
+            echo "::error::Dependency Review A/B canary checkout identity mismatch for ${EXPECTED_CHECKOUT_REPOSITORY}: expected ${EXPECTED_CHECKOUT_SHA}, actual ${actual_sha}."
+            exit 1
+          fi
+          echo "DEPENDENCY_REVIEW_CANARY_CHECKOUT repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Run dependency review A/B canary
+        id: dependency_review_support
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          set -euo pipefail
+
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable: exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+
+          set +e
+          anonymous_status="$(
+            curl -sS --connect-timeout 10 --max-time 30 \
+              -o /dev/null \
+              -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}"
+          )"
+          anonymous_curl_status=$?
+          token_status="$(
+            curl -sS --connect-timeout 10 --max-time 30 \
+              -o /dev/null \
+              -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}"
+          )"
+          token_curl_status=$?
+          set -e
+
+          normalize_http_status() {
+            case "$1" in
+              [0-9][0-9][0-9]) printf '%s' "$1" ;;
+              "") printf '%s' unavailable ;;
+              *) printf '%s' malformed ;;
+            esac
+          }
+
+          anonymous_http_status="$(normalize_http_status "$anonymous_status")"
+          token_http_status="$(normalize_http_status "$token_status")"
+
+          case "${REPOSITORY_VISIBILITY:-}" in
+            public | private | internal) repository_visibility="$REPOSITORY_VISIBILITY" ;;
+            *) repository_visibility="unknown" ;;
+          esac
+
+          echo "DEPENDENCY_REVIEW_CANARY repository=${REPOSITORY} visibility=${repository_visibility} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} anonymous_http_status=${anonymous_http_status} anonymous_curl_exit=${anonymous_curl_status} token_http_status=${token_http_status} token_curl_exit=${token_curl_status} token_permissions=contents:read,pull-requests:read"
+
+          if [ "$token_curl_status" -ne 0 ] || [ "$token_http_status" != "200" ]; then
+            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: job-token HTTP ${token_http_status}; curl exit ${token_curl_status}. Anonymous probe was HTTP ${anonymous_http_status}; curl exit ${anonymous_curl_status}. Use this A/B result to identify the authorization or platform availability boundary. Failing closed."
+            exit 1
+          fi
+
+          echo "supported=true" >>"$GITHUB_OUTPUT"
+      - name: Explain A/B interpretation
+        if: always()
+        run: |
+          echo "::notice::This temporary owner-path canary compares the same immutable public dependency-review pair anonymously and with the job token. It never promotes anonymous success to authority and never substitutes another scanner for Dependency Review. Remove the canary after issue #810 has captured decisive owner-path evidence."
