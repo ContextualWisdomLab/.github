@@ -24,6 +24,16 @@ def update_tests_and_docs() -> None:
     fix.update_tests_and_docs_original()
 
 
+def commit_and_push(message: str) -> None:
+    """Skip an already-published TDD phase, otherwise publish normally."""
+    staged = fix.run("git", "diff", "--cached", "--quiet", check=False)
+    if staged.returncode == 0:
+        return
+    fix.commit_and_push_original(message)
+
+
 fix.update_tests_and_docs_original = fix.update_tests_and_docs
+fix.commit_and_push_original = fix.commit_and_push
 fix.update_tests_and_docs = update_tests_and_docs
+fix.commit_and_push = commit_and_push
 fix.main()
