@@ -135,8 +135,8 @@ jobs:
           text = text.replace(old, new, 1)
 
           marker = '''    if decision == "approve" and confirmed:
-              raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
-          '''
+        raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+'''
           insertion = '''    if len(probe_kinds) < required_probes:
               raise RuntimeError(
                   f"Noema {decision} requires at least {required_probes} distinct probe_kind values"
