@@ -38,5 +38,31 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "issue": 442,
             "type": "documentation",
         },
+        {
+            "repository": "contextual-orchestrator",
+            "issue": 994,
+            "type": "documentation",
+        },
+        {
+            "repository": "contextual-orchestrator",
+            "issue": 1003,
+            "type": "documentation",
+        },
+        {"repository": "appguardrail", "issue": 1077, "type": "documentation"},
+        {"repository": "naruon", "issue": 1513, "type": "documentation"},
+        {"repository": "LineageWeave", "issue": 908, "type": "documentation"},
+        {
+            "repository": "ContextualWisdomLab.github.io",
+            "issue": 203,
+            "type": "documentation",
+        },
+        {"repository": "TEPP", "issue": 435, "type": "documentation"},
+        {
+            "repository": "semantic-data-portal",
+            "issue": 72,
+            "type": "documentation",
+        },
+        {"repository": "Orgmetra", "issue": 160, "type": "documentation"},
+        {"repository": "noema", "issue": 530, "type": "feature"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
