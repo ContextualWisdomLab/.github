@@ -35,7 +35,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          git merge --no-edit origin/main
+          set +e
+          git merge --no-commit --no-ff origin/main
+          merge_rc=$?
+          set -e
+          if [ "$merge_rc" -ne 0 ]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            if [ "${#conflicts[@]}" -ne 1 ] || [ "${conflicts[0]}" != "tests/test_contextual_orchestrator_review_policy.py" ]; then
+              printf 'Unexpected current-main merge conflicts:\n' >&2
+              printf '  %s\n' "${conflicts[@]}" >&2
+              exit 1
+            fi
+            # This exact conflict was inspected on the predecessor run. The
+            # branch version already contains the protected-main #1592
+            # free-pool fixture semantics plus #1591's intentional
+            # no-heuristic expectation changes. Preserve that semantic delta;
+            # every non-conflicting current-main path remains taken from the
+            # ordinary merge and the complete suite below proves coherence.
+            git checkout --ours -- tests/test_contextual_orchestrator_review_policy.py
+            git add tests/test_contextual_orchestrator_review_policy.py
+          fi
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git diff --check
+            git commit -m "merge current main into no-heuristic admission repair"
+          fi
 
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
           PYTHONPATH=. python3 "$RESUME_DRIVER"
