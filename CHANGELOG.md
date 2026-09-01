@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Review deleted files from base-side evidence in Noema review gate:
+  `fetch_changed_files()` now captures the PR file `status`, and
+  `changed_file_context()` fetches pre-deletion content at `baseRefOid`
+  for removed files rather than attempting a head fetch that guaranteed
+  a 404 error and blocked substantive reviews.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
