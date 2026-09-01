@@ -57,9 +57,27 @@ _contextual_orchestrator_load_token() {
   export CONTEXTUAL_ORCHESTRATOR_TOKEN
 }
 
-_contextual_orchestrator_load_token || {
+_contextual_orchestrator_install_strix_compat() {
+  local loader_dir installer
+
+  if [ "${GITHUB_ACTIONS:-}" != "true" ] || [ -z "${STRIX_EXECUTABLE_PATH:-}" ]; then
+    return 0
+  fi
+  if ! loader_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"; then
+    _contextual_orchestrator_token_fail "Could not resolve the contextual-orchestrator helper directory." || return 1
+  fi
+  installer="$loader_dir/install_strix_timeout_compat.py"
+  if [ ! -f "$installer" ] || [ -L "$installer" ]; then
+    _contextual_orchestrator_token_fail "The trusted Strix timeout compatibility installer is unavailable." || return 1
+  fi
+  if ! python3 "$installer"; then
+    _contextual_orchestrator_token_fail "Could not install the trusted Strix timeout compatibility launcher." || return 1
+  fi
+}
+
+_contextual_orchestrator_load_token && _contextual_orchestrator_install_strix_compat || {
   _contextual_orchestrator_status=$?
-  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+  unset -f _contextual_orchestrator_install_strix_compat _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
   return "$_contextual_orchestrator_status"
 }
-unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+unset -f _contextual_orchestrator_install_strix_compat _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
