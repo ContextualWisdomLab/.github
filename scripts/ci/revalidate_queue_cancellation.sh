@@ -34,6 +34,7 @@ event="$(jq -r '.event // empty' <<<"$run_json")"
 status="$(jq -r '.status // empty' <<<"$run_json")"
 run_head="$(jq -r '.head_sha // empty' <<<"$run_json")"
 run_branch="$(jq -r '.head_branch // empty' <<<"$run_json")"
+run_head_repo="$(jq -r '.head_repository.full_name // empty' <<<"$run_json")"
 if ! [[ "$run_head" =~ ^[0-9a-fA-F]{40}$ ]]; then
   warn_preserve "live run head is malformed."
 fi
@@ -51,11 +52,43 @@ case "$event" in
     pr_number="$(jq -r '.pull_requests[0].number // empty' <<<"$run_json")"
     if ! [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]; then
       if [ "$cancellation_mode" = "aged-orphan" ]; then
-        # The stale candidate was selected only after the initial fleet snapshot
-        # proved that its head repository/ref is not a currently open PR head.
-        # Without an attached PR number there is no later PR authority to
-        # revalidate, so the still-queued aged orphan may be retired.
-        :
+        # Association metadata on an Actions run can lag the PR itself. Re-read
+        # every open PR immediately before destructive cancellation so a PR
+        # created/associated after the initial sweep snapshot cannot lose its
+        # sole current-head evidence. Any incomplete evidence fails closed.
+        if [ -z "$run_head_repo" ] || [ -z "$run_branch" ]; then
+          warn_preserve "unassociated PR run has no authoritative head repository/ref."
+        fi
+        if ! fresh_open_pr_heads_json="$(
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
+            --paginate \
+            | jq -sc '[.[] | .[] | {
+                repo: (.head.repo.full_name // null),
+                ref: (.head.ref // null),
+                sha: (.head.sha // null)
+              }]'
+        )"; then
+          warn_preserve "open PR heads could not be re-fetched for an unassociated PR run."
+        fi
+        if ! jq -e '
+          all(.[ ];
+            (.repo | type) == "string" and (.repo | length) > 0 and
+            (.ref | type) == "string" and (.ref | length) > 0 and
+            (.sha | type) == "string" and (.sha | test("^[0-9a-fA-F]{40}$"))
+          )
+        ' <<<"$fresh_open_pr_heads_json" >/dev/null; then
+          warn_preserve "fresh open PR head evidence is malformed."
+        fi
+        if jq -e \
+          --arg repo "$run_head_repo" \
+          --arg ref "$run_branch" \
+          --arg sha "$run_head" \
+          'any(.[ ]; .repo == $repo and .ref == $ref and .sha == $sha)' \
+          <<<"$fresh_open_pr_heads_json" >/dev/null; then
+          warn_preserve "run became associated with an open PR after queue classification."
+        fi
       else
         warn_preserve "no authoritative PR identity is attached to the live run."
       fi
