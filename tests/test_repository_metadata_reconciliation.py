@@ -226,7 +226,11 @@ def test_pages_and_docs_probes(monkeypatch) -> None:
         RECONCILER._pages_exists("Repo")
 
     responses = iter(
-        [completed(), completed(code=1, out="Not Found"), completed(code=1, err="boom")]
+        [
+            completed(out=json.dumps({"type": "file"})),
+            completed(code=1, out="Not Found"),
+            completed(code=1, err="boom"),
+        ]
     )
     monkeypatch.setattr(
         RECONCILER.subprocess, "run", lambda *args, **kwargs: next(responses)
