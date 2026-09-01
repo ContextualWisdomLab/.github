@@ -367,14 +367,22 @@ def test_build_catalog_applies_account_cap() -> None:
         account_counts[account] = account_counts.get(account, 0) + 1
     assert account_counts["nvidia_nim"] == 2
     assert account_counts["nvidia_nim_sub"] == 2
-    assert account_counts["openai"] == 2
+    # OPENAI_API_KEY is intentionally absent from FREE_POOL_CREDENTIAL_NAMES
+    # (see build_zdr_prioritized_catalog's own docstring): an openai row is
+    # never a free-pool candidate, account cap aside.
+    assert "openai" not in account_counts
 
 
 def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
+    # nvidia_nim, not openai: OPENAI_API_KEY is intentionally absent from
+    # FREE_POOL_CREDENTIAL_NAMES (see build_zdr_prioritized_catalog's own
+    # docstring), so an all-openai report has zero free-pool candidates and
+    # would fail closed before this test's actual property -- limit
+    # enforcement -- is ever exercised.
     report = {
         "models": [
-                {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+                {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_{i}", "is_free": True, **FREE_PRICE}
             for i in range(20)
         ]
     }
