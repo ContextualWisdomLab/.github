@@ -34,5 +34,34 @@ def repair_policy() -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def repair_stale_policy_test() -> None:
+    """Make the legacy-input regression match the now-non-authoritative contract."""
+    path = Path("tests/test_contextual_orchestrator_review_policy.py")
+    text = path.read_text(encoding="utf-8")
+    old = '''@pytest.mark.parametrize(("field", "value"), [("limit", True), ("account_cap", 1.5)])
+def test_build_catalog_rejects_malformed_legacy_cap_inputs(field: str, value: object) -> None:
+    """Compatibility-only inputs still fail closed when their type is malformed."""
+    kwargs = {field: value}
+    with pytest.raises(policy.PolicyError, match="legacy"):
+        policy.build_zdr_prioritized_catalog(
+            policy.parse_discovery_report(_report()), **kwargs
+        )
+'''
+    new = '''@pytest.mark.parametrize(("field", "value"), [("limit", True), ("account_cap", 1.5)])
+def test_build_catalog_ignores_legacy_cap_input_types(field: str, value: object) -> None:
+    """Retired compatibility inputs cannot regain admission authority through type gates."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()), **{field: value}
+    )
+    assert result["report"][f"legacy_{field}_ignored"] is True
+'''
+    if text.count(old) != 1:
+        if "def test_build_catalog_ignores_legacy_cap_input_types" in text:
+            return
+        raise SystemExit("stale legacy-cap regression changed unexpectedly")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 fix.repair_policy = repair_policy
+repair_stale_policy_test()
 fix.main()
