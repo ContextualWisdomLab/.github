@@ -433,6 +433,16 @@ def build_catalog_from_paths(
     return result
 
 
+def _warn_explicit_legacy_options(argv: list[str]) -> None:
+    """Warn when obsolete cardinality options remain in operator configuration."""
+    for option in ("--limit", "--account-cap"):
+        if any(argument == option or argument.startswith(f"{option}=") for argument in argv):
+            print(
+                f"contextual-orchestrator review policy: {option} is deprecated and ignored",
+                file=sys.stderr,
+            )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for catalog generation."""
     parser = argparse.ArgumentParser(
@@ -461,7 +471,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the catalog CLI and return one on policy or input failure."""
-    args = _build_parser().parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    args = _build_parser().parse_args(effective_argv)
+    _warn_explicit_legacy_options(effective_argv)
     try:
         build_catalog_from_paths(
             args.discovery_report,

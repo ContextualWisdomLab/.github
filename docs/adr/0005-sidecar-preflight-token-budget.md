@@ -23,3 +23,15 @@ empty or truncated output, but they do not impose a wall-clock deadline.
 
 The former attempt counts, retry ceilings, and timeout values in this ADR are
 historical evidence only and must not be restored.
+
+## 2026-09-02 startup-latency amendment
+
+Admission evidence and runtime readiness are distinct. The central free-only
+catalog retains every evidence-eligible route. Startup probes those admitted
+routes concurrently, with identical per-route base/escalation semantics and
+deterministic input-order evidence, so one slow provider cannot serialize the
+whole catalog and consume the review workflow deadline. Concurrency changes no
+route membership, priority, cost/ZDR decision, or provider preference; it only
+removes additive startup latency. The regression uses a synchronization barrier
+rather than a wall-clock threshold, proving that all admitted routes enter the
+probe before any one route is allowed to complete.

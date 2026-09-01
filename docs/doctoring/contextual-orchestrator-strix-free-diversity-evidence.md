@@ -63,6 +63,11 @@ first-come escalation preference. Every evidence-eligible route remains in the
 catalog. Downstream selection requires identified routing evidence; if that
 evidence is unavailable, the runtime fails closed.
 
+Startup readiness follows the same separation: complete admission evidence
+remains durable, while all admitted routes are probed concurrently and reported
+in catalog order. This removes additive provider latency without turning probe
+completion order into routing authority.
+
 PR #1629 restores that contract on current protected-main lineage by removing
 the reintroduced catalog cardinality/account caps, ranking, priority synthesis,
 launcher route-count caps, and shared escalation quota while preserving the

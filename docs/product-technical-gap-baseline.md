@@ -2589,3 +2589,19 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Validation.** Full suite `2407 passed, 1 skipped, 21 subtests`; `coverage` 100% on `scripts/ci`; `interrogate` 100%; all four touched/added workflow files re-parse as valid YAML; `test_opencode_workflow_shell_syntax.py` and related shell-syntax tests pass unchanged.
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
+
+### 2026-09-02 Noema/OpenCode reviewer readiness false-negative regression
+
+External review on `.github#1629` demonstrated a real operational false negative:
+full evidence admission had been coupled to sequential startup probing, so a large
+set of individually slow provider routes could consume the review deadline before
+Noema/OpenCode began serving. The repair keeps evidence admission complete, starts
+per-route readiness probes concurrently with no provider preference, preserves
+input-order/source evidence, and keeps each candidate's budget escalation local.
+`tests/test_contextual_orchestrator_review_preflight_concurrency.py` is the durable
+barrier-based regression: the old sequential implementation cannot pass it, while
+the GREEN implementation proves all admitted routes can enter transport before any
+route completes. Explicit legacy `--limit`/`--account-cap` CLI configuration now
+emits diagnostics while remaining decision-inert. The pinned contextual-orchestrator
+ranking contract was also re-audited: `_static_rank_key` ends in `agent.id`, so equal
+neutral priorities do not inherit discovery/list order as a routing tiebreak.

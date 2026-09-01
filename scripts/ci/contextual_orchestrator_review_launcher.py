@@ -22,6 +22,7 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
@@ -312,169 +313,124 @@ def _response_has_reasoning_without_content(response: object) -> bool:
     return not _chat_response_has_text(response)
 
 
-def _preflight_review_agents(
-    agents: list[object], *, client: Any
-) -> tuple[list[object], dict[str, object]]:
-    """Probe each route with the runtime request contract and keep ready routes.
+def _preflight_review_agent(
+    agent: object, *, client: Any
+) -> tuple[object | None, dict[str, object], int]:
+    """Probe one admitted route with route-local budget escalation evidence."""
+    row: dict[str, object] = {
+        "agent_id": str(getattr(agent, "id", "")),
+        "provider": str(getattr(agent, "provider_name", "") or "unknown"),
+        "model": str(getattr(agent, "model", "")),
+        "attempts": 1,
+    }
+    base_payload: dict[str, object] = {
+        "model": getattr(agent, "model", ""),
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Reply with just 'OK'."},
+        ],
+        "temperature": REVIEW_TEMPERATURE,
+        "max_tokens": REVIEW_PREFLIGHT_BASE_TOKENS,
+        "stream": False,
+    }
+    try:
+        response = client.proxy_send_once(agent, "chat/completions", base_payload)
+    except Exception as exc:  # noqa: BLE001 - sanitize at provider boundary
+        _record_provider_exception(row, exc)
+        return None, row, 0
+    if _chat_response_has_text(response):
+        row["status"] = "ready"
+        row["finish_reason"] = _response_finish_reason(response) or "unknown"
+        row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
+        return agent, row, 0
 
-    ADR-0005: a single fixed ``max_tokens`` cannot fit every model in a
-    heterogeneous pool. Each candidate gets one cheap base-budget probe
-    (``REVIEW_PREFLIGHT_BASE_TOKENS``); when that specific candidate's
-    response is empty for a "budget too small" reason -- either
-    ``choices[0].finish_reason == "length"`` (OpenAI's documented signature),
-    or the vendored ``ModelClient._response_content``'s own broader signature
-    (a populated ``message.reasoning`` with no string ``content``, which a
-    reasoning model can hit under a different ``finish_reason`` -- provider
-    ``finish_reason`` semantics for this case are not verified as uniform
-    across the pool, and this is the exact original failure mode PR #1436
-    responded to) -- that *same* candidate is retried once at a larger,
-    escalated budget (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``) before being
-    marked rejected. The retry decision is local to that candidate and
-    cannot be exhausted by earlier catalog entries. Every other failure class
-    (transport exception,
-    non-2xx, or empty content matching neither signature) is not retried: a
-    genuinely-down candidate never reaches the escalation path, so it cannot
-    produce a false "healthy" read.
-    An exception on the escalated attempt (transport failure, auth failure,
-    rate limit, server error, or a genuine budget rejection) is recorded via
-    ``_record_provider_exception`` -- the SAME sanitized classification the
-    base probe uses, regardless of attempt. An HTTP status alone does not
-    distinguish "this candidate's real ceiling is below the escalated
-    budget" from any other cause (401/429/5xx are not budget evidence); this
-    codebase has no validated signal today that does, so it does not invent
-    one via an over-specific label.
-
-    The report deliberately records only stable route identity, a bounded
-    exception class name, an optional numeric HTTP status, attempt count, and
-    a bounded ``finish_reason``. Provider response bodies, exception
-    messages, URLs, prompts, and credentials are never copied into evidence.
-    ``finish_reason`` and ``reasoning_without_content`` are populated on
-    every response-bearing outcome -- success included, not just
-    failure/escalation, so future tuning has a real "normal" baseline to
-    compare against -- and always describe the same, most recent attempt for
-    a route (the base attempt when only one was made; the escalated attempt
-    when a second was made) -- never a mix of the two attempts' state. When
-    the escalated attempt raises an exception instead of returning a
-    response, both fields are absent entirely (there is no response to
-    describe) rather than silently retaining the base attempt's values.
-
-    Args:
-        agents: Selected zero-cost model agents.
-        client: Vendored ``ModelClient``-compatible transport.
-    Returns:
-        A pair of viable agents and a sanitized preflight report. The
-        report's ``escalations_used`` is observed telemetry for this
-        stage only and never an admission quota.
-
-    Raises:
-        ReviewPreflightError: If no provider route returns usable text.
-    """
-    viable: list[object] = []
-    routes: list[dict[str, object]] = []
-    escalations_used = 0
-    for agent in agents:
-        row: dict[str, object] = {
-            "agent_id": str(getattr(agent, "id", "")),
-            "provider": str(getattr(agent, "provider_name", "") or "unknown"),
-            "model": str(getattr(agent, "model", "")),
-            "attempts": 1,
-        }
-        base_payload: dict[str, object] = {
-            "model": getattr(agent, "model", ""),
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "Reply with just 'OK'."},
-            ],
-            "temperature": REVIEW_TEMPERATURE,
-            "max_tokens": REVIEW_PREFLIGHT_BASE_TOKENS,
-            "stream": False,
-        }
-        try:
-            response = client.proxy_send_once(agent, "chat/completions", base_payload)
-        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
-            _record_provider_exception(row, exc)
-            routes.append(row)
-            continue
-        if _chat_response_has_text(response):
-            # KNOWN GAP, tracked (not yet fixed) as
-            # ContextualWisdomLab/.github#1454: this admits the candidate
-            # having only proven it works at REVIEW_PREFLIGHT_BASE_TOKENS
-            # (16), never at the real serving budget
-            # (REVIEW_MAX_OUTPUT_TOKENS, 4096) main()'s ModelClient actually
-            # requests. ADR-0005's own Research (axis 2) already documents
-            # that a provider's hard completion-token ceiling is a real,
-            # separate-from-reasoning-overhead quantity per model; a
-            # candidate whose real ceiling sits strictly between 16 and 4096
-            # would pass here and only fail later, on real review traffic.
-            # Mitigated in production (not fixed here) by
-            # contextual_orchestrator.orchestrator.TaskOrchestrator's own
-            # per-request failover/circuit-breaker, which this preflight
-            # does not replace.
-            row["status"] = "ready"
-            # Populated on every outcome, including this most-common,
-            # ordinary success path -- not just failure/escalation --  so
-            # future tuning has a real "normal" baseline to compare against,
-            # not just evidence of what went wrong.
-            row["finish_reason"] = _response_finish_reason(response) or "unknown"
-            row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
-            routes.append(row)
-            viable.append(agent)
-            continue
-        finish_reason = _response_finish_reason(response)
-        row["finish_reason"] = finish_reason or "unknown"
-        reasoning_without_content = _response_has_reasoning_without_content(response)
-        row["reasoning_without_content"] = reasoning_without_content
-        budget_signature = finish_reason == "length" or reasoning_without_content
-        if not budget_signature:
-            row["status"] = "rejected"
-            row["error_type"] = "invalid_chat_response"
-            routes.append(row)
-            continue
-        escalations_used += 1
-        row["attempts"] = 2
-        escalated_payload = dict(base_payload)
-        escalated_payload["max_tokens"] = REVIEW_PREFLIGHT_ESCALATED_TOKENS
-        try:
-            escalated_response = client.proxy_send_once(
-                agent, "chat/completions", escalated_payload
-            )
-        except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
-            # An HTTP status alone (401 auth, 429 throttle, 5xx server
-            # error, ...) is not evidence the escalated *budget* specifically
-            # caused the rejection -- only that some request failed. Record
-            # the same sanitized classification the base probe uses, rather
-            # than the previous "escalated_probe_rejected" label, which
-            # over-claimed budget-specific attribution this codebase has no
-            # validated signal to actually support.
-            _record_provider_exception(row, exc)
-            routes.append(row)
-            continue
-        if _chat_response_has_text(escalated_response):
-            row["status"] = "ready"
-            row["escalated"] = True
-            # Overwrite the base attempt's stale diagnostic fields with the
-            # escalated (successful, final) attempt's own state -- otherwise
-            # a ready route's evidence would still show the budget-too-small
-            # signature that triggered the escalation in the first place,
-            # describing a response this route no longer produced.
-            row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
-            row["reasoning_without_content"] = _response_has_reasoning_without_content(
-                escalated_response
-            )
-            routes.append(row)
-            viable.append(agent)
-            continue
+    finish_reason = _response_finish_reason(response)
+    row["finish_reason"] = finish_reason or "unknown"
+    reasoning_without_content = _response_has_reasoning_without_content(response)
+    row["reasoning_without_content"] = reasoning_without_content
+    if finish_reason != "length" and not reasoning_without_content:
         row["status"] = "rejected"
         row["error_type"] = "invalid_chat_response"
-        # Both fields now describe this escalated (2nd, final) attempt,
-        # never a mix with the base attempt's state -- see the docstring.
+        return None, row, 0
+
+    row["attempts"] = 2
+    escalated_payload = dict(base_payload)
+    escalated_payload["max_tokens"] = REVIEW_PREFLIGHT_ESCALATED_TOKENS
+    try:
+        escalated_response = client.proxy_send_once(
+            agent, "chat/completions", escalated_payload
+        )
+    except Exception as exc:  # noqa: BLE001 - sanitize at provider boundary
+        _record_provider_exception(row, exc)
+        return None, row, 1
+    if _chat_response_has_text(escalated_response):
+        row["status"] = "ready"
+        row["escalated"] = True
         row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
         row["reasoning_without_content"] = _response_has_reasoning_without_content(
             escalated_response
         )
-        routes.append(row)
+        return agent, row, 1
 
-    report: dict[str, object] = {
+    row["status"] = "rejected"
+    row["error_type"] = "invalid_chat_response"
+    row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
+    row["reasoning_without_content"] = _response_has_reasoning_without_content(
+        escalated_response
+    )
+    return None, row, 1
+
+
+def _preflight_review_agents(
+    agents: list[object], *, client: Any
+) -> tuple[list[object], dict[str, object]]:
+    """Probe admitted routes concurrently and report evidence in catalog order.
+
+    Admission and readiness are separate contracts. Every evidence-eligible
+    route stays admitted; this stage only establishes immediate serving
+    readiness. All admitted routes start one equal base probe concurrently, so
+    one slow route cannot serialize startup behind every other provider. A
+    route receives one larger-budget retry only when its own response carries
+    the explicit budget-starvation signature. There is no shared first-come
+    quota, route cap, provider preference, or completion-order authority.
+
+    Results are consumed in input order, preserving exact catalog/source
+    evidence even when providers complete out of order. ``ModelClient`` keeps
+    per-call usage in thread-local storage and its provider-slot guard is
+    thread-safe, so one shared client does not alias route telemetry.
+    """
+    if not agents:
+        report: dict[str, object] = {
+            "contract": "strix-plain-chat-preflight-v2",
+            "probed_count": 0,
+            "ready_count": 0,
+            "rejected_count": 0,
+            "escalations_used": 0,
+            "routes": [],
+        }
+        raise ReviewPreflightError(
+            "no provider route passed the Strix plain-chat preflight", report
+        )
+
+    with ThreadPoolExecutor(
+        max_workers=len(agents), thread_name_prefix="review-preflight"
+    ) as executor:
+        futures = [
+            executor.submit(_preflight_review_agent, agent, client=client)
+            for agent in agents
+        ]
+        outcomes = [future.result() for future in futures]
+
+    viable: list[object] = []
+    routes: list[dict[str, object]] = []
+    escalations_used = 0
+    for ready_agent, row, escalations in outcomes:
+        routes.append(row)
+        escalations_used += escalations
+        if ready_agent is not None:
+            viable.append(ready_agent)
+
+    report = {
         "contract": "strix-plain-chat-preflight-v2",
         "probed_count": len(agents),
         "ready_count": len(viable),
@@ -487,7 +443,6 @@ def _preflight_review_agents(
             "no provider route passed the Strix plain-chat preflight", report
         )
     return viable, report
-
 
 def _preflight_with_fallback(
     primary_agents: list[object], fallback_agents: list[object], *, client: Any
@@ -700,7 +655,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
-        PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
         is_zdr_model,
@@ -743,31 +697,8 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     normalized_rows = parse_discovery_report({"models": rows})
-    free_rows = [
-        row for row in normalized_rows if row.get("cost_evidence") == "free"
-    ]
-    priced_rows = [
-        row for row in normalized_rows if row.get("cost_evidence") == "priced"
-    ]
-    admitted_free_rows = _zdr_admitted_rows(
-        free_rows,
-        require_zdr=args.require_zdr,
-        zdr_endpoints=zdr_endpoints,
-        checker=is_zdr_model,
-    )
-    admitted_priced_rows = _zdr_admitted_rows(
-        priced_rows,
-        require_zdr=args.require_zdr,
-        zdr_endpoints=zdr_endpoints,
-        checker=is_zdr_model,
-    )
-    primary_rows = (
-        (admitted_free_rows or admitted_priced_rows)
-        if args.pool == "auto"
-        else normalized_rows
-    )
     result = build_zdr_prioritized_catalog(
-        primary_rows,
+        normalized_rows,
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
@@ -782,58 +713,17 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.report_out, result["report"])
 
     agents = load_agents(args.catalog_out)
-    primary_report = result["report"]
-    fallback_result = None
-    fallback_agents: list[object] = []
-    if (
-        args.pool == "auto"
-        and admitted_free_rows
-        and admitted_priced_rows
-    ):
-        try:
-            fallback_result = build_zdr_prioritized_catalog(
-                admitted_priced_rows,
-                zdr_endpoints=zdr_endpoints,
-                require_zdr=args.require_zdr,
-                pool="auto",
-            )
-        except PolicyError:
-            fallback_result = None
-        if fallback_result is not None:
-            fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"], normalized_rows, provider_account=provider_account
-            )
-            fallback_result["report"]["primary_selected_count"] = primary_report[
-                "selected_count"
-            ]
-            fallback_result["report"]["primary_selection"] = primary_report["selected"]
-            fallback_agents = _load_temporary_agents(
-                f"{args.catalog_out}.priced",
-                fallback_result["agents"],
-                loader=load_agents,
-            )
     client = ModelClient(
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
         max_retries=0,
         temperature=REVIEW_TEMPERATURE,
     )
     try:
-        agents, preflight_report, fallback_used = _preflight_with_fallback(
-            agents, fallback_agents, client=client
-        )
+        agents, preflight_report = _preflight_review_agents(agents, client=client)
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)
         _log_preflight_rejections(exc.report)
         raise SystemExit(f"review sidecar preflight failed: {exc}") from None
-    if fallback_used and fallback_result is not None:
-        Path(args.catalog_out).write_text(
-            json.dumps({"agents": fallback_result["agents"]}, indent=2, sort_keys=True)
-            + "\n",
-            encoding="utf-8",
-        )
-        result = fallback_result
-        result["report"]["fallback_reason"] = "primary_routes_unavailable"
-        _write_json(args.report_out, result["report"])
     _write_json(args.preflight_out, preflight_report)
 
     client = ModelClient(

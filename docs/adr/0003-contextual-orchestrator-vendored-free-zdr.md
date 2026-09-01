@@ -190,10 +190,12 @@ all five, and auto-optimize routing by cost.
   was drafted (in a now-superseded addendum proposing to gate the `free`
   decision on this evidence rather than making it directly) before the
   2026-08-30 amendment above made the switch directly, without waiting for
-  that gate. The evidence itself remains useful regardless: it is exactly
-  the live signal for when "the free-catalog's stale-model and
-  provider-diversity gaps documented alongside this amendment" (above) are
-  closed, without requiring a manual re-audit.
+  that gate. The evidence itself remains useful as an account-level
+  diagnostic, but it is not an exact provider/outage-domain diversity signal:
+  multiple credentialed accounts can share one provider or outage domain.
+  Closing the reliability risk therefore requires separately modeled provider/
+  outage-domain evidence rather than treating account cardinality as routing
+  authority or as proof that the earlier diversity gap is closed.
   `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
   records that PR's own reasoning trail.
 - **2026-08-31 amendment: Noema reviews independently of OpenCode.** Noema no
