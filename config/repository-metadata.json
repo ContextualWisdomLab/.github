@@ -49,6 +49,12 @@
       "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "EmbedRelay": {
+      "description": "EmbedRelay — governed embedding-space continuity and cross-model vector migration for retrieval systems.",
+      "topics": ["embeddings", "vector-search", "embedding-migration", "retrieval", "interoperability", "pre-release", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
