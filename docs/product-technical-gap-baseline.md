@@ -2386,11 +2386,14 @@ exact same head showing both files at 100% branch coverage with zero missing bra
 this evidence on the review thread and did not widen the PR's diff for a claim that does not hold
 against this repo's own tooling.
 
-**One test in the full suite remains a known, pre-existing flake**, unrelated to this change:
+**One test in the full suite remained a known, pre-existing flake**, unrelated to this change:
 `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`
-intermittently exits 141 (SIGPIPE) under full-suite parallel load; reproduces identically on
-unmodified `origin/main` and passes cleanly in file isolation. Not remediated here — out of scope
-for a coverage-gap-only PR, and not itself a coverage regression.
+intermittently exited 141 (SIGPIPE) under full-suite parallel load; reproduced identically on
+unmodified `origin/main` and passed cleanly in file isolation. Not remediated in this pass — out of
+scope for a coverage-gap-only PR, and not itself a coverage regression. **Since remediated** (`9e0c0224`,
+`fix(test): eliminate scheduler-wake SIGPIPE flake`): the fixture's fake `gh dispatches` responder now
+drains its stdin (`cat >/dev/null`) before recording the call, closing the unread-pipe race that
+produced the intermittent SIGPIPE (Devin Review, PR #1500).
 
 ## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 

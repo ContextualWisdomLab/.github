@@ -683,25 +683,66 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_existing_noema_review_matches_actor_and_head():
-    noema_marker = noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->"
+    head = "a" * 40
+    noema_marker = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     assert noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="human", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="human", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body="review without gate marker")]}),
+        make_pr(
+            headRefOid=head,
+            reviews={"nodes": [review(commit=head, login="noema", body="review without gate marker")]},
+        ),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="", body=noema_marker)]}),
         "",
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+
+
+def test_existing_noema_review_rejects_well_formed_body_bound_to_a_different_head():
+    """A well-formed footer/marker pair naming a stale SHA must not match.
+
+    The review's own commit oid can match the current head even when its
+    authored body text still carries the previous head's SHA bindings (a
+    corrupted or hand-edited review) — this is distinct from the missing/
+    malformed case and exercises the SHA-equality check on its own.
+    """
+    head = "a" * 40
+    stale = "b" * 40
+    stale_bound_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{stale}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={stale} decision=approve -->",
+        ]
+    )
+    assert not noema.existing_noema_review(
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=stale_bound_body)]}),
+        "noema",
+    )
 
 
 def test_existing_noema_review_rejects_legacy_body_without_footer_marker():
@@ -2024,20 +2065,23 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
 
+    valid_review_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     cases = [
         (make_pr(headRefOid=head, isDraft=True), "noema"),
         (
             make_pr(
                 headRefOid=head,
-                reviews={
-                    "nodes": [
-                        review(
-                            commit=head,
-                            login="noema",
-                            body=noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->",
-                        )
-                    ]
-                },
+                reviews={"nodes": [review(commit=head, login="noema", body=valid_review_body)]},
             ),
             "noema",
         ),
@@ -2059,6 +2103,29 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     )
     calls.clear()
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls
+
+    # A review with both markers present but a missing/malformed body-side or
+    # closing-marker SHA binding (Devin Review, PR #1500) must also not
+    # suppress a rerun: noema_review_handoff.py's noema_review_state() can
+    # never recognize such a review as a valid current-head verdict either,
+    # so treating it as "already reviewed" here would stall the PR forever.
+    malformed_pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                review(
+                    commit=head,
+                    login="noema",
+                    body=noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->",
+                )
+            ]
+        },
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=malformed_pr: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
