@@ -31,6 +31,22 @@ def desired(**overrides):
     return state
 
 
+class FakeResponse:
+    """Minimal context-managed HTTPS response used by Pages reachability tests."""
+
+    def __init__(self, payload=b"x"):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self, size=-1):
+        return self.payload[:size]
+
+
 def install_live_state(
     monkeypatch,
     *,
@@ -49,6 +65,8 @@ def install_live_state(
     if page_config is None:
         page_config = {
             "build_type": "legacy",
+            "status": "built",
+            "html_url": "https://contextualwisdomlab.github.io/Repo/",
             "source": {"branch": default_branch, "path": "/docs"},
         }
 
@@ -67,6 +85,49 @@ def install_live_state(
     monkeypatch.setattr(
         RECONCILER, "_pages_configuration", lambda *args: page_config
     )
+    monkeypatch.setattr(RECONCILER, "urlopen", lambda *args, **kwargs: FakeResponse())
+
+
+def test_pages_publication_ready_requires_build_https_and_content(monkeypatch) -> None:
+    """A Pages configuration is complete only when its built site is reachable."""
+
+    ready = {
+        "status": "built",
+        "html_url": "https://contextualwisdomlab.github.io/Repo/",
+    }
+    seen = []
+
+    def open_ok(request, timeout):
+        seen.append((request.full_url, request.headers["User-agent"], timeout))
+        return FakeResponse(b"published")
+
+    monkeypatch.setattr(RECONCILER, "urlopen", open_ok)
+    RECONCILER._pages_publication_ready("Repo", ready)
+    assert seen == [
+        (
+            "https://contextualwisdomlab.github.io/Repo/",
+            "ContextualWisdomLab-repository-metadata-reconcile",
+            10,
+        )
+    ]
+
+    with pytest.raises(RuntimeError, match="not built"):
+        RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
+    with pytest.raises(RuntimeError, match="URL is invalid"):
+        RECONCILER._pages_publication_ready("Repo", {**ready, "html_url": "http://x"})
+
+    monkeypatch.setattr(
+        RECONCILER, "urlopen", lambda *args, **kwargs: FakeResponse(b"")
+    )
+    with pytest.raises(RuntimeError, match="empty content"):
+        RECONCILER._pages_publication_ready("Repo", ready)
+
+    def open_error(*args, **kwargs):
+        raise RECONCILER.URLError("offline")
+
+    monkeypatch.setattr(RECONCILER, "urlopen", open_error)
+    with pytest.raises(RuntimeError, match="not reachable"):
+        RECONCILER._pages_publication_ready("Repo", ready)
 
 
 def test_verify_repository_accepts_converged_disabled_and_enabled_pages(
@@ -78,9 +139,7 @@ def test_verify_repository_accepts_converged_disabled_and_enabled_pages(
     RECONCILER.verify_repository("Repo", desired())
 
     install_live_state(monkeypatch, badge=True, docs=True, pages=True)
-    RECONCILER.verify_repository(
-        "Repo", desired(deepwiki=True, pages=True)
-    )
+    RECONCILER.verify_repository("Repo", desired(deepwiki=True, pages=True))
 
 
 @pytest.mark.parametrize(
@@ -107,6 +166,8 @@ def test_verify_repository_accepts_converged_disabled_and_enabled_pages(
                 "pages": True,
                 "page_config": {
                     "build_type": "workflow",
+                    "status": "built",
+                    "html_url": "https://contextualwisdomlab.github.io/Repo/",
                     "source": {"branch": "main", "path": "/docs"},
                 },
             },
@@ -124,6 +185,25 @@ def test_verify_repository_rejects_every_public_surface_drift(
     install_live_state(monkeypatch, **state)
     with pytest.raises(RuntimeError, match=message):
         RECONCILER.verify_repository("Repo", desired(**wanted))
+
+
+def test_verify_repository_rejects_unready_published_pages(monkeypatch) -> None:
+    """A correctly configured but still-building Pages site is not completion."""
+
+    install_live_state(
+        monkeypatch,
+        badge=True,
+        docs=True,
+        pages=True,
+        page_config={
+            "build_type": "legacy",
+            "status": "building",
+            "html_url": "https://contextualwisdomlab.github.io/Repo/",
+            "source": {"branch": "main", "path": "/docs"},
+        },
+    )
+    with pytest.raises(RuntimeError, match="not built"):
+        RECONCILER.verify_repository("Repo", desired(deepwiki=True, pages=True))
 
 
 def test_main_verify_only_uses_read_only_verifier(monkeypatch, tmp_path: Path) -> None:
