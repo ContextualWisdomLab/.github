@@ -1,4 +1,4 @@
-name: Isolated PR 1589 GREEN writer
+name: Isolated PR 1589 main reconciliation
 
 on:
   push:
@@ -11,15 +11,15 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  reconcile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Reconcile current main and implement source-bound probe witnesses
+      - name: Merge protected main without executing target code
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
-          EXPECTED_HEAD: cdfcf4001033bcf521cc67dcfda0bab047e7ef36
+          EXPECTED_HEAD: 8a72d6033fa101a05fa5e2b29d95abfb2c24bee6
         shell: bash
         run: |
           set -euo pipefail
@@ -29,185 +29,11 @@ jobs:
           git fetch origin "$TARGET_BRANCH" main
           git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit -X theirs origin/main
-
-          test -n "$(git grep -n 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py)"
+          git merge --no-edit origin/main
           test -n "$(git grep -n 'OBSERVED_REVIEW_PROBE_KINDS' -- scripts/ci/noema_review_gate.py)"
-          test -f tests/test_noema_probe_source_binding.py
-
-          mapfile -t stale_writers < <(find .github/workflows -maxdepth 1 -type f -name 'source-fix-1589*.yml' -print | sort)
-          if ((${#stale_writers[@]})); then
-            git rm -- "${stale_writers[@]}"
-          fi
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source_path = Path('scripts/ci/noema_review_gate.py')
-          source = source_path.read_text(encoding='utf-8')
-
-          old_validator_start = source.index('\ndef _validate_observed_probe_class_evidence(')
-          validator_end = source.index('\ndef validate_substantive_verdict(', old_validator_start)
-          new_validator = r'''
-
-def changed_diff_line_texts(diff: str) -> dict[tuple[str, int, str], str]:
-    """Return exact changed-side source text keyed by diff location."""
-    source_lines: dict[tuple[str, int, str], str] = {}
-    old_path = new_path = ""
-    old_line = new_line = 0
-    in_hunk = False
-    for raw_line in diff.splitlines():
-        if raw_line.startswith("diff --git "):
-            old_path = new_path = ""
-            in_hunk = False
-            continue
-        if not in_hunk and raw_line.startswith("--- "):
-            old_path = parse_diff_path(raw_line[4:], "a/")
-            continue
-        if not in_hunk and raw_line.startswith("+++ "):
-            new_path = parse_diff_path(raw_line[4:], "b/")
-            continue
-        match = DIFF_HUNK_RE.match(raw_line)
-        if match:
-            old_line, new_line = map(int, match.groups())
-            in_hunk = True
-            continue
-        if not in_hunk or raw_line.startswith("\\ No newline"):
-            continue
-        if raw_line.startswith("+"):
-            if not new_path:
-                return {}
-            source_lines[(new_path, new_line, "RIGHT")] = raw_line[1:]
-            new_line += 1
-        elif raw_line.startswith("-"):
-            if not old_path:
-                return {}
-            source_lines[(old_path, old_line, "LEFT")] = raw_line[1:]
-            old_line += 1
-        else:
-            old_line += 1
-            new_line += 1
-    return source_lines
-
-
-def _validate_observed_probe_class_evidence(
-    probe: dict[str, Any],
-    probe_kind: str,
-    index: int,
-    source_lines: dict[tuple[str, int, str], str],
-) -> None:
-    """Bind each class-specific witness to the probe's exact changed source line."""
-    class_evidence = probe.get("class_evidence")
-    required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
-    if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
-        expected = ", ".join(required_fields)
-        raise RuntimeError(
-            f"Noema adversarial probe {index} class_evidence for {probe_kind} "
-            f"must contain exactly: {expected}"
-        )
-    probe_location = (probe.get("path"), probe.get("line"), probe.get("side"))
-    required_witness_fields = {"path", "line", "side", "source_excerpt"}
-    for field in required_fields:
-        witness = class_evidence.get(field)
-        if not isinstance(witness, dict) or set(witness) != required_witness_fields:
-            raise RuntimeError(
-                f"Noema adversarial probe {index} class_evidence.{field} "
-                "requires an exact source-bound witness object"
-            )
-        witness_location = (
-            witness.get("path"), witness.get("line"), witness.get("side")
-        )
-        if witness_location != probe_location:
-            raise RuntimeError(
-                f"Noema adversarial probe {index} class_evidence.{field} "
-                "must match the probe location"
-            )
-        excerpt = witness.get("source_excerpt")
-        if not isinstance(excerpt, str) or source_lines.get(witness_location) != excerpt:
-            raise RuntimeError(
-                f"Noema adversarial probe {index} class_evidence.{field} "
-                "must be source-bound to the exact changed line"
-            )
-'''
-          source = source[:old_validator_start] + new_validator + source[validator_end:]
-
-          old = '    locations = changed_diff_locations(diff)\n    if not locations:\n'
-          new = (
-              '    locations = changed_diff_locations(diff)\n'
-              '    source_lines = changed_diff_line_texts(diff)\n'
-              '    if not locations or set(source_lines) != locations:\n'
-          )
-          if source.count(old) != 1:
-              raise SystemExit(f'expected one locations block, found {source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = '''        _validate_observed_probe_class_evidence(probe, probe_kind, index)\n        probe_kinds.add(probe_kind)\n        location = (probe.get("path"), probe.get("line"), probe.get("side"))\n        if location not in locations:\n            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")\n'''
-          new = '''        probe_kinds.add(probe_kind)\n        location = (probe.get("path"), probe.get("line"), probe.get("side"))\n        if location not in locations:\n            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")\n        _validate_observed_probe_class_evidence(\n            probe, probe_kind, index, source_lines\n        )\n'''
-          if source.count(old) != 1:
-              raise SystemExit(f'expected one probe validation block, found {source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = '"class_evidence": {"exact_fields_for_selected_probe_kind": "source-traced witness text"},'
-          new = '"class_evidence": {"exact_fields_for_selected_probe_kind": {**location_example, "source_excerpt": "exact changed-line text"}},'
-          if source.count(old) != 1:
-              raise SystemExit(f'expected one class_evidence prompt example, found {source.count(old)}')
-          source = source.replace(old, new, 1)
-
-          old = '"A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific source-traced witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ".",'
-          new = '"A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ". Every witness field value must be an object containing exactly path, line, side, and source_excerpt; path/line/side must equal that probe location and source_excerpt must copy the exact changed-side line text from the supplied diff. Generic prose or a witness from another changed line is invalid.",'
-          if source.count(old) != 1:
-              raise SystemExit(f'expected one class evidence instruction, found {source.count(old)}')
-          source = source.replace(old, new, 1)
-          source_path.write_text(source, encoding='utf-8')
-
-          test_path = Path('tests/test_noema_observed_defect_probe_taxonomy.py')
-          test_text = test_path.read_text(encoding='utf-8')
-          old = '''def _class_evidence(probe_kind: str) -> dict[str, str]:\n    \"\"\"Build the exact class-specific witness schema expected for one probe kind.\"\"\"\n    return {\n        field: f\"source-traced {field.replace('_', ' ')} witness\"\n        for field in CLASS_EVIDENCE_FIELDS[probe_kind]\n    }\n'''
-          new = '''def _source_ref() -> dict[str, object]:\n    \"\"\"Return an exact changed-side source reference for the fixture line.\"\"\"\n    return {\n        \"path\": \"tool.py\",\n        \"line\": 1,\n        \"side\": \"RIGHT\",\n        \"source_excerpt\": \"candidate = source.value\",\n    }\n\n\ndef _class_evidence(probe_kind: str) -> dict[str, dict[str, object]]:\n    \"\"\"Build source-bound class witnesses for one observed probe kind.\"\"\"\n    return {field: _source_ref() for field in CLASS_EVIDENCE_FIELDS[probe_kind]}\n'''
-          if test_text.count(old) != 1:
-              raise SystemExit(f'expected taxonomy class_evidence helper once, found {test_text.count(old)}')
-          test_text = test_text.replace(old, new, 1)
-          prompt_assertion = '    assert "CodeGraph context" not in prompt_text\n'
-          if prompt_assertion in test_text and 'assert "source_excerpt" in prompt_text' not in test_text:
-              test_text = test_text.replace(
-                  prompt_assertion,
-                  prompt_assertion + '    assert "source_excerpt" in prompt_text\n',
-                  1,
-              )
-          test_path.write_text(test_text, encoding='utf-8')
-
-          workflow_path = Path('.github/workflows/noema-observed-probe-quality-ci.yml')
-          workflow = workflow_path.read_text(encoding='utf-8')
-          trigger_anchor = '      - tests/test_noema_observed_defect_probe_taxonomy.py\n'
-          run_anchor = '            tests/test_noema_observed_defect_probe_taxonomy.py \\\n'
-          if '      - tests/test_noema_probe_source_binding.py\n' not in workflow:
-              if trigger_anchor not in workflow:
-                  raise SystemExit('quality workflow trigger anchor missing')
-              workflow = workflow.replace(
-                  trigger_anchor,
-                  trigger_anchor + '      - tests/test_noema_probe_source_binding.py\n',
-                  1,
-              )
-          if '            tests/test_noema_probe_source_binding.py \\\n' not in workflow:
-              if run_anchor not in workflow:
-                  raise SystemExit('quality workflow run anchor missing')
-              workflow = workflow.replace(
-                  run_anchor,
-                  run_anchor + '            tests/test_noema_probe_source_binding.py \\\n',
-                  1,
-              )
-          workflow_path.write_text(workflow, encoding='utf-8')
-          PY
-
+          test -n "$(git grep -n 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py)"
           test -z "$(find .github/workflows -maxdepth 1 -type f -name 'source-fix-1589*.yml' -print -quit)"
-          git grep -q 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py
-          git grep -q 'def changed_diff_line_texts' -- scripts/ci/noema_review_gate.py
-          git grep -q 'source_excerpt' -- scripts/ci/noema_review_gate.py
-          git diff --check
-          git add -A
-          git diff --cached --check
-          git commit -m "fix(noema): bind probe witnesses to exact changed source"
+          git diff --check HEAD^1 HEAD
           git push origin "HEAD:${TARGET_BRANCH}"
