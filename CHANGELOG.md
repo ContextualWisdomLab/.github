@@ -17,7 +17,15 @@ Semantic Versioning where the repository publishes a release.
   already existed immediately before it launches Strix, and only accepts one
   that is new since that snapshot -- while severity scanning for blocking
   (HIGH/CRITICAL) findings stays cumulative across every attempt, so a real
-  finding from an earlier attempt is never silently dropped.
+  finding from an earlier attempt is never silently dropped. A second, deeper
+  Devin Review finding on the same PR then showed the artifact-presence
+  contract itself was wrong even before attempt-scoping: the pinned
+  `strix-agent==1.5.3` only writes `vulnerabilities/*.md` when a scan has
+  findings, so a genuinely clean (zero-finding) scan never produces one and
+  would fail closed every time, since `#1495`. The success-evidence contract
+  now checks Strix's own always-written `run.json` (`"status": "completed"`)
+  instead, still attempt-scoped the same way; blocking-finding severity
+  scanning over `vulnerabilities/*.md` remains cumulative and unchanged.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

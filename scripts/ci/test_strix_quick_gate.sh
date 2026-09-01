@@ -3376,16 +3376,20 @@ STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 # so the backstop is only written for a genuine zero exit status, never for a
 # sleep interrupted mid-flight.
 #
-# Production's own artifact-presence guard became attempt-scoped (a "success"
-# rc=0 Strix invocation must not be validated by a leftover report an
+# Production's own success-evidence guard became attempt-scoped (a "success"
+# rc=0 Strix invocation must not be validated by a leftover run record an
 # earlier, already-superseded attempt or model left behind -- Devin review
-# on `#1495`'s successor `#1563`), so this backstop must match: it snapshots
-# which vulnerabilities/*.md files already existed before this specific
-# invocation started (a fresh process per attempt, so a plain array survives
-# for its whole lifetime) and only treats the run as already covered when a
-# file *not* in that snapshot exists -- i.e. this attempt (or an earlier one
-# reused via the same latest-directory selection just below) itself
-# contributed genuine evidence, not merely inherited it.
+# on `#1495`'s successor `#1563`, round 1) and switched from
+# vulnerabilities/*.md (only ever written when there are findings -- a real
+# clean scan makes it hollow-fail-closed too, round 2 of the same review) to
+# run.json's "completed" status (Strix's own always-written run record). This
+# backstop must match: it snapshots which vulnerabilities/*.md and run.json
+# paths already existed before this specific invocation started (a fresh
+# process per attempt, so a plain array survives for its whole lifetime) and
+# only treats each as already covered when a path *not* in that snapshot
+# exists -- i.e. this attempt (or an earlier one reused via the same
+# latest-directory selection just below) itself contributed genuine
+# evidence, not merely inherited it.
 strix_fake_signaled=0
 trap 'strix_fake_signaled=1' TERM INT
 strix_fake_preexisting_vuln_files=()
@@ -3409,6 +3413,22 @@ strix_fake_is_preexisting_vuln_file() {
 	done
 	return 1
 }
+strix_fake_preexisting_run_records=()
+for strix_fake_preexisting_run_dir in "$STRIX_REPORTS_DIR"/*; do
+	if [ -f "$strix_fake_preexisting_run_dir/run.json" ]; then
+		strix_fake_preexisting_run_records+=("$strix_fake_preexisting_run_dir/run.json")
+	fi
+done
+strix_fake_is_preexisting_run_record() {
+	local candidate="$1"
+	local existing
+	for existing in "${strix_fake_preexisting_run_records[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$strix_fake_signaled" -eq 1 ]; then
@@ -3416,20 +3436,29 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	if [ "$rc" -ne 0 ] ||
 		[ "${FAKE_STRIX_SCENARIO:-}" = "success-zero-report-artifacts" ] ||
-		[ "${FAKE_STRIX_SCENARIO:-}" = "retry-hollow-second-attempt-fails-closed" ]; then
+		[ "${FAKE_STRIX_SCENARIO:-}" = "retry-hollow-second-attempt-fails-closed" ] ||
+		[ "${FAKE_STRIX_SCENARIO:-}" = "success-clean-scan-zero-findings" ]; then
 		return
 	fi
-	local run_dir vuln_file
+	local run_dir vuln_file wrote_vuln=0 wrote_run_record=0
 	for run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ] && ! strix_fake_is_preexisting_vuln_file "$vuln_file"; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ -f "$run_dir/run.json" ] && ! strix_fake_is_preexisting_run_record "$run_dir/run.json"; then
+			wrote_run_record=1
+		fi
+	done
+	if [ "$wrote_vuln" -eq 1 ] && [ "$wrote_run_record" -eq 1 ]; then
+		return
+	fi
 	# Reuse the existing *latest* run directory (e.g. one holding only a
 	# strix.log), mirroring production's own latest_strix_report_dir()
 	# mtime selection, instead of creating a brand-new sibling directory --
@@ -3447,24 +3476,45 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	# A reused directory (the common case -- see above) can already hold a
-	# vuln-0001.md from an earlier attempt; overwriting that same path
-	# would not register as new evidence under production's attempt-scoped
-	# tracking (keyed on path, not content or mtime), so pick a path that
-	# is not already in this attempt's preexisting snapshot.
-	local backstop_index=1
-	local backstop_file="$target_run_dir/vulnerabilities/vuln-0001.md"
-	while strix_fake_is_preexisting_vuln_file "$backstop_file"; do
-		backstop_index=$((backstop_index + 1))
-		backstop_file="$target_run_dir/vulnerabilities/vuln-$(printf '%04d' "$backstop_index").md"
-	done
-	cat >"$backstop_file" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		# A reused directory (the common case -- see above) can already hold
+		# a vuln-0001.md from an earlier attempt; overwriting that same path
+		# would not register as new evidence under production's
+		# attempt-scoped tracking (keyed on path, not content or mtime), so
+		# pick a path that is not already in this attempt's preexisting
+		# snapshot.
+		local backstop_index=1
+		local backstop_file="$target_run_dir/vulnerabilities/vuln-0001.md"
+		while strix_fake_is_preexisting_vuln_file "$backstop_file"; do
+			backstop_index=$((backstop_index + 1))
+			backstop_file="$target_run_dir/vulnerabilities/vuln-$(printf '%04d' "$backstop_index").md"
+		done
+		cat >"$backstop_file" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ "$wrote_run_record" -eq 0 ]; then
+		mkdir -p "$target_run_dir"
+		# run.json has no severity-ordered filename convention to bump like
+		# vuln-NNNN.md -- a reused directory's run.json is always the same
+		# single path, so an already-preexisting one can only be superseded
+		# by overwriting it in place. Attempt-scoped tracking is keyed on
+		# path, not content, so overwriting a preexisting path here would be
+		# invisible to production the same way a reused vuln-0001.md was;
+		# route to a fresh directory instead whenever the reused one's
+		# run.json is already attempt-preexisting.
+		if [ -f "$target_run_dir/run.json" ] && strix_fake_is_preexisting_run_record "$target_run_dir/run.json"; then
+			target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop-run-record"
+			mkdir -p "$target_run_dir"
+		fi
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -3482,11 +3532,30 @@ REPORT
 		;;
 	success-zero-report-artifacts)
 		# Deliberately mirrors the historical "hollow path" bug: Strix exits
-		# 0 (a clean process exit) but writes no vulnerabilities/*.md report
-		# artifact anywhere under STRIX_REPORTS_DIR. This is the regression
-		# case for has_any_strix_vulnerability_report_artifact()'s fail-closed
-		# guard in run_strix_once(); see the trap opt-out above.
+		# 0 (a clean process exit) but writes no run.json run record
+		# anywhere under STRIX_REPORTS_DIR. This is the regression case for
+		# has_new_completed_strix_run()'s fail-closed guard in
+		# run_strix_once(); see the trap opt-out above.
 		echo "scan ok with zero report artifacts"
+		exit 0
+		;;
+	success-clean-scan-zero-findings)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 2: the pinned strix-agent only writes vulnerabilities/*.md
+		# when ReportState.vulnerability_reports is non-empty -- a genuinely
+		# clean scan with zero findings never writes one at all, only its
+		# always-written run.json (status "completed") and findings.sarif.
+		# Before this fix, requiring a vulnerabilities/*.md artifact made
+		# every clean scan fail exactly like the hollow-success bug it was
+		# meant to catch. This stub models that real shape directly (no
+		# vulnerabilities/ directory at all) rather than relying on the
+		# shared trap's own backstop, so it fails loudly if a future change
+		# reintroduces a vulnerabilities/*.md requirement.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-clean-scan"
+		cat >"$STRIX_REPORTS_DIR/fake-clean-scan/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+		echo "scan ok with zero findings"
 		exit 0
 		;;
 	contextual-orchestrator-gateway-model-qualification)
@@ -3908,14 +3977,16 @@ REPORT
 		;;
 	retry-hollow-second-attempt-fails-closed)
 		# Regression for Devin's review on `#1495`'s successor `#1563`:
-		# has_any_strix_vulnerability_report_artifact() (now
-		# has_new_strix_vulnerability_report_artifact()) must not validate a
-		# later hollow rc=0 attempt using an earlier, already-superseded
-		# attempt's leftover report. Attempt one writes a genuine
-		# below-threshold report and then fails with a transient rate-limit
-		# error (so run_strix_with_transient_retry retries the same model);
-		# attempt two exits 0 with no new artifact anywhere. The overall gate
-		# must fail closed, not silently accept attempt one's stale evidence.
+		# has_new_completed_strix_run() must not validate a later hollow
+		# rc=0 attempt using an earlier, already-superseded attempt's
+		# leftover run.json. Attempt one genuinely completes (writes both a
+		# below-threshold vulnerability report and a completed run.json)
+		# and then the wrapping process itself still exits non-zero (a
+		# transient rate-limit signal after real work was already done, so
+		# run_strix_with_transient_retry retries the same model); attempt
+		# two exits 0 with no new run.json of its own anywhere. The overall
+		# gate must fail closed, not silently accept attempt one's stale
+		# completion evidence.
 		case "${STRIX_LLM:-}" in
 		vertex_ai/retry-hollow-primary)
 			attempt="0"
@@ -3932,6 +4003,9 @@ REPORT
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+				cat >"$STRIX_REPORTS_DIR/attempt-one/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 				echo "Penetration test failed: LLM request failed: RateLimitError"
 				exit 1
 			fi
@@ -6352,6 +6426,16 @@ run_filtered_gate_case_if_requested() {
 			"" \
 			"1"
 		;;
+	success-clean-scan-zero-findings)
+		run_gate_case "success-clean-scan-zero-findings" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok with zero findings" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
 	contextual-orchestrator-missing-api-base-fails-closed)
 		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
 			"orchestrator/free" \
@@ -7223,10 +7307,14 @@ run_pull_request_target_head_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -7234,13 +7322,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -7261,13 +7350,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -7543,10 +7640,14 @@ run_pull_request_target_bounded_head_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -7554,13 +7655,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -7581,13 +7683,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -7698,10 +7808,14 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -7709,13 +7823,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -7736,13 +7851,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -7922,10 +8045,14 @@ run_pull_request_target_changed_backend_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -7933,13 +8060,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -7960,13 +8088,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -8228,10 +8364,14 @@ run_pull_request_target_frontend_email_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -8239,13 +8379,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -8266,13 +8407,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 
@@ -8466,10 +8615,14 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -8477,13 +8630,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -8504,13 +8658,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "scan ok"
@@ -9012,10 +9174,14 @@ run_full_head_scope_skips_gitlink_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -9023,13 +9189,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -9050,13 +9217,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 target_path=""
@@ -9342,10 +9517,14 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -9353,13 +9532,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -9380,13 +9560,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 if [ "${LLM_API_BASE+x}" = "x" ]; then
@@ -9615,10 +9803,14 @@ run_vertex_without_llm_api_key_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -9626,13 +9818,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -9653,13 +9846,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
@@ -9713,10 +9914,14 @@ run_vertex_with_llm_api_key_file_does_not_forward_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -9724,13 +9929,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -9751,13 +9957,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
@@ -10051,10 +10265,14 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a default
-# INFO-severity vulnerabilities/*.md report artifact when this stub is about
-# to exit 0 and no branch above already wrote one of its own. See
-# has_any_strix_vulnerability_report_artifact() in strix_quick_gate.sh.
+# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
+# record with status "completed" (production's authoritative success
+# evidence -- real strix-agent always writes one on completion regardless
+# of finding count, unlike vulnerabilities/*.md, which only exists when
+# there are findings) and a default INFO-severity vulnerabilities/*.md
+# report artifact when this stub is about to exit 0 and no branch above
+# already wrote its own. See has_new_completed_strix_run() in
+# strix_quick_gate.sh.
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$rc" -ne 0 ]; then
@@ -10062,13 +10280,14 @@ strix_fake_backstop_vuln_report_on_success() {
 	fi
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
 	local run_dir vuln_file
+	local wrote_vuln=0
 	for run_dir in "$reports_dir"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
 			if [ -f "$vuln_file" ]; then
-				return
+				wrote_vuln=1
 			fi
 		done
 	done
@@ -10089,13 +10308,21 @@ strix_fake_backstop_vuln_report_on_success() {
 	if [ -z "$target_run_dir" ]; then
 		target_run_dir="$reports_dir/fake-success-backstop"
 	fi
-	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
+	fi
+	if [ ! -f "$target_run_dir/run.json" ]; then
+		mkdir -p "$target_run_dir"
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
 }
 trap strix_fake_backstop_vuln_report_on_success EXIT
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
@@ -10626,10 +10853,10 @@ run_gate_case "success" \
 	"<unset>"
 
 # Regression for the zero-evidence "hollow path" bug: Strix exits 0 but
-# writes no vulnerabilities/*.md report artifact anywhere. Before the fix in
-# run_strix_once() (has_any_strix_vulnerability_report_artifact()) this was
-# indistinguishable from a genuinely clean scan and the gate passed; it must
-# now fail closed with the dedicated log-only-success message.
+# writes no run.json run record anywhere. Before the fix in run_strix_once()
+# (has_new_completed_strix_run()) this was indistinguishable from a
+# genuinely clean scan and the gate passed; it must now fail closed with the
+# dedicated log-only-success message.
 run_gate_case "success-zero-report-artifacts" \
 	"vertex_ai/ready-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
@@ -10912,10 +11139,11 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-retry-same-model-s
 	"1"
 
 # Regression for Devin's review on `#1495`'s successor `#1563`: attempt one
-# writes a genuine below-threshold report then fails transiently (retried);
-# attempt two exits 0 with no new artifact. The gate must fail closed
-# overall -- has_new_strix_vulnerability_report_artifact() must not let
-# attempt two's hollow success ride on attempt one's leftover evidence, and
+# genuinely completes (writes both a below-threshold report and a completed
+# run.json) then the wrapping process still fails transiently (retried);
+# attempt two exits 0 with no new run.json of its own. The gate must fail
+# closed overall -- has_new_completed_strix_run() must not let attempt two's
+# hollow success ride on attempt one's leftover completion evidence, and
 # has_only_below_threshold_vulnerabilities()'s presence guard (reached after
 # the retry sequence exhausts) must not accept that same stale evidence
 # either.
@@ -10931,6 +11159,22 @@ run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
 	"__DEFAULT__" \
 	"" \
 	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 2: the
+# pinned strix-agent only writes vulnerabilities/*.md when there are
+# findings, so a genuinely clean scan (zero findings) never writes one --
+# only its always-written run.json and findings.sarif. Requiring a
+# vulnerabilities/*.md artifact for the success gate made every clean scan
+# fail exactly like the hollow-success bug it was meant to catch; this must
+# now pass on run.json's completed status alone.
+run_gate_case "success-clean-scan-zero-findings" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok with zero findings" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
 
 run_gate_case_allow_provider_signal "vertex-primary-api-connection-retry-same-model-success" \
 	"gemini/retry-api-connection-primary" \

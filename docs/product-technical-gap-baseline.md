@@ -2389,6 +2389,52 @@ reused directory when its default `vuln-0001.md` is already attempt-preexisting.
 2246 passed / 1 skipped / 21 subtests (repository-wide 99% coverage shortfall is the pre-existing,
 unrelated gap independently owned by `#1567`); `test_strix_quick_gate.sh` full harness: PASS.
 
+**Round 2 -- Devin Review caught a deeper, pre-existing gap in the same fix, still on `#1563`**: the
+attempt-scoped `has_new_strix_vulnerability_report_artifact()` above still required *some*
+`vulnerabilities/*.md` file to exist for an attempt to count as successful -- but that requirement was
+never actually satisfiable by a genuinely clean scan. Verified empirically against the pinned
+`strix-agent==1.5.3` package source (`report/writer.py`, `report/state.py`, `core/paths.py`):
+`write_vulnerabilities()` writes one Markdown file per entry in `ReportState.vulnerability_reports` and
+is only called when that list is non-empty; a scan that finds *zero* vulnerabilities never calls it and
+so never writes a `vulnerabilities/` directory at all. What `ReportState._save_artifacts()` *always*
+writes on completion, finding count aside, is `findings.sarif` (explicitly "even empty, so a clean run
+overwrites a prior findings.sarif") and `run.json` via `write_run_record()`, with
+`run_record["status"]` set to `"completed"` by `save_run_data(mark_complete=True)`. This means both the
+original `#1495` fix and the round-1 attempt-scoping refinement above would fail-closed on *every*
+clean, zero-finding scan -- the exact false-positive failure mode "hollow success" detection exists to
+avoid, just triggered by a passing scan instead of a hollow one. This flaw predates round 1; it shipped
+with `#1495` and was only surfaced now.
+
+**Fix**: replaced the artifact-presence contract outright. `capture_attempt_start_vulnerability_files()`
+/ `is_attempt_start_vulnerability_file()` / `has_new_strix_vulnerability_report_artifact()` are removed.
+`capture_attempt_start_run_records()` (called at the same point in `run_strix_once()`, immediately
+before `set -o pipefail`) snapshots every `run_dir/run.json` path under `$STRIX_REPORTS_DIR` present at
+attempt start. `has_new_completed_strix_run()` replaces the old check at both call sites (the
+`run_strix_once()` `rc==0` acceptance and `has_only_below_threshold_vulnerabilities()`'s presence
+guard): it walks non-preexisting report directories for a `run.json` that is *not* in the attempt-start
+snapshot and whose contents match `"status"\s*:\s*"completed"` (plain `grep`, no new `jq` dependency --
+none was otherwise used in this script). Attempt-scoping from round 1 is preserved exactly, just
+re-keyed to the artifact that is actually always written. `has_only_below_threshold_vulnerabilities()`'s
+severity-scanning loop is unchanged and stays cumulative/pipeline-wide over `vulnerabilities/*.md`: a
+real HIGH/CRITICAL finding from an earlier attempt still blocks regardless of whether a later attempt's
+own scan reproduced it. Finding thresholds and provider-failure fail-closed behavior are unchanged.
+
+**Regression**: new scenario `success-clean-scan-zero-findings` in `test_strix_quick_gate.sh` models a
+clean scan directly -- a `run.json` with `"status": "completed"` and no `vulnerabilities/` directory at
+all -- and asserts the gate accepts it (`exit=0`), proving a genuinely clean scan no longer fails
+closed. `retry-hollow-second-attempt-fails-closed` was re-modeled to match the new contract: attempt one
+now writes both a below-threshold `vulnerabilities/*.md` report and its own completed `run.json` before
+failing with a transient rate-limit error; attempt two exits `0` with no new `run.json` of its own and
+still fails closed with the same "no report artifact" message, proving attempt-scoping survived the
+contract switch. The shared fake-`strix` stub's backstop `EXIT` trap (both the simple per-scenario
+copies and the shared signal-aware trap) now independently tracks and writes both evidence kinds
+(`wrote_vuln` / `wrote_run_record` flags), with a preexisting-run-record snapshot mirroring the
+production `ATTEMPT_START_RUN_RECORDS` scoping; a reused run directory whose `run.json` is already
+attempt-preexisting routes the backstop's own run-record write to a fresh fallback directory rather than
+overwriting it (no `vuln-NNNN.md`-style incrementing filename convention applies to `run.json`). Full
+suite: pytest 2246 passed / 1 skipped / 21 subtests, repository-wide coverage 99% (same pre-existing gap
+owned by `#1567`, unaffected by this change); `test_strix_quick_gate.sh` full harness: PASS.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
