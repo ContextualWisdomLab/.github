@@ -31,33 +31,30 @@ jobs:
           text = path.read_text(encoding='utf-8')
 
           def validation_step(name: str, condition: str = "github.event_name == 'pull_request_target'") -> str:
-              template = '''      - name: @@NAME@@
-        if: @@CONDITION@@
-        env:
-          GH_TOKEN: @@D@@{{ github.token }}
-          TARGET_REPOSITORY: @@D@@{{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR_NUMBER: @@D@@{{ github.event.pull_request.number }}
-          EXPECTED_HEAD_SHA: @@D@@{{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          live_pr="$(gh api "repos/@@D@@{TARGET_REPOSITORY}/pulls/@@D@@{PR_NUMBER}")"
-          live_state="$(printf '%s' "$live_pr" | jq -r '.state // empty')"
-          live_head_sha="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
-          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then
-            echo "::error::Could not validate live pull request identity."
-            exit 1
-          fi
-          if [ "$live_state" != "open" ] || [ "@@D@@{live_head_sha}" != "@@D@@{EXPECTED_HEAD_SHA}" ]; then
-            echo "::error::Strix event no longer matches the live open pull request head."
-            exit 1
-          fi
-
-'''
-              return (
-                  template.replace('@@NAME@@', name)
-                  .replace('@@CONDITION@@', condition)
-                  .replace('@@D@@', '$')
-              )
+              lines = [
+                  "      - name: @@NAME@@",
+                  "        if: @@CONDITION@@",
+                  "        env:",
+                  "          GH_TOKEN: @@D@@{{ github.token }}",
+                  "          TARGET_REPOSITORY: @@D@@{{ github.event.pull_request.base.repo.full_name || github.repository }}",
+                  "          PR_NUMBER: @@D@@{{ github.event.pull_request.number }}",
+                  "          EXPECTED_HEAD_SHA: @@D@@{{ github.event.pull_request.head.sha }}",
+                  "        run: |",
+                  "          set -euo pipefail",
+                  '          live_pr="$(gh api \\"repos/@@D@@{TARGET_REPOSITORY}/pulls/@@D@@{PR_NUMBER}\\")"',
+                  '          live_state="$(printf \'%s\' "$live_pr" | jq -r \'.state // empty\')"',
+                  '          live_head_sha="$(printf \'%s\' "$live_pr" | jq -r \'.head.sha // empty\')"',
+                  '          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then',
+                  '            echo "::error::Could not validate live pull request identity."',
+                  "            exit 1",
+                  "          fi",
+                  '          if [ "$live_state" != "open" ] || [ "@@D@@{live_head_sha}" != "@@D@@{EXPECTED_HEAD_SHA}" ]; then',
+                  '            echo "::error::Strix event no longer matches the live open pull request head."',
+                  "            exit 1",
+                  "          fi",
+                  "",
+              ]
+              return ("\n".join(lines) + "\n").replace('@@NAME@@', name).replace('@@CONDITION@@', condition).replace('@@D@@', '$')
 
           early_name = 'Validate live pull request before Strix setup'
           if early_name not in text:
@@ -79,37 +76,21 @@ jobs:
               marker = '      - name: Collect Strix reports for artifact upload\n'
               if marker not in text:
                   raise SystemExit('missing publication marker')
-              text = text.replace(
-                  marker,
-                  validation_step(before_publish, publication_condition) + marker,
-                  1,
-              )
+              text = text.replace(marker, validation_step(before_publish, publication_condition) + marker, 1)
 
           path.write_text(text, encoding='utf-8')
 
           test_path = Path('tests/test_strix_control_plane_supersession.py')
           tests = test_path.read_text(encoding='utf-8')
-          publication_anchor = '''    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'''
-          publication_assert = (
-              '    assert "if: '
-              + publication_condition
-              + '" in recheck\n'
-          )
+          publication_anchor = '    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'
+          publication_assert = '    assert "if: ' + publication_condition + '" in recheck\n'
           if publication_assert not in tests:
               if publication_anchor not in tests:
                   raise SystemExit('missing publication regression anchor')
-              tests = tests.replace(
-                  publication_anchor,
-                  publication_anchor + publication_assert,
-                  1,
-              )
+              tests = tests.replace(publication_anchor, publication_anchor + publication_assert, 1)
           stale_timeout_assert = '    assert "export LLM_TIMEOUT=300" in workflow\n'
           if stale_timeout_assert in tests:
-              tests = tests.replace(
-                  stale_timeout_assert,
-                  '    assert "export LLM_TIMEOUT=0" in workflow\n',
-                  1,
-              )
+              tests = tests.replace(stale_timeout_assert, '    assert "export LLM_TIMEOUT=0" in workflow\n', 1)
           test_path.write_text(tests, encoding='utf-8')
           PY
           python -m pytest -q tests/test_strix_control_plane_supersession.py tests/test_required_workflow_queue_contract.py tests/test_strix_llm_timeout_contract.py
