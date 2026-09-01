@@ -47,6 +47,22 @@ class FakeResponse:
         return self.payload[:size]
 
 
+class FakeOpener:
+    """Minimal redirect-controlled opener used by Pages reachability tests."""
+
+    def __init__(self, *, response=None, error=None, seen=None):
+        self.response = response or FakeResponse()
+        self.error = error
+        self.seen = seen
+
+    def open(self, request, timeout):
+        if self.seen is not None:
+            self.seen.append((request.full_url, request.headers["User-agent"], timeout))
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
 def install_live_state(
     monkeypatch,
     *,
@@ -85,23 +101,39 @@ def install_live_state(
     monkeypatch.setattr(
         RECONCILER, "_pages_configuration", lambda *args: page_config
     )
-    monkeypatch.setattr(RECONCILER, "urlopen", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        RECONCILER, "build_opener", lambda *args: FakeOpener()
+    )
 
 
-def test_pages_publication_ready_requires_build_https_and_content(monkeypatch) -> None:
-    """A Pages configuration is complete only when its built site is reachable."""
+def test_pages_publication_ready_confines_origin_redirects_and_content(
+    monkeypatch,
+) -> None:
+    """Published Pages checks stay on the owned origin and require non-empty content."""
 
     ready = {
         "status": "built",
         "html_url": "https://contextualwisdomlab.github.io/Repo/",
     }
     seen = []
+    handlers = []
 
-    def open_ok(request, timeout):
-        seen.append((request.full_url, request.headers["User-agent"], timeout))
-        return FakeResponse(b"published")
+    def build_ok(handler):
+        handlers.append(handler)
+        return FakeOpener(response=FakeResponse(b"published"), seen=seen)
 
-    monkeypatch.setattr(RECONCILER, "urlopen", open_ok)
+    monkeypatch.setattr(RECONCILER, "build_opener", build_ok)
+    assert RECONCILER._pages_url_is_expected(RECONCILER.PAGES_BASE_URL)
+    assert RECONCILER._pages_url_is_expected(ready["html_url"])
+    assert not RECONCILER._pages_url_is_expected(None)
+    assert not RECONCILER._pages_url_is_expected("https://example.com/")
+    assert not RECONCILER._pages_url_is_expected(
+        "https://contextualwisdomlab.github.io.evil.example/"
+    )
+    assert not RECONCILER._pages_url_is_expected(
+        "https://contextualwisdomlab.github.io@127.0.0.1/"
+    )
+
     RECONCILER._pages_publication_ready("Repo", ready)
     assert seen == [
         (
@@ -110,22 +142,40 @@ def test_pages_publication_ready_requires_build_https_and_content(monkeypatch) -
             10,
         )
     ]
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], RECONCILER._NoPagesRedirects)
+    assert (
+        handlers[0].redirect_request(
+            None, None, 302, "redirect", {}, "http://127.0.0.1/"
+        )
+        is None
+    )
 
     with pytest.raises(RuntimeError, match="not built"):
         RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
-    with pytest.raises(RuntimeError, match="URL is invalid"):
-        RECONCILER._pages_publication_ready("Repo", {**ready, "html_url": "http://x"})
+    for unsafe_url in [
+        "http://contextualwisdomlab.github.io/Repo/",
+        "https://example.com/",
+        "https://contextualwisdomlab.github.io.evil.example/",
+    ]:
+        with pytest.raises(RuntimeError, match="URL is invalid"):
+            RECONCILER._pages_publication_ready(
+                "Repo", {**ready, "html_url": unsafe_url}
+            )
 
     monkeypatch.setattr(
-        RECONCILER, "urlopen", lambda *args, **kwargs: FakeResponse(b"")
+        RECONCILER,
+        "build_opener",
+        lambda *args: FakeOpener(response=FakeResponse(b"")),
     )
     with pytest.raises(RuntimeError, match="empty content"):
         RECONCILER._pages_publication_ready("Repo", ready)
 
-    def open_error(*args, **kwargs):
-        raise RECONCILER.URLError("offline")
-
-    monkeypatch.setattr(RECONCILER, "urlopen", open_error)
+    monkeypatch.setattr(
+        RECONCILER,
+        "build_opener",
+        lambda *args: FakeOpener(error=RECONCILER.URLError("offline")),
+    )
     with pytest.raises(RuntimeError, match="not reachable"):
         RECONCILER._pages_publication_ready("Repo", ready)
 
