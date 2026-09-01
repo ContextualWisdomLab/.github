@@ -76,6 +76,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "accounting-information-platform": ("accounting", "ledger"),
         "pg-erd-cloud": ("erd", "postgresql"),
         "clearfolio": ("document-viewer", "document-conversion"),
+        "DiagramWeave": ("diagram-editor", "plantuml"),
+        "semantic-data-portal": ("data-catalog", "semantic-search"),
+        "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "mhtml-etl-gateway": ("mhtml", "etl"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
