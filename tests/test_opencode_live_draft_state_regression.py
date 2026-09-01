@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -23,9 +24,20 @@ def _write_live_state_gh(
     live_draft: bool,
     live_head: str = HEAD,
     later_exit: int = 19,
+    approved_receipt: bool = False,
 ) -> None:
-    """Serve the live PR lookup, then fail if the step reaches later GitHub I/O."""
+    """Serve live PR state and optionally one approved receipt helper fixture."""
     payload = json.dumps({"draft": live_draft, "head": {"sha": live_head}})
+    helper_source = """def fetch_reviews(repository, number):
+    return [{\"state\": \"APPROVED\"}]
+
+
+def evaluate_receipts(reviews, head_sha, *, is_draft):
+    if is_draft:
+        return None, \"draft\"
+    return {\"state\": \"APPROVED\"}, \"approved\"
+"""
+    helper_b64 = base64.b64encode(helper_source.encode()).decode()
     fake_gh = bin_dir / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
@@ -34,7 +46,15 @@ def _write_live_state_gh(
         f"  printf '%s' {json.dumps(payload)}\n"
         "  exit 0\n"
         "fi\n"
-        f"exit {later_exit}\n",
+        + (
+            "if [[ \"$*\" == api\\ repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=* ]]; then\n"
+            f"  printf '%s' {json.dumps(helper_b64)}\n"
+            "  exit 0\n"
+            "fi\n"
+            if approved_receipt
+            else ""
+        )
+        + f"exit {later_exit}\n",
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
@@ -46,16 +66,23 @@ def _run_step(
     *,
     live_draft: bool,
     live_head: str = HEAD,
+    event_draft: bool = True,
     action: str = "converted_to_draft",
+    approved_receipt: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute one production step with stale draft event metadata."""
+    """Execute one production step against independently controlled live state."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     if bash is None or jq is None:
         pytest.skip("bash and jq are required to execute the production step body")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _write_live_state_gh(bin_dir, live_draft=live_draft, live_head=live_head)
+    _write_live_state_gh(
+        bin_dir,
+        live_draft=live_draft,
+        live_head=live_head,
+        approved_receipt=approved_receipt,
+    )
     return subprocess.run(
         [bash, "-c", script],
         env={
@@ -68,7 +95,7 @@ def _run_step(
             "PR_NUMBER": "1437",
             "HEAD_SHA": HEAD,
             "PR_ACTION": action,
-            "PR_DRAFT": "true",
+            "PR_DRAFT": "true" if event_draft else "false",
             "BASE_BRANCH": "main",
             "WORKFLOW_SHA": "c" * 40,
         },
@@ -96,6 +123,39 @@ def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
 
     assert result.returncode == 19
     assert "Event draft snapshot is stale" in result.stdout
+
+
+@pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
+def test_stale_ready_event_exempts_live_draft_pr(
+    tmp_path: Path,
+    script: str,
+) -> None:
+    """A delayed ready event cannot keep dispatching or polling after live draft conversion."""
+    result = _run_step(
+        tmp_path,
+        script,
+        live_draft=True,
+        event_draft=False,
+        action="ready_for_review",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "still a draft on the live exact head" in result.stdout
+
+
+def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
+    """Validated live-ready state must be used by the receipt gate, not stale metadata."""
+    result = _run_step(
+        tmp_path,
+        request_review_script(),
+        live_draft=False,
+        event_draft=True,
+        action="converted_to_draft",
+        approved_receipt=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Current-head substantive OpenCode verdict already exists" in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
