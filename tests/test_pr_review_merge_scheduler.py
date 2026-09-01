@@ -4595,9 +4595,34 @@ def test_complete_paginated_pr_contexts_bounds_repeated_pages(monkeypatch):
             }
         }
     )
-    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 0)
+    calls = 0
+
+    def repeat_page(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [],
+                                "pageInfo": {
+                                    "hasNextPage": True,
+                                    "endCursor": "loop",
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", repeat_page)
+    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 1)
     with pytest.raises(RuntimeError, match="exceeded its safety bound"):
         sched.complete_paginated_pr_contexts("owner/repo", pr)
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
