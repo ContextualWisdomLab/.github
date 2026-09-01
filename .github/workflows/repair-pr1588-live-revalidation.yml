@@ -1,0 +1,193 @@
+name: Repair PR 1588 live revalidation
+
+on:
+  push:
+    branches:
+      - fix/strix-control-plane-supersession-20260901
+    paths:
+      - .github/workflows/repair-pr1588-live-revalidation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/strix-control-plane-supersession-20260901
+          fetch-depth: 1
+
+      - name: Apply live-state admission repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/strix.yml')
+          text = path.read_text(encoding='utf-8')
+
+          early_name = '      - name: Validate live pull request before Strix setup\n'
+          if early_name not in text:
+              marker = '      - name: Set up Python\n'
+              assert marker in text
+              block = '''      - name: Validate live pull request before Strix setup
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not revalidate the live pull request before Strix setup."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix event is stale before setup: live state/head no longer match the event."
+            exit 1
+          fi
+
+'''
+              text = text.replace(marker, block + marker, 1)
+
+          provider_name = '      - name: Revalidate live pull request before provider execution\n'
+          if provider_name not in text:
+              marker = '      - name: Provision contextual-orchestrator Strix sidecar\n'
+              assert marker in text
+              block = '''      - name: Revalidate live pull request before provider execution
+        if: ${{ steps.gate.outputs.enabled == 'true' && (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') }}
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not revalidate the live pull request before provider execution."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix target became stale before provider execution."
+            exit 1
+          fi
+
+'''
+              text = text.replace(marker, block + marker, 1)
+
+          publication_name = '      - name: Revalidate live pull request before evidence publication\n'
+          if publication_name not in text:
+              marker = '      - name: Collect Strix reports for artifact upload\n'
+              assert marker in text
+              block = '''      - name: Revalidate live pull request before evidence publication
+        id: live_publication
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          echo 'current=false' >>"$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != "pull_request_target" ] && [ "$GITHUB_EVENT_NAME" != "repository_dispatch" ]; then
+            echo 'current=true' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not revalidate the live pull request before evidence publication."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix target became stale before evidence publication."
+            exit 1
+          fi
+          echo 'current=true' >>"$GITHUB_OUTPUT"
+
+'''
+              text = text.replace(marker, block + marker, 1)
+
+          text = text.replace(
+              "      - name: Collect Strix reports for artifact upload\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}",
+              "      - name: Collect Strix reports for artifact upload\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' && steps.live_publication.outputs.current == 'true' }}",
+              1,
+          )
+          text = text.replace(
+              "      - name: Upload Strix reports artifact\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}",
+              "      - name: Upload Strix reports artifact\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' && steps.live_publication.outputs.current == 'true' }}",
+              1,
+          )
+          text = text.replace(
+              "      - name: Publish same-head manual Strix status\n        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}",
+              "      - name: Publish same-head manual Strix status\n        if: ${{ always() && !cancelled() && steps.live_publication.outputs.current == 'true' && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}",
+              1,
+          )
+
+          followup_marker = "      - name: Publish same-head manual Strix status\n        env:\n"
+          followup_name = '      - name: Revalidate live pull request before follow-up status publication\n'
+          if followup_name not in text:
+              first = text.find(followup_marker)
+              assert first >= 0
+              second = text.find(followup_marker, first + len(followup_marker))
+              assert second >= 0
+              block = '''      - name: Revalidate live pull request before follow-up status publication
+        id: live_followup_publication
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+        run: |
+          set -euo pipefail
+          echo 'current=false' >>"$GITHUB_OUTPUT"
+          if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not revalidate the live pull request before follow-up status publication."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix target became stale before follow-up status publication."
+            exit 1
+          fi
+          echo 'current=true' >>"$GITHUB_OUTPUT"
+
+'''
+              text = text[:second] + block + text[second:]
+              second_after = text.find(followup_marker, second + len(block))
+              assert second_after >= 0
+              status_if = "        if: ${{ steps.live_followup_publication.outputs.current == 'true' }}\n"
+              text = text[: second_after + len('      - name: Publish same-head manual Strix status\n')] + status_if + text[second_after + len('      - name: Publish same-head manual Strix status\n'):]
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python3 -m pytest -q tests/test_strix_control_plane_supersession.py
+          bash scripts/ci/test_strix_quick_gate.sh
+          python3 -m compileall -q tests/test_strix_control_plane_supersession.py
+          git diff --check
+
+      - name: Commit verified repair and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/repair-pr1588-live-revalidation.yml
+          git add .github/workflows/strix.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "fix(strix): revalidate live head at admission boundaries"
+          git push origin HEAD:fix/strix-control-plane-supersession-20260901
