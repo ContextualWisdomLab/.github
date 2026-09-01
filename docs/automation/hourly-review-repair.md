@@ -16,11 +16,15 @@ engine**.
   requests.
 
 Every product caller, Orgmetra included, is provider-neutral by construction: the worker's model
-boundary is the contextual-orchestrator gateway (ADR-0003). Provider keys (Bytez, NVIDIA NIM ×2,
-OpenRouter, OpenAI) stay in the sidecar's process-local KV and automatic model discovery selects
-upstream models behind the fail-closed `contextual-orchestrator/orchestrator/free` virtual model
-id. A caller schedule is not evidence that gateway credentials, discovery, or a live OpenCode tool
-loop are available; those facts require exact worker-run evidence.
+boundary is the contextual-orchestrator gateway (ADR-0003). Available provider credentials (Bytez,
+NVIDIA NIM primary/sub, OpenRouter, and the separately governed OpenAI credential) stay in the
+sidecar's process-local registry; discovery selects only routes eligible for the requested virtual
+model policy. An individual provider credential may be absent without making the gateway invalid.
+For scheduled repair, the fail-closed `contextual-orchestrator/orchestrator/free` path proceeds with
+remaining eligible providers and fails only when required gateway configuration is unavailable or
+discovery yields no eligible free-tier route. A caller schedule is not evidence that gateway
+configuration, discovery, or a live OpenCode tool loop are available; those facts require exact
+worker-run evidence.
 
 Merge eligibility remains owned by the separate merge scheduler, branch
 protection, required checks, independent review, and unresolved-thread policy.
@@ -202,9 +206,11 @@ organization-level queue inspection and bounded repair dispatch.
 When a scheduled run fails, classify the result before rerunning:
 
 - no actionable file-scoped feedback: expected no-op;
-- missing any of the five gateway provider secrets (including `NVIDIA_NIM_API_KEY`) or the
-  sidecar's `CONTEXTUAL_ORCHESTRATOR_BASE_URL`/`CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE`: central
-  secret configuration failure;
+- missing required sidecar configuration (`CONTEXTUAL_ORCHESTRATOR_BASE_URL` or
+  `CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE`): central gateway configuration failure;
+- one or more individual provider credentials absent: continue discovery with
+  the credentials that are available; classify a model-admission failure only
+  if the requested policy has no eligible route after discovery;
 - head changed: safe optimistic-concurrency refusal; inspect the new head rather
   than retrying predecessor evidence;
 - out-of-scope or ignored-path change: treat as a security failure and preserve
