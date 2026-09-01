@@ -1715,6 +1715,605 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
+
+The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an
+unhandled `json.decoder.JSONDecodeError` inside `extract_json_object`, called from `call_llm` in
+`scripts/ci/noema_review_gate.py`. Investigated the canonical-source question first, since this is
+exactly the shape of a central-vs-local drift-copy question this repo's own policy addresses:
+`contextual-orchestrator` has no `scripts/ci/noema_review_gate.py` committed at all and no
+`noema-review.yml` workflow of its own — the required `Required Noema Review` workflow
+(`.github/workflows/noema-review.yml`, this repo) materializes this file from a tarball of this repo's
+trusted commit SHA into every target repo's runner (`Materialize trusted Noema review gate` step), so the
+fix belongs here only; there was no local drift copy in `contextual-orchestrator` to remove either, since
+none existed.
+
+Root cause: `extract_json_object` located a `{...}` substring in the LLM's response content and called
+`json.loads()` on it directly with no exception handling. A truncated or malformed model reply (observed:
+an unquoted property name partway through the object — exactly `Expecting property name enclosed in
+double quotes`) raised `json.JSONDecodeError`, which propagated out of `call_llm`, `inspect_and_review`,
+and `main`, past the module's `except RuntimeError` guard in `__main__` (which only catches
+`RuntimeError`), crashing the whole `noema-review` job with a raw Python traceback and zero signal about
+why the review didn't complete. Every PR org-wide that hit this same LLM-output edge case would hit the
+identical unhandled crash, since the same materialized file runs in every target repo.
+
+Fixed by catching `json.JSONDecodeError` in `extract_json_object` and converting it into the same
+`RuntimeError` this file already raises for its other "no usable verdict" cases in `call_llm`
+(unsupported decision, missing summary, malformed finding). `call_llm` now gives every invalid verdict
+one bounded correction request through its existing repair path; a second invalid response fails closed
+through the module's top-level non-zero exit. The error message embeds the raw model response, scrubbed of secrets via
+`scrub_sensitive_data` and bounded to a new `MAX_LLM_RESPONSE_LOG_CHARS` (2000 chars), so the job log
+still shows *why* the verdict was unusable. (The candidate substring `extract_json_object` extracts is
+guaranteed to start with `{`, so per JSON grammar a successful parse can only ever yield an object — a
+"valid JSON but not an object" branch would be unreachable dead code under this repo's 100%-coverage gate
+and was deliberately not added.) The top-level `__main__` handler was also changed to print
+`::error::{exc}` instead of a bare message, matching this repo's own convention in sibling CI gates
+(`opencode_review_receipt_gate.py`, `select_nvidia_nim_model.py`).
+
+Regression tests reproduce the exact reported crash signature at both layers —
+`test_extract_json_object_fails_closed_on_malformed_json` (brace-wrapped invalid JSON, mid-object
+truncation, secret-scrubbing, length-bounding), `test_call_llm_fails_closed_on_malformed_json_response`,
+and `test_call_llm_repairs_one_malformed_json_response` exercise the bounded repair and exhausted-repair
+paths. A clean `RuntimeError` propagates only after the corrected response is still invalid. 100% coverage
+and 100% docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507.
+
+The same gate also imposed a hard-coded 120-second HTTP read timeout. A real
+Four Pillars review reached that boundary after Contextual Orchestrator had
+successfully provisioned and selected a route, then failed with an unhandled
+`TimeoutError` before a verdict arrived. Noema review requests now allow the
+documented four-hour request window; GitHub's job boundary remains the outer
+execution limit. The transport timeout is pinned by the existing call contract
+test so a shorter accidental value cannot silently restore the failure.
+
+## 2026-08-31 noema-review-gate follow-up: fail-closed fix itself still had a public-log secret-leak
+edge and an unhandled envelope-crash edge
+
+Devin Review on PR #1507 found two gaps in the malformed-JSON fail-closed fix above, before that PR
+finished its own review cycle — both genuine, not duplicates of the round-4 pattern already recorded.
+
+**Security (priority): raw model output could still leak an unrecognized-shape credential to a public
+log.** The fix above logged the LLM's raw response text through `scrub_sensitive_data` — a finite,
+pattern-based regex scrubber (known token/key prefixes, `Bearer`/`token`/`key=` shapes) — into the
+`RuntimeError` message that `__main__` prints as `::error::{exc}` on stderr. `noema-review.yml` is a
+`pull_request_target` workflow, so that Actions log is public on this org's public repos. A regex
+allowlist of known secret *shapes* cannot bound what an LLM might echo back or hallucinate in an
+unrecognized shape (mid-sentence, base64-wrapped, or simply a shape nobody anticipated) — no amount of
+pattern-list tuning closes that gap, so the fix does not try to. `extract_json_object`'s decode-failure
+diagnostic no longer embeds the raw or scrubbed response at all; it logs only a length and a truncated
+SHA-256 fingerprint of the (unlogged) content, enough to correlate repeat failures for the same
+underlying response without ever exposing its bytes. `MAX_LLM_RESPONSE_LOG_CHARS` (the old
+truncate-and-embed bound) was removed as unused. Regression test
+`test_extract_json_object_fails_closed_on_malformed_json` was extended to assert this directly: a
+credential in a shape none of the `SENSITIVE_DATA_SCRUB_PATTERNS` recognize (a bare UUID-shaped value
+mid-sentence, no `token`/`key`/`bearer` marker) is confirmed to survive the old scrubber unmasked, then
+confirmed absent from the new diagnostic entirely — as is a known-shape secret, and the raw response text
+in general, regardless of input size.
+
+**Bug: a malformed gateway envelope still crashed before the repair boundary.** `call_llm` only wrapped
+`extract_json_object(content)` — parsing the nested verdict string — in the `try` that feeds the #1504
+one-time repair-retry. The lines building `content` from the raw HTTP body (`json.loads(raw)` then four
+chained `.get()`/`[0]` accesses) sat *before* that `try`, unguarded: a non-JSON raw body raised an
+unhandled `json.JSONDecodeError`, and a syntactically valid but wrong-shaped envelope (top-level JSON
+that is a list/`null`/string/number, a non-list `choices`, a non-object `choices[0]` or `message`, or
+non-string `content`) raised an unhandled `AttributeError`/`TypeError`/`KeyError` — exactly the class of
+crash the malformed-JSON fix above was meant to close, just one layer higher. Fixed with a new
+`extract_llm_message_content(raw)` that validates the envelope shape explicitly with `isinstance` checks
+at each step (never a broad `except AttributeError`/`TypeError`, so a genuine unrelated bug still
+surfaces as itself) and raises the same bounded `RuntimeError` `call_llm` already converts everywhere
+else; the call now sits inside the existing repair-retry `try` block, so a malformed envelope gets the
+same one repair-retry request a malformed verdict gets before failing closed with a clean diagnostic. A
+missing (not malformed) `choices`/`message`/`content` still falls through to an empty string, matching
+the original code's leniency for an absent field — `extract_json_object` already fails closed on empty
+content. None of the raised messages embed any response bytes, only JSON-value type names.
+
+Regression tests: direct unit coverage of every `extract_llm_message_content` branch (malformed raw
+body, non-object top level, non-list `choices`, non-object `choices[0]`/`message`, non-string `content`,
+and the lenient missing-field paths), plus `call_llm` integration tests reproducing the repair-once and
+exhausted-repair paths end-to-end (`test_call_llm_repairs_one_malformed_envelope_before_failing_closed`,
+`test_call_llm_fails_closed_after_repeated_malformed_envelope`). 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`. PR: ContextualWisdomLab/.github#1507 (same PR; addressed before
+merge).
+
+## 2026-08-31 noema-review-gate follow-up round 3: non-UTF-8 gateway replies still crashed before the
+repair boundary
+
+Devin Review's third pass on PR #1507 found one more instance of the same crash-before-repair-boundary
+class the round-2 fix above closed for a malformed JSON envelope, plus two informational confirmations
+that needed verifying rather than fixing.
+
+**Bug: a non-UTF-8 response body still crashed before the repair boundary.** `call_llm` decoded the raw
+HTTP response with a plain `response.read().decode("utf-8")` sitting *before* the `try` that feeds the
+repair-retry — the same unguarded-preamble shape the round-2 envelope fix closed for `json.loads` and the
+chained `.get()`/`[0]` accesses, just one step earlier. A gateway reply containing invalid UTF-8 bytes
+raised an unhandled `UnicodeDecodeError` before `extract_llm_message_content` or the JSON repair boundary
+ever ran, crashing the required review check with a traceback instead of getting the same one-time
+schema-repair attempt every other malformed-envelope shape already gets. Fixed with a new
+`decode_llm_response_body(raw_bytes)` that converts a `UnicodeDecodeError` into the same bounded
+`RuntimeError` `call_llm` already uses elsewhere, called from inside the existing repair-retry `try`
+block (`raw = decode_llm_response_body(raw_bytes)`, ahead of `extract_llm_message_content(raw)`). Per the
+round-2 security fix, the raised diagnostic never embeds the raw response bytes — not even the
+undecodable fragment, since a body containing invalid UTF-8 could still contain a credential-adjacent
+byte sequence — only a length and a truncated SHA-256 fingerprint, matching `extract_json_object`'s
+no-raw-content pattern exactly.
+
+Regression tests: `test_decode_llm_response_body_happy_path` and
+`test_decode_llm_response_body_fails_closed_on_invalid_utf8` give direct unit coverage of the new
+function (including that a secret-shaped prefix and an unrecoverable tail around the bad byte never
+appear in the raised message), and `test_call_llm_fails_closed_after_repeated_invalid_utf8_response`
+integrates it end-to-end: one repair-retry request, then a clean top-level `RuntimeError` when the retry
+response is *also* invalid UTF-8 — never an unhandled traceback. 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`.
+
+**Confirmed correct, no change needed — repair recursion remains bounded.** `call_llm`'s `except
+RuntimeError` handler only recurses once: `if repair_error: raise` re-raises immediately on a second
+failure instead of recursing again, so total gateway calls per review are capped at two regardless of
+which layer (decode, envelope, or verdict JSON) keeps failing. Already covered by
+`test_call_llm_fails_closed_after_repeated_malformed_envelope` and the new
+`test_call_llm_fails_closed_after_repeated_invalid_utf8_response`, both of which assert exactly two
+requests were made.
+
+**Confirmed correct, no change needed — falsey envelope values still fail closed.** A `choices`,
+`message`, or `content` field that is present but falsey-and-wrong-shaped for the lenient branch (e.g.
+`choices: false`, `choices: 0`, `choices: ""`, `choices: []`) is treated by `extract_llm_message_content`
+the same as an absent field — deliberately lenient, per that function's existing docstring — and resolves
+to empty `content`. That empty string is not silently accepted: `extract_json_object` requires content
+starting with `{` and raises its own bounded `RuntimeError` ("did not contain a JSON object") for an
+empty string, so the falsey-envelope path still fails closed one layer down. Verified directly against
+`extract_llm_message_content` + `extract_json_object` for `choices` in `{False, 0, "", []}`.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge). Devin's own framing marked this
+the last expected finding in this decode/parse vein for this PR.
+
+## 2026-08-31 noema-review-gate stale-trigger guard: workflow_run head misread and case-sensitive SHA
+comparison
+
+Devin Review's next pass on PR #1507 reviewed the stale-trigger guard added around `EXPECTED_HEAD` (the
+mechanism that aborts a Noema review run — before any credential/model work or verdict publication — when
+its triggering event's head no longer matches the PR's live head) and found two real bugs. Given this
+PR's concurrent commit velocity, a sibling session landed the same two fixes to `noema-review.yml` and
+`scripts/ci/noema_review_gate.py` (`d74fc4b`/`a5262f3`/`a398a02`/`e4c7a8d`) while this session was still
+verifying them; this entry records the independently-confirmed root cause and evidence, plus the
+regression tests this session added on top of that already-landed fix (rebased cleanly, no functional
+disagreement between the two).
+
+**Bug 1 (confirmed real): `workflow_run`-triggered reviews always looked stale.** `noema-review.yml`
+subscribes to `workflow_run` for `["Required OpenCode Review", "Strix Security Scan"]` — both
+`pull_request_target` workflows — so Noema runs as their follow-up. `EXPECTED_HEAD`, the `run-name`, and
+the `concurrency` group all read `github.event.workflow_run.head_sha` for that path, but GitHub's
+`workflow_run.head_sha` is the base/trusted commit the completing `pull_request_target` job checked out
+(its own `github.sha`), not the PR's head — confirmed against GitHub's REST/webhook docs for the
+`workflow_run` payload and against this same workflow's own `PR_NUMBER` line, which already reads the
+correct PR association via `github.event.workflow_run.pull_requests[0].number`. Every
+`workflow_run`-triggered follow-up review was therefore comparing the live PR head against the wrong
+(base) commit in `EXPECTED_HEAD` and would almost always find them unequal, aborting the run and silently
+skipping the review it exists to produce. Fixed by reusing the same established `pull_requests[0]` pattern
+for the head SHA everywhere it appears: `github.event.workflow_run.pull_requests[0].head.sha`, in
+`EXPECTED_HEAD`, `run-name`, and the `concurrency` group alike (`docs/pr-review-and-merge-procedure.md`'s
+trigger-mapping table updated to match). `pull_requests` is documented to come back empty for cross-fork
+PRs; that already degrades safely (`EXPECTED_HEAD` falls through to `''`, and `PR_NUMBER` — sourced from
+the same array — already falls through the same way, so the existing "Skip events without pull request
+context" step short-circuits before any stale-head comparison runs).
+
+**Bug 2 (confirmed real): uppercase `--expected-head` was falsely treated as stale.**
+`scripts/ci/noema_review_gate.py`'s `--expected-head` regex (`^[0-9a-fA-F]{40}$`) accepts uppercase hex,
+and the bash-side guard in `noema-review.yml` accepts it too, but both of the script's live-head
+comparisons (`inspect_and_review`'s pre-model-work check against `fetch_pr(...).headRefOid`, and its
+pre-publication re-check against a freshly re-fetched `headRefOid`) used a plain case-sensitive `!=`
+against GitHub's GraphQL `headRefOid`, which is always lowercase — as did the workflow YAML's own bash
+`[ "$live_head" != "$EXPECTED_HEAD" ]` check against the REST `.head.sha` field. A legitimately
+uppercase-cased dispatch (e.g. from `client_payload.pr_head_sha`) would be rejected or silently skipped at
+every one of these sites even though it named the correct commit. Fixed by lowercasing both sides at
+every comparison: `inspect_and_review` normalizes its `expected_head` parameter once
+(`expected_head = expected_head.strip().lower()`) and lowercases `headRefOid` at both comparison sites;
+the workflow's bash check now compares `"${live_head,,}" != "${EXPECTED_HEAD,,}"`, reusing this repo's
+existing `${VAR,,}` lowercase-normalization idiom already used for PR SHAs elsewhere in
+`opencode-review-dispatch.yml`.
+
+Regression tests added by this session on top of the landed fix: `tests/test_noema_orchestrator_workflow_contract.py` adds
+`test_workflow_run_expected_head_uses_pull_request_head_not_base_commit` (proves, with distinct base vs.
+PR-head SHA values, that the fixed expression resolves to the PR head and not the base commit) and
+`test_workflow_run_expected_head_fails_closed_when_pull_requests_is_empty`, plus
+`test_stale_trigger_step_compares_expected_head_case_insensitively` and
+`test_stale_trigger_step_still_rejects_a_genuinely_different_head`, which execute the workflow's own
+extracted bash step against a fake `gh` to prove the case-insensitive fix without weakening genuine
+stale-trigger detection. `tests/test_noema_review_gate.py` adds
+`test_uppercase_expected_head_is_not_stale_before_model_work` and
+`test_uppercase_expected_head_is_not_stale_before_publication`, covering both Python-side comparison
+sites end-to-end (through to `submit_review` actually being called), complementing the sibling session's
+own `test_expected_head_comparison_is_case_insensitive`. 100% coverage (branch included) and 100%
+docstring coverage on `scripts/ci/`.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
+## 2026-09-01 OpenCode contextual-orchestrator runtime ceiling
+
+Exact-head evidence from four-pillars PRs #35 and #37 showed the required
+OpenCode job failing closed after approximately 91 minutes without a verdict.
+The central model-pool workflow still capped its contextual-orchestrator
+candidate, every changed-file cadence, the dynamic cap, and the central-review
+fallback at 5,400 seconds even though the target, pool, and retry budgets already
+had capacity for a long-running candidate. Those seven limits now use the full
+11,700-second review budget, with an executable step-scoped contract preventing
+unrelated numeric strings elsewhere in the workflow from masking a regression.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
+## 2026-08-31 noema-review-gate close-cleanup job: bare head_sha match, single-pass status sweep, and a
+workflow-file-scoped endpoint that does not resolve for the sibling repositories the job exists to clean up
+
+Devin Review's pass on the `cancel-closed-pr-runs` job (the job that cancels still-active "Required Noema
+Review" runs when their pull request closes) found two real bugs plus a test-quality gap. Verified against
+a fresh clone of `fix/noema-review-gate-json-parse-crash` at commit `03117b7` (the commit that introduced
+this job) -- neither was fixed yet at that point. While this session was building its own fix, a concurrent
+session landed `e0f542f` ("fix: scope Noema cleanup to closed PR") addressing both findings with a
+different mechanism; this session's mandatory pre-push `git fetch && git rebase` surfaced it. Rather than
+push a duplicate/conflicting fix, this session verified `e0f542f` independently, found its Bug 2 mechanism
+introduces a new regression specific to this job's cross-repository use case, and landed a corrected
+version on top of it (`git reset --hard` to `e0f542f` locally, since this session's own prior commit had
+never been pushed, then a fresh commit) rather than a competing rewrite.
+
+**Bug 1 (confirmed real, and correctly fixed by `e0f542f`): bare `head_sha` match let one PR's close
+cancel a different PR's still-needed run.** The jq selector's match condition was an OR of three clauses,
+the first a bare `.head_sha == $head_sha` with no PR association required. Two different open PRs can
+share one head commit (e.g. a duplicate PR opened from the same branch against a different target);
+closing one would match and cancel the *other*, unrelated PR's run purely because of the shared commit.
+`e0f542f` dropped the bare `head_sha` OR-branch (and the `pull_requests[]` branch alongside it), keeping
+only the `display_title` `"target#pr@"` prefix match -- this workflow's own generated run-name, itself
+derived from the same PR-number resolution chain the job's other env vars use, so it identifies the
+correct PR without depending on GitHub's `pull_requests[]` array (documented empty for cross-fork PRs).
+This session's independent re-derivation reached the same conclusion and kept this exact selector logic
+unchanged.
+
+**Bug 2 (confirmed real; `e0f542f`'s fix introduces a different regression for this job's primary use
+case): a run could transition between the five active statuses faster than a sequential per-status sweep
+could see it.** The original `cancel_runs` was called once per status in a fixed loop, each call issuing
+its own `gh api` fetch at a different moment; a run that is e.g. `requested` when the already-fetched
+`queued` list was read, then becomes `queued` moments later -- after the loop has already moved past
+checking `queued` for that pass -- is a genuine GitHub Actions run lifecycle race that could let an
+abandoned run escape cancellation entirely. `e0f542f` fixed this by switching to one unfiltered snapshot
+(`.../actions/workflows/noema-review.yml/runs`, no `status` filter, filtered client-side by jq instead),
+which does eliminate the race for a query targeting the *central* `.github` repository. It does not for the
+job's actual primary case: `noema-review.yml` runs against **sibling** repositories only through the
+organization's required-workflow ruleset (`README.md`'s "또 같이" / "siblings call it" section: "GitHub
+runs the trusted workflows from `ContextualWisdomLab/.github@main` in that sibling's repository context")
+and is never itself committed to those repositories' own `.github/workflows/`. GitHub's `List repository
+workflows` / `List workflow runs for a workflow` endpoint family is documented (and, per public reporting
+on the predecessor "required workflows" feature's retirement, confirmed to differ) to enumerate workflow
+files that exist in that specific repository's own tree; there is no documentation stating a ruleset-only
+required workflow sourced from a different repository is addressable this way in the target repository's
+context, and this repository's own established pattern for the identical cross-repo cleanup problem
+(`strix.yml`'s sibling `cancel-closed-pr-runs` job) deliberately uses the repository-wide, `.name`-filtered
+`/actions/runs` endpoint rather than a workflow-file-scoped one. If unresolved for a sibling repository,
+`gh api`'s failure is caught by this job's existing fail-open `::warning::...leaving runs unchanged; exit
+0` handling, so the job would not error -- it would silently no-op cleanup for every sibling repository,
+which is the majority of this job's real invocations and exactly the outcome the whole feature exists to
+prevent (the original `03117b7` commit message: abandoned model calls consuming runner capacity for the
+two-hour review window). Fixed by keeping `e0f542f`'s selector (display_title-only PR scoping) but
+restoring the repository-wide, `status`-server-filtered `/actions/runs` endpoint, and replacing the
+original single sequential sweep with a bounded multi-pass re-scan instead of one unfiltered snapshot:
+the five-status sweep always runs at least two full passes (a run missed by every status query in pass 1
+has, by definition, settled into a checkable status by the time pass 2 re-queries it), and a third pass
+runs only when either of the first two found something to cancel, capped at three passes total. Status
+stays a *server-side* filter deliberately -- `noema-review.yml` is this org's central, highest-volume
+review workflow (fan-out across every sibling PR event plus every OpenCode/Strix completion), and an
+unfiltered fetch of its entire run history on every PR close, filtered only client-side, is a real
+rate-limit and latency concern this repository's own `gh api --help`/REST docs give no server-side
+multi-status filter to avoid; the bounded-retry, status-filtered design keeps every individual query small
+(only the currently active runs) while still closing the race across passes.
+
+**Test-quality finding (addressed): existing coverage only grep-matched workflow YAML text, never
+executed the jq selector or the cancellation loop.** `e0f542f` had already added one such test
+(`test_noema_close_cleanup_selects_only_the_closed_pr_from_one_snapshot` in
+`tests/test_noema_orchestrator_workflow_contract.py`) executing the real extracted bash against a fake
+`gh`; because its fake `gh` answered every call with the same fixture regardless of the requested status,
+it implicitly assumed client-side status filtering and needed updating to filter by the `status=` query
+parameter (mirroring GitHub's real server-side behavior) once server-side filtering was restored --
+renamed to `test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles` with that
+fix, its shared-head-SHA/different-PR-number assertions otherwise unchanged. Two further tests were added
+to `tests/test_noema_review_gate.py`, both executing the workflow's real bash via this repo's established
+`_extract_run_block`-plus-`subprocess.run`-with-a-fake-`gh` idiom (matching
+`tests/test_noema_orchestrator_workflow_contract.py`'s pattern for this same job):
+`test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped` proves, with two synthetic runs sharing one
+head SHA but different PR numbers (42 closing, 43 open), that only PR #42's run is cancelled; and
+`test_close_cleanup_survives_a_run_transitioning_between_active_statuses` proves, with a stateful fake
+`gh` that only reveals a run under `queued` starting on that status's *second* query, that the fixed
+multi-pass sweep still cancels it, and that pass 1 alone finds nothing (`"pass 1/3 matched 0 run(s)"` in
+the captured log) -- demonstrating the original single-sweep design would have missed it. All three tests
+were confirmed to fail both against the pre-`03117b7` state and, independently, against `e0f542f` alone
+(the status-transitioning-run test errors out on `e0f542f`'s workflow-scoped, no-`status`-param URL, which
+this test's status-aware fake `gh` cannot resolve into a per-status result -- itself supporting evidence
+for the endpoint regression above) before passing against this session's corrected version.
+
+Validation: `coverage run -m pytest tests -q` -- 2169 passed, 1 skipped, 21 subtests passed; `coverage
+report` -- 100% on `scripts/ci/` (no `.py` production files touched; the fix and its tests are entirely in
+`.github/workflows/noema-review.yml` and `tests/`); `interrogate` -- 100% docstring coverage (minimum
+100.0%, actual 100.0%). The workflow file re-parses clean with `yaml.safe_load`, and the touched `run:`
+block passes `bash -n` both as extracted at edit time and as exercised end-to-end by the new subprocess
+tests. Full validation was re-run after this PR's isolated-clone protocol's pre-push
+`git fetch && git rebase`, given the branch's ongoing concurrent commit velocity.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
+## 2026-08-31 opencode-review.yml required-verdict poller: complete multi-job wait budget
+
+**Current status: resolved in the same PR.** The investigation below records
+the intermediate single-job mitigation and the platform limit it exposed. Its
+residual-gap conclusion is superseded by the final design: the required check
+dispatches OpenCode directly and chains two 325-minute polling windows, while
+the downstream validation, source, coverage, and review jobs have explicit
+8-, 12-, 300-, and 305-minute bounds. This covers the full 625-minute
+downstream path inside roughly 650 minutes of polling without shortening the
+205-minute model-pool budget. Each Reviews API call is capped at 25 seconds and
+counts inside a fixed 30-second polling cadence. Fork PRs fail closed during
+the short bootstrap job, so untrusted contributors cannot allocate either
+long-running wait window; a maintainer must materialize an accepted external
+contribution on a base-repository branch first.
+
+Devin Review's pass on `opencode-review.yml`'s "Fail closed without a current-head OpenCode verdict"
+step (the poller the branch-protection-required `opencode-review-target` job uses to wait for
+`opencode-review-dispatch.yml` to post a verdict) found a real arithmetic bug: 639 `sleep 30` calls
+(the loop never sleeps after its final attempt) sum to 319.5 minutes of polling patience, which is
+*less* than `opencode-review-dispatch.yml`'s own `opencode-review-target` job's `timeout-minutes: 325`
+-- the job that actually runs the review and posts the verdict this poller is waiting for. The poller
+could give up before that job's own declared budget elapses, even before counting the
+`validate-pr-metadata` -> `coverage-source-tree` -> `coverage-evidence` chain that job's `needs:` list
+requires to finish first, or the dispatch/queueing delay before that chain even starts. Independently
+verified the arithmetic (639 x 30 = 19170s = 319.5m < 325m) against a fresh clone at the branch's then
+head before making any change. CodeRabbit's independent pass on the same step added a second, distinct
+finding: the loop's `sleep 30` calls were the *only* budgeted time -- the up to 640 sequential
+`gh api --paginate repos/{repo}/pulls/{number}/reviews` calls themselves had no timeout and no budget
+allocation, so one hung connection or a heavily-paginated PR review list could silently consume time
+the arithmetic above never accounted for.
+
+**Investigated the full pipeline before picking new numbers, and found a platform ceiling neither
+finding's suggested fix accounted for.** `opencode-review-dispatch.yml`'s own `opencode-review-target`
+job carries a job-header comment breaking its 325-minute budget into named line items (12m evidence +
+205m provider-pool + 36m publication gate + 18m Noema handoff + ~54m setup/cleanup overhead), and an
+existing test (`test_opencode_job_timeout_contains_full_sequential_review_budget` in
+`tests/test_opencode_agent_contract.py`) already asserts that composition holds -- left unchanged here.
+The three jobs upstream of it in that same workflow's `needs:` chain (`validate-pr-metadata`,
+`coverage-source-tree`, `coverage-evidence`) carry no `timeout-minutes` of their own; the only
+script-enforced bound inside them is `coverage-evidence`'s three sequential
+`timeout --kill-after=20 900` sandboxed test-measurement invocations (Python/R/a third language,
+2700s/45m worst case), on top of realistic (not pathological) dispatch-event, runner-provisioning,
+Docker-image-build, and git-fetch/artifact-transfer overhead -- a realistic worst-case estimate in the
+~90-105 minute range. Summed with the downstream job's own 325-minute budget, a fully safe poller
+budget would need to exceed roughly 415-430 minutes. But GitHub-hosted runners (`runs-on: ubuntu-latest`,
+used by both the poller job and every job in the chain it waits on) hard-cap **every** job's wall-clock
+at 360 minutes regardless of `timeout-minutes`
+(<https://docs.github.com/en/actions/reference/limits>; corroborated by
+<https://github.com/orgs/community/discussions/25700>, a report of exactly this "`timeout-minutes: 600`
+but killed at 360m anyway" gotcha) -- so no value written into this poller job's `timeout-minutes` can
+ever let it wait the full realistic worst case; the platform kills the runner first. This also explains,
+retroactively, why the downstream job's own budget was set to 325 rather than something larger: 325 is
+already only 35 minutes under that same 360-minute ceiling.
+
+**Fix: maximize patience within what a single GitHub-hosted job can actually deliver, document the
+residual gap explicitly, and treat "one call can't silently be unbounded" as a real, separate defect
+worth fixing alongside the budget numbers.** Raised the enclosing `opencode-review-target` job's
+`timeout-minutes` from 325 to 355 (5 minutes under the 360-minute hard cap -- the largest value that
+stays honored by the platform rather than silently truncated). Raised the poll loop's attempt count from
+640 to 661 (`for attempt in $(seq 1 661)`; `sleep 30` interval unchanged), giving 660 sleeps x 30s = 330
+minutes of pure-sleep patience -- now 5 minutes *more* than the downstream job's own 325-minute budget,
+closing Devin's specific inequality with an explicit margin, versus falling 5.5 minutes short before.
+Addressed CodeRabbit's per-call finding by wrapping the `gh api --paginate` call itself in
+`timeout 25`, so no single call (hung connection or an unusually deep multi-page fetch) can consume more
+than 25 seconds; a failed or timed-out call now degrades to treating that attempt as "no verdict yet"
+(`reviews="[]"`) and continues polling on the next attempt, instead of crashing the whole step under
+`set -euo pipefail` the way an unguarded `reviews="$(gh api ...)"` would have. This leaves 25 minutes of
+declared slack (355m job timeout minus 330m poll budget) for the dispatch step, cumulative per-call
+latency across up to 661 attempts, and runner/shutdown overhead, so the loop's own
+`::error::No APPROVED or CHANGES_REQUESTED...` message is the one that fires on genuine exhaustion,
+not an abrupt platform-level job-timeout kill with no actionable message.
+
+**What this fix does and does not close.** It provably fixes Devin's narrow arithmetic complaint (poll
+budget now exceeds the downstream job's own declared budget, with margin) and CodeRabbit's per-call
+budgeting gap (every `gh api` call is now individually bounded and its failure handled). It does *not*
+close the larger realistic-worst-case gap: 330 minutes of patience is still well short of the
+~415-430 minute realistic worst case once upstream chain delay is counted, because that full figure
+exceeds even the platform's own 360-minute per-job ceiling -- no `timeout-minutes` value fixes that.
+Fully closing it needs an architecture change (splitting the wait across multiple short-lived
+re-dispatched jobs, e.g. chained through `workflow_run`, rather than one job blocking end-to-end) that
+is deliberately out of scope for this budget-sizing fix and is recorded here as an explicit residual
+risk rather than silently left implicit.
+
+**Test-quality finding (addressed): the existing regression test only pinned exact literals
+(`"timeout-minutes: 325"`, `"for attempt in $(seq 1 640)"`), which would have needed a matching
+hand-edit on every future change and would not have caught a future edit that broke the underlying
+relationship while still passing its own literal check.** `tests/test_opencode_required_verdict_regression.py`
+now parses the poller's attempt count, sleep interval, per-call timeout, and enclosing job timeout
+directly out of `opencode-review.yml`, and the downstream job's `timeout-minutes` directly out of
+`opencode-review-dispatch.yml` (same regex shape already used by
+`test_opencode_job_timeout_contains_full_sequential_review_budget`), then asserts the arithmetic
+relationships rather than the literals: `test_poll_budget_exceeds_downstream_review_job_budget_with_explicit_margin`
+asserts the poll budget clears the downstream budget plus an explicit 5-minute margin;
+`test_enclosing_job_timeout_has_headroom_above_the_poll_budget` asserts the job's own timeout-minutes
+stays at or below the 360-minute GitHub-hosted hard cap and leaves at least 20 minutes of slack above the
+pure-sleep budget; `test_poller_gh_api_call_has_an_explicit_per_call_timeout` asserts the per-call
+timeout wrapper and the fail-soft `reviews="[]"` fallback are present. Verified these tests actually
+catch the original bug (not just pass vacuously) by temporarily reverting the workflow to the pre-fix
+640/325 numbers and confirming both budget tests fail with the exact original shortfall
+(`330s slack < 1200s minimum`), then restored the fix and re-confirmed all pass. Also added a small
+functional smoke test (bash, fake `gh`, tiny timeout/sleep values) exercising the modified loop's exact
+structure end-to-end: two simulated hung calls are killed by `timeout` and gracefully treated as
+"no verdict yet" without crashing the script, and the loop finds and returns the correct verdict once
+`gh` starts succeeding.
+
+Validation: `coverage run -m pytest tests -q` -- 2173 passed, 1 skipped, 21 subtests passed (up from the
+prior 2169-passed baseline by the 3 new tests plus one already landed by a concurrent commit this
+session rebased onto); `coverage report` -- 100% on `scripts/ci/` (no `.py` production files touched; the
+fix and its tests are entirely in `.github/workflows/opencode-review.yml` and `tests/`); `interrogate` --
+100% docstring coverage (minimum 100.0%, actual 100.0%). `actionlint v1.7.12` (built locally via
+`go install`, since no prebuilt binary or cached module was reachable through the outbound proxy) reports
+no findings on the modified workflow file (exit 0). `yaml.safe_load` and `bash -n` both re-confirmed
+clean on the modified step, and the existing `tests/test_opencode_workflow_shell_syntax.py` suite passes
+unchanged.
+
+PR: ContextualWisdomLab/.github#1507 (same PR; addressed before merge).
+
+## 2026-08-31 noema-review-gate: repair-retry request fired without re-checking a live-moved PR head
+
+CodeRabbit's review on PR #1507 found a real efficiency gap in `call_llm`'s one-time repair-retry path.
+`inspect_and_review(repo, number, expected_head)` already checks the normalized `expected_head` against
+the PR's live `headRefOid` twice -- once before any credential/model work, and again right before
+`submit_review` -- but `call_llm` itself had no `expected_head` parameter at all. Its self-recursive
+repair-retry branch (`except RuntimeError as exc: if repair_error: raise; return call_llm(..., str(exc))`,
+fired once whenever the first attempt's verdict is malformed) went straight to a second,
+`NOEMA_LLM_TIMEOUT_SECONDS`-bounded (currently 14,400 seconds) request with no live-head check of its own.
+Verified independently from a fresh isolated clone (not the branch's shared working checkout, given three
+concurrent actors were pushing to it) before making any change: confirmed both existing checks, confirmed
+`call_llm`'s signature had no `expected_head`, and confirmed the recursive retry call site had no head
+comparison anywhere on its path. Net effect was wasted compute, not a correctness gap -- the existing
+post-call check in `inspect_and_review` already stopped a genuinely stale verdict from publishing -- but a
+PR head moving mid-first-attempt could still burn a second, potentially multi-hour LLM call producing a
+verdict `inspect_and_review` was always going to discard once `call_llm` returned.
+
+**Fix.** `expected_head: str` was added to `call_llm`'s signature as a required parameter, positioned
+after the other required parameters (`repo`, `number`, `pr`, `diff`, `truncated`) and before the existing
+optional, default-valued ones (`review_context`, `changed_paths`, `repair_error`) -- keeping this file's
+existing convention of required-then-optional parameter ordering. Inside the repair-retry branch, after
+the existing `if repair_error: raise` short-circuit (which already caps retries at one) and before the
+recursive call, `call_llm` now re-fetches the live PR via the existing `fetch_pr` helper (no new HTTP
+call) and compares its `headRefOid`, lowercased, against `expected_head` -- the same lowercase-normalized
+comparison idiom `inspect_and_review`'s own two checks already use. A mismatch raises a new
+`StaleHeadDuringRepairRetryError(RuntimeError)` (defined immediately above `call_llm`) with a distinct
+message ("...stale before repair retry.") rather than a bare `RuntimeError`, so `inspect_and_review` can
+tell a benign stale-head race apart from a genuine review failure and keep treating it as the same kind of
+clean, non-error skip (`print(...); return 0`) as its other two stale-head checks -- not as a hard failure
+that would reach `main`'s top-level `except RuntimeError` / `::error::` / exit-1 path. `inspect_and_review`
+now calls `call_llm` inside a `try`/`except StaleHeadDuringRepairRetryError` for exactly that purpose.
+Scope was kept intentionally narrow: this does not touch the separate `submit_review` TOCTOU race
+CodeRabbit flagged on the same PR (tracked separately, not a code change), and it does not redesign
+`call_llm`'s retry/repair architecture -- one added live-head check on the one existing retry path.
+
+**Regression tests** (`tests/test_noema_review_gate.py`): `test_call_llm_skips_repair_retry_when_head_moves_before_it_fires`
+proves the retry request never fires (`len(open_calls) == 1`) and `StaleHeadDuringRepairRetryError` is
+raised with a "stale before repair retry" message when the live head has moved between the first attempt
+and the retry decision; `test_call_llm_still_repairs_once_when_head_has_not_moved` proves the existing
+one-time repair behavior is unchanged when the head has not moved; `test_inspect_and_review_reports_stale_before_repair_retry_cleanly`
+proves `inspect_and_review` converts that exception into a clean `return 0` without ever calling
+`submit_review`. Every pre-existing direct `call_llm(...)` call site across `tests/test_noema_review_gate.py`,
+`tests/test_noema_review_orchestrator_ssrf.py`, and `tests/test_repository_branch_coverage_review_schedulers.py`
+was updated for the new required parameter; call sites that raise before `call_llm`'s HTTP request (URL/
+SSRF validation) needed only the added argument, while call sites that exercise the repair-retry path
+needed a `fetch_pr` mock added alongside it so the new live-head check has something to compare against.
+
+Validation: `coverage run -m pytest tests -q` -- 2174 passed, 1 skipped, 21 subtests passed. Baseline
+before this change was 2170 passed; two concurrent sessions' opencode-review.yml poller-budget fixes
+landed and were picked up mid-session by this PR's mandatory pre-push `git fetch`/rebase protocol (first
+`ddaa917`, widening the poller's own budget past its downstream job, raising the baseline to 2173; then
+`4548f93`, which superseded that same-day fix with a different architecture -- two chained polling
+windows covering the complete multi-hour path -- landing at 2171 before this change's own 3 new tests).
+Both moves produced a `CHANGELOG.md` conflict against this entry's own `[Unreleased]` bullet (resolved by
+keeping this session's bullet plus whichever upstream bullet was current at that fetch, dropping the
+now-superseded intermediate one); `docs/product-technical-gap-baseline.md` conflicted once and auto-merged
+cleanly the second time. `coverage report --show-missing` -- 100% on `scripts/ci/` (`noema_review_gate.py`:
+517 stmts, 232 branches, 100%; TOTAL unchanged at 10,600 stmts / 4,252 branches, since neither concurrent
+fix touched a `scripts/ci/` production file); `interrogate` -- 100% docstring coverage (minimum 100.0%,
+actual 100.0%); `ruff check` on every touched file -- all checks passed. Full validation was re-run after
+every rebase, given the branch's ongoing concurrent commit velocity from multiple simultaneous sessions.
+
+PR: ContextualWisdomLab/.github#1507 (CodeRabbit review on #1507; same PR, addressed before merge).
+
+Deeply nested wrapped JSON can make Python's decoder raise `RecursionError`
+instead of `JSONDecodeError`. The extraction boundary now converts that case
+to the same bounded length-and-SHA-256 fail-closed diagnostic, with a regression
+test that forces the decoder failure without depending on interpreter-specific
+nesting limits.
+
+### Same-PR old-head model cancellation
+
+The repair-retry guard prevents a second stale request, but head-specific
+workflow concurrency still allowed the first request to occupy a runner for up
+to four hours after a new commit. Head-specific native concurrency remains so
+a delayed event or manual rerun of an older attempt cannot cancel the current
+head. After a live `pull_request_target` event passes the existing live-head
+check, it explicitly cancels active runs for the same PR's other heads before
+model setup, but only when their run IDs are smaller than its own. This
+directional condition prevents an older cleanup racing a push from cancelling
+the newer run and closes the stale-compute gap without weakening exact-head
+review publication.
+
+Cancelled upstream review runs exposed a separate same-head race: their
+`workflow_run` notifications entered this concurrency group, cancelled a live
+native Noema review, and then skipped because the upstream conclusion was
+`cancelled`. Merely disabling `cancel-in-progress` is insufficient because
+GitHub always replaces the existing pending member of a concurrency group with
+the newest pending run. Cancelled notifications therefore use a run-unique
+suffix and are also denied cancellation authority. All actionable triggers
+remain in the shared head-specific group; successful or failed upstream
+completions still serialize and trigger the intended current-head review.
+
+## 2026-08-31 noema-review-gate: the live-head re-check added to close the above gap was itself an unguarded API call
+
+Auditing the directional cancellation guard immediately above (run IDs smaller than the current run, plus
+a fresh live-head re-check performed again right before each individual cancellation) for robustness --
+not disputing its correctness -- found
+`live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"` was a bare
+assignment under this step's own `set -euo pipefail`, unlike every other `gh api` call in this same step
+and in the sibling `cancel-closed-pr-runs` job, which are all wrapped in `if ! ... ; then warn;
+continue/return; fi`. Reproduced concretely: a fake `gh` that fails only this one call (simulating a
+transient rate limit or network blip) makes the whole step exit 1, which -- since no later step in this
+job declares `continue-on-error` or `if: always()` -- fails the entire `noema-review` job, blocking a
+perfectly valid, live-head Noema review over a housekeeping API hiccup unrelated to the review itself
+(Devin review on #1507).
+
+**Fix**: wrap the re-check the same way every other `gh api` call in this file already is -- on failure,
+log a `::warning::` and `exit 0` (treat "cannot verify" the same as "verified stale": stop cancelling
+further runs, but let the job, and the actual review later in it, proceed). Reproduced the crash against
+the pre-fix step with a hand-rolled fake `gh`, confirmed `exit 0` post-fix with the identical fake-failure
+fixture, and confirmed the normal (non-failure) cancellation path is unchanged, before folding both
+scenarios into `tests/test_noema_review_gate.py` as
+`test_superseded_cleanup_survives_a_transient_live_head_lookup_failure`, executing the real, unmodified
+production bash (not a reimplementation) via `subprocess.run`, in the same fake-`gh`-fixture idiom
+`test_superseded_cleanup_preserves_current_and_newer_run_ids` already established for this step.
+`test_noema_concurrency_and_live_head_cleanup_preserve_current_review` was also extended with a docstring
+enumerating the four invariants this mechanism now holds together across every review round it took to get
+here (new-head cancels old-head; a delayed workflow_run/repository_dispatch trigger never reaches this
+step at all; a directional ordering guard stops an older cleanup from racing a newer run; and this
+live-head re-check itself fails safe) plus structural assertions for the step's `pull_request_target`-only
+gate and the now-guarded (non-bare) live-head re-check -- so a future edit that reintroduces any of these
+regressions fails a test immediately rather than requiring another bot-finds-it/human-fixes-it round.
+
+Validation: `coverage run -m pytest tests -q` -- 2179 passed, 1 skipped, 21 subtests passed (1 new test
+plus one extended existing test); `coverage report` -- 100% on `scripts/ci/` (no `.py` production file
+touched by this specific fix; the fix and its tests are entirely in `.github/workflows/noema-review.yml`,
+`docs/`, and `tests/` -- separately, the unreachable type branch in `extract_json_object` was removed so
+the implementation now directly reflects the JSON grammar guarantee); `interrogate` -- 100% docstring
+coverage (minimum 100.0%, actual 100.0%); `actionlint`
+on the modified workflow -- clean. The touched `run:` block parses with `bash -n` and was exercised
+interactively against hand-rolled fake `gh` fixtures for both the crash-reproduction and the fixed
+behavior before being folded into the pytest suite. Full validation was re-run after every rebase, given
+the branch's ongoing, very high commit velocity from multiple simultaneous sessions converging on this
+same ~15-line mechanism throughout the day.
+
+PR: ContextualWisdomLab/.github#1507 (Devin review on #1507; same PR, addressed before merge).
+
+The same exact-head review also identified that scanning every opening brace could recover a valid
+nested object after its malformed outer object failed to decode. Recovery now considers only top-level
+brace groups, preserving lightly wrapped and multiple-object responses while failing closed on nested
+escape. A regression test reproduces the former nested-object acceptance directly. An explicit,
+string-aware `MAX_JSON_NESTING_DEPTH = 100` check also runs before `raw_decode`, so the limit does not
+depend on Python-version-specific `RecursionError` behavior.
+
+The two chained required-workflow pollers were then replaced after live organization evidence showed
+53 concurrent Actions runs and a growing runner queue. The required workflow still dispatches the same
+bounded multi-hour OpenCode path and still fails closed without a formal exact-head receipt, but it now
+releases its runner after one receipt lookup. Once the privileged dispatch validates the formal receipt,
+it selects the latest exact-head `Required OpenCode Review` `pull_request_target` run and calls
+`rerun-failed-jobs`; only the small verdict job reruns. This preserves ruleset `18156473`'s required
+workflow identity and the two-hour-plus model allowance while removing roughly eleven runner-hours of
+polling per PR. The authenticated dispatch carries the immutable triggering required-run ID; the
+continuation fetches that target-repository run directly and validates its `pull_request_target` event,
+central workflow path, and live PR `head_sha` before rerunning it. This remains correct even when runner
+queue delay exceeds the model jobs' declared timeout sum and avoids dependence on context-specific title
+or `workflow_url` rendering. Scheduler review retries propagate the same immutable run ID from the
+required check's Actions details URL, so the scheduler and direct required-workflow entrypoints share one
+continuation contract. Native wake calls use the privileged dispatch job's narrowly scoped `actions:
+write` workflow token. Sibling wake calls require `PR_REVIEW_MERGE_TOKEN` or
+`OPENCODE_APPROVE_TOKEN` and fail closed when neither is configured; the review-only OpenCode app token
+and the central repository's workflow token are never presented as cross-repository Actions credentials.
+
 ## 2026-08-31 `ORCHESTRATOR_PIN_SHA` bumped to carry #925's stream_options/tools fix
 
 **Context**: `#1451` fixed a separate, org-wide `pingora_edge_policy.py` coverage
@@ -1744,6 +2343,84 @@ sync: `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s default,
 contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
+
+## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
+
+**Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
+unhandled `urllib.error.HTTPError: HTTP Error 502: Bad Gateway`. Root cause: `call_llm` in
+`scripts/ci/noema_review_gate.py` had `with opener.open(request) as response:` sitting outside the
+`try`/`except` that only guarded the JSON-decode/validation steps *after* a successful response --
+identical in shape to, but a distinct bug from, the malformed-verdict crash fixed in `#1507`
+(2026-08-31 entries above). Confirmed via direct fetch that `#1546`'s own `call_llm` (main tip at the
+time, `5686de41`) carried the same unguarded line, so this crash is orthogonal to, and survives
+regardless of, the `#1438`/`#1546` wall-clock-deadline policy question -- `#1438` was closed by the
+repo owner as a stale mixed branch unrelated to this specific bug.
+
+**Fix, round 1**: widened the `try` to cover the request itself and added `urllib.error.URLError`
+alongside `RuntimeError` to the existing repair-retry `except` clause -- one retry on a transient
+transport failure, then a clean `RuntimeError` on a second failure, matching the malformed-verdict
+path's contract. RED (`HTTPError: Bad Gateway` reproduced uncaught) confirmed before, GREEN after.
+
+**Fix, round 2 (Devin Review, then owner confirmation, on `#1566` itself)**: Devin correctly found that
+`response.read()` can raise `http.client.IncompleteRead` -- and, more generally, any
+`http.client.HTTPException` or raw `OSError` (a bare socket timeout/disconnect reaching `opener.open()`
+before urllib gets a chance to wrap it as `URLError`) -- none of which are `RuntimeError` or
+`urllib.error.URLError`, so they still escaped the round-1 boundary. The owner's review comment and
+follow-up issue comment on `#1566` confirmed this independently and specified the exact contract: widen
+to the bounded transport/read exception families without swallowing JSON/validator/programming errors,
+add RED->GREEN regressions for a truncated-body success-after-retry and a repeated-failure case, and at
+least one timeout/disconnect family exercising a distinct exception path -- while preserving `#1546`'s
+unbounded inference semantics (no fixed inference timeout, no direct-provider fallback, no bypass).
+
+Widened the `except` clause to `(RuntimeError, urllib.error.URLError, http.client.HTTPException,
+OSError)` and simplified the repair-retry re-raise from an `isinstance(exc, urllib.error.URLError)`
+check to `isinstance(exc, RuntimeError)`: re-raise as-is only when the second failure is already this
+module's own `RuntimeError` (a malformed verdict, an invalid finding, etc.); otherwise wrap in a clean
+`RuntimeError`. This generalizes the fail-closed contract to any transport exception type without
+needing another `isinstance` branch added per exception class encountered. Three genuinely distinct
+exception paths are now each covered by their own RED->GREEN success-after-retry and repeated-failure
+regression pair (`test_call_llm_repairs_once_after_a_transport_error_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_transport_error` for `HTTPError`/`URLError`;
+`test_call_llm_repairs_once_after_a_truncated_response_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_truncated_response` for `http.client.IncompleteRead`;
+`test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_socket_timeout` for a raw `TimeoutError` reaching
+`opener.open()` directly) -- each verified genuinely RED against the pre-fix boundary before being
+folded in, never transferred from an earlier case as substitute proof. Full suite: 2252 passed, 1
+skipped, 21 subtests; `noema_review_gate.py` at 100% line/branch coverage; 100% docstring coverage.
+
+**Fix, round 3 (Devin Review again, same `#1566`)**: a fourth, distinct bug in the fix itself --
+gating the retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is this the
+second attempt" with "does the caught exception have display text". Several transport exceptions
+(a bare `OSError()`/`TimeoutError()`, or an `http.client.HTTPException` raised with no message) all
+stringify to `''`, so an empty-message failure on the *first* attempt would leave `repair_error`
+falsy on the recursive call too -- the retry-state signal was lost, and `call_llm` would retry
+unboundedly (each recursive call itself another live-gateway request) rather than failing closed
+after one attempt, eventually crashing on an uncaught `RecursionError` once the interpreter's call
+stack was exhausted. Added an explicit `is_retry: bool = False` parameter to track retry state
+independently of the exception's text; it (not `repair_error`) now gates both the prompt-injection
+branch (falling back to a generic message when `repair_error` is empty) and the except clause's
+retry-vs-fail-closed decision, and is threaded through as `is_retry=True` on the recursive call.
+Verified genuine RED with a bounded-recursion regression test
+(`test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error`, which raises a
+diagnostic `AssertionError` if `call_llm` retries more than once instead of letting it recurse to
+CPython's own limit) before this fourth fix, GREEN after -- paired with
+`test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds` for the
+happy-path case. Full suite: 2254 passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at
+100% line/branch coverage, 100% docstring coverage.
+
+**Owner**: this repo (`ContextualWisdomLab/.github`), `scripts/ci/noema_review_gate.py`.
+**Status**: fixed on `ContextualWisdomLab/.github#1566` (branch `fix/noema-review-transport-error-retry`),
+pending required checks and final review.
+
+While verifying this fix's full-suite run, an unrelated, pre-existing SIGPIPE (exit 141) flake was also
+found and root-caused in `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`:
+its fake `gh` fixture never drains the JSON piped into it via `--input -` for the dispatch call, so under
+`set -euo pipefail` the pipeline's writer (`jq`) can be killed by `SIGPIPE` if the fake reader exits
+first -- reproduced locally at roughly a 60% failure rate over 15 runs in complete isolation (not merely
+under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/null`) before the fixture
+writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
+that PR for its own evidence.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

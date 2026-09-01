@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -104,6 +106,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       title
       body
       isDraft
+      state
       headRefOid
       reviewDecision
       reviewThreads(first: 100) {
@@ -128,6 +131,27 @@ query($owner: String!, $name: String!, $number: Int!) {
           commit { oid }
         }
       }
+      statusCheckRollup {
+        contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun {
+              name
+              status
+              conclusion
+              checkSuite {
+                workflowRun {
+                  workflow { name }
+                }
+              }
+            }
+            ... on StatusContext {
+              context
+              state
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -142,6 +166,21 @@ def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     if not pr:
         raise RuntimeError(f"PR #{number} was not found in {repo}")
     return pr
+
+
+def require_expected_head(pr: dict[str, Any], expected_head_sha: str) -> None:
+    """Fail closed unless the pull request is open at the expected commit."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
+        raise RuntimeError("Expected pull request head must be a full commit SHA")
+    live_head_sha = str(pr.get("headRefOid") or "")
+    if (
+        str(pr.get("state") or "").upper() != "OPEN"
+        or live_head_sha.lower() != expected_head_sha.lower()
+    ):
+        raise RuntimeError(
+            "Pull request is closed or its head changed before Noema review: "
+            f"expected {expected_head_sha}, observed {live_head_sha or '<missing>'}"
+        )
 
 
 def review_author(review: dict[str, Any]) -> str:
@@ -202,7 +241,19 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
-        diff = diff[:MAX_DIFF_CHARS]
+        marker = "[overlong changed line content omitted]"
+        bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
+        complete, separator, partial = bounded.rpartition("\n")
+        if not separator:
+            return diff[:MAX_DIFF_CHARS], truncated
+        last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
+        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
+        inside_hunk = last_hunk > last_file
+        if partial.startswith(("+", "-")) and (
+            inside_hunk or not partial.startswith(("+++", "---"))
+        ):
+            complete += f"\n{partial[0]}{marker}"
+        diff = complete
     return diff, truncated
 
 
@@ -467,16 +518,308 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
+    """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
+
+    A lightweight, string-literal-aware bracket-type stack: walks forward
+    from ``start`` (a ``{``), ignoring any ``{``/``[``/``}``/``]`` characters
+    that appear inside a JSON string literal, and returns ``True`` as soon as
+    the opening brace's matching close is found without nesting exceeding
+    ``max_depth``, or ``False`` the moment ``max_depth`` is exceeded. Running
+    off the end of ``text`` without closing (an unterminated candidate) is
+    reported as within bound — that shape is already a decode failure
+    ``json.JSONDecoder.raw_decode`` reports on its own; this function's only
+    job is bounding nesting *depth*, not validating overall JSON shape.
+
+    A closer that does not match the innermost open bracket's type (a ``]``
+    where the enclosing container is a ``{``, or vice versa) is a no-op: it
+    does not pop the stack. A plain up/down counter that treated ``{``/``[``
+    interchangeably would let such a mismatched closer prematurely signal
+    "the outer bracket is closed" while genuinely deeper structure follows,
+    under-counting the real nesting depth ``raw_decode`` would encounter on
+    this exact candidate (Devin review on PR #1507).
+
+    This check runs before ``raw_decode`` is attempted on a candidate, ahead
+    of and independent of ``json.JSONDecoder``'s own recursion behavior —
+    see ``extract_json_object``'s docstring for why that behavior cannot be
+    trusted to reject excessive nesting on its own.
+    """
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+            if len(stack) > max_depth:
+                return False
+        elif char == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+                if not stack:
+                    # Only "{" can empty the stack: text[start] is always
+                    # "{" (this function's own contract), so it is always
+                    # the bottom-most, last-popped element; a "]" popping
+                    # an inner "[" can never reach an empty stack itself.
+                    return True
+        elif char == "]" and stack and stack[-1] == "[":
+            stack.pop()
+    return True
+
+
+MAX_JSON_NESTING_DEPTH = 100
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract a JSON object from a strict or lightly wrapped LLM response."""
+    """Extract a JSON object from a strict or lightly wrapped LLM response.
+
+    Fails closed with ``RuntimeError`` — the same "no usable verdict" failure
+    path ``call_llm`` already raises for an unsupported decision, a missing
+    summary, or a malformed finding — instead of letting a malformed or
+    truncated LLM response's ``json.JSONDecodeError`` propagate as an
+    unhandled exception and crash the review job. Only top-level brace groups
+    are candidates: a ``{`` is a candidate only while a bracket-type stack
+    (tracking ``{``/``[`` opens against their own matching ``}``/``]``
+    closes) is empty, so a valid nested object cannot escape a malformed
+    outer *object or array* wrapper. Every candidate starts at a ``{``,
+    making each successful parse a JSON object (``dict``); only the decode
+    failure itself needs converting. Once a top-level candidate begins, a
+    decode failure rejects the response rather than scanning forward to a
+    later verdict; multiple objects remain supported only when the first
+    candidate decodes successfully.
+
+    A closer that cannot legally match the innermost open bracket — nothing
+    open at all, or the innermost open bracket is the other type — stops
+    candidate discovery outright instead of being a no-op on the stack. Only
+    ignoring the mismatch (popping nothing, but continuing to scan) is not
+    enough: a *later*, otherwise-well-formed ``[``/``]`` or ``{``/``}`` pair
+    can still legitimately re-close the stack down to empty despite the
+    earlier mismatch, so a subsequent ``{`` would again be seen as a fresh
+    top-level candidate even though the response as a whole was never
+    cleanly-formed JSON (Devin review on PR #1507, e.g. ``[} ] {...}``: the
+    stray ``}`` is a no-op, but the following ``]`` still validly closes the
+    ``[``, and the ``{`` after that would wrongly look top-level again). Any
+    closer this malformed anywhere in the response is treated as proof the
+    whole response cannot be trusted to contain a clean top-level object
+    from that point on, not just proof that one bracket group failed to
+    close.
+
+    The raised diagnostic never embeds the raw (or scrubbed) model response.
+    This is a ``pull_request_target`` workflow whose Actions logs are public
+    on this org's public repos, and ``scrub_sensitive_data`` is a finite,
+    pattern-based scrubber: an LLM can echo back or hallucinate a credential
+    in a shape none of its patterns recognize (mid-sentence, base64-wrapped,
+    or simply a shape nobody anticipated). A regex allowlist of known secret
+    *shapes* cannot be a complete defense, so instead of trying to perfect
+    it, the raw content is never logged at all. Only a length and a SHA-256
+    content fingerprint are logged — enough to correlate repeat failures for
+    the same underlying (unlogged) response without exposing its bytes.
+
+    Excessive nesting is rejected by an explicit ``_json_nesting_within_bound``
+    check against ``MAX_JSON_NESTING_DEPTH`` (100 — generously above the
+    verdict schema's own real maximum of roughly 5 levels: object ->
+    ``findings``/``reviewed_lines``/``adversarial_validation.probes`` ->
+    each list's object entries), evaluated *before* ``raw_decode`` is ever
+    attempted, rather than by trusting ``json.JSONDecoder``'s own recursion
+    behavior to raise on deep input. That behavior is not a stable contract:
+    a real ``depth = max(20_000, sys.getrecursionlimit() * 2)`` nested-array
+    payload raises ``RecursionError`` from the C-accelerated scanner on
+    Python 3.11-3.13, but is decoded successfully (no exception at all) on
+    the Python 3.14.7 hosted runner this job actually runs on (job
+    99642234627, commit ``ec23350e``:
+    ``test_extract_json_object_fails_closed_on_excessive_nesting`` failed
+    with "DID NOT RAISE RuntimeError" against that exact real payload).
+    Relying on ``RecursionError`` alone would make this fail-closed guarantee
+    a property of whichever CPython version happens to run the job, not of
+    this function. The explicit bound removes that dependency; a residual
+    ``except RecursionError`` is kept only as defense-in-depth for whatever
+    lies within the bound (``RecursionError`` is itself a ``RuntimeError``
+    subclass, so even an unhandled one here would already surface through
+    ``call_llm``'s own ``except RuntimeError`` around this call and every
+    post-decode field read).
+    """
     stripped = text.strip()
-    if stripped.startswith("{"):
-        return json.loads(stripped)
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end < start:
+    decoder = json.JSONDecoder()
+    decode_error: json.JSONDecodeError | None = None
+    candidate_starts: list[int] = []
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for index, character in enumerate(stripped):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            if not stack:
+                candidate_starts.append(index)
+            stack.append("{")
+        elif character == "[":
+            stack.append("[")
+        elif character == "}":
+            if not stack or stack[-1] != "{":
+                # A closer that cannot legally appear here (nothing open, or
+                # the innermost open bracket is a "[") is proof this response
+                # is not cleanly-formed JSON at all, not just proof that one
+                # bracket group failed to close. Stop finding new candidates
+                # rather than let bracket-type matching alone "resync" past
+                # it and treat a later, structurally-unrelated { as a fresh
+                # top-level verdict (Devin review on PR #1507).
+                break
+            stack.pop()
+        elif character == "]":
+            if not stack or stack[-1] != "[":
+                break
+            stack.pop()
+
+    for start in candidate_starts:
+        if not _json_nesting_within_bound(stripped, start, MAX_JSON_NESTING_DEPTH):
+            decode_error = json.JSONDecodeError(
+                f"JSON nesting exceeds the bounded limit ({MAX_JSON_NESTING_DEPTH} levels)",
+                stripped,
+                start,
+            )
+            break
+        try:
+            candidate, _end = decoder.raw_decode(stripped, start)
+        except RecursionError:
+            decode_error = json.JSONDecodeError(
+                "JSON nesting exceeds decoder limit", stripped, start
+            )
+            break
+        except json.JSONDecodeError as exc:
+            decode_error = exc
+            break
+        return candidate
+
+    if "{" not in stripped:
         raise RuntimeError("Noema LLM response did not contain a JSON object")
-    return json.loads(stripped[start : end + 1])
+
+    exc = decode_error or json.JSONDecodeError(
+        "No JSON object could be decoded", stripped, 0
+    )
+    try:
+        raise exc
+    except json.JSONDecodeError as exc:
+        fingerprint = hashlib.sha256(
+            stripped.encode("utf-8", errors="surrogatepass")
+        ).hexdigest()[:16]
+        raise RuntimeError(
+            f"Noema LLM response was not valid JSON ({exc}). Raw model output "
+            "is not logged here (this pull_request_target workflow's logs "
+            "are public and a finite secret-scrub pattern list cannot "
+            "guarantee an LLM-echoed or hallucinated credential in an "
+            f"unrecognized shape is caught): response length={len(stripped)} "
+            f"chars, sha256={fingerprint}."
+        ) from exc
+
+
+def extract_llm_message_content(raw: str) -> str:
+    """Parse and validate the OpenAI-compatible chat-completion HTTP envelope.
+
+    Fails closed with the same bounded ``RuntimeError`` ``call_llm`` already
+    uses for an unusable verdict, instead of letting a malformed gateway
+    reply crash the review job before it ever reaches the verdict-JSON
+    repair boundary handled by ``extract_json_object``. Covers a non-JSON
+    raw body, a non-object top-level JSON value, a wrong-shaped ``choices``
+    or ``message`` field, and non-string ``content`` — each rejected with an
+    explicit ``isinstance`` check rather than a broad ``except``, so a
+    genuine programming error elsewhere in this module still surfaces as
+    itself. A missing or empty ``choices``/``message``/``content`` is left
+    to fall through to an empty string, matching the original code's
+    leniency for an absent (not malformed) field; ``extract_json_object``
+    already fails closed on empty content.
+
+    None of the raised messages embed any part of the untrusted response
+    body — only JSON-value type names, which cannot carry a credential.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Noema LLM response body was not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
+        )
+    choices = data.get("choices")
+    if not choices:
+        choices = [{}]
+    elif not isinstance(choices, list):
+        raise RuntimeError(
+            f"Noema LLM response 'choices' was not a list (got {type(choices).__name__})"
+        )
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError(
+            "Noema LLM response choices[0] was not a JSON object "
+            f"(got {type(first_choice).__name__})"
+        )
+    message = first_choice.get("message")
+    if not message:
+        message = {}
+    elif not isinstance(message, dict):
+        raise RuntimeError(
+            f"Noema LLM response 'message' was not a JSON object (got {type(message).__name__})"
+        )
+    content = message.get("content")
+    if not content:
+        content = ""
+    elif not isinstance(content, str):
+        raise RuntimeError(
+            f"Noema LLM response 'content' was not a string (got {type(content).__name__})"
+        )
+    return content.strip()
+
+
+def decode_llm_response_body(raw_bytes: bytes) -> str:
+    """Decode the raw gateway HTTP response body as UTF-8 text.
+
+    Devin Review bug finding on PR #1507 round 3: a gateway reply containing
+    invalid UTF-8 used to raise ``UnicodeDecodeError`` at the plain
+    ``response.read().decode("utf-8")`` call in ``call_llm``, before that
+    body ever reached ``extract_llm_message_content`` or the verdict-JSON
+    repair boundary. That crashed the required review check with an
+    unhandled traceback instead of getting the same one-time schema-repair
+    retry every other malformed-envelope shape already gets. Call this
+    inside ``call_llm``'s existing repair-retry ``try`` block so a decode
+    failure converts to the same bounded ``RuntimeError`` and gets the same
+    fail-closed treatment.
+
+    The raised diagnostic never embeds the raw response bytes — not even
+    the undecodable fragment. Only a length and a SHA-256 content
+    fingerprint are logged, matching ``extract_json_object``'s no-raw-content
+    pattern: a body containing invalid UTF-8 could still contain a
+    credential-adjacent byte sequence, and this is a ``pull_request_target``
+    workflow whose Actions logs are public on this org's public repos.
+    """
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
+        raise RuntimeError(
+            f"Noema LLM response body was not valid UTF-8 ({exc}). Raw "
+            "response bytes are not logged here (this pull_request_target "
+            "workflow's logs are public and a finite secret-scrub pattern "
+            "list cannot guarantee an LLM-echoed or hallucinated credential "
+            "in an unrecognized byte sequence is caught): response "
+            f"length={len(raw_bytes)} bytes, sha256={fingerprint}."
+        ) from exc
 
 
 def _truthy_env(name: str) -> bool:
@@ -566,23 +909,58 @@ def reject_private_llm_url(api_url: str) -> None:
             raise ValueError("URL cannot target internal IP addresses")
 
 
+class StaleHeadDuringRepairRetryError(RuntimeError):
+    """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
+
+
 def call_llm(
     repo: str,
     number: int,
     pr: dict[str, Any],
     diff: str,
     truncated: bool,
+    expected_head: str,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
+    is_retry: bool = False,
 ) -> dict[str, Any]:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
+    """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
+
+    ``expected_head`` is the same normalized (lowercase) SHA
+    ``inspect_and_review`` already checks before model work and before
+    publication. It is threaded through here so the one-time repair-retry
+    request below — fired only after the first attempt's verdict was
+    malformed — can also confirm the PR head has not moved before spending a
+    second, potentially multi-hour model call on a
+    review that ``inspect_and_review``'s own post-call stale-head check would
+    discard anyway once this function returns. See ``fetch_pr`` for the live
+    lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
+    condition is reported distinctly to the caller.
+
+    ``is_retry`` tracks retry state independently of ``repair_error``'s text:
+    several transport exceptions (a bare ``OSError``/``TimeoutError`` or
+    ``http.client.HTTPException`` raised with no message) stringify to an
+    empty string, so gating on ``repair_error``'s truthiness alone would let
+    an empty-message failure retry unboundedly instead of failing closed
+    after one attempt.
+    """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
     if not api_url or not api_key:
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
     reject_private_llm_url(api_url)
+
+    allowed_locations = [
+        {"path": path, "line": line, "side": side}
+        for path, line, side in sorted(changed_diff_locations(diff))
+    ]
+    location_example = (
+        allowed_locations[0]
+        if allowed_locations
+        else {"path": "path", "line": 0, "side": "RIGHT"}
+    )
 
     prompt = {
         "role": "user",
@@ -591,15 +969,45 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
+                json.dumps(
+                    {
+                        "decision": "approve|request_changes|comment",
+                        "summary": "...",
+                        "reviewed_lines": [{**location_example, "analysis": "..."}],
+                        "adversarial_validation": {
+                            "status": "passed|failed",
+                            "residual_risk": "...",
+                            "probes": [
+                                {
+                                    **location_example,
+                                    "hypothesis": "...",
+                                    "attack_or_counterexample": "...",
+                                    "evidence": "observed or source-traced result",
+                                    "outcome": "falsified|confirmed",
+                                }
+                            ],
+                        },
+                        "findings": [
+                            {
+                                "severity": "high|medium|low",
+                                "file": location_example["path"],
+                                "line": location_example["line"],
+                                "side": location_example["side"],
+                                "message": "...",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
-                        f"Your prior verdict was rejected by the trusted validator: {repair_error}",
+                        "Your prior verdict was rejected by the trusted validator: "
+                        f"{repair_error or 'no diagnostic message was available'}",
                         "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
                     ]
-                    if repair_error
+                    if is_retry
                     else []
                 ),
                 f"Repository: {repo}",
@@ -632,48 +1040,56 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
-        raw = response.read().decode("utf-8")
-    data = json.loads(raw)
-    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-    verdict = extract_json_object(content)
-    decision = str(verdict.get("decision") or "").strip().lower()
-    if decision not in {"approve", "request_changes", "comment"}:
-        raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
-    summary = verdict.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        raise RuntimeError("Noema LLM response did not contain a substantive summary")
-    findings = verdict.get("findings")
-    if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-        raise RuntimeError("Noema LLM response findings must be a list of objects")
-    for finding in findings:
-        if (
-            finding.get("severity") not in {"high", "medium", "low"}
-            or not isinstance(finding.get("file"), str)
-            or not finding["file"].strip()
-            or type(finding.get("line")) is not int
-            or finding["line"] <= 0
-            or finding.get("side") not in {"RIGHT", "LEFT"}
-            or not isinstance(finding.get("message"), str)
-            or not finding["message"].strip()
-        ):
-            raise RuntimeError("Noema LLM response contained a malformed finding")
-    if decision == "request_changes" and not findings:
-        raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
     try:
+        with opener.open(request) as response:  # nosec B310
+            raw_bytes = response.read()
+        raw = decode_llm_response_body(raw_bytes)
+        content = extract_llm_message_content(raw)
+        verdict = extract_json_object(content)
+        decision = str(verdict.get("decision") or "").strip().lower()
+        if decision not in {"approve", "request_changes", "comment"}:
+            raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
+        summary = verdict.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise RuntimeError("Noema LLM response did not contain a substantive summary")
+        findings = verdict.get("findings")
+        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+            raise RuntimeError("Noema LLM response findings must be a list of objects")
+        for finding in findings:
+            if (
+                finding.get("severity") not in {"high", "medium", "low"}
+                or not isinstance(finding.get("file"), str)
+                or not finding["file"].strip()
+                or type(finding.get("line")) is not int
+                or finding["line"] <= 0
+                or finding.get("side") not in {"RIGHT", "LEFT"}
+                or not isinstance(finding.get("message"), str)
+                or not finding["message"].strip()
+            ):
+                raise RuntimeError("Noema LLM response contained a malformed finding")
+        if decision == "request_changes" and not findings:
+            raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except RuntimeError as exc:
-        if repair_error:
-            raise
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        if is_retry:
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(str(exc)) from exc
+        if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
+            raise StaleHeadDuringRepairRetryError(
+                "Pull request head changed during review; stale before repair retry."
+            ) from exc
         return call_llm(
             repo,
             number,
             pr,
             diff,
             truncated,
+            expected_head,
             review_context,
             changed_paths,
             str(exc),
+            is_retry=True,
         )
     return verdict
 
@@ -758,9 +1174,22 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int) -> int:
-    """Inspect PR state and submit Noema's independent LLM review."""
+def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
+    """Inspect PR state and submit Noema's independent LLM review.
+
+    ``expected_head`` is normalized defensively before the stale-head
+    comparisons below, and before the one ``call_llm`` performs on its own
+    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and
+    workflow require canonical lowercase SHA input so equivalent casing
+    cannot split the workflow concurrency group.
+    """
+    expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
+    try:
+        require_expected_head(pr, expected_head)
+    except RuntimeError:
+        print("Pull request is closed or its trigger head is stale; Noema review skipped before model work.")
+        return 0
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
@@ -778,19 +1207,31 @@ def inspect_and_review(repo: str, number: int) -> int:
     diff, truncated = fetch_diff(repo, number)
     changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
-    verdict = call_llm(repo, number, pr, diff, truncated, review_context, changed_paths)
+    try:
+        verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
+    except StaleHeadDuringRepairRetryError:
+        print("Pull request head changed during review; Noema review skipped before repair retry.")
+        return 0
+    current_pr = fetch_pr(repo, number)
+    try:
+        require_expected_head(current_pr, expected_head)
+    except RuntimeError:
+        print("Pull request closed or its head changed during review; stale verdict was not published.")
+        return 0
     # Re-check for a concurrent Noema submission immediately before posting.
     # noema-review.yml's concurrency group (shared across pull_request_target,
     # workflow_run, and repository_dispatch triggers) is the primary defense
     # against two runs racing to review the same head, but GitHub's
-    # cancel-in-progress is best-effort and does not preempt a run mid-step;
-    # this narrows the remaining race window from the full diff/context/LLM
-    # call duration down to one GraphQL round trip immediately before the
-    # POST.
-    if existing_noema_review(fetch_pr(repo, number), actor):
+    # cancel-in-progress is best-effort and does not preempt a run mid-step:
+    # a run already past the pre-model existing_noema_review() check when a
+    # newer trigger supersedes it can still finish its own diff/context/LLM
+    # call and post afterward. require_expected_head() alone does not catch
+    # this -- it only proves the head SHA is unchanged, not that no other
+    # process posted a review for that same head in the meantime.
+    if existing_noema_review(current_pr, actor):
         print("Current head already has a Noema review as of just before submission; not posting a duplicate.")
         return 0
-    submit_review(repo, number, pr, actor, verdict)
+    submit_review(repo, number, current_pr, actor, verdict)
     return 0
 
 
@@ -799,6 +1240,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
+    parser.add_argument("--expected-head", required=True)
     return parser.parse_args(argv)
 
 
@@ -807,12 +1249,16 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    return inspect_and_review(args.repo, args.pr_number)
+    if not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
+        raise SystemExit(
+            "--expected-head must be a canonical lowercase 40-character Git SHA"
+        )
+    return inspect_and_review(args.repo, args.pr_number, args.expected_head)
 
 
 if __name__ == "__main__":  # pragma: no cover
     try:
         raise SystemExit(main(sys.argv[1:]))
     except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"::error::{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
