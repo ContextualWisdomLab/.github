@@ -355,7 +355,7 @@ jobs:
           fi
           separator='&'
           [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
-          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDIDC_AUDIENCE}" | jq -r '.value // empty')"
+          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
           if [ -z "$oidc_token" ]; then
             echo "::error::OpenCode review dispatch could not obtain its OIDC token."
             exit 1
