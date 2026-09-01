@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot migration of existing Noema verdict fixtures to probe classes."""
+"""One-shot migration of review fixtures and stale free-pool test inputs."""
 
 from pathlib import Path
 
@@ -32,8 +32,19 @@ def add_multiline_probe_kinds(text: str, name: str, kinds: tuple[str, ...]) -> s
     return text[:start] + block + text[end:]
 
 
-def main() -> None:
-    """Migrate exact fixtures that exercise successful formal verdicts."""
+def replace_in_function(text: str, name: str, old: str, new: str) -> str:
+    """Replace one exact fragment inside a named test function."""
+    start, end = function_span(text, name)
+    block = text[start:end]
+    count = block.count(old)
+    if count != 1:
+        raise SystemExit(f"{name}: expected one stale fixture fragment, found {count}")
+    block = block.replace(old, new, 1)
+    return text[:start] + block + text[end:]
+
+
+def migrate_noema_verdict_fixtures() -> None:
+    """Migrate existing successful Noema verdict fixtures to probe classes."""
     path = Path("tests/test_noema_review_gate.py")
     text = path.read_text(encoding="utf-8")
     text = add_multiline_probe_kinds(
@@ -67,8 +78,38 @@ def main() -> None:
         raise SystemExit("fail-closed fixture shape drifted")
     block = block.replace(old_first, new_first, 1).replace(old_second, new_second, 1)
     text = text[:start] + block + text[end:]
-
     path.write_text(text, encoding="utf-8")
+
+
+def repair_free_pool_test_inputs() -> None:
+    """Align stale generic catalog fixtures with the merged free-pool source contract."""
+    path = Path("tests/test_contextual_orchestrator_review_policy.py")
+    text = path.read_text(encoding="utf-8")
+    text = replace_in_function(
+        text,
+        "test_build_catalog_applies_account_cap",
+        '{"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}',
+        '{"provider": "openrouter", "model": f"o{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}',
+    )
+    text = replace_in_function(
+        text,
+        "test_build_catalog_applies_account_cap",
+        'assert account_counts["openai"] == 2',
+        'assert account_counts["openrouter"] == 2',
+    )
+    text = replace_in_function(
+        text,
+        "test_build_catalog_respects_limit",
+        '{"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}',
+        '{"provider": "openrouter", "model": f"m{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}',
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def main() -> None:
+    """Apply every temporary fixture migration required by the exact base."""
+    migrate_noema_verdict_fixtures()
+    repair_free_pool_test_inputs()
 
 
 if __name__ == "__main__":
