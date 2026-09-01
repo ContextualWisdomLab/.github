@@ -12,7 +12,7 @@ import pytest
 from scripts.ci import pr_review_autofix_context as context
 
 
-WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+WORKFLOW = Path(".github/workflows/contextual-orchestrator-review-repair-quality.yml")
 
 
 def test_context_helper_is_part_of_the_focused_exact_head_quality_gate() -> None:
