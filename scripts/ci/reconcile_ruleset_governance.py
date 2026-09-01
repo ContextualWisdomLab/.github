@@ -9,7 +9,10 @@ than a compare-and-swap guarantee. Privileged mutation is additionally bound to
 the exact protected-main revision, serialized owner-plane execution, and the
 immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
 overwritten, the reconciler restores the newest displaced administrator state
-before failing; recovery re-checks immutable history after every restore write.
+before failing; recovery re-checks immutable history and protected-main identity
+before every recovery write. The canonical audit is executed against projected
+and live state so this narrow reconciler never reports broader policy drift as
+converged.
 """
 
 from __future__ import annotations
@@ -306,6 +309,36 @@ def _editable_projection(live: dict[str, Any]) -> dict[str, Any]:
     return projection
 
 
+def _canonical_governance_errors(
+    live: dict[str, Any], target: RulesetTarget
+) -> list[str]:
+    """Run the canonical audit against one complete live-shaped ruleset payload."""
+
+    auditor = Path(__file__).with_name("audit_central_required_workflows.py")
+    mode = {"repository": ["--repository"], "organization": []}[target.scope]
+    completed = subprocess.run(
+        [sys.executable, str(auditor), *mode],
+        check=False,
+        input=json.dumps(live, separators=(",", ":")),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return [] if completed.returncode == 0 else [completed.stderr.strip()]
+
+
+def _assert_canonical_governance(
+    live: dict[str, Any], target: RulesetTarget
+) -> None:
+    """Fail closed when canonical audit policy still reports any governance drift."""
+
+    errors = _canonical_governance_errors(live, target)
+    if errors:
+        raise RulesetGovernanceError(
+            f"{target.scope} canonical governance drift remains: {errors[0]}"
+        )
+
+
 def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, Any]:
     """Build the exact safe update body while preserving unrelated live controls."""
 
@@ -327,7 +360,6 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
         "required_approving_review_count": int,
         "require_code_owner_review": bool,
         "require_last_push_approval": bool,
-        "required_reviewers": list,
         "allowed_merge_methods": list,
     }
     for field, expected_type in required_parameters.items():
@@ -335,6 +367,10 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
             raise RulesetGovernanceError(
                 f"pull_request.parameters.{field} has invalid type"
             )
+    if "required_reviewers" in parameters and type(parameters["required_reviewers"]) is not list:
+        raise RulesetGovernanceError(
+            "pull_request.parameters.required_reviewers has invalid type"
+        )
 
     parameters["required_approving_review_count"] = 0
     parameters["require_code_owner_review"] = False
@@ -350,6 +386,7 @@ def _recover_displaced_history_state(
     current_version: int,
     current_payload: dict[str, Any],
     displaced_version: int,
+    expected_main_sha: str | None = None,
 ) -> None:
     """Restore the newest state displaced by our unsafe PUT without hiding races.
 
@@ -357,7 +394,9 @@ def _recover_displaced_history_state(
     verifies immutable history immediately afterward. If an administrator write
     slipped between the recovery GET and PUT, that displaced history version
     becomes the next recovery target. A newer live state observed before a
-    recovery write is never overwritten. The loop is bounded and fails closed.
+    recovery write is never overwritten. Privileged recovery revalidates the
+    reviewed protected-main SHA immediately before every PUT. The loop is bounded
+    and fails closed.
     """
 
     for _attempt in range(COLLISION_RECOVERY_LIMIT):
@@ -369,6 +408,8 @@ def _recover_displaced_history_state(
             raise RulesetGovernanceError(
                 "concurrent ruleset history detected but live state advanced again; refusing recovery"
             )
+        if expected_main_sha is not None:
+            _assert_current_main(expected_main_sha)
 
         _gh_api("PUT", target.endpoint, body=displaced_payload)
         history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
@@ -406,6 +447,8 @@ def _verify_ruleset_history_transition(
     target: RulesetTarget,
     baseline_version: int,
     desired: dict[str, Any],
+    *,
+    expected_main_sha: str | None = None,
 ) -> None:
     """Detect hidden pre-PUT edits and restore the newest displaced state safely.
 
@@ -434,6 +477,7 @@ def _verify_ruleset_history_transition(
         current_version=newest_id,
         current_payload=desired,
         displaced_version=predecessor_id,
+        expected_main_sha=expected_main_sha,
     )
     raise RulesetGovernanceError(
         "concurrent ruleset history detected; restored newest displaced administrator state"
@@ -450,6 +494,9 @@ def _reconcile_target(
 
     first = _gh_api("GET", target.endpoint)
     desired = _desired_payload(first, target)
+    projected = copy.deepcopy(first)
+    projected.update(desired)
+    _assert_canonical_governance(projected, target)
     if _editable_projection(first) == desired:
         return False
     if verify_only:
@@ -474,8 +521,14 @@ def _reconcile_target(
     _assert_identity(after, target)
     if _editable_projection(after) != desired:
         raise RulesetGovernanceError(f"{target.scope} ruleset did not converge")
+    _assert_canonical_governance(after, target)
     if baseline_version is not None:
-        _verify_ruleset_history_transition(target, baseline_version, desired)
+        _verify_ruleset_history_transition(
+            target,
+            baseline_version,
+            desired,
+            expected_main_sha=expected_main_sha,
+        )
     if expected_main_sha is not None:
         _assert_current_main(expected_main_sha)
     return True

@@ -9,6 +9,9 @@ on:
       - "tests/test_ruleset_governance_review_regressions.py"
       - "tests/test_ruleset_governance_review_round2.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
+      - "tests/test_ruleset_audit_completeness_regression.py"
+      - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_solo_maintainer_ruleset_policy.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
   push:
@@ -21,6 +24,9 @@ on:
       - "tests/test_ruleset_governance_review_regressions.py"
       - "tests/test_ruleset_governance_review_round2.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
+      - "tests/test_ruleset_audit_completeness_regression.py"
+      - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_solo_maintainer_ruleset_policy.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
   workflow_dispatch:
@@ -85,7 +91,10 @@ jobs:
               tests/test_ruleset_governance_reconciliation.py \
               tests/test_ruleset_governance_review_regressions.py \
               tests/test_ruleset_governance_review_round2.py \
-              tests/test_central_required_workflow_ruleset_audit.py
+              tests/test_central_required_workflow_ruleset_audit.py \
+              tests/test_ruleset_audit_completeness_regression.py \
+              tests/test_ruleset_merge_method_shape_regression.py \
+              tests/test_solo_maintainer_ruleset_policy.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
