@@ -834,6 +834,110 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         inventory.publish_owner_issue(client, known, ledger_sha256="bad")
 
 
+def test_live_collector_rejects_every_incomplete_api_shape() -> None:
+    """All malformed live inventory boundaries fail closed."""
+    org_path = "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1"
+    with pytest.raises(inventory.InventoryError, match="organization"):
+        inventory.collect_live_organization(_LiveClient({}), "other")
+    for response, message in [({}, "repository inventory"), ([], "empty")]:
+        with pytest.raises(inventory.InventoryError, match=message):
+            inventory.collect_live_organization(_LiveClient({org_path: response}))
+
+    repo = "ContextualWisdomLab/naruon"
+    valid_repo = {"name": "naruon", "full_name": repo, "archived": False, "default_branch": "main"}
+
+    def client_for(**updates: Any) -> _LiveClient:
+        responses: dict[str, Any] = {
+            org_path: [valid_repo],
+            f"/repos/{repo}/commits/main": [{"sha": SHA}, {"sha": SHA}],
+            f"/repos/{repo}/git/trees/{SHA}?recursive=1": {"truncated": False, "tree": []},
+            f"/repos/{repo}/actions/workflows?per_page=100&page=1": {"total_count": 0, "workflows": []},
+        }
+        responses.update(updates)
+        return _LiveClient(responses)
+
+    malformed_repositories = [
+        ({"name": 1, "full_name": repo, "archived": False, "default_branch": "main"}, "identity"),
+        ({"name": "naruon", "full_name": repo, "archived": "no", "default_branch": "main"}, "metadata"),
+    ]
+    for malformed, message in malformed_repositories:
+        with pytest.raises(inventory.InventoryError, match=message):
+            inventory.collect_live_organization(_LiveClient({org_path: [malformed]}))
+    archived, _ = inventory.collect_live_organization(_LiveClient({org_path: [{"name": "old", "full_name": "ContextualWisdomLab/old", "archived": True}]}))
+    assert archived["repositories"][0]["archived"] is True
+    with pytest.raises(inventory.InventoryError, match="SHA is invalid"):
+        inventory.collect_live_organization(client_for(**{f"/repos/{repo}/commits/main": [{"sha": "bad"}]}))
+    with pytest.raises(inventory.InventoryError, match="tree is malformed"):
+        inventory.collect_live_organization(client_for(**{f"/repos/{repo}/git/trees/{SHA}?recursive=1": {"truncated": False, "tree": {}}}))
+    with pytest.raises(inventory.InventoryError, match="tree path"):
+        inventory.collect_live_organization(client_for(**{f"/repos/{repo}/git/trees/{SHA}?recursive=1": {"truncated": False, "tree": [{"type": "blob", "path": 1}]}}))
+    workflow_path = f"/repos/{repo}/actions/workflows?per_page=100&page=1"
+    for response, message in [([], "workflow inventory"), ({"workflows": [], "total_count": "0"}, "total_count"), ({"workflows": [], "total_count": 1}, "pagination")]:
+        with pytest.raises(inventory.InventoryError, match=message):
+            inventory.collect_live_organization(client_for(**{workflow_path: response}))
+
+
+def test_live_transport_and_mutation_failures_are_redacted_by_type() -> None:
+    """Transport and write exceptions become bounded fail-closed errors."""
+    class Broken:
+        def request(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("secret detail")
+
+    with pytest.raises(inventory.InventoryError, match="RuntimeError"):
+        inventory.collect_live_organization(Broken())
+    record = {"repository": "appguardrail", "workflow_id": 9, "path": ".github/workflows/gone.yml", "classification": "orphan_active", "default_branch_sha": SHA}
+    with pytest.raises(inventory.InventoryError, match="disable failed"):
+        inventory.disable_confirmed_orphan(Broken(), record, confirmed_head_sha=SHA)
+    with pytest.raises(inventory.InventoryError, match="identity"):
+        inventory.disable_confirmed_orphan(Broken(), {**record, "workflow_id": "9"}, confirmed_head_sha=SHA)
+    with pytest.raises(inventory.InventoryError, match="publication failed"):
+        inventory.publish_owner_issue(Broken(), record, ledger_sha256="e" * 64)
+    with pytest.raises(inventory.InventoryError, match="repository"):
+        inventory.publish_owner_issue(Broken(), {**record, "repository": "bad name"}, ledger_sha256="e" * 64)
+    bad_create = _LiveClient({"/repos/ContextualWisdomLab/new-product/issues": {}})
+    with pytest.raises(inventory.InventoryError, match="no issue number"):
+        inventory.publish_owner_issue(bad_create, {**record, "repository": "new-product"}, ledger_sha256="e" * 64)
+
+
+def test_live_collector_consumes_second_repository_and_workflow_pages() -> None:
+    """Full 100-item pages force the next API page instead of truncating."""
+    first_org = "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1"
+    second_org = "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=2"
+    archived = [{"name": f"repo-{index}", "full_name": f"ContextualWisdomLab/repo-{index}", "archived": True} for index in range(100)]
+    payload, _ = inventory.collect_live_organization(_LiveClient({first_org: archived, second_org: []}))
+    assert len(payload["repositories"]) == 100
+
+    repo = "ContextualWisdomLab/naruon"
+    first = [_workflow(index + 1, f".github/workflows/{index}.yml") for index in range(100)]
+    responses = {
+        first_org: [{"name": "naruon", "full_name": repo, "archived": False, "default_branch": "main"}],
+        f"/repos/{repo}/commits/main": [{"sha": SHA}, {"sha": SHA}],
+        f"/repos/{repo}/git/trees/{SHA}?recursive=1": {"truncated": False, "tree": []},
+        f"/repos/{repo}/actions/workflows?per_page=100&page=1": {"total_count": 101, "workflows": first},
+        f"/repos/{repo}/actions/workflows?per_page=100&page=2": {"total_count": 101, "workflows": [_workflow(101, ".github/workflows/last.yml")]},
+    }
+    payload, _ = inventory.collect_live_organization(_LiveClient(responses))
+    assert len(payload["repositories"][0]["workflow_pages"]) == 2
+
+
+def test_live_main_requires_receipts_and_writes_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Live CLI fails without receipts and writes both evidence files on success."""
+    assert inventory.main(["--live"]) == 2
+    assert "receipt-output" in capsys.readouterr().err
+    import scripts.ci.organization_commercial_readiness_loop as readiness
+
+    monkeypatch.setattr(readiness.GitHubClient, "from_environment", classmethod(lambda cls: object()))
+    payload = _payload([_repo("naruon", [], [])])
+    monkeypatch.setattr(inventory, "collect_live_organization", lambda _client: (payload, [{"method": "GET"}]))
+    output = tmp_path / "ledger.json"
+    receipts = tmp_path / "receipts.json"
+    assert inventory.main(["--live", "--output", str(output), "--receipt-output", str(receipts)]) == 0
+    assert json.loads(receipts.read_text())[0]["method"] == "GET"
+    monkeypatch.setattr(readiness.GitHubClient, "from_environment", classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError())))
+    assert inventory.main(["--live", "--receipt-output", str(receipts)]) == 2
+    assert "credential unavailable" in capsys.readouterr().err
+
+
 def test_known_fleet_fixture_routes_owner_issues() -> None:
     """The three named fleet incidents remain routed, not heuristically deleted."""
     payload = _payload(

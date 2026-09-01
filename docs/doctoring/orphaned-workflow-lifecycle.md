@@ -73,6 +73,12 @@ python3 scripts/ci/inventory_orphaned_workflows.py --live \
   --receipt-output /tmp/workflow-lifecycle-api-receipts.json
 ```
 
+The protected-default-branch integration is
+`.github/workflows/workflow-lifecycle-inventory.yml`. Its scheduled runs have
+read-only repository permissions, verify the checked-out SHA, and
+retain both immutable artifacts for 30 days. It contains no disable endpoint;
+operator mutation remains a later reviewed action.
+
 For fixture verification, feed a JSON payload with `organization`, `observed_at`,
 `repository_inventory_complete: true`, and one object per visible non-archived
 repository. The completeness flag is mandatory: a partial repository list must

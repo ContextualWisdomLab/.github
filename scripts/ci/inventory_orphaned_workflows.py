@@ -623,8 +623,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from scripts.ci.organization_commercial_readiness_loop import (  # pylint: disable=import-outside-toplevel
                     GitHubClient,
                 )
-            except ModuleNotFoundError:
-                from organization_commercial_readiness_loop import GitHubClient  # type: ignore[no-redef]  # pylint: disable=import-outside-toplevel
+            except ModuleNotFoundError:  # pragma: no cover - direct-script smoke tested
+                from organization_commercial_readiness_loop import GitHubClient  # type: ignore[no-redef]  # pylint: disable=import-outside-toplevel  # pragma: no cover
 
             try:
                 client = GitHubClient.from_environment()

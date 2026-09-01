@@ -83,12 +83,13 @@ repair, and delegates all privileged logic to the same sealed scheduler.
 
 GitHub persists Actions registry identities independently of the protected
 default-branch tree. `scripts/ci/inventory_orphaned_workflows.py` is a
-read-only classifier: it binds each advertised workflow to one default-branch
-SHA, distinguishes repository YAML from GitHub-owned `dynamic/` identities,
-and fail-closes on incomplete pagination or visibility. It does not disable
-or recreate workflows. Confirmed fleet orphans route through the explicit
-linkable owner-issue registry in the inventory module; it never infers issue
-numbers or treats an absent owner route as a passing classification.
+read-only classifier and live collector: it paginates the organization and
+registry, binds each advertised workflow to a revalidated default-branch SHA,
+distinguishes repository YAML from GitHub-owned `dynamic/` identities, and
+fail-closes on incomplete trees, pagination, permissions, or visibility. The
+scheduled integration retains content-bound API receipts. Classification never
+disables or recreates workflows; the operator primitive is separately reviewed
+and accepts only an immutable orphan ledger record on an unchanged head.
 
 ## Exact-artifact SBOM attestation
 

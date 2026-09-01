@@ -893,6 +893,8 @@ Semantic Versioning where the repository publishes a release.
 - Add a live, paginated organization workflow inventory with content-bound API
   receipts, exact default-head revalidation, and a separately reviewed,
   ledger-bound operator disable primitive.
+- Schedule the central read-only workflow-lifecycle sweep on the protected
+  default branch and retain its exact ledger and API receipts for 30 days.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.
