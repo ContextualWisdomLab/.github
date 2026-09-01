@@ -1721,7 +1721,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     calls.clear()
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert noema.inspect_and_review("owner/repo", 7, "head") == 0
     assert calls
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
