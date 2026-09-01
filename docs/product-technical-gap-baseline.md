@@ -1790,6 +1790,32 @@ Strix concurrency group (a sibling PR's scan superseding a queued/pending run,
 re-dispatch observed 8+ hours later despite the workflow's own comment describing one; manually
 re-triggered via the Actions API as a stopgap, not yet root-caused as a scheduler bug.
 
+**Correction 3 (owner decision, 2026-09-01): `contextual-orchestrator#979` closed as policy-incompatible,
+not merged.** `#979` was one contributor to the free-pool preflight budget waste this whole entry
+documents — a hand-maintained denylist (`_NVIDIA_NIM_RETIRED_MODEL_IDS` checked against
+`_NVIDIA_NIM_PROVIDER_NAMES = {"nvidia_nim", "nvidia_nim_sub"}`) excluding two catalog-listed-but-
+HTTP-404-retired NVIDIA NIM model ids from `is_routable_discovered_model`. Despite a same-session
+investigation (confirmed via `git merge-tree` against `#971`) concluding this denylist was *not* a
+routing-identity/provider-family abstraction — it operates on the raw pre-`ModelAgent` eligibility
+gate, before any grouping or routing selection — the owner's ruling on the closing comment overrides
+that read: *"That is a provider-specific, hand-authored routing rule and conflicts with the required
+provider-neutral `model_group` contract and the prohibition on keyword/list heuristics."* The
+underlying problem (two dead ids burning preflight budget every run, confirmed live on `#957`/`#961`)
+remains real and unfixed as of this entry.
+
+**Required replacement design, per the same comment, quoted in full:** *"The replacement must record
+structured runtime serving evidence for an exact deployment identity (endpoint + credential/account +
+concrete model/model-group member), mark a terminal completion 404 unavailable through the shared
+measured-routing path, and allow later successful evidence to recover it. No provider-name or
+model-id literals. The text+image regression may be retained only with a provider-neutral fixture.
+`#971` remains the implementation parent."* i.e.: no hand-maintained list at all — a terminal 404 on a
+concrete deployment identity should feed the same `ModelGroupRouter`/measured-routing evidence
+ledger `#971` is introducing (`model_group_name_for()`), marking that identity unavailable until a
+later successful call recovers it, self-healing rather than requiring a human edit for every future
+retirement. Relayed as a comment on `#971` (named the implementation parent, still open and actively
+iterating) rather than reopening `#979` or opening a replacement PR — per the harness's own instruction
+after a PR closes without merging, do not reopen or replace it unless explicitly asked.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
