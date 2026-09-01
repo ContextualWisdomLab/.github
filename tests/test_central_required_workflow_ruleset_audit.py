@@ -130,6 +130,7 @@ def repository_ruleset_payload() -> dict:
                 "parameters": {
                     "required_approving_review_count": 0,
                     "dismiss_stale_reviews_on_push": True,
+                    "require_code_owner_review": False,
                     "require_last_push_approval": False,
                     "required_review_thread_resolution": True,
                     "allowed_merge_methods": ["merge", "squash"],
