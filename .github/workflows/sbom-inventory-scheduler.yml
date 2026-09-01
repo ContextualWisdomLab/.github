@@ -1,13 +1,12 @@
 # Central SBOM inventory aggregator.
 #
-# Scheduled companion to sbom-generation.yml. It reads every managed repo's
+# Hourly companion to sbom-generation.yml. It reads every non-fork repository's
 # latest SBOM back out of the GitHub dependency graph (populated by the
 # per-repo SBOM Generation dependency snapshot) and writes ONE consolidated org
 # inventory into this .github repo:
 #
 #   docs/sbom/inventory.json   machine-readable component roll-up
-#   docs/sbom/inventory.md     component + license roll-up (flags copyleft /
-#                              NOASSERTION against the commercial-license-only policy)
+#   docs/sbom/inventory.md     component + license roll-up for commercial-policy review
 #
 # Cross-repo reads reuse the OpenCode app OIDC token exchange the other
 # schedulers use, falling back to github.token. Results land through a PR so the
@@ -16,7 +15,7 @@ name: SBOM Inventory Scheduler
 
 on:
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 * * * *"
   repository_dispatch:
     types: [sbom-inventory]
 
@@ -108,7 +107,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           ref: main
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -119,16 +118,49 @@ jobs:
       - name: Self-test aggregator
         run: python3 scripts/ci/sbom_inventory_aggregator.py --self-test
 
+      - name: Discover live non-fork repositories
+        env:
+          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          repos_json="$(
+            gh repo list \
+              --no-archived \
+              --limit 500 \
+              --json "nameWithOwner,isFork" \
+              -- \
+              "$ORG_LOGIN"
+          )"
+          mapfile -t repos < <(
+            jq -r '.[] | select(.isFork == false) | .nameWithOwner' <<<"$repos_json"
+          )
+          if [ "${#repos[@]}" -eq 0 ]; then
+            echo "No live non-fork repositories were discovered for $ORG_LOGIN." >&2
+            exit 1
+          fi
+          printf '%s\n' "${repos[@]}" >"$RUNNER_TEMP/cwl-nonfork-repositories.txt"
+          echo "Discovered ${#repos[@]} live non-fork repositories."
+
       - name: Aggregate org SBOM inventory
         env:
           GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
+          repo_args=()
+          while IFS= read -r repo; do
+            if [ -n "$repo" ]; then
+              repo_args+=(--repo "$repo")
+            fi
+          done <"$RUNNER_TEMP/cwl-nonfork-repositories.txt"
+          if [ "${#repo_args[@]}" -eq 0 ]; then
+            echo "Non-fork repository evidence file was empty." >&2
+            exit 1
+          fi
           generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           python3 scripts/ci/sbom_inventory_aggregator.py \
-            --org "$ORG_LOGIN" \
             --output-dir docs/sbom \
-            --generated-at "$generated_at"
+            --generated-at "$generated_at" \
+            "${repo_args[@]}"
 
       - name: Open or update inventory PR
         env:
@@ -139,17 +171,33 @@ jobs:
             echo "No SBOM inventory changes; nothing to publish."
             exit 0
           fi
+
           branch="automation/sbom-inventory"
           git config user.name "cwl-sbom-inventory[bot]"
           git config user.email "cwl-sbom-inventory@users.noreply.github.com"
-          git checkout -B "$branch"
           git add docs/sbom
           git commit -m "chore: refresh org SBOM inventory"
-          git push --force-with-lease origin "$branch"
+
+          # Preserve the existing publication head as ancestry without trusting
+          # its generated tree. A concurrent writer makes the final normal push
+          # fail closed instead of rewriting remote history.
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/$branch"
+            previous_head="$(git rev-parse FETCH_HEAD)"
+            if ! git merge-base --is-ancestor "$previous_head" HEAD; then
+              git merge \
+                --strategy=ours \
+                --no-edit \
+                -m "chore: preserve SBOM inventory publication lineage" \
+                "$previous_head"
+            fi
+          fi
+
+          git push origin "HEAD:refs/heads/$branch"
           if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
             gh pr create \
               --base main \
               --head "$branch" \
               --title "chore: refresh org SBOM inventory" \
-              --body "Automated central SBOM inventory refresh. Review the license roll-up in docs/sbom/inventory.md for any flagged copyleft/NOASSERTION components."
+              --body "Automated central SBOM inventory refresh for live non-fork repositories. Review reciprocal, restricted, and NOASSERTION license evidence in docs/sbom/inventory.md against the product's actual distribution and hosted-service model."
           fi
