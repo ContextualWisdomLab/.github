@@ -162,6 +162,8 @@ def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
         "see http://open-code.ai/en/docs/github",
         "share this: https://youtube.com/@opencode-agent",
         "see docs/@opencode-agent for the config file",
+        "visit https://example.com/?next=/opencode for the redirect",
+        "visit https://example.com/?next=/oc for the redirect",
     ],
 )
 def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
@@ -177,7 +179,11 @@ def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
     ``@cwl-noema-review/@opencode-agent`` with no space) reopened the same
     class of false positive for ``/@opencode-agent`` embedded in an arbitrary
     URL or path segment, since both share the exact same "word char, then
-    slash, then the mention" shape as the deliberate separator case.
+    slash, then the mention" shape as the deliberate separator case. A third
+    finding (CodeRabbit, same PR) noted the slash-preceded exclusion for the
+    bare ``/opencode``/``/oc`` forms did not also exclude a preceding ``=``,
+    so a URL query string such as ``?next=/opencode`` or ``?next=/oc`` still
+    matched.
     """
 
     module = load_module()

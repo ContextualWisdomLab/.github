@@ -29,6 +29,9 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # requests with a bare slash and no space (@cwl-noema-review/@opencode-agent);
 # that is recognized only when the slash is immediately preceded by the
 # other pattern's exact literal mention text, not by an arbitrary word.
+# The bare /opencode and /oc forms additionally exclude a preceding "=": a
+# URL query string (?next=/opencode, ?redirect=/oc) shares the same "not
+# preceded by a word character" shape as a deliberate standalone command.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
@@ -38,7 +41,7 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![A-Za-z0-9_/-])@opencode-agent"
         r"|(?<=@cwl-noema-review)/@opencode-agent"
-        r"|(?<![A-Za-z0-9_/-])(?:/opencode|/oc)"
+        r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
         r")(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
