@@ -25,9 +25,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          writer_ref='refs/heads/fix/strix-control-plane-supersession-20260901'
           starting_head="$GITHUB_SHA"
-          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1588" --jq '.head.sha')"
-          test "$live_head" = "$starting_head"
+          remote_head="$(git ls-remote origin "$writer_ref" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$starting_head"
 
           git config user.name 'opencode-agent[bot]'
           git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
@@ -209,7 +211,8 @@ jobs:
           bash scripts/ci/test_strix_quick_gate.sh
           git diff --check
 
-          latest_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1588" --jq '.head.sha')"
+          latest_head="$(git ls-remote origin "$writer_ref" | awk '{print $1}')"
+          test -n "$latest_head"
           test "$latest_head" = "$starting_head"
           rm -f .github/workflows/repair-pr1588-exact-head.yml .github/repair-pr1588.trigger
           git add -A
