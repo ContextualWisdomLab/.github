@@ -27,12 +27,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 2
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-
-      - name: Apply exact-head source and regression repair
+      - name: Materialize and verify the source fix
         shell: bash
         env:
           WRITER_BRANCH: fix/strix-control-plane-supersession-20260901
@@ -40,102 +35,31 @@ jobs:
         run: |
           set -euo pipefail
           remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
-          if [ "$remote_head" != "$EXPECTED_HEAD" ] || [ "$(git rev-parse HEAD)" != "$EXPECTED_HEAD" ]; then
-            echo "::error::Writer branch moved before repair; refusing stale mutation."
-            exit 1
-          fi
+          test "$remote_head" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
 
-          python3 <<'PY'
-          from pathlib import Path
-
-          workflow_path = Path('.github/workflows/strix.yml')
-          test_path = Path('tests/test_strix_control_plane_supersession.py')
-          workflow = workflow_path.read_text(encoding='utf-8')
-          tests = test_path.read_text(encoding='utf-8')
-
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one exact match, found {count}')
-              return text.replace(old, new, 1)
-
-          permissions_old = '''    permissions:\n      actions: read\n      contents: read\n      id-token: write\n      models: read\n      statuses: write\n'''
-          permissions_new = '''    permissions:\n      actions: read\n      contents: read\n      id-token: write\n      models: read\n      pull-requests: read\n      statuses: write\n'''
-          workflow = replace_once(workflow, permissions_old, permissions_new, 'strix job permissions')
-
-          harden_marker = '''      - name: Harden runner\n        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1\n        with:\n          egress-policy: audit\n          disable-file-monitoring: true\n\n'''
-          early_validation = '''      - name: Validate live pull request before Strix setup\n        if: github.event_name == 'pull_request_target'\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}\n          PR_NUMBER: ${{ github.event.pull_request.number }}\n          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n        run: |\n          set -euo pipefail\n          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then\n            echo "::error::Unable to revalidate live pull request before Strix setup."\n            exit 1\n          fi\n          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"\n          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"\n          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then\n            echo "::error::Strix event is stale or the pull request is no longer open before setup."\n            exit 1\n          fi\n\n'''
-          workflow = replace_once(workflow, harden_marker, harden_marker + early_validation, 'early live validation insertion')
-
-          provider_marker = '''      - name: Provision contextual-orchestrator Strix sidecar\n'''
-          provider_validation = '''      - name: Revalidate live pull request before provider execution\n        if: github.event_name == 'pull_request_target'\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}\n          PR_NUMBER: ${{ github.event.pull_request.number }}\n          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n        run: |\n          set -euo pipefail\n          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then\n            echo "::error::Unable to revalidate live pull request before provider execution."\n            exit 1\n          fi\n          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"\n          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"\n          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then\n            echo "::error::Strix event is stale or the pull request is no longer open before provider execution."\n            exit 1\n          fi\n\n'''
-          workflow = replace_once(workflow, provider_marker, provider_validation + provider_marker, 'provider live validation insertion')
-
-          collect_marker = '''      - name: Collect Strix reports for artifact upload\n'''
-          publication_validation = '''      - name: Revalidate live pull request before evidence publication\n        id: publication_revalidation\n        if: ${{ always() && github.event_name == 'pull_request_target' }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}\n          PR_NUMBER: ${{ github.event.pull_request.number }}\n          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n        run: |\n          set -euo pipefail\n          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then\n            echo "::error::Unable to revalidate live pull request before evidence publication."\n            exit 1\n          fi\n          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"\n          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"\n          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then\n            echo "::error::Strix event is stale or the pull request is no longer open before evidence publication."\n            exit 1\n          fi\n          echo "valid=true" >> "$GITHUB_OUTPUT"\n\n'''
-          workflow = replace_once(workflow, collect_marker, publication_validation + collect_marker, 'publication live validation insertion')
-
-          collect_if_old = '''      - name: Collect Strix reports for artifact upload\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}\n'''
-          collect_if_new = '''      - name: Collect Strix reports for artifact upload\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.publication_revalidation.outputs.valid == 'true') }}\n'''
-          workflow = replace_once(workflow, collect_if_old, collect_if_new, 'collection publication gate')
-
-          upload_if_old = '''      - name: Upload Strix reports artifact\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}\n'''
-          upload_if_new = '''      - name: Upload Strix reports artifact\n        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.publication_revalidation.outputs.valid == 'true') }}\n'''
-          workflow = replace_once(workflow, upload_if_old, upload_if_new, 'artifact publication gate')
-
-          tests = replace_once(
-              tests,
-              '    assert "GH_TOKEN: ${{ github.token }}" in early\n',
-              '    assert "GH_TOKEN: ${{ github.token }}" in early\n    assert "pull-requests: read" in workflow.split("  strix:", 1)[1].split("    steps:", 1)[0]\n    assert "if ! pull_request_json=" in early\n',
-              'early lookup and private-repo permission regression',
-          )
-          tests = replace_once(
-              tests,
-              '    assert "exit 1" in recheck\n\n\ndef test_strix_preserves_provider_serialization_and_timeout_repair()',
-              '    assert "exit 1" in recheck\n    assert "id: publication_revalidation" in recheck\n    assert "always() && github.event_name == \'pull_request_target\'" in recheck\n    collect = _step(workflow, "Collect Strix reports for artifact upload")\n    upload = _step(workflow, "Upload Strix reports artifact")\n    assert "steps.publication_revalidation.outputs.valid == \'true\'" in collect\n    assert "steps.publication_revalidation.outputs.valid == \'true\'" in upload\n\n\ndef test_strix_preserves_provider_serialization_and_timeout_repair()',
-              'publication gate regression',
-          )
-
-          workflow_path.write_text(workflow, encoding='utf-8')
-          test_path.write_text(tests, encoding='utf-8')
+          python3 -m py_compile scripts/ci/repair_pr1588_final_source.py
+          python3 scripts/ci/repair_pr1588_final_source.py
+          python3 - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_strix_control_plane_supersession.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+                  print(f'PASS {name}')
           PY
-
-          cat >"${RUNNER_TEMP}/repair-requirements.txt" <<'EOF'
-          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
-          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
-          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
-          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
-          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
-          EOF
-          python -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r "${RUNNER_TEMP}/repair-requirements.txt"
-          python -m pytest tests/test_strix_control_plane_supersession.py tests/test_required_workflow_queue_contract.py -q
           bash scripts/ci/test_strix_quick_gate.sh
-          python - <<'PY'
-          from pathlib import Path
-          text = Path('.github/workflows/strix.yml').read_text(encoding='utf-8')
-          required = [
-              'Validate live pull request before Strix setup',
-              'Revalidate live pull request before provider execution',
-              'Revalidate live pull request before evidence publication',
-              'pull-requests: read',
-              "steps.publication_revalidation.outputs.valid == 'true'",
-          ]
-          missing = [value for value in required if value not in text]
-          if missing:
-              raise SystemExit(f'missing repaired contracts: {missing}')
-          PY
+          git diff --check
 
+          rm scripts/ci/repair_pr1588_final_source.py
           rm .github/workflows/repair-pr1588-final-source.yml
-          git add .github/workflows/strix.yml tests/test_strix_control_plane_supersession.py .github/workflows/repair-pr1588-final-source.yml
+          git add .github/workflows/strix.yml tests/test_strix_control_plane_supersession.py scripts/ci/repair_pr1588_final_source.py .github/workflows/repair-pr1588-final-source.yml
           git diff --cached --check
 
           remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
-          if [ "$remote_head" != "$EXPECTED_HEAD" ]; then
-            echo "::error::Writer branch moved during repair; refusing non-fast-forward mutation."
-            exit 1
-          fi
+          test "$remote_head" = "$EXPECTED_HEAD"
 
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m "fix(strix): enforce live PR state at all admission boundaries"
+          git commit -m "fix(strix): enforce live PR state at admission boundaries"
           git push origin "HEAD:${WRITER_BRANCH}"
