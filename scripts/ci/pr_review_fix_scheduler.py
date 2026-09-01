@@ -14,24 +14,32 @@ from typing import Any
 
 try:
     from pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
         force_cancel_workflow_runs,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
     )
 except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
         force_cancel_workflow_runs,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -76,6 +84,26 @@ RCA_REPAIR_CHANGE_REQUEST_MARKERS = (
     "sast semgrep failed",
     "codeql failed",
 )
+RCA_IGNORED_CHECK_NAMES = frozenset(
+    {
+        "metadata-only gate evaluation",
+        "opencode-review",
+        "PR governance metadata controller",
+        "scan-pr-queue",
+    }
+)
+RCA_IGNORED_WORKFLOW_NAMES = frozenset(
+    {
+        "OpenCode Review",
+        "Required OpenCode Review",
+        "OpenCode PR Review",
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
+    }
+)
+FAILED_CHECK_CONCLUSIONS = frozenset(
+    {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
+)
+FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 
 
 def run_json(args: list[str]) -> Any:
@@ -224,12 +252,50 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 
 def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether exact-head failed-check evidence warrants RCA and repair."""
-    if not (
+    review_requires_rca = (
         has_current_head_changes_requested(pr)
         and change_request_requires_rca(pr)
-    ):
+    )
+    failed_checks = current_head_failed_checks(pr)
+    if not review_requires_rca and not failed_checks:
         return False, ()
+    if failed_checks:
+        return True, (
+            "current-head failed check(s) require RCA: " + ", ".join(failed_checks),
+        )
     return True, ("current-head failed-check blocker requires RCA",)
+
+
+def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
+    """Return terminal failed checks that can carry source-backed RCA evidence."""
+    failed: list[str] = []
+    rollup = pr.get("statusCheckRollup") or {}
+    nodes = rollup if isinstance(rollup, list) else context_nodes(pr)
+    for node in latest_check_run_attempts(nodes):
+        if node.get("__typename") == "CheckRun":
+            name = str(node.get("name") or "").strip()
+            workflow_name = str(
+                (
+                    ((node.get("checkSuite") or {}).get("workflowRun") or {}).get(
+                        "workflow"
+                    )
+                    or {}
+                ).get("name")
+                or ""
+            ).strip()
+            conclusion = str(node.get("conclusion") or "").upper()
+            if (
+                name not in RCA_IGNORED_CHECK_NAMES
+                and workflow_name not in RCA_IGNORED_WORKFLOW_NAMES
+                and conclusion in FAILED_CHECK_CONCLUSIONS
+            ):
+                failed.append(name or "unnamed check")
+        else:
+            name = str(node.get("context") or "").strip()
+            state = str(node.get("state") or "").upper()
+            if name not in RCA_IGNORED_CHECK_NAMES and state in FAILED_STATUS_STATES:
+                failed.append(name or "unnamed status")
+    return tuple(dict.fromkeys(failed))
 
 
 CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
@@ -414,8 +480,6 @@ def inspect_pr(
 ) -> tuple[str, tuple[str, ...]]:
     """Inspect one PR and optionally dispatch a bounded repair."""
     number = int(pr["number"])
-    if pr.get("isDraft"):
-        return "skip", ("draft PR",)
     if not _base_branch_matches(pr, args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
@@ -425,28 +489,39 @@ def inspect_pr(
             "external PR head is not writable by repository workflow credentials",
         )
 
-    needs_fix, reasons = needs_autofix(pr)
-    repair_mode = "review"
-    resolve_conflict = False
-    if not needs_fix:
-        needs_rca, rca_reasons = needs_rca_repair(pr)
-        if needs_rca:
-            repair_mode = "rca"
-            reasons = rca_reasons
-        else:
-            needs_resolve, resolve_reasons = needs_conflict_resolution(
-                pr,
-                allow_unreviewed=bool(
-                    getattr(args, "resolve_unreviewed_conflicts", False)
-                ),
-            )
-            if not needs_resolve:
-                return "skip", (
-                    "no current-head autofixable review, failed-check RCA, or approved merge conflict",
-                )
-            resolve_conflict = True
-            repair_mode = "conflict"
-            reasons = resolve_reasons
+    conflicted = str(pr.get("mergeStateStatus") or "").upper() in CONFLICT_MERGE_STATES
+    if conflicted:
+        if pr.get("isDraft"):
+            return "skip", ("draft PR",)
+        needs_resolve, resolve_reasons = needs_conflict_resolution(
+            pr,
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
+        )
+        if not needs_resolve:
+            return "skip", ("merge conflict is not authorized for repair",)
+        needs_fix = True
+        reasons = resolve_reasons
+        repair_mode = "conflict"
+        resolve_conflict = True
+    else:
+        needs_fix, reasons = needs_autofix(pr)
+        repair_mode = "review"
+        resolve_conflict = False
+
+    needs_rca, rca_reasons = needs_rca_repair(pr)
+    if pr.get("isDraft") and not needs_rca:
+        return "skip", ("draft PR",)
+
+    if not conflicted and needs_rca:
+        needs_fix = True
+        repair_mode = "rca"
+        reasons = rca_reasons
+    elif not needs_fix and not conflicted:
+        return "skip", (
+            "no current-head autofixable review, failed-check RCA, or approved merge conflict",
+        )
 
     if comments is None:
         comments = issue_comments(repo, number)
@@ -490,13 +565,24 @@ def process_queue(args: argparse.Namespace) -> int:
         if args.pr_number
         else fetch_open_prs(args.repo, args.max_prs)
     )
+    pagination_errors: set[int] = set()
+    for pr in prs:
+        if not _base_branch_matches(pr, args.base_branch):
+            continue
+        if not same_repository_head(args.repo, pr):
+            continue
+        try:
+            complete_paginated_pr_contexts(args.repo, pr)
+        except RuntimeError:
+            pagination_errors.add(int(pr["number"]))
+
     dispatched = 0
     inspected = 0
     decisions: list[dict[str, Any]] = []
 
     prs_needing_comments = []
     for pr in prs:
-        if pr.get("isDraft"):
+        if int(pr["number"]) in pagination_errors:
             continue
         if not _base_branch_matches(pr, args.base_branch):
             continue
@@ -510,7 +596,9 @@ def process_queue(args: argparse.Namespace) -> int:
                 getattr(args, "resolve_unreviewed_conflicts", False)
             ),
         )
-        if needs_fix or needs_rca or needs_resolve:
+        if (needs_fix and not pr.get("isDraft")) or needs_rca or (
+            needs_resolve and not pr.get("isDraft")
+        ):
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
@@ -552,6 +640,17 @@ def process_queue(args: argparse.Namespace) -> int:
 
     for pr in prs:
         inspected += 1
+        pr_number = int(pr["number"])
+        if pr_number in pagination_errors:
+            reasons = (
+                "status-context pagination failed; deferring this PR without "
+                "evaluating partial check evidence",
+            )
+            decisions.append(
+                {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
+            )
+            print(f"PR #{pr['number']}: wait: {reasons[0]}")
+            continue
         if dispatched >= args.max_dispatches:
             decisions.append(
                 {
@@ -561,7 +660,6 @@ def process_queue(args: argparse.Namespace) -> int:
                 }
             )
             continue
-        pr_number = int(pr["number"])
         if pr_number in comment_fetch_errors:
             decisions.append(
                 {

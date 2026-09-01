@@ -177,6 +177,181 @@ def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monk
         workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
         dry_run=False,
     ) is None
+def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
+    """Exact-head check evidence can start RCA without a circular review prerequisite."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ("Application CI",)
+    assert fix.needs_rca_repair(pr) == (
+        True,
+        ("current-head failed check(s) require RCA: Application CI",),
+    )
+
+
+def test_control_plane_failure_and_pending_checks_do_not_trigger_rca():
+    """The metadata gate and nonterminal checks cannot recursively dispatch repair."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "metadata-only gate evaluation",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "IN_PROGRESS",
+                        "conclusion": None,
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Superseded run",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Approval gate",
+                        "status": "COMPLETED",
+                        "conclusion": "ACTION_REQUIRED",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
+
+
+@pytest.mark.parametrize(
+    ("older_conclusion", "newer_status", "newer_conclusion", "expected"),
+    [
+        ("FAILURE", "COMPLETED", "SUCCESS", ()),
+        ("SUCCESS", "COMPLETED", "FAILURE", ("Application CI",)),
+        ("FAILURE", "IN_PROGRESS", None, ()),
+    ],
+)
+def test_failed_checks_use_only_latest_check_run_attempt(
+    older_conclusion, newer_status, newer_conclusion, expected
+):
+    """Successful or pending reruns supersede stale failures by suite creation time."""
+    def attempt(created_at, status, conclusion):
+        return {
+            "__typename": "CheckRun",
+            "name": "Application CI",
+            "status": status,
+            "conclusion": conclusion,
+            "checkSuite": {
+                "createdAt": created_at,
+                "workflowRun": {"workflow": {"name": "Application CI"}},
+            },
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    attempt("2026-09-01T00:00:00Z", "COMPLETED", older_conclusion),
+                    attempt("2026-09-01T01:00:00Z", newer_status, newer_conclusion),
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == expected
+
+
+def test_draft_with_failed_check_dispatches_rca(monkeypatch):
+    """A draft stays unmergeable while its real source failure reaches bounded RCA."""
+    captured = {}
+    pr = make_pr(
+        isDraft=True,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "Application CI",
+                        "state": "FAILURE",
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"])
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert reasons == ("current-head failed check(s) require RCA: Application CI",)
+    assert captured["repair_mode"] == "rca"
+
+
+def test_conflict_repair_precedes_failed_check_rca(monkeypatch):
+    """A conflicted tree must be repaired before check failures can be diagnosed."""
+    captured = {}
+    pr = make_pr(
+        mergeStateStatus="DIRTY",
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "Application CI",
+                        "state": "FAILURE",
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--resolve-unreviewed-conflicts",
+            "--dry-run",
+        ]
+    )
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert "auto-resolving" in reasons[0]
+    assert captured["resolve_conflict"] is True
+    assert "repair_mode" not in captured
 
 
 def test_needs_autofix_uses_current_head_evidence():
@@ -511,6 +686,50 @@ def test_context_explicit_rca_uses_precollected_evidence(monkeypatch, tmp_path):
     assert "redacted exact-head failure" in body
 
 
+def test_context_direct_rca_uses_live_failed_check_without_review(monkeypatch, tmp_path):
+    """Trusted context authorizes direct RCA from live exact-head failure evidence."""
+    head = "a" * 40
+    pr = {
+        "number": 7,
+        "title": "Repair failed checks",
+        "url": "https://example.test/pr/7",
+        "headRefName": "feature",
+        "baseRefName": "main",
+        "headRefOid": head,
+        "baseRefOid": "b" * 40,
+        "mergeStateStatus": "CLEAN",
+        "statusCheckRollup": [
+            {
+                "__typename": "CheckRun",
+                "name": "Application CI",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+            }
+        ],
+    }
+    monkeypatch.setattr(context, "pr_view", lambda repo, number: pr)
+    monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: [])
+    monkeypatch.setattr(context, "review_threads", lambda repo, number: [])
+    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: ["src/app.py"])
+    evidence = tmp_path / "failed-checks.md"
+    evidence.write_text("exact-head Application CI failure", encoding="utf-8")
+    output = tmp_path / "context.md"
+
+    context.write_context(
+        "owner/repo",
+        7,
+        head,
+        output,
+        repair_mode="rca",
+        failed_check_evidence_path=evidence,
+    )
+
+    body = output.read_text(encoding="utf-8")
+    assert "Repair mode: failed-check-rca" in body
+    assert "exact-head Application CI failure" in body
+    assert "- `src/app.py`" in body
+
+
 def test_context_inferred_rca_collects_evidence(monkeypatch, tmp_path):
     """Legacy callers still infer RCA and invoke the trusted collector once."""
     head = "a" * 40
@@ -579,7 +798,7 @@ def test_context_explicit_mode_and_evidence_fail_closed(monkeypatch, tmp_path):
     output = tmp_path / "context.md"
 
     monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: [])
-    with pytest.raises(RuntimeError, match="does not match"):
+    with pytest.raises(RuntimeError, match="lacks exact-head"):
         context.write_context("owner/repo", 7, head, output, repair_mode="rca")
 
     evidence = tmp_path / "review-only.md"
