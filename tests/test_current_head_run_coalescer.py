@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +27,22 @@ def load_module():
     return module
 
 
+def pr_association(
+    number: int = 1,
+    *,
+    head_sha: str = "a" * 40,
+    branch: str = "feature/current",
+    repository: str = "ContextualWisdomLab/.github",
+    base_ref: str = "main",
+) -> dict[str, object]:
+    """Return one Actions run pull-request association fixture."""
+    return {
+        "number": number,
+        "head": {"sha": head_sha, "ref": branch, "repo": {"full_name": repository}},
+        "base": {"ref": base_ref, "sha": "c" * 40, "repo": {"full_name": repository}},
+    }
+
+
 def run_record(
     run_id: int,
     workflow_id: int,
@@ -36,26 +52,51 @@ def run_record(
     branch: str = "feature/current",
     repository: str = "ContextualWisdomLab/.github",
     event: str = "pull_request",
+    pr_number: int = 1,
+    execution_head_sha: str | None = None,
+    associations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Return one bounded Actions run fixture."""
+    """Return one bounded Actions run fixture with authoritative PR association."""
     return {
         "id": run_id,
         "workflow_id": workflow_id,
         "status": status,
-        "head_sha": head_sha,
+        "head_sha": execution_head_sha or head_sha,
         "head_branch": branch,
         "event": event,
         "head_repository": {"full_name": repository},
+        "pull_requests": associations
+        if associations is not None
+        else [
+            pr_association(
+                pr_number,
+                head_sha=head_sha,
+                branch=branch,
+                repository=repository,
+            )
+        ],
     }
 
 
-def live_pr(*, state: str = "open", head_sha: str = "a" * 40) -> dict[str, object]:
+def live_pr(
+    *,
+    state: str = "open",
+    head_sha: str = "a" * 40,
+    number: int = 1,
+    base_ref: str = "main",
+) -> dict[str, object]:
     """Return the exact live PR identity used by revalidation tests."""
     return {
+        "number": number,
         "state": state,
         "head": {
             "sha": head_sha,
             "ref": "feature/current",
+            "repo": {"full_name": "ContextualWisdomLab/.github"},
+        },
+        "base": {
+            "sha": "c" * 40,
+            "ref": base_ref,
             "repo": {"full_name": "ContextualWisdomLab/.github"},
         },
     }
@@ -64,13 +105,7 @@ def live_pr(*, state: str = "open", head_sha: str = "a" * 40) -> dict[str, objec
 def test_select_duplicate_queued_runs_keeps_one_authoritative_run_per_workflow() -> None:
     """Older queued duplicates are retired while one exact-head run survives."""
     module = load_module()
-    runs = [
-        run_record(100, 10),
-        run_record(101, 10),
-        run_record(102, 10),
-        run_record(200, 20),
-        run_record(201, 20),
-    ]
+    runs = [run_record(100, 10), run_record(101, 10), run_record(102, 10), run_record(200, 20), run_record(201, 20)]
     assert module.select_duplicate_queued_run_ids(
         runs,
         repository="ContextualWisdomLab/.github",
@@ -82,17 +117,26 @@ def test_select_duplicate_queued_runs_keeps_one_authoritative_run_per_workflow()
 def test_in_progress_run_is_never_selected_and_makes_queued_siblings_redundant() -> None:
     """A running authoritative workflow is preserved and queued duplicates retire."""
     module = load_module()
-    runs = [
-        run_record(100, 10, status="in_progress"),
-        run_record(101, 10),
-        run_record(102, 10),
-    ]
+    runs = [run_record(100, 10, status="in_progress"), run_record(101, 10), run_record(102, 10)]
     assert module.select_duplicate_queued_run_ids(
         runs,
         repository="ContextualWisdomLab/.github",
         branch="feature/current",
         head_sha="a" * 40,
     ) == [101, 102]
+
+
+def test_pull_request_target_uses_associated_pr_head_not_execution_head() -> None:
+    """Trusted-base pull_request_target runs coalesce by their associated PR head."""
+    module = load_module()
+    target = run_record(100, 10, event="pull_request_target", execution_head_sha="b" * 40)
+    newer = run_record(101, 10, event="pull_request_target", execution_head_sha="b" * 40)
+    assert module.select_duplicate_queued_run_ids(
+        [target, newer],
+        repository="ContextualWisdomLab/.github",
+        branch="feature/current",
+        head_sha="a" * 40,
+    ) == [100]
 
 
 def test_other_identities_and_malformed_runs_are_not_coalesced() -> None:
@@ -119,6 +163,8 @@ def test_other_identities_and_malformed_runs_are_not_coalesced() -> None:
     assert module._positive_int("1") is None
     assert module._positive_int(0) is None
     assert module._positive_int(1) == 1
+    assert module._pull_request_associations({"pull_requests": "bad"}) == []
+    assert module._association_number({"number": "1"}) is None
 
 
 def test_revalidation_requires_a_distinct_newer_or_running_sibling() -> None:
@@ -127,15 +173,9 @@ def test_revalidation_requires_a_distinct_newer_or_running_sibling() -> None:
     candidate = run_record(100, 10)
     for active in ([candidate], [candidate, run_record(99, 10)]):
         with pytest.raises(module.CoalescingRefused, match="authoritative sibling"):
-            module.validate_candidate_against_live_state(
-                candidate,
-                live_pr=live_pr(),
-                active_same_head_runs=active,
-            )
+            module.validate_candidate_against_live_state(candidate, live_pr=live_pr(), active_same_head_runs=active)
     module.validate_candidate_against_live_state(
-        candidate,
-        live_pr=live_pr(),
-        active_same_head_runs=[candidate, run_record(101, 10)],
+        candidate, live_pr=live_pr(), active_same_head_runs=[candidate, run_record(101, 10)]
     )
     module.validate_candidate_against_live_state(
         candidate,
@@ -151,27 +191,50 @@ def test_revalidation_fails_closed_for_status_state_identity_and_event_changes()
     sibling = run_record(101, 10)
     with pytest.raises(module.CoalescingRefused, match="no longer queued"):
         module.validate_candidate_against_live_state(
-            run_record(100, 10, status="in_progress"),
-            live_pr=live_pr(),
-            active_same_head_runs=[sibling],
+            run_record(100, 10, status="in_progress"), live_pr=live_pr(), active_same_head_runs=[sibling]
         )
     with pytest.raises(module.CoalescingRefused, match="no longer open"):
-        module.validate_candidate_against_live_state(
-            candidate, live_pr=live_pr(state="closed"), active_same_head_runs=[sibling]
-        )
+        module.validate_candidate_against_live_state(candidate, live_pr=live_pr(state="closed"), active_same_head_runs=[sibling])
     with pytest.raises(module.CoalescingRefused, match="head moved"):
-        module.validate_candidate_against_live_state(
-            candidate, live_pr=live_pr(head_sha="b" * 40), active_same_head_runs=[sibling]
-        )
-    malformed = run_record(0, 10)
+        module.validate_candidate_against_live_state(candidate, live_pr=live_pr(head_sha="b" * 40), active_same_head_runs=[sibling])
     with pytest.raises(module.CoalescingRefused, match="identity is malformed"):
-        module.validate_candidate_against_live_state(
-            malformed, live_pr=live_pr(), active_same_head_runs=[sibling]
-        )
-    wrong_event = run_record(100, 10, event="push")
+        module.validate_candidate_against_live_state(run_record(0, 10), live_pr=live_pr(), active_same_head_runs=[sibling])
     with pytest.raises(module.CoalescingRefused, match="not a pull-request"):
+        module.validate_candidate_against_live_state(run_record(100, 10, event="push"), live_pr=live_pr(), active_same_head_runs=[sibling])
+
+
+def test_pr_scope_rejects_other_open_pr_and_accepts_closed_matching_predecessor() -> None:
+    """Concurrent PRs keep independent evidence while a closed predecessor may coalesce."""
+    module = load_module()
+    current = live_pr()
+    other_assoc = [pr_association(2)]
+    candidate = run_record(100, 10, pr_number=2, associations=other_assoc)
+    sibling = run_record(101, 10)
+    other_open = live_pr(number=2)
+    with pytest.raises(module.CoalescingRefused, match="independent pull request"):
         module.validate_candidate_against_live_state(
-            wrong_event, live_pr=live_pr(), active_same_head_runs=[sibling]
+            candidate,
+            live_pr=current,
+            active_same_head_runs=[candidate, sibling],
+            current_pr_number=1,
+            associated_prs={2: other_open},
+        )
+    other_closed = live_pr(state="closed", number=2)
+    module.validate_candidate_against_live_state(
+        candidate,
+        live_pr=current,
+        active_same_head_runs=[candidate, sibling],
+        current_pr_number=1,
+        associated_prs={2: other_closed},
+    )
+    wrong_base = live_pr(state="closed", number=2, base_ref="release")
+    with pytest.raises(module.CoalescingRefused, match="independent pull request"):
+        module.validate_candidate_against_live_state(
+            candidate,
+            live_pr=current,
+            active_same_head_runs=[candidate, sibling],
+            current_pr_number=1,
+            associated_prs={2: wrong_base},
         )
 
 
@@ -179,32 +242,35 @@ def test_revalidation_ignores_non_authoritative_sibling_shapes() -> None:
     """Different workflow or malformed sibling records cannot authorize cancellation."""
     module = load_module()
     candidate = run_record(100, 10)
-    siblings = [
-        run_record(101, 11),
-        run_record(102, 10, branch="other"),
-        run_record(0, 10),
-        candidate,
-    ]
+    siblings = [run_record(101, 11), run_record(102, 10, branch="other"), run_record(0, 10), candidate]
     with pytest.raises(module.CoalescingRefused, match="authoritative sibling"):
-        module.validate_candidate_against_live_state(
-            candidate, live_pr=live_pr(), active_same_head_runs=siblings
-        )
+        module.validate_candidate_against_live_state(candidate, live_pr=live_pr(), active_same_head_runs=siblings)
 
 
-def test_run_json_uses_token_decodes_success_and_bounds_failure(monkeypatch) -> None:
-    """GitHub transport is token-bound, JSON-only, and bounded on command failure."""
+def test_run_json_uses_token_timeout_decodes_success_and_bounds_failure(monkeypatch) -> None:
+    """GitHub transport is token-bound, JSON-only, individually timed, and bounded."""
     module = load_module()
     monkeypatch.delenv("GH_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="GH_TOKEN"):
         module._run_json(["gh", "api", "repos/o/r"])
 
     monkeypatch.setenv("GH_TOKEN", "token")
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr=""),
-    )
+    seen: dict[str, object] = {}
+
+    def success(*args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", success)
     assert module._run_json(["gh", "api", "repos/o/r"]) == {"ok": True}
+    assert seen["timeout"] == module.API_TIMEOUT_SECONDS
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=30)
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="timed out"):
+        module._run_json(["gh", "api", "repos/o/r"])
 
     monkeypatch.setattr(
         module.subprocess,
@@ -245,36 +311,36 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
     monkeypatch.setattr(module, "_run_json", pages)
     assert len(module._active_runs("o/r", "a" * 40)) == 101
     assert any("page=2" in call for call in calls)
+    assert not any(item.startswith("head_sha=") for call in calls for item in call)
 
     monkeypatch.setattr(module, "_run_json", lambda _args: {"workflow_runs": "bad"})
     with pytest.raises(RuntimeError, match="malformed Actions"):
         module._active_runs("o/r", "a" * 40)
 
 
-def test_cancel_run_uses_ordinary_endpoint_and_surfaces_failure(monkeypatch) -> None:
-    """Only GitHub's ordinary cancellation endpoint is used for queued duplicates."""
+def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -> None:
+    """Cancellation shares the token/timeout transport and never uses force-cancel."""
     module = load_module()
     calls: list[list[str]] = []
-
-    def success(args, **_kwargs):
-        calls.append(list(args))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(module.subprocess, "run", success)
+    monkeypatch.setattr(module, "_run_json", lambda args: calls.append(list(args)))
     module._cancel_run("o/r", 123)
     assert calls == [["gh", "api", "-X", "POST", "repos/o/r/actions/runs/123/cancel"]]
+    assert "force-cancel" not in " ".join(calls[0])
 
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="failed", stderr=""),
-    )
-    with pytest.raises(RuntimeError, match="failed"):
-        module._cancel_run("o/r", 123)
+
+def test_associated_pr_fetches_only_noncurrent_numbers(monkeypatch) -> None:
+    """Closed-predecessor validation fetches only distinct non-current PRs."""
+    module = load_module()
+    calls: list[int] = []
+    monkeypatch.setattr(module, "_fetch_pr", lambda _repo, number: calls.append(number) or live_pr(number=number, state="closed"))
+    runs = [run_record(100, 10), run_record(101, 10, pr_number=2), run_record(102, 10, pr_number=2)]
+    result = module._associated_prs("o/r", runs, 1)
+    assert list(result) == [2]
+    assert calls == [2]
 
 
 def test_coalesce_validates_inputs_rechecks_each_candidate_and_preserves_races(monkeypatch, capsys) -> None:
-    """The mutation path revalidates live state per candidate and tolerates a disappearing sibling."""
+    """The mutation path revalidates live state per candidate and preserves races."""
     module = load_module()
     for repo in ("../evil", "owner/..", "owner/repo/extra"):
         with pytest.raises(RuntimeError, match="repository identity"):
@@ -288,13 +354,7 @@ def test_coalesce_validates_inputs_rechecks_each_candidate_and_preserves_races(m
 
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr(head_sha="b" * 40))
     with pytest.raises(module.CoalescingRefused, match="moved before"):
-        module.coalesce(
-            "ContextualWisdomLab/.github",
-            1,
-            "ContextualWisdomLab/.github",
-            "feature/current",
-            "a" * 40,
-        )
+        module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40)
 
     candidate = run_record(100, 10)
     sibling = run_record(101, 10)
@@ -304,15 +364,23 @@ def test_coalesce_validates_inputs_rechecks_each_candidate_and_preserves_races(m
     monkeypatch.setattr(module, "_fetch_run", lambda *_args: candidate)
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
-    assert module.coalesce(
-        "ContextualWisdomLab/.github",
-        1,
-        "ContextualWisdomLab/.github",
-        "feature/current",
-        "a" * 40,
-    ) == []
+    assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == []
     assert cancelled == []
     assert "Preserving run 100" in capsys.readouterr().out
+
+
+def test_coalesce_refetches_candidate_last_and_preserves_started_run(monkeypatch) -> None:
+    """A candidate that starts after sibling validation is not cancelled."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: run_record(100, 10, status="in_progress"))
+    cancelled: list[int] = []
+    monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
+    assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == []
+    assert cancelled == []
 
 
 def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, capsys) -> None:
@@ -325,13 +393,7 @@ def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, cap
     monkeypatch.setattr(module, "_fetch_run", lambda *_args: candidate)
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
-    assert module.coalesce(
-        "ContextualWisdomLab/.github",
-        1,
-        "ContextualWisdomLab/.github",
-        "feature/current",
-        "a" * 40,
-    ) == [100]
+    assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == [100]
     assert cancelled == [100]
     assert "Cancelled redundant queued current-head run 100" in capsys.readouterr().out
 
@@ -340,16 +402,8 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
     """CLI parsing forwards exact identity and the executable entrypoint is reachable."""
     module = load_module()
     argv = [
-        "--repo",
-        "owner/repo",
-        "--pr-number",
-        "7",
-        "--expected-head-repo",
-        "owner/repo",
-        "--expected-head-ref",
-        "feature/current",
-        "--expected-head",
-        "a" * 40,
+        "--repo", "owner/repo", "--pr-number", "7", "--expected-head-repo", "owner/repo",
+        "--expected-head-ref", "feature/current", "--expected-head", "a" * 40,
     ]
     parsed = module.parse_args(argv)
     assert parsed.pr_number == 7
@@ -365,11 +419,11 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
 
 
 def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
-    """The production workflow uses trusted source and the smallest mutation scope."""
+    """The production workflow uses trusted source and a shell-safe mutation scope."""
     assert WORKFLOW.is_file(), "current-head duplicate coalescer workflow is not implemented"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request_target:" in text
-    assert "types: [opened, synchronize, reopened]" in text
+    assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]" in text
     assert "actions: write" in text
     assert "contents: read" in text
     assert "pull-requests: read" in text
@@ -377,5 +431,7 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "ref: ${{ github.workflow_sha }}" in text
     assert "current_head_run_coalescer.py" in text
     assert "cancel-in-progress: true" in text
-    assert "github.event.pull_request.number" in text
-    assert "github.event.pull_request.head.sha" in text
+    assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
+    assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
+    run_block = text.split("run: |", 1)[1]
+    assert "${{ github.event.pull_request.head.ref }}" not in run_block
