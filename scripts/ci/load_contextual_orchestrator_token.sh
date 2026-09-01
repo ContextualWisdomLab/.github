@@ -110,12 +110,16 @@ _contextual_orchestrator_cleanup_helpers() {
     _contextual_orchestrator_cleanup_helpers
 }
 
-_contextual_orchestrator_load_token || {
+# Noema's structural review walks attacker-controlled PR source. Keep the
+# model-side bearer out of the process environment until that source analysis
+# has completed successfully. Non-Noema consumers return immediately from the
+# materializer and preserve the historical token-loading behavior.
+_contextual_orchestrator_materialize_noema_codegraph || {
   _contextual_orchestrator_status=$?
   _contextual_orchestrator_cleanup_helpers
   return "$_contextual_orchestrator_status"
 }
-_contextual_orchestrator_materialize_noema_codegraph || {
+_contextual_orchestrator_load_token || {
   _contextual_orchestrator_status=$?
   _contextual_orchestrator_cleanup_helpers
   return "$_contextual_orchestrator_status"
