@@ -167,4 +167,4 @@ def test_draft_exemption_fails_closed_when_live_head_moved(
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
     assert result.returncode == 1
-    assert "head moved while validating draft" in result.stdout
+    assert "head moved while validating live" in result.stdout

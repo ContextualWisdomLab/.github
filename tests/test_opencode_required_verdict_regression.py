@@ -156,15 +156,17 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     )
 
 
-def _write_refusing_gh(bin_dir: Path) -> None:
-    """Install a fake ``gh`` on PATH that fails loudly if it is ever invoked.
-
-    Used to prove an early-exit branch never reaches the Reviews API call.
-    """
+def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
+    """Serve the authoritative live PR lookup, then reject downstream GitHub I/O."""
     fake_gh = bin_dir / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
-        "echo 'unexpected gh invocation: the early-exit should have short-circuited' >&2\n"
+        "set -euo pipefail\n"
+        "if [[ \"$*\" == \"api repos/ContextualWisdomLab/example/pulls/1437\" ]]; then\n"
+        "  printf '%s' \"$LIVE_PR_JSON\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'unexpected gh invocation after live-state validation' >&2\n"
         "exit 17\n",
         encoding="utf-8",
     )
@@ -194,7 +196,7 @@ def _run_fail_closed_step(
         pytest.skip("bash and jq are required to execute the production step body")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _write_refusing_gh(bin_dir)
+    _write_live_pr_then_refusing_gh(bin_dir)
     return subprocess.run(
         [bash, "-c", fail_closed_script()],
         env={
@@ -206,6 +208,9 @@ def _run_fail_closed_step(
             "HEAD_SHA": head_sha,
             "PR_ACTION": pr_action,
             "PR_DRAFT": pr_draft,
+            "LIVE_PR_JSON": json.dumps(
+                {"draft": pr_draft.lower() == "true", "head": {"sha": head_sha}}
+            ),
         },
         text=True,
         capture_output=True,
@@ -231,7 +236,7 @@ def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> N
     """
     result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="true")
     assert result.returncode == 0, result.stderr
-    assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
+    assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout
 
 
 def _run_request_review_step(
@@ -251,7 +256,7 @@ def _run_request_review_step(
         pytest.skip("bash is required to execute the production step body")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _write_refusing_gh(bin_dir)
+    _write_live_pr_then_refusing_gh(bin_dir)
     return subprocess.run(
         [bash, "-c", request_review_script()],
         env={
@@ -266,6 +271,9 @@ def _run_request_review_step(
             "PR_DRAFT": pr_draft,
             "BASE_BRANCH": "main",
             "WORKFLOW_SHA": "c" * 40,
+            "LIVE_PR_JSON": json.dumps(
+                {"draft": pr_draft.lower() == "true", "head": {"sha": HEAD}}
+            ),
         },
         text=True,
         capture_output=True,
@@ -284,8 +292,8 @@ def test_request_review_step_exempts_a_pr_converted_to_draft_before_any_api_call
     had no draft exemption at all, so it still fetched the receipt-gate
     helper source and queried the Reviews API, and could reach OIDC token
     exchange and a `repository_dispatch` scheduler wake, before the "Fail
-    closed" step's exemption ever ran. This proves the request step now
-    exits before any API call -- helper-source fetch included -- when
+    closed" step's exemption ever ran. This proves the request step now performs only the authoritative live-state lookup, then
+    exits before helper-source, review, token, or dispatch API calls when
     `PR_DRAFT` is `"true"` (the value GitHub sends for `converted_to_draft`),
     while `ready_for_review` and explicit draft-review dispatch paths
     elsewhere (`pr_review_merge_scheduler.py`'s own draft handling) are
@@ -293,7 +301,7 @@ def test_request_review_step_exempts_a_pr_converted_to_draft_before_any_api_call
     """
     result = _run_request_review_step(tmp_path, pr_draft="true")
     assert result.returncode == 0, result.stderr
-    assert "PR is a draft; a current-head OpenCode review is not requested" in result.stdout
+    assert "PR is still a draft on the live exact head; a current-head OpenCode review is not requested" in result.stdout
 
 
 def test_request_review_step_still_dispatches_for_a_non_draft_pr(
@@ -302,7 +310,7 @@ def test_request_review_step_still_dispatches_for_a_non_draft_pr(
     """A non-draft PR must still reach the receipt-gate helper fetch."""
     result = _run_request_review_step(tmp_path, pr_draft="false")
     assert result.returncode == 17, result.stderr
-    assert "unexpected gh invocation" in result.stderr
+    assert "unexpected gh invocation after live-state validation" in result.stderr
 
 
 def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
@@ -326,7 +334,7 @@ def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
         tmp_path, pr_action="converted_to_draft", pr_draft="true"
     )
     assert result.returncode == 0, result.stderr
-    assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
+    assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout
 
 
 def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
@@ -362,7 +370,7 @@ def test_fail_closed_step_still_polls_for_a_non_draft_pr(tmp_path: Path) -> None
     """A non-draft PR must still reach the Reviews API call (not exempted)."""
     result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="false")
     assert result.returncode == 17, result.stderr
-    assert "unexpected gh invocation" in result.stderr
+    assert "unexpected gh invocation after live-state validation" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -386,7 +394,9 @@ def test_scheduler_wake_reuses_trusted_receipt_predicate(
     fake_gh.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  printf '%s' "$LIVE_PR_JSON"
+elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
@@ -423,6 +433,7 @@ fi
         "BASE_BRANCH": "main",
         "WORKFLOW_SHA": "c" * 40,
         "GH_TOKEN": "token",
+        "LIVE_PR_JSON": json.dumps({"draft": False, "head": {"sha": HEAD}}),
     }
     result = subprocess.run(
         ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True
