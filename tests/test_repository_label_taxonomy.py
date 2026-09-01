@@ -32,5 +32,11 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         },
         {"repository": "RankWeave", "issue": 40, "type": "documentation"},
         {"repository": "fast-mlsirm", "issue": 1717, "type": "documentation"},
+        {"repository": "EgressWeave", "issue": 231, "type": "documentation"},
+        {
+            "repository": "psychometrics-commons",
+            "issue": 442,
+            "type": "documentation",
+        },
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
