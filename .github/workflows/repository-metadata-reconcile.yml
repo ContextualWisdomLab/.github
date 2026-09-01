@@ -1,0 +1,74 @@
+name: Repository Metadata Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Audit desired state or apply repository-facing metadata changes
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - apply
+  workflow_call:
+    inputs:
+      mode:
+        description: Audit desired state or apply repository-facing metadata changes
+        required: false
+        default: audit
+        type: string
+    secrets:
+      CWL_REPOSITORY_METADATA_TOKEN:
+        required: false
+
+concurrency:
+  group: repository-metadata-reconciliation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    name: Reconcile repository-facing metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout trusted central source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve requested mode
+        id: mode
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          mode="${DISPATCH_MODE:-audit}"
+          case "${mode}" in
+            audit|apply) ;;
+            *)
+              echo "::error::Unsupported reconciliation mode: ${mode}"
+              exit 1
+              ;;
+          esac
+          if [ "${mode}" = "apply" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Apply mode is permitted only from protected main."
+            exit 1
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Reconcile desired repository state
+        env:
+          CWL_REPOSITORY_METADATA_TOKEN: ${{ secrets.CWL_REPOSITORY_METADATA_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/repository_metadata_reconciler.py \
+            --manifest config/repository-metadata.json \
+            --mode "${{ steps.mode.outputs.mode }}"
