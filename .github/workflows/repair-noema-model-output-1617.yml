@@ -10,10 +10,14 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.actor == 'seonghobae' &&
+      github.triggering_actor == 'seonghobae'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -133,11 +137,13 @@ jobs:
 
       - name: Guard and push only the verified exact-head commit
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
-          writer_ref='refs/heads/fix/noema-model-output-retry-20260901'
+          test -n "${GH_TOKEN:-}"
+          writer_branch='fix/noema-model-output-retry-20260901'
+          writer_ref="refs/heads/${writer_branch}"
           remote_head="$(git ls-remote origin "$writer_ref" | awk '{print $1}')"
           test "$remote_head" = "$GITHUB_SHA"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            HEAD:fix/noema-model-output-retry-20260901
+          gh auth setup-git
+          git push origin HEAD:"$writer_branch"
