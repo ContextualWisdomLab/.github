@@ -122,11 +122,12 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     start = workflow.index(start_marker) + len(start_marker)
     end = workflow.index('\n                \' <<<"$runs_json"', start)
     selector = workflow[start:end]
+    workflow_path = ".github/workflows/noema-review.yml"
     runs = {
         "workflow_runs": [
-            {"id": 98, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
-            {"id": 99, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
-            {"id": 100, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
+            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
+            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
             {"id": 97, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
         ]
     }
@@ -147,6 +148,84 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     )
 
 
+def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array():
+    """A sibling-repo run whose display_title never rendered is still matched.
+
+    Devin Review, PR #1507 ("Sibling Noema runs evade cancellation"): a
+    required-workflow-ruleset run materialized in a sibling repository can
+    carry the bare workflow name in ``name`` and the plain PR title (not
+    this workflow's rendered run-name) in ``display_title`` -- exactly the
+    shape ``tests/test_opencode_required_verdict_regression.py`` documents
+    for the analogous OpenCode wake selector, and confirmed live against
+    real sibling-repository runs during this fix. The selector must still
+    match such a run via GitHub's own ``pull_requests[]`` array and exclude
+    the live head via the direct ``head_sha`` comparison, since the head is
+    also never embedded in a display_title that never rendered it.
+    """
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup selector")
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" \'\n'
+    start = workflow.index(start_marker) + len(start_marker)
+    end = workflow.index('\n                \' <<<"$runs_json"', start)
+    selector = workflow[start:end]
+    workflow_path = ".github/workflows/noema-review.yml"
+    current_head = "b" * 40
+    old_head = "a" * 40
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 98,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Fix an unrelated example bug",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 99,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "A different pull request's title",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 8}],
+            },
+            {
+                "id": 100,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Same PR, current push",
+                "head_sha": current_head,
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 97,
+                "path": ".github/workflows/strix.yml",
+                "name": "Required Noema Review",
+                "display_title": "Fix an unrelated example bug",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            },
+        ]
+    }
+    result = subprocess.run(
+        [
+            jq, "-r",
+            "--arg", "pr", "7",
+            "--argjson", "current", "101",
+            "--arg", "target", "owner/repo",
+            "--arg", "head", current_head,
+            selector,
+        ],
+        input=json.dumps(runs),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["98"]
+
+
 def test_noema_close_event_cancels_historical_head_runs():
     """Close cleanup must cancel active Noema runs across prior head groups."""
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
@@ -155,21 +234,31 @@ def test_noema_close_event_cancels_historical_head_runs():
     )[0]
     assert "actions: write" in cleanup
     assert "Cancel queued and running Noema reviews for the closed pull request" in cleanup
-    assert 'select(.name == "Required Noema Review")' in cleanup
+    assert 'select((.name // "") | startswith("Required Noema Review"))' in cleanup
+    assert 'select(.path == ".github/workflows/noema-review.yml")' in cleanup
     assert "CLOSED_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
-    # Devin Review finding on PR #1507 (bug 1): a bare head_sha match let
-    # closing one PR cancel a different open PR's still-needed run whenever
-    # the two happened to share a head commit. Selection is PR-scoped only,
-    # via this workflow's own generated display_title (not GitHub's
-    # pull_requests[] array, which is documented to come back empty for
-    # cross-fork runs).
+    # Devin Review finding on PR #1507 (bug 1, "Sibling Noema runs evade
+    # cancellation"): GitHub does not consistently render this workflow's
+    # run-name for an organization-required-workflow run materialized in a
+    # sibling repository, so display_title alone (an exact `.name ==`
+    # filter alone, too) can never match a sibling PR's runs. Selection is
+    # PR-scoped by two independent, OR'd signals: the generated
+    # display_title where GitHub does render it, and GitHub's own
+    # pull_requests[] array otherwise -- reliably populated here because
+    # this job only ever processes same-repository, non-fork pull requests
+    # (unlike the general cross-fork case elsewhere in this org's tooling,
+    # where pull_requests[] is documented to come back empty). Never a bare
+    # head_sha, which two different open PRs can share.
     assert ".head_sha == $head_sha" not in cleanup
     assert "--arg head_sha" not in cleanup
     assert (
         '((.display_title // "") | startswith("Required Noema Review " + '
         '$target + "#" + $pr + "@"))'
+    ) in cleanup
+    assert (
+        'or ((.pull_requests // []) | any(.number == ($pr | tonumber)))'
     ) in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
@@ -235,11 +324,12 @@ def _superseded_cleanup_script() -> str:
 def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) -> None:
     """Execute cleanup and cancel only the same PR's older, different-head run."""
     current_head = "b" * 40
+    workflow_path = ".github/workflows/noema-review.yml"
     runs = {"workflow_runs": [
-        {"id": 100, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
-        {"id": 199, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
-        {"id": 201, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
-        {"id": 99, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
+        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
+        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
+        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
+        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
     ]}
     fixture = tmp_path / "runs.json"
     fixture.write_text(json.dumps(runs), encoding="utf-8")
@@ -292,6 +382,7 @@ def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
         "workflow_runs": [
             {
                 "id": 100,
+                "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40,
             },
@@ -361,6 +452,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
         "workflow_runs": [
             {
                 "id": 100,
+                "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{shared_head}"
@@ -368,6 +460,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
             },
             {
                 "id": 200,
+                "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
@@ -437,6 +530,7 @@ def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
         "workflow_runs": [
             {
                 "id": 300,
+                "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"

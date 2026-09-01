@@ -66,9 +66,9 @@ jobs:
           # actions/workflows/noema-review.yml/runs is not guaranteed to
           # resolve there -- GitHub's List repository workflows family
           # enumerates workflow files that exist in that repository's own
-          # tree. actions/runs plus the existing `.name == "Required Noema
-          # Review"` filter is this repo's own already-proven pattern for
-          # this exact cross-repo cleanup (see strix.yml's identical job).
+          # tree. actions/runs plus the run object's own `.path` field is
+          # this repo's own already-proven pattern for this exact cross-repo
+          # cleanup (see strix.yml's identical job).
           # Status stays a server-side filter -- bounding each query to only
           # the currently active runs -- rather than an unfiltered
           # per-workflow fetch filtered client-side, since noema-review.yml
@@ -86,21 +86,48 @@ jobs:
               return 0
             fi
             local run_ids
-            # PR-scoped only, by the display_title this same workflow's own
-            # run-name derives from the triggering event's PR number (see
-            # run-name above) -- not by head_sha, which two different open
-            # PRs can share (e.g. a duplicate PR opened from the same branch
-            # against another target), and which would let closing one
-            # cancel the other's still-needed run. Matching by PR number
-            # rather than by the closed PR's current head SHA also means
-            # historical-head runs from earlier pushes to this same PR are
-            # still caught.
+            # PR-scoped by two independent, OR'd signals -- neither alone
+            # covers every trigger this job serves. The rendered
+            # display_title (this workflow's own run-name, embedding the
+            # target repository/PR number/head SHA) is this workflow's
+            # original signal, and stays reliable for repository_dispatch
+            # and workflow_run triggers. But GitHub does not consistently
+            # render run-name for an organization-required-workflow
+            # pull_request_target run materialized in a sibling repository
+            # (Devin Review, PR #1507: "Sibling Noema runs evade
+            # cancellation") -- `name` and `display_title` can both collapse
+            # to the bare workflow name and the plain PR title there,
+            # matching neither the old `.name ==` filter nor the
+            # display_title prefix below. GitHub's own `pull_requests[]`
+            # array on the run object closes that gap: it is populated for
+            # this workflow's pull_request_target runs because the
+            # noema-review job itself only ever processes same-repository,
+            # non-fork pull requests (its own `if:` requires
+            # `head.repo.full_name == github.repository`), so the cross-fork
+            # "empty pull_requests[]" caveat that rules this field out
+            # elsewhere in this org's tooling does not apply here. Neither
+            # signal alone is sufficient for every trigger type, so this
+            # matches on either one -- never a bare head_sha, which two
+            # different open PRs can share (e.g. a duplicate PR opened from
+            # the same branch against another target) and which would let
+            # closing one cancel the other's still-needed run. Matching by
+            # PR number rather than by the closed PR's current head SHA also
+            # means historical-head runs from earlier pushes to this same PR
+            # are still caught. `.path` pins the workflow identity in place
+            # of the old `.name ==` filter: unlike `.name` (which, like
+            # display_title, only carries the bare workflow name for a
+            # required-workflow-ruleset run), `.path` was independently
+            # confirmed stable across both native and sibling contexts.
             if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" \
               --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Required Noema Review")
-                | select((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                | select(.path == ".github/workflows/noema-review.yml")
+                | select((.name // "") | startswith("Required Noema Review"))
+                | select(
+                    ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                    or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                  )
                 | .id
               ' <<<"$runs_json")"; then
               echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
@@ -284,13 +311,32 @@ jobs:
                 echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
                 continue
               fi
+              # See the close-cleanup job's matching comment above cancel_runs's
+              # own selector for the full rationale: display_title only
+              # renders this workflow's PR/head-bearing run-name reliably for
+              # a native trigger, so a sibling-repository required-workflow
+              # run is additionally matched via GitHub's own pull_requests[]
+              # array (populated here because noema-review only ever
+              # processes same-repository, non-fork pull requests), and
+              # `.path` pins workflow identity where `.name` cannot. The
+              # live-head exclusion below is independently reinforced with a
+              # direct `.head_sha` comparison -- the run object's own
+              # head_sha field, unlike display_title, is populated and
+              # accurate regardless of run-name rendering, so it protects the
+              # current run even when its display_title never rendered a
+              # matching "@$head" suffix to exclude by.
               if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
                 --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" '
                   .workflow_runs[]
                   | select(.id < $current)
-                  | select(.name == "Required Noema Review")
-                  | select((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                  | select(.path == ".github/workflows/noema-review.yml")
+                  | select((.name // "") | startswith("Required Noema Review"))
+                  | select(
+                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                    )
                   | select(((.display_title // "") | endswith("@" + $head)) | not)
+                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
                   | .id
                 ' <<<"$runs_json")"; then
                 echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
