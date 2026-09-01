@@ -127,6 +127,26 @@ def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
     assert module.exact_mentions(body) == ("opencode-agent",)
 
 
+def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
+    """A slash used to separate two agent requests must not swallow the @mention.
+
+    Devin review regression on #1537: excluding a preceding ``/`` from the
+    lookbehind to reject documentation-link false positives (see
+    ``test_exact_mentions_rejects_slash_opencode_substrings``) was originally
+    applied to the whole ``@opencode-agent|/opencode|/oc`` alternation, so a
+    maintainer separating both requested agents with a bare slash and no
+    space (``@cwl-noema-review/@opencode-agent``) silently lost the OpenCode
+    request. The slash exclusion must apply only to the bare ``/opencode``
+    and ``/oc`` forms, not to the ``@`` form.
+    """
+
+    module = load_module()
+    assert module.exact_mentions("@cwl-noema-review/@opencode-agent") == (
+        "cwl-noema-review",
+        "opencode-agent",
+    )
+
+
 @pytest.mark.parametrize(
     "body",
     [
