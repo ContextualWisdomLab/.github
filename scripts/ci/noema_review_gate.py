@@ -35,6 +35,19 @@ MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+OBSERVED_REVIEW_PROBE_KINDS = frozenset(
+    {
+        "mutable_alias",
+        "time_of_check_time_of_use",
+        "execution_identity",
+        "coercion_boundary",
+        "test_oracle",
+        "cross_contract",
+        "authority_boundary",
+        "dependency_context",
+        "state_machine_race",
+    }
+)
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -355,9 +368,16 @@ def validate_substantive_verdict(
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
+    probe_kinds: set[str] = set()
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
             raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+        probe_kind = probe.get("probe_kind")
+        if probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+            raise RuntimeError(
+                f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
+            )
+        probe_kinds.add(str(probe_kind))
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
             raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
@@ -374,6 +394,11 @@ def validate_substantive_verdict(
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
+
+    if len(probe_kinds) < required_probes:
+        raise RuntimeError(
+            f"Noema {decision} requires at least {required_probes} distinct probe_kind values"
+        )
 
     if decision == "approve" and confirmed:
         raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
@@ -980,6 +1005,7 @@ def call_llm(
                             "probes": [
                                 {
                                     **location_example,
+                                    "probe_kind": "mutable_alias|time_of_check_time_of_use|execution_identity|coercion_boundary|test_oracle|cross_contract|authority_boundary|dependency_context|state_machine_race",
                                     "hypothesis": "...",
                                     "attack_or_counterexample": "...",
                                     "evidence": "observed or source-traced result",
@@ -1000,6 +1026,8 @@ def call_llm(
                     separators=(",", ":"),
                 ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Classify every adversarial probe with one observed defect class and use distinct classes when multiple probes are required: mutable_alias, time_of_check_time_of_use, execution_identity, coercion_boundary, test_oracle, cross_contract, authority_boundary, dependency_context, state_machine_race.",
+                "Actively attack caller-owned mutable aliases and readonly illusions; changing getters or Proxies between validation and use; execution/tenant/request identity confusion; JavaScript or serialization coercion at enum, key, digest, and identity boundaries; weak substring or vacuous test oracles; contradictions across PRD/ADR/architecture/changelog/contracts; component-vs-host authority overreach; omitted causal dependency context; and cancellation/retry/publication state-machine races.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
@@ -1128,7 +1156,8 @@ def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
         if isinstance(probe, dict):
             lines.append(
                 f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
-                f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
+                f"[{probe.get('probe_kind')}] {probe.get('outcome')}: "
+                f"{str(probe.get('hypothesis') or '').strip()} — "
                 f"{str(probe.get('evidence') or '').strip()}"
             )
     lines.append(f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}")

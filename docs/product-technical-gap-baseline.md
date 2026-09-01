@@ -1,5 +1,10 @@
 # Product and Technical Gap Baseline
 
+
+## 2026-09-01 — Noema observed-defect adversarial-probe corpus
+
+Live review evidence from `ContextualWisdomLab/noema#528` demonstrated several defect classes that an independent reviewer must actively attack rather than relying on generic correctness prose: Devin found caller-owned mutable checkpoint aliases, changing-getter/Proxy TOCTOU across validation and snapshot, and cross-execution identity confusion; CodeRabbit separately found a vacuous `toContain("released")` oracle and cross-document contract contradictions. The central Noema validator now requires every formal adversarial probe to carry an executable `probe_kind` from the observed corpus (`mutable_alias`, `time_of_check_time_of_use`, `execution_identity`, `coercion_boundary`, `test_oracle`, `cross_contract`, `authority_boundary`, `dependency_context`, `state_machine_race`). Material source/test changes already require two probes; they now must cover distinct classes so duplicated generic attacks cannot satisfy the gate. The prompt explicitly attacks these failure shapes and the published review evidence renders the class for auditability. This strengthens review evidence without claiming parity or superiority over proprietary reviewers; the corpus is grounded only in concrete, independently observed PR findings.
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`

@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Noema formal reviews now classify adversarial probes against an executable corpus of observed reviewer defect classes (mutable aliases, TOCTOU, identity/coercion boundaries, weak oracles, cross-contract and authority contradictions, dependency context, and state-machine races), and material changes require distinct probe classes before approval.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
