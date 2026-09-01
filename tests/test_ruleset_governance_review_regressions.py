@@ -184,6 +184,24 @@ def test_ruleset_target_exposes_history_endpoints() -> None:
     target = _target()
     assert target.history_endpoint == "repos/ContextualWisdomLab/.github/rulesets/17921150/history"
     assert target.history_version_endpoint(7).endswith("/history/7")
+    with pytest.raises(module.RulesetGovernanceError, match="version identity is malformed"):
+        target.history_version_endpoint(0)
+
+
+def test_history_transport_and_version_state_are_strict(monkeypatch) -> None:
+    """History arrays and version states cross typed, exact-identity trust boundaries."""
+
+    monkeypatch.setattr(module, "_run_gh_json", lambda *_args, **_kwargs: [{"version_id": 1}])
+    assert module._gh_api_list("GET", "history") == [{"version_id": 1}]
+    monkeypatch.setattr(module, "_run_gh_json", lambda *_args, **_kwargs: {})
+    with pytest.raises(module.RulesetGovernanceError, match="must be an array"):
+        module._gh_api_list("GET", "history")
+
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: {"state": _live()})
+    assert module._history_version_state(_target(), 4) == _live()
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: {"state": []})
+    with pytest.raises(module.RulesetGovernanceError, match="version state must be an object"):
+        module._history_version_state(_target(), 4)
 
 
 def test_latest_history_version_rejects_missing_or_malformed_history(monkeypatch) -> None:
@@ -193,8 +211,17 @@ def test_latest_history_version_rejects_missing_or_malformed_history(monkeypatch
     with pytest.raises(module.RulesetGovernanceError, match="ruleset history is empty"):
         module._latest_history_version(_target())
 
-    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": True}])
-    with pytest.raises(module.RulesetGovernanceError, match="version identity is malformed"):
+    for invalid in (True, 0):
+        monkeypatch.setattr(
+            module,
+            "_gh_api_list",
+            lambda *_args, invalid=invalid, **_kwargs: [{"version_id": invalid}],
+        )
+        with pytest.raises(module.RulesetGovernanceError, match="version identity is malformed"):
+            module._latest_history_version(_target())
+
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [[]])
+    with pytest.raises(module.RulesetGovernanceError, match="history entry must be an object"):
         module._latest_history_version(_target())
 
     monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": 12}])
@@ -211,6 +238,32 @@ def test_history_transition_accepts_exactly_one_new_reviewed_version(monkeypatch
     )
     monkeypatch.setattr(module, "_history_version_state", lambda _target, version: _converged())
     module._verify_ruleset_history_transition(_target(), 7, _converged())
+
+
+def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypatch) -> None:
+    """Missing predecessor, absent version advance, or mismatched latest state fail closed."""
+
+    desired = _converged()
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": 8}])
+    with pytest.raises(module.RulesetGovernanceError, match="did not expose a predecessor"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 7}, {"version_id": 6}],
+    )
+    with pytest.raises(module.RulesetGovernanceError, match="not visible in history"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 8}, {"version_id": 7}],
+    )
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args, **_kwargs: _live())
+    with pytest.raises(module.RulesetGovernanceError, match="does not match reviewed mutation"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
 
 
 def test_history_collision_restores_immediate_predecessor_before_failing(monkeypatch) -> None:
@@ -266,6 +319,28 @@ def test_history_collision_does_not_overwrite_a_newer_post_put_admin_edit(monkey
     )
     monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: newer)
     with pytest.raises(module.RulesetGovernanceError, match="advanced again"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+
+
+def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
+    """A failed predecessor restore is surfaced rather than treated as collision recovery."""
+
+    desired = _converged()
+    external = _live()
+    external["conditions"] = {"ref_name": {"include": ["refs/heads/external"], "exclude": []}}
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 10}, {"version_id": 9}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_history_version_state",
+        lambda _target, version: desired if version == 10 else external,
+    )
+    replies = iter([desired, {}, desired])
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: next(replies))
+    with pytest.raises(module.RulesetGovernanceError, match="rollback did not converge"):
         module._verify_ruleset_history_transition(_target(), 7, desired)
 
 
