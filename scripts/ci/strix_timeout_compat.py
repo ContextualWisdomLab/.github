@@ -38,8 +38,9 @@ class UnboundedInferenceAsyncio:
         """Delegate non-warm-up asyncio attributes without changing semantics."""
         return getattr(self._asyncio_module, attribute_name)
 
-    async def wait_for(self, awaitable: Awaitable[Any], _timeout: object) -> Any:
+    async def wait_for(self, awaitable: Awaitable[Any], timeout: object) -> Any:
         """Await model warm-up without a fixed wall-clock deadline."""
+        del timeout
         return await self._asyncio_module.wait_for(awaitable, timeout=None)
 
 
