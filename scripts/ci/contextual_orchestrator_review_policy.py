@@ -236,8 +236,8 @@ def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: object = DEFAULT_CATALOG_LIMIT,
+    account_cap: object = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
@@ -246,9 +246,10 @@ def build_zdr_prioritized_catalog(
 
     ``limit`` and ``account_cap`` remain accepted only so older callers can roll
     forward without a flag-day. They are intentionally non-authoritative and
-    cannot remove, rank, or prioritize a candidate. The admission set is fully
-    determined by explicit cost evidence, ``orchestrator/free`` credential-source
-    authorization, and the caller's optional ZDR requirement.
+    are not inspected, validated, serialized, or allowed to remove, rank, or
+    prioritize a candidate. The admission set is fully determined by explicit
+    cost evidence, ``orchestrator/free`` credential-source authorization, and
+    the caller's optional ZDR requirement.
 
     Input order is preserved only as discovery provenance. Every emitted agent
     has neutral priority, so this module does not convert that serialization
@@ -256,10 +257,6 @@ def build_zdr_prioritized_catalog(
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
-    if isinstance(limit, bool) or not isinstance(limit, int):
-        raise PolicyError("legacy limit must be an integer when supplied")
-    if isinstance(account_cap, bool) or not isinstance(account_cap, int):
-        raise PolicyError("legacy account_cap must be an integer when supplied")
 
     all_rows = list(rows)
     all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
@@ -267,7 +264,9 @@ def build_zdr_prioritized_catalog(
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
     candidate_rows = (
-        free_pool_rows if pool == "free" else [
+        free_pool_rows
+        if pool == "free"
+        else [
             row
             for row in all_rows
             if _cost_evidence(row) in {COST_FREE, COST_PRICED}
@@ -349,8 +348,8 @@ def build_zdr_prioritized_catalog(
             "priced_selected_count": selected_evidence.count(COST_PRICED),
             "unknown_selected_count": selected_evidence.count(COST_UNKNOWN),
             "zdr_selected_count": zdr_count,
-            "legacy_limit_ignored": limit,
-            "legacy_account_cap_ignored": account_cap,
+            "legacy_limit_ignored": True,
+            "legacy_account_cap_ignored": True,
             "zdr_sources": sorted(
                 {
                     provider_zdr_scope(str(row["provider"])).source
@@ -401,8 +400,8 @@ def build_catalog_from_paths(
     *,
     out_path: str,
     report_path: str,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: object = DEFAULT_CATALOG_LIMIT,
+    account_cap: object = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
     pool: str = "free",
