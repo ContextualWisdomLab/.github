@@ -9,10 +9,12 @@ import re
 from scripts.ci import source_fix_1591_escalation_order as fix
 
 
+ADR_PATH = Path("docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md")
+
+
 def repair_adr_contract() -> None:
     """Keep the accepted sidecar pin and exact no-timeout language executable tests require."""
-    path = Path("docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md")
-    text = path.read_text(encoding="utf-8")
+    text = ADR_PATH.read_text(encoding="utf-8")
     pin = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
     if pin not in text:
         raise SystemExit("accepted sidecar pin disappeared from ADR-0003")
@@ -28,7 +30,7 @@ def repair_adr_contract() -> None:
         text = text.replace(old, new, 1)
     if "initial completion ping" not in text:
         raise SystemExit("ADR-0003 no-timeout contract lacks initial completion ping")
-    path.write_text(text, encoding="utf-8")
+    ADR_PATH.write_text(text, encoding="utf-8")
 
 
 def update_tests_and_docs() -> None:
@@ -49,6 +51,7 @@ def update_tests_and_docs() -> None:
 
 def commit_and_push(message: str) -> None:
     """Skip an already-published TDD phase, otherwise publish normally."""
+    fix.run("git", "add", str(ADR_PATH))
     staged = fix.run("git", "diff", "--cached", "--quiet", check=False)
     if staged.returncode == 0:
         return
