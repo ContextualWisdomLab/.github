@@ -1,0 +1,61 @@
+name: Repair Noema model-output boundary 1617
+
+on:
+  push:
+    branches: [fix/noema-model-output-retry-20260901]
+
+concurrency:
+  group: repair-noema-model-output-1617
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/noema-model-output-retry-20260901
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install repository-pinned quality tools
+        run: python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply exact source repair
+        run: PYTHONPATH=. python scripts/ci/repair_noema_model_output_1617.py
+
+      - name: Verify focused RED-to-GREEN regressions
+        run: PYTHONPATH=. python -m pytest -q tests/test_noema_model_output_failure_classification.py tests/test_noema_review_gate.py
+
+      - name: Verify complete suite and 100 percent source coverage
+        run: |
+          PYTHONPATH=. coverage run -m pytest tests -q
+          coverage report --show-missing
+          interrogate
+          git diff --check
+
+      - name: Remove purpose-complete repair machinery
+        run: |
+          rm scripts/ci/repair_noema_model_output_1617.py
+          rm .github/workflows/repair-noema-model-output-1617.yml
+
+      - name: Commit verified production repair
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          test -n "$(git status --porcelain)"
+          git commit -m 'fix(noema): classify and bound malformed-verdict repair failures'
+          git push origin HEAD:fix/noema-model-output-retry-20260901
