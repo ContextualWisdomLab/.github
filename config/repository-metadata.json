@@ -4,74 +4,37 @@
   "repositories": {
     "CalendarWeave": {
       "description": "Calendar resource infrastructure for iCalendar, CalDAV, revisions, and interoperable scheduling.",
-      "topics": [
-        "calendar",
-        "caldav",
-        "icalendar",
-        "pim",
-        "rust",
-        "scheduling",
-        "calendar-resource",
-        "contextualwisdomlab"
-      ],
+      "topics": ["calendar", "caldav", "icalendar", "pim", "rust", "scheduling", "calendar-resource", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": {"enabled": false}
     },
     "ConceptWeave": {
       "description": "Evidence-bound ontology and semantic-model engineering for governed enterprise meaning.",
-      "topics": [
-        "ontology",
-        "semantic-model",
-        "knowledge-graph",
-        "governance",
-        "rust",
-        "data-modeling",
-        "contextualwisdomlab"
-      ],
+      "topics": ["ontology", "semantic-model", "knowledge-graph", "governance", "rust", "data-modeling", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": {"enabled": false}
     },
     "learning-content-studio": {
       "description": "Author, review, version, and publish accessible learning content across interoperable learning standards.",
-      "topics": [
-        "learning-content",
-        "lcms",
-        "authoring",
-        "scorm",
-        "cmi5",
-        "accessibility",
-        "education",
-        "contextualwisdomlab"
-      ],
+      "topics": ["learning-content", "lcms", "authoring", "scorm", "cmi5", "accessibility", "education", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": {"enabled": false}
+    },
+    "learning-interoperability-contracts": {
+      "description": "Versioned learning interoperability schemas, profiles, SDK contracts, and conformance fixtures.",
+      "topics": ["interoperability", "xapi", "cmi5", "lti", "qti", "open-badges", "education", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": {"enabled": false}
     },
     "learning-management-platform": {
       "description": "Standards-oriented learning management for employee, partner, customer, and self-sponsored education.",
-      "topics": [
-        "learning-management",
-        "lms",
-        "education",
-        "xapi",
-        "cmi5",
-        "credentials",
-        "rust",
-        "contextualwisdomlab"
-      ],
+      "topics": ["learning-management", "lms", "education", "xapi", "cmi5", "credentials", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": {"enabled": false}
     },
     "learning-record-store": {
       "description": "Immutable xAPI learning record storage and evidence services for interoperable learning analytics.",
-      "topics": [
-        "xapi",
-        "learning-record-store",
-        "cmi5",
-        "learning-analytics",
-        "education",
-        "evidence",
-        "contextualwisdomlab"
-      ],
+      "topics": ["xapi", "learning-record-store", "cmi5", "learning-analytics", "education", "evidence", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": {"enabled": false}
     }
