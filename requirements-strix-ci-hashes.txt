@@ -1388,9 +1388,9 @@ openai==2.54.0 \
     #   litellm
     #   openai-agents
     #   strix-agent
-openai-agents==0.19.4 \
-    --hash=sha256:12e0372fae9698fe6f78e05aaeb4ccdb229602f7ef99b8195a7d68dc82869f51 \
-    --hash=sha256:fe21778ee1e8216c9cdb775fa86d11b08be68c0184e14023993088d3f812c0be
+openai-agents==0.22.0 \
+    --hash=sha256:6c3d7b9e34d3ca4bf763d4557d01ec844685290f0d80cb72e10a304029c0d7ee \
+    --hash=sha256:985a74a8024123980c2d4dc329d19b2332a0f86919fa7b3f6b9c2abaae022680
     # via strix-agent
 packaging==26.2 \
     --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e \
