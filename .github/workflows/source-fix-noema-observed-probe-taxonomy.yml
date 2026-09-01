@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
-          # Retry after fixing the fixture migrator to advance by probe occurrence.
+          # The exact base inherited two stale OpenAI free-pool fixtures from #1587; repair them before full verification.
           git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
           cd repo
           git checkout "$TARGET_BRANCH"
@@ -32,6 +32,9 @@ jobs:
           PYTHONPATH=. python3 scripts/ci/source_fix_noema_probe_test_fixtures.py
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt >/dev/null
           PYTHONPATH=. python3 -m pytest -q tests/test_noema_observed_defect_probe_taxonomy.py tests/test_noema_review_gate.py
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_contextual_orchestrator_review_policy.py::test_build_catalog_applies_account_cap \
+            tests/test_contextual_orchestrator_review_policy.py::test_build_catalog_respects_limit
           PYTHONPATH=. python3 -m pytest -q tests
           interrogate --fail-under=100 scripts/ci/noema_review_gate.py
           python3 -m compileall -q scripts/ci tests
@@ -39,7 +42,13 @@ jobs:
           git rm .github/workflows/source-fix-noema-observed-probe-taxonomy.yml
           git rm scripts/ci/source_fix_noema_observed_probe_taxonomy.py
           git rm scripts/ci/source_fix_noema_probe_test_fixtures.py
-          git add scripts/ci/noema_review_gate.py tests/test_noema_observed_defect_probe_taxonomy.py tests/test_noema_review_gate.py CHANGELOG.md docs/product-technical-gap-baseline.md
+          git add \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_review_gate.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            CHANGELOG.md \
+            docs/product-technical-gap-baseline.md
           git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
