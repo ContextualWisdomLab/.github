@@ -51,12 +51,14 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # - The bare "/opencode"/"/oc" forms are the most URL/path-context-prone,
 #   so both sides exclude the full set of characters that continue a
 #   URL/path/filename token: a Unicode word character, ".", "/", "?", "=",
-#   "#", or "-". This rejects, on the leading side, a query string
-#   (?next=/opencode) and a URL fragment identifier
-#   (https://example.com/#/oc); and on the trailing side, a root-relative
-#   path (/oc/config), a dotted filename continuation (/oc.json), a query
-#   string glued on with no separator (/oc?mode=docs), and a Unicode word
-#   continuation (/océan) that a plain ASCII character class would miss.
+#   "#", "%", ":", or "-". This rejects, on the leading side, a query
+#   string (?next=/opencode), a URL fragment identifier
+#   (https://example.com/#/oc), and a URI scheme separator (scheme:/oc,
+#   app:/opencode); and on the trailing side, a root-relative path
+#   (/oc/config), a dotted filename continuation (/oc.json), a query
+#   string glued on with no separator (/oc?mode=docs), a percent-encoded
+#   path continuation (/oc%2Fconfig), and a Unicode word continuation
+#   (/océan) that a plain ASCII character class would miss.
 # - "@cwl-noema-review" on its own additionally excludes a preceding "/"
 #   (closing the same URL/path-embedding class as "@opencode-agent" above)
 #   but deliberately NOT a trailing "/": that would break recognition of
@@ -71,7 +73,7 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![\w/-])@opencode-agent(?![\w/-])"
         r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
-        r"|(?<![\w./?=#-])(?:/opencode|/oc)(?![\w./?=#-])"
+        r"|(?<![\w./?=#%:-])(?:/opencode|/oc)(?![\w./?=#%:-])"
         r")",
         re.IGNORECASE,
     ),

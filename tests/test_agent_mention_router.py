@@ -357,6 +357,34 @@ def test_exact_mentions_rejects_unicode_embedded_at_mentions() -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/oc%2Fconfig",
+        "/opencode%2Fdocs",
+        "scheme:/oc",
+        "app:/opencode",
+    ],
+)
+def test_exact_mentions_rejects_encoded_path_and_uri_scheme_continuations(
+    body: str,
+) -> None:
+    """A percent-encoded path or URI-scheme-separated alias is not a mention.
+
+    Tenth-round finding on #1537's successor PR (Devin): the bare
+    ``/opencode``/``/oc`` forms' boundary excluded neither a following
+    ``%`` (a percent-encoded path continuation, ``/oc%2Fconfig``) nor a
+    preceding ``:`` (a URI scheme separator, ``scheme:/oc``, ``app:/oc``),
+    so both still matched as complete, standalone mentions. The fix adds
+    ``%`` and ``:`` to that alternative's own leading/trailing exclusion
+    set, alongside the ``.``, ``/``, ``?``, ``=``, and ``#`` already
+    excluded there.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
