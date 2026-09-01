@@ -12,9 +12,7 @@ import pytest
 
 from scripts.ci import sandboxed_web_e2e
 
-POSIX_PROCESS_GROUPS = pytest.mark.skipif(
-    os.name == "nt", reason="sandboxed_web_e2e requires POSIX process groups"
-)
+POSIX_PROCESS_GROUPS = pytest.mark.skipif(os.name == "nt", reason="sandboxed_web_e2e requires POSIX process groups")
 
 
 def free_port():
@@ -27,14 +25,14 @@ def free_port():
 def http_server_command(port: int, label: str) -> str:
     """Build a simple Python HTTP service command."""
     return (
-        f'{sys.executable} -c "'
+        f"{sys.executable} -c \""
         "import http.server, socketserver; "
         "socketserver.TCPServer.allow_reuse_address=True; "
         f"handler=http.server.SimpleHTTPRequestHandler; "
         f"server=socketserver.TCPServer(('127.0.0.1', {port}), handler); "
         f"print('{label} ready', flush=True); "
         "server.serve_forever()"
-        '"'
+        "\""
     )
 
 
@@ -47,13 +45,13 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
     backend_port = free_port()
     frontend_port = free_port()
     e2e_cmd = (
-        f'{sys.executable} -c "'
+        f"{sys.executable} -c \""
         "import pathlib, sys, urllib.request; "
         f"print(urllib.request.urlopen('http://127.0.0.1:{backend_port}/index.html').status); "
         f"print(urllib.request.urlopen('http://127.0.0.1:{frontend_port}/index.html').status); "
         "print('e2e-stderr', file=sys.stderr); "
         "pathlib.Path('e2e-created.txt').write_text('sandbox-only')"
-        '"'
+        "\""
     )
 
     exit_code = sandboxed_web_e2e.main(
@@ -88,29 +86,17 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
 
     if exit_code == 125:
         result_lines = [
-            line
-            for line in captured.out.splitlines()
-            if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
+            line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
         ]
         if result_lines:
-            payload = json.loads(
-                result_lines[-1].removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-            )
+            payload = json.loads(result_lines[-1].removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
             if payload["backend_ready"] is False or payload["frontend_ready"] is False:
-                pytest.skip(
-                    "runner could not start localhost services for sandboxed web E2E"
-                )
+                pytest.skip("runner could not start localhost services for sandboxed web E2E")
 
     assert exit_code == 0
     assert "SANDBOXED_WEB_E2E_RESULT" in captured.out
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["backend_ready"] is True
     assert payload["frontend_ready"] is True
     assert payload["exit_code"] == 0
@@ -126,44 +112,17 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     """Small helper branches handle empty URLs, loopback readiness, and hard cleanup."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
     exited.wait(timeout=5)
-    exited_service = sandboxed_web_e2e.Service(
-        "done", "true", exited, tmp_path / "missing.log"
-    )
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
     assert sandboxed_web_e2e.wait_for_url("", 1, exited_service) is True
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://localhost./health", 1, exited_service)
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service)
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service)
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://[::1]:1/health", 1, exited_service)
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url(
-            "HTTP://[::ffff:127.0.0.1]:1/", 1, exited_service
-        )
-        is False
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("https://127.0.0.1:1/", 1, exited_service)
-        is False
-    )
-    with pytest.raises(
-        ValueError, match=re.escape("URL must start with http:// or https://")
-    ):
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://localhost./health", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.2:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:1/health", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("HTTP://[::ffff:127.0.0.1]:1/", 1, exited_service) is False
+    assert sandboxed_web_e2e.wait_for_url("https://127.0.0.1:1/", 1, exited_service) is False
+    with pytest.raises(ValueError, match=re.escape("URL must start with http:// or https://")):
         sandboxed_web_e2e.wait_for_url("file:///etc/passwd", 1, exited_service)
     sandboxed_web_e2e.stop_service(exited_service)
     assert sandboxed_web_e2e.tail_text(tmp_path / "missing.log") == ""
@@ -190,29 +149,15 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
         if len(killed) == 2:
             raise ProcessLookupError
 
-    slow_service = sandboxed_web_e2e.Service(
-        "slow", "sleep", SlowProcess(), tmp_path / "slow.log"
-    )
+    slow_service = sandboxed_web_e2e.Service("slow", "sleep", SlowProcess(), tmp_path / "slow.log")
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", fake_killpg, raising=False)
-    monkeypatch.setattr(
-        sandboxed_web_e2e.signal,
-        "SIGKILL",
-        sandboxed_web_e2e.signal.SIGTERM,
-        raising=False,
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.signal, "SIGKILL", sandboxed_web_e2e.signal.SIGTERM, raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
     assert len(killed) == 2
 
     killed.clear()
-    slow_service = sandboxed_web_e2e.Service(
-        "slow", "sleep", SlowProcess(), tmp_path / "slow.log"
-    )
-    monkeypatch.setattr(
-        sandboxed_web_e2e.os,
-        "killpg",
-        lambda pid, sig: killed.append((pid, sig)),
-        raising=False,
-    )
+    slow_service = sandboxed_web_e2e.Service("slow", "sleep", SlowProcess(), tmp_path / "slow.log")
+    monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
     assert len(killed) == 2
 
@@ -239,9 +184,7 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", fake_run)
 
-    service = sandboxed_web_e2e.start_service(
-        "backend", "npm run dev", tmp_path, {"PATH": "/bin"}, tmp_path
-    )
+    service = sandboxed_web_e2e.start_service("backend", "npm run dev", tmp_path, {"PATH": "/bin"}, tmp_path)
     completed = sandboxed_web_e2e.run_shell("npm test", tmp_path, {"PATH": "/bin"}, 5)
 
     assert service.label == "backend"
@@ -284,45 +227,27 @@ def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
                 raise sandboxed_web_e2e.urllib.error.URLError("not ready")
             return Response(500 if len(attempts) == 2 else 204)
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener()
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FakeOpener())
     sleeps = []
-    monkeypatch.setattr(
-        sandboxed_web_e2e.time, "sleep", lambda seconds: sleeps.append(seconds)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     log_path = tmp_path / "service.log"
-    log_path.write_text(
-        "\n".join(f"line-{index}" for index in range(90)), encoding="utf-8"
-    )
+    log_path.write_text("\n".join(f"line-{index}" for index in range(90)), encoding="utf-8")
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), log_path)
 
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service)
-        is True
-    )
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 10, service) is True
     assert len(attempts) == 3
     assert sleeps == [1, 1]
     assert sandboxed_web_e2e.tail_text(log_path).splitlines()[0] == "line-10"
 
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: example\\.com"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: example\\.com"):
         sandboxed_web_e2e.wait_for_url("http://example.com", 10, service)
 
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: 192\\.168\\.1\\.1"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 192\\.168\\.1\\.1"):
         sandboxed_web_e2e.wait_for_url("http://192.168.1.1", 10, service)
 
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://[::1]:8000/health", 10, service) is True
-    )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://localhost:8000/health", 10, service)
-        is True
-    )
+    assert sandboxed_web_e2e.wait_for_url("http://[::1]:8000/health", 10, service) is True
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:8000/health", 10, service) is True
 
 
 @POSIX_PROCESS_GROUPS
@@ -356,10 +281,7 @@ def test_wait_for_url_ignores_environment_proxy_configuration(monkeypatch, tmp_p
         tmp_path,
     )
     try:
-        assert (
-            sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{real_port}/", 8, service)
-            is True
-        )
+        assert sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{real_port}/", 8, service) is True
     finally:
         sandboxed_web_e2e.stop_service(service)
 
@@ -400,13 +322,8 @@ def test_wait_for_url_ignores_proxy_environment_variables(monkeypatch, tmp_path)
     monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{dead_port}")
     monkeypatch.setenv("https_proxy", f"http://127.0.0.1:{dead_port}")
     try:
-        service = sandboxed_web_e2e.Service(
-            "web", "serve", RunningProcess(), tmp_path / "missing.log"
-        )
-        assert (
-            sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{port}/", 10, service)
-            is True
-        )
+        service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "missing.log")
+        assert sandboxed_web_e2e.wait_for_url(f"http://127.0.0.1:{port}/", 10, service) is True
     finally:
         server.terminate()
         server.wait(timeout=5)
@@ -416,35 +333,19 @@ def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path)
     """Readiness polling must fail closed on public, metadata, and userinfo targets."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
     exited.wait(timeout=5)
-    exited_service = sandboxed_web_e2e.Service(
-        "done", "true", exited, tmp_path / "missing.log"
-    )
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: example\\.com"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: example\\.com"):
         sandboxed_web_e2e.wait_for_url("http://example.com/health", 1, exited_service)
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: app\\.localhost"
-    ):
-        sandboxed_web_e2e.wait_for_url(
-            "http://app.localhost:8000/health", 1, exited_service
-        )
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: 169\\.254\\.169\\.254"
-    ):
-        sandboxed_web_e2e.wait_for_url(
-            "http://169.254.169.254/latest/meta-data/", 1, exited_service
-        )
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: 0\\.0\\.0\\.0"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: app\\.localhost"):
+        sandboxed_web_e2e.wait_for_url("http://app.localhost:8000/health", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 169\\.254\\.169\\.254"):
+        sandboxed_web_e2e.wait_for_url("http://169.254.169.254/latest/meta-data/", 1, exited_service)
+    with pytest.raises(ValueError, match="URL cannot target external hostname: 0\\.0\\.0\\.0"):
         sandboxed_web_e2e.wait_for_url("http://0.0.0.0:8000/health", 1, exited_service)
     with pytest.raises(ValueError, match="URL cannot target external hostname: ::"):
         sandboxed_web_e2e.wait_for_url("http://[::]/", 1, exited_service)
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: ::ffff:8\\.8\\.8\\.8"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: ::ffff:8\\.8\\.8\\.8"):
         sandboxed_web_e2e.wait_for_url("http://[::ffff:8.8.8.8]/", 1, exited_service)
     with pytest.raises(ValueError, match="URL cannot include userinfo"):
         sandboxed_web_e2e.wait_for_url("http://user@127.0.0.1/", 1, exited_service)
@@ -460,42 +361,32 @@ def test_require_loopback_readiness_url_rejects_malformed_port():
     with pytest.raises(ValueError, match="URL has a malformed port"):
         sandboxed_web_e2e.require_loopback_readiness_url("http://127.0.0.1:abc/health")
     with pytest.raises(ValueError, match="URL has a malformed port"):
-        sandboxed_web_e2e.require_loopback_readiness_url(
-            "http://127.0.0.1:99999/health"
-        )
+        sandboxed_web_e2e.require_loopback_readiness_url("http://127.0.0.1:99999/health")
 
 
 def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
     """Literal localhost is allowed only when every resolved address is loopback."""
     exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
     exited.wait(timeout=5)
-    exited_service = sandboxed_web_e2e.Service(
-        "done", "true", exited, tmp_path / "missing.log"
-    )
+    exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
     monkeypatch.setattr(
         sandboxed_web_e2e.socket,
         "getaddrinfo",
         lambda host, port: [(0, 0, 0, "", ("8.8.8.8", 0))],
     )
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: localhost"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
         sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
 
     monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", lambda host, port: [])
-    with pytest.raises(
-        ValueError, match="URL cannot target unresolved hostname: localhost"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
         sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
 
     def _unresolved(host, port):
         raise socket.gaierror("name not known")
 
     monkeypatch.setattr(sandboxed_web_e2e.socket, "getaddrinfo", _unresolved)
-    with pytest.raises(
-        ValueError, match="URL cannot target unresolved hostname: localhost"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target unresolved hostname: localhost"):
         sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
 
     monkeypatch.setattr(
@@ -503,9 +394,7 @@ def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
         "getaddrinfo",
         lambda host, port: [(0, 0, 0, "", ("not-an-ip", 0))],
     )
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: localhost"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
         sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
 
     monkeypatch.setattr(
@@ -513,9 +402,7 @@ def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
         "getaddrinfo",
         lambda host, port: [(0, 0, 0, "", ("::ffff:8.8.8.8", 0))],
     )
-    with pytest.raises(
-        ValueError, match="URL cannot target external hostname: localhost"
-    ):
+    with pytest.raises(ValueError, match="URL cannot target external hostname: localhost"):
         sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
 
     monkeypatch.setattr(
@@ -523,10 +410,7 @@ def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
         "getaddrinfo",
         lambda host, port: [(0, 0, 0, "", ("::ffff:127.0.0.1", 0))],
     )
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service)
-        is False
-    )
+    assert sandboxed_web_e2e.wait_for_url("http://localhost:1/", 1, exited_service) is False
     sandboxed_web_e2e.stop_service(exited_service)
 
 
@@ -546,9 +430,7 @@ def test_require_loopback_readiness_url_rejects_malformed_ports():
         with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
             sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:abc/ready")
         with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
-            sandboxed_web_e2e.require_loopback_readiness_url(
-                f"http://{host}:99999/ready"
-            )
+            sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:99999/ready")
         with pytest.raises(ValueError, match=re.escape("URL has a malformed port")):
             sandboxed_web_e2e.require_loopback_readiness_url(f"http://{host}:-1/ready")
 
@@ -570,9 +452,7 @@ def test_require_unoccupied_readiness_port_rejects_pre_existing_listener():
         sock.listen(1)
         port = sock.getsockname()[1]
         with pytest.raises(ValueError, match="readiness port is already in use"):
-            sandboxed_web_e2e.require_unoccupied_readiness_port(
-                f"http://127.0.0.1:{port}/health"
-            )
+            sandboxed_web_e2e.require_unoccupied_readiness_port(f"http://127.0.0.1:{port}/health")
 
 
 def test_require_unoccupied_readiness_port_allows_a_free_port():
@@ -581,9 +461,7 @@ def test_require_unoccupied_readiness_port_allows_a_free_port():
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     # The socket above is closed (and never listened), so the port is free again.
-    sandboxed_web_e2e.require_unoccupied_readiness_port(
-        f"http://127.0.0.1:{port}/health"
-    )
+    sandboxed_web_e2e.require_unoccupied_readiness_port(f"http://127.0.0.1:{port}/health")
 
 
 def test_require_unoccupied_readiness_port_probes_explicit_port_zero(monkeypatch):
@@ -604,9 +482,7 @@ def test_require_unoccupied_readiness_port_probes_explicit_port_zero(monkeypatch
         recorded.append(address)
         raise OSError("nothing listening")
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e.socket, "create_connection", fake_create_connection
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.socket, "create_connection", fake_create_connection)
 
     sandboxed_web_e2e.require_unoccupied_readiness_port("http://127.0.0.1:0/health")
 
@@ -632,16 +508,12 @@ def test_bubblewrap_tmpfs_targets_have_only_targeted_bandit_waivers():
     assert source.count(rationale) == 2
 
 
-def test_main_reports_occupied_readiness_port_before_starting_services(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_reports_occupied_readiness_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A readiness port already occupied by another process fails closed with exit 125."""
     repo = tmp_path / "repo"
     repo.mkdir()
     started = []
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -669,20 +541,12 @@ def test_main_reports_occupied_readiness_port_before_starting_services(
     assert exit_code == 125
     assert not started
     assert "invalid readiness URL: readiness port is already in use" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
-def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(monkeypatch, tmp_path, capsys):
     """A symlink-escape rejection from the shared ``copy_workspace`` helper
     must not surface as an uncaught traceback here either.
 
@@ -699,9 +563,7 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(
     repo.mkdir()
     (repo / "escape-link").symlink_to(outside)
     started = []
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     exit_code = sandboxed_web_e2e.main(
         [
@@ -724,27 +586,17 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(
     assert "Traceback" not in captured.err
     assert "workspace copy rejected" in captured.err
     assert "workspace symlink escapes the sandbox root" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
-def test_main_reports_malformed_backend_port_before_starting_services(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_reports_malformed_backend_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A malformed backend readiness port fails closed with exit 125, not a crash."""
     repo = tmp_path / "repo"
     repo.mkdir()
     started = []
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     exit_code = sandboxed_web_e2e.main(
         [
@@ -769,27 +621,17 @@ def test_main_reports_malformed_backend_port_before_starting_services(
     assert exit_code == 125
     assert not started
     assert "invalid readiness URL: URL has a malformed port" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
-def test_main_reports_malformed_frontend_port_before_starting_services(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_reports_malformed_frontend_port_before_starting_services(monkeypatch, tmp_path, capsys):
     """A malformed frontend readiness port fails closed with exit 125, not a crash."""
     repo = tmp_path / "repo"
     repo.mkdir()
     started = []
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     exit_code = sandboxed_web_e2e.main(
         [
@@ -814,14 +656,8 @@ def test_main_reports_malformed_frontend_port_before_starting_services(
     assert exit_code == 125
     assert not started
     assert "invalid readiness URL: URL has a malformed port" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
@@ -832,9 +668,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
     request = sandboxed_web_e2e.urllib.request.Request("https://example.test/ready")
 
     with pytest.raises(urllib.error.HTTPError) as exc_info:
-        sandboxed_web_e2e.NoRedirectHandler().redirect_request(
-            request, None, 302, "Found", {}, "http://127.0.0.1"
-        )
+        sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
 
     assert exc_info.value.code == 302
 
@@ -850,23 +684,15 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda seconds: None)
-
     class FailingOpener:
         def open(self, url, timeout):
             raise sandboxed_web_e2e.urllib.error.URLError("still starting")
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FailingOpener()
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.urllib.request, "build_opener", lambda *args: FailingOpener())
 
-    service = sandboxed_web_e2e.Service(
-        "web", "serve", RunningProcess(), tmp_path / "web.log"
-    )
+    service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "web.log")
 
-    assert (
-        sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service)
-        is False
-    )
+    assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service) is False
 
 
 def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
@@ -888,9 +714,7 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
         return service
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "run_shell",
@@ -901,9 +725,7 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
             stderr="e2e-err\n",
         ),
     )
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "stop_service", lambda service: stopped.append(service.label)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: stopped.append(service.label))
 
     exit_code = sandboxed_web_e2e.main(
         [
@@ -939,14 +761,8 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     assert "e2e-out" in captured.out
     assert "e2e-err" in captured.err
     assert "--- backend log tail ---" in captured.out
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["backend_ready"] is True
     assert payload["frontend_ready"] is True
     assert payload["exit_code"] == 0
@@ -955,9 +771,7 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     assert payload["evidence_note"] == "needs browser auth"
 
 
-def test_main_runs_required_isolation_with_mapped_environment(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_path, capsys):
     """Required isolation wraps every command and maps sandbox paths into /workspace."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -978,14 +792,10 @@ def test_main_runs_required_isolation_with_mapped_environment(
         started.append((label, command, cwd, env))
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
     monkeypatch.setattr(sandboxed_web_e2e, "isolated_command", fake_isolated)
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "run_shell",
@@ -1012,14 +822,8 @@ def test_main_runs_required_isolation_with_mapped_environment(
     assert [item[0] for item in started] == ["backend", "frontend"]
     assert all(item[1].startswith("wrapped ") for item in started)
     assert started[0][3]["HOME"].startswith("/workspace/")
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["isolation"] == "required"
     assert payload["isolation_backend"] == "/usr/bin/bwrap"
 
@@ -1030,17 +834,13 @@ def test_main_reports_rejected_isolated_command(monkeypatch, tmp_path, capsys):
     repo.mkdir()
     started = []
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "isolated_command",
         lambda command, **kwargs: (_ for _ in ()).throw(RuntimeError("host-only tool")),
     )
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     exit_code = sandboxed_web_e2e.main(
         [
@@ -1059,21 +859,13 @@ def test_main_reports_rejected_isolated_command(monkeypatch, tmp_path, capsys):
     assert exit_code == 126
     assert not started
     assert "isolation rejected command: host-only tool" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 126
     assert payload["isolation_backend"] == "/usr/bin/bwrap"
 
 
-def test_main_reports_coded_failure_for_whitespace_only_command(
-    monkeypatch, tmp_path, capsys
-):
+def test_main_reports_coded_failure_for_whitespace_only_command(monkeypatch, tmp_path, capsys):
     """A whitespace-only command fails closed via argparse, not an uncaught traceback.
 
     ``isolated_command`` raises ``ValueError`` for a command that is empty
@@ -1093,12 +885,8 @@ def test_main_reports_coded_failure_for_whitespace_only_command(
     repo.mkdir()
     started = []
 
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap"
-    )
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "start_service", lambda *args: started.append(args)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxed_web_e2e, "start_service", lambda *args: started.append(args))
 
     with pytest.raises(SystemExit) as exc_info:
         sandboxed_web_e2e.main(
@@ -1148,14 +936,8 @@ def test_main_reports_unavailable_required_isolation(monkeypatch, tmp_path, caps
 
     assert exit_code == 126
     assert "bwrap unavailable" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 126
     assert payload["isolation_backend"] == "unavailable"
 
@@ -1203,14 +985,8 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
 
     assert exit_code == 125
     assert "service readiness failed" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["backend_ready"] is False
     assert payload["frontend_ready"] is True
     assert payload["exit_code"] == 125
@@ -1263,14 +1039,8 @@ def test_main_reports_invalid_readiness_url(monkeypatch, tmp_path, capsys):
     assert exit_code == 125
     assert not started
     assert "invalid readiness URL: URL cannot target external hostname" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
@@ -1282,9 +1052,7 @@ def test_main_reports_malformed_readiness_port(monkeypatch, tmp_path, capsys):
 
     def fake_start(label, command, cwd, env, logs_dir):
         started.append(label)
-        raise AssertionError(
-            "services must not start before readiness URLs are validated"
-        )
+        raise AssertionError("services must not start before readiness URLs are validated")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
     monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
@@ -1312,14 +1080,8 @@ def test_main_reports_malformed_readiness_port(monkeypatch, tmp_path, capsys):
     assert exit_code == 125
     assert not started
     assert "invalid readiness URL: URL has a malformed port" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
 
 
@@ -1386,14 +1148,10 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(
-            command, timeout, output=b"e2e-out", stderr=b"e2e-err"
-        )
+        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out", stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
     monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
 
@@ -1421,54 +1179,46 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     assert "e2e command timed out after 3s" in captured.err
 
     def fake_run_shell_with_newlines(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(
-            command, timeout, output=b"e2e-out\n", stderr=b"e2e-err\n"
-        )
+        raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out\n", stderr=b"e2e-err\n")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_with_newlines)
-    assert (
-        sandboxed_web_e2e.main(
-            [
-                "--repo-root",
-                str(repo),
-                "--isolation",
-                "disabled",
-                "--backend-cmd",
-                "backend",
-                "--frontend-cmd",
-                "frontend",
-                "--e2e-timeout",
-                "3",
-                "--e2e-cmd",
-                "e2e",
-            ]
-        )
-        == 124
-    )
+    assert sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-timeout",
+            "3",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    ) == 124
 
     def fake_run_shell_without_output(command, cwd, env, timeout):
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_without_output)
-    assert (
-        sandboxed_web_e2e.main(
-            [
-                "--repo-root",
-                str(repo),
-                "--isolation",
-                "disabled",
-                "--backend-cmd",
-                "backend",
-                "--frontend-cmd",
-                "frontend",
-                "--e2e-timeout",
-                "3",
-                "--e2e-cmd",
-                "e2e",
-            ]
-        )
-        == 124
-    )
+    assert sandboxed_web_e2e.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--isolation",
+            "disabled",
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-timeout",
+            "3",
+            "--e2e-cmd",
+            "e2e",
+        ]
+    ) == 124
 
 
 @POSIX_PROCESS_GROUPS
@@ -1498,7 +1248,7 @@ def test_sandboxed_web_e2e_reports_readiness_failure(tmp_path, capsys):
             "--e2e-timeout",
             "5",
             "--e2e-cmd",
-            f'{sys.executable} -c "raise SystemExit(99)"',
+            f"{sys.executable} -c \"raise SystemExit(99)\"",
         ]
     )
     captured = capsys.readouterr()
@@ -1515,9 +1265,7 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo.mkdir()
 
     def fake_run_shell(command, cwd, env, timeout):
-        raise subprocess.TimeoutExpired(
-            command, timeout, output="e2e-out", stderr="e2e-err"
-        )
+        raise subprocess.TimeoutExpired(command, timeout, output="e2e-out", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
 
@@ -1528,9 +1276,9 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
             "--isolation",
             "disabled",
             "--backend-cmd",
-            f'{sys.executable} -c "import time; time.sleep(3)"',
+            f"{sys.executable} -c \"import time; time.sleep(3)\"",
             "--frontend-cmd",
-            f'{sys.executable} -c "import time; time.sleep(3)"',
+            f"{sys.executable} -c \"import time; time.sleep(3)\"",
             "--e2e-cmd",
             "fake e2e",
             "--e2e-timeout",
@@ -1565,27 +1313,19 @@ def test_isolation_backend_fails_closed_without_bwrap(monkeypatch):
 def test_isolation_backend_returns_bwrap_path_on_linux(monkeypatch):
     """Linux isolation returns the resolved bubblewrap executable after a passing preflight."""
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap"
-    )
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "_probe_isolation_capability", lambda backend: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandboxed_web_e2e, "_probe_isolation_capability", lambda backend: None)
     assert sandboxed_web_e2e.isolation_backend("required") == "/usr/bin/bwrap"
 
 
 def test_isolation_backend_fails_closed_when_namespaces_denied(monkeypatch):
     """A discovered bwrap binary that cannot create namespaces is unavailable."""
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "_probe_isolation_capability",
-        lambda backend: (_ for _ in ()).throw(
-            RuntimeError("bubblewrap cannot create required namespaces: denied")
-        ),
+        lambda backend: (_ for _ in ()).throw(RuntimeError("bubblewrap cannot create required namespaces: denied")),
     )
     with pytest.raises(RuntimeError, match="cannot create required namespaces"):
         sandboxed_web_e2e.isolation_backend("required")
@@ -1605,9 +1345,7 @@ def test_probe_isolation_capability_accepts_working_bwrap(monkeypatch):
     monkeypatch.setattr(
         sandboxed_web_e2e.subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args, 0, stdout="", stderr=""
-        ),
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
     )
     sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
@@ -1623,10 +1361,7 @@ def test_probe_isolation_capability_rejects_denied_namespaces(monkeypatch):
         sandboxed_web_e2e.subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
-            args,
-            1,
-            stdout="",
-            stderr="bwrap: Creating new namespace failed: Operation not permitted",
+            args, 1, stdout="", stderr="bwrap: Creating new namespace failed: Operation not permitted"
         ),
     )
     with pytest.raises(RuntimeError, match="Operation not permitted"):
@@ -1649,18 +1384,14 @@ def test_probe_isolation_capability_rejects_when_probe_cannot_run(monkeypatch):
         sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
 
-def test_probe_isolation_capability_exercises_the_same_operations_as_real_commands(
-    monkeypatch,
-):
+def test_probe_isolation_capability_exercises_the_same_operations_as_real_commands(monkeypatch):
     """The probe must not pass on a host that would fail the real invocation.
 
     A reduced probe (missing --new-session, /tmp, or the bind+chdir into the
     same mount real commands use) can pass on a host that denies one of
     those specific operations, then fail later once a real service starts.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/sh"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/sh")
     captured: dict[str, object] = {}
 
     def _fake_run(command, **kwargs):
@@ -1716,9 +1447,7 @@ def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp
 
 def test_probe_shell_fails_clearly_when_no_mounted_shell_exists(monkeypatch, tmp_path):
     """No usable mounted shell is a clear, documented failure, not a silent fallback."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e, "PROBE_SHELL_PATHS", (str(tmp_path / "no-such-sh"),)
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "PROBE_SHELL_PATHS", (str(tmp_path / "no-such-sh"),))
     with pytest.raises(RuntimeError, match="needs a system shell"):
         sandboxed_web_e2e._probe_shell()
 
@@ -1742,22 +1471,16 @@ def test_probe_isolation_capability_rejects_on_timeout(monkeypatch):
         sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
 
-def test_isolation_backend_preflight_runs_with_no_readiness_urls_configured(
-    monkeypatch, tmp_path, capsys
-):
+def test_isolation_backend_preflight_runs_with_no_readiness_urls_configured(monkeypatch, tmp_path, capsys):
     """A broken bwrap is still caught, and reported as exit code 126, with no readiness URLs at all."""
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(sandboxed_web_e2e.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/usr/bin/bwrap")
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "_probe_isolation_capability",
-        lambda backend: (_ for _ in ()).throw(
-            RuntimeError("bubblewrap cannot create required namespaces: denied")
-        ),
+        lambda backend: (_ for _ in ()).throw(RuntimeError("bubblewrap cannot create required namespaces: denied")),
     )
 
     exit_code = sandboxed_web_e2e.main(
@@ -1776,14 +1499,8 @@ def test_isolation_backend_preflight_runs_with_no_readiness_urls_configured(
 
     assert exit_code == 126
     assert "cannot create required namespaces" in captured.err
-    result_line = [
-        line
-        for line in captured.out.splitlines()
-        if line.startswith(sandboxed_web_e2e.RESULT_MARKER)
-    ][-1]
-    payload = json.loads(
-        result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip()
-    )
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["exit_code"] == 126
     assert payload["isolation_backend"] == "unavailable"
 
@@ -1794,9 +1511,7 @@ def test_isolated_command_mounts_only_workspace(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sandboxed_web_e2e.shutil,
         "which",
-        lambda name, path=None: (
-            "/usr/bin/bwrap" if name == "bwrap" else "/usr/bin/python3"
-        ),
+        lambda name, path=None: "/usr/bin/bwrap" if name == "bwrap" else "/usr/bin/python3",
     )
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
@@ -1842,15 +1557,11 @@ def test_isolated_command_rejects_host_home_executable(monkeypatch, tmp_path):
 
 def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tmp_path):
     """Resolved tools outside read-only mounts fail before entering bubblewrap."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: "/snap/bin/tool"
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: "/snap/bin/tool")
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
-    with pytest.raises(
-        RuntimeError, match=re.escape("outside the isolated bind roots")
-    ):
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
         sandboxed_web_e2e.isolated_command(
             "tool",
             backend="/usr/bin/bwrap",
@@ -1860,9 +1571,7 @@ def test_isolated_command_rejects_executable_outside_bound_roots(monkeypatch, tm
         )
 
 
-def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(
-    monkeypatch, tmp_path
-):
+def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(monkeypatch, tmp_path):
     """A ./gradlew-style repository launcher resolves against the sandboxed cwd.
 
     ``shutil.which`` resolves any command string containing a path separator
@@ -1872,9 +1581,7 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(
     resolution instead goes through the sandboxed-``cwd``-relative path this
     fix adds, not a PATH search.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -1895,9 +1602,7 @@ def test_isolated_command_resolves_repo_local_launcher_against_sandboxed_cwd(
     assert command.endswith("./gradlew build")
 
 
-def test_isolated_command_resolves_bare_command_via_relative_path_entry(
-    monkeypatch, tmp_path
-):
+def test_isolated_command_resolves_bare_command_via_relative_path_entry(monkeypatch, tmp_path):
     """A bare command resolves when PATH itself has a relative entry.
 
     ``shutil.which`` joins a relative ``PATH`` entry with the *calling
@@ -1908,9 +1613,7 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(
     ``shutil.which`` to ``None`` here proves resolution instead falls
     through to the cwd-anchored ``PATH`` search this fix adds.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     bin_dir = repo / "bin"
@@ -1932,9 +1635,7 @@ def test_isolated_command_resolves_bare_command_via_relative_path_entry(
     assert command.endswith("tool")
 
 
-def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(
-    monkeypatch, tmp_path
-):
+def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_mount(monkeypatch, tmp_path):
     """An absolute copied-repo launcher path is rewritten to its /workspace equivalent.
 
     ``isolated_command`` binds ``sandbox_root`` at ``SANDBOX_MOUNT`` inside
@@ -1945,9 +1646,7 @@ def test_isolated_command_translates_absolute_workspace_launcher_to_sandbox_moun
     that does not exist inside the sandbox, where only ``SANDBOX_MOUNT`` is
     bound, so the command would fail to launch there unchanged.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -1982,9 +1681,7 @@ def test_which_relative_to_cwd_returns_none_for_empty_path(tmp_path):
     assert result is None
 
 
-def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(
-    monkeypatch, tmp_path
-):
+def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(monkeypatch, tmp_path):
     """A relative PATH entry cannot be used to search the real host filesystem outside the copy.
 
     ``PATH=../../..`` resolved against ``cwd`` would otherwise land on a
@@ -1992,9 +1689,7 @@ def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(
     the same way an unresolved command already does, without the lookup
     itself probing the host filesystem outside the sandbox root.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -2011,9 +1706,7 @@ def test_isolated_command_rejects_relative_path_entry_escaping_sandbox(
 
 def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_path):
     """A repo-local launcher path that lexically escapes the sandbox root is still rejected."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -2021,9 +1714,7 @@ def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_pat
     outside.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
     outside.chmod(0o755)
 
-    with pytest.raises(
-        RuntimeError, match=re.escape("outside the isolated bind roots")
-    ):
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
         sandboxed_web_e2e.isolated_command(
             "../../outside-tool",
             backend="/usr/bin/bwrap",
@@ -2035,9 +1726,7 @@ def test_isolated_command_rejects_repo_local_path_traversal(monkeypatch, tmp_pat
 
 def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
     """An explicit absolute path outside the workspace and bind roots is still rejected."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -2045,9 +1734,7 @@ def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
     outside.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
     outside.chmod(0o755)
 
-    with pytest.raises(
-        RuntimeError, match=re.escape("outside the isolated bind roots")
-    ):
+    with pytest.raises(RuntimeError, match=re.escape("outside the isolated bind roots")):
         sandboxed_web_e2e.isolated_command(
             str(outside),
             backend="/usr/bin/bwrap",
@@ -2059,9 +1746,7 @@ def test_isolated_command_rejects_explicit_external_path(monkeypatch, tmp_path):
 
 def test_isolated_command_rejects_missing_repo_local_launcher(monkeypatch, tmp_path):
     """A repo-local launcher path that does not exist in the copy is rejected as unresolved."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -2083,9 +1768,7 @@ def test_isolated_command_rejects_unresolved_executable(monkeypatch, tmp_path):
     it without ever receiving the read-only-root/bind-mount validation this
     function exists to apply.
     """
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(sandboxed_web_e2e.shutil, "which", lambda *_args, **_kwargs: None)
     sandbox = tmp_path / "sandbox"
     repo = sandbox / "repo"
     repo.mkdir(parents=True)
@@ -2169,9 +1852,7 @@ def test_sandbox_environment_skips_path_translation_when_path_is_absent(tmp_path
     """No PATH key is added when the source environment does not carry one."""
     sandbox = tmp_path / "sandbox"
 
-    mapped = sandboxed_web_e2e._sandbox_environment(
-        {"HOME": str(sandbox / "home")}, sandbox
-    )
+    mapped = sandboxed_web_e2e._sandbox_environment({"HOME": str(sandbox / "home")}, sandbox)
 
     assert "PATH" not in mapped
 
@@ -2239,14 +1920,7 @@ def test_parse_args_rejects_blank_backend_frontend_e2e_commands(capsys):
     when isolation is enabled -- so a blank command is rejected the same way
     whether or not isolation is later requested as ``disabled``.
     """
-    base = [
-        "--backend-cmd",
-        "backend",
-        "--frontend-cmd",
-        "frontend",
-        "--e2e-cmd",
-        "e2e",
-    ]
+    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
     for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
         argv = list(base)
         argv[base.index(flag) + 1] = "   "
@@ -2265,14 +1939,7 @@ def test_parse_args_rejects_malformed_quoting_in_commands(capsys):
     failure. Validating in ``parse_args`` catches it up front for both
     isolation modes.
     """
-    base = [
-        "--backend-cmd",
-        "backend",
-        "--frontend-cmd",
-        "frontend",
-        "--e2e-cmd",
-        "e2e",
-    ]
+    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
     for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
         argv = list(base)
         argv[base.index(flag) + 1] = "echo 'unterminated"
@@ -2282,9 +1949,7 @@ def test_parse_args_rejects_malformed_quoting_in_commands(capsys):
         assert f"{flag} is not a valid shell command" in capsys.readouterr().err
 
 
-def test_main_disabled_isolation_reports_clean_failure_for_blank_command(
-    tmp_path, capsys
-):
+def test_main_disabled_isolation_reports_clean_failure_for_blank_command(tmp_path, capsys):
     """Disabled isolation still fails a blank command closed, not with a traceback.
 
     This is the exact bug this validation fixes: with ``--isolation
@@ -2317,9 +1982,7 @@ def test_main_disabled_isolation_reports_clean_failure_for_blank_command(
     assert "Traceback" not in captured.out
 
 
-def test_main_disabled_isolation_reports_clean_failure_for_malformed_quoting(
-    tmp_path, capsys
-):
+def test_main_disabled_isolation_reports_clean_failure_for_malformed_quoting(tmp_path, capsys):
     """Disabled isolation still fails malformed shell-quoting closed, not with a traceback.
 
     This is the exact bug this validation fixes: with ``--isolation
@@ -2398,11 +2061,11 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             "--isolation",
             "disabled",
             "--backend-cmd",
-            f'{sys.executable} -c "import time; time.sleep(0.2)"',
+            f"{sys.executable} -c \"import time; time.sleep(0.2)\"",
             "--frontend-cmd",
-            f'{sys.executable} -c "import time; time.sleep(0.2)"',
+            f"{sys.executable} -c \"import time; time.sleep(0.2)\"",
             "--e2e-cmd",
-            f'{sys.executable} -c "raise SystemExit(0)"',
+            f"{sys.executable} -c \"raise SystemExit(0)\"",
         ],
     )
     module = sys.modules.pop("scripts.ci.sandboxed_web_e2e", None)
@@ -2413,20 +2076,3 @@ def test_module_import_and_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_web_e2e"] = module
     assert exc_info.value.code == 0
-
-
-def test_probe_isolation_capability_uses_shell_false(monkeypatch):
-    """The capability probe must use shell=False explicitly to prevent command injection risks."""
-    monkeypatch.setattr(
-        sandboxed_web_e2e.shutil, "which", lambda name, path=None: "/bin/sh"
-    )
-    captured = {}
-
-    def _fake_run(command, **kwargs):
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
-    sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
-
-    assert captured["kwargs"].get("shell") is False

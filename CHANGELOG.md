@@ -5,6 +5,267 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Pin the three central required review workflows (Strix, OpenCode Review, Noema Review) off the observed starved floating `ubuntu-latest` runner image.** Following the same repair already rolled out to security gates (`#1618`) and the merge scheduler (`#1609`), `strix.yml`, `opencode-review.yml`, and `noema-review.yml` now request the explicit `ubuntu-24.04` image on every job. These three workflows are the org's own required-workflow gate for every sibling repository, so a starved floating image here directly contributes to organization-wide required-check queuing. New `tests/test_required_review_runner_image_contract.py` asserts no job in any of the three files still requests the floating image. Also fixed 4 pre-existing, unrelated test failures on `main` left by `#1630`'s organization-sweep rotation cadence change (every 15 minutes to hourly, to reduce control-plane pressure under the same Actions saturation): `tests/test_required_workflow_queue_contract.py`'s rotation-index tests still asserted the old `/ 900` (15-minute) divisor against the new `/ 3600` (hourly) production value.
+- **Refresh Noema reviewer App authority after long model work (`#1616`).** A real `naruon#1497` review outlived its repository-scoped GitHub App installation token and failed the next exact-head GitHub operation with HTTP 401. The trusted workflow now prepares the validated verdict into a private runner-local envelope, remints the same least-privilege repository-scoped App authority after model work, independently re-fetches exact live head/reviewer identity, and only then publishes. Skipped preparation creates no envelope, predecessor App tokens cannot authorize publication, PAT/OIDC remain explicit fail-closed sources, malformed handoffs are cleaned up, and executable plus step-scoped regressions cover stale-head, identity, alias, workflow wiring, and migration of legacy broader-suite contracts away from the retired single-process reviewer path.
+- Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
+  `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
+  `noema_review_handoff.py`'s `noema_review_state()` can never recognize such a review as a
+  valid current-head verdict (its trusted-span helpers return empty without the footer marker),
+  so an unchanged PR carrying only a legacy review would stall forever: the gate skips
+  republishing believing it is done, and the handoff never accepts what was already posted.
+  `existing_noema_review()` now also requires `NOEMA_REVIEW_FOOTER_MARKER` before treating a
+  review as already covering the head, so a legacy review no longer suppresses a rerun that
+  would publish a current-format replacement.
+- Fix a broken CI contract test that was blocking every open `.github`-repo
+  PR: `test_strix_quick_gate.sh`'s
+  `assert_opencode_review_uses_codegraph_and_contextual_orchestrator` used an
+  `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` range to isolate that
+  one job's YAML block in `opencode-review.yml`, intending to assert it has
+  no `if:` condition on any step (a real trust-boundary invariant: this
+  bootstrap job must never depend on event-payload fields). Because job keys
+  in that file are always 2-space indented, `/^[^ ]/` (a truly unindented
+  line) never matches anywhere in the `jobs:` section, so the range never
+  closed and silently swallowed every job defined after
+  `required-workflow-bootstrap` too — including the unrelated,
+  legitimate `if: github.event.action != 'closed'` on a completely different
+  job's step. `required-workflow-bootstrap` itself has always had zero `if:`
+  conditions; only the test's own job-scoping was wrong. Replaced the range
+  with an explicit awk state machine that starts at the bootstrap job header
+  and stops at the next 2-space-indented job key, so it correctly isolates
+  only that job's steps.
+- Close a 99% `scripts/ci` coverage regression on protected main: merged #1546 added an
+  uncovered `live_head_matches` helper, an uncovered no-active/no-stale-runs fall-through in
+  `prepare_autofix_slot`, and an uncovered "current-head autofix run is already queued or
+  running" wait path in `pr_review_fix_scheduler.py::inspect_pr`, while the pre-existing
+  conflicted-draft and conflicted-unauthorized `inspect_pr` returns and the REST
+  `fetch_workflow_names_by_check_suite_rest` pagination/name-filtering/permission-denied paths
+  in `pr_review_merge_scheduler.py` remained untested. Every PR rebasing onto main inherited
+  this failure via the `coverage-evidence` required check regardless of its own diff; this adds
+  test-only coverage for all of the above with no production code change.
+- Fix two `tests/test_contextual_orchestrator_review_policy.py` tests left broken by merged
+  `#1587` ("separate free-pool admission from global discovery"), which intentionally excluded
+  `OPENAI_API_KEY` from `FREE_POOL_CREDENTIAL_NAMES` but did not update
+  `test_build_catalog_applies_account_cap` and `test_build_catalog_respects_limit`, both of which
+  still built discovery reports using `openai` rows and asserted they were admitted to the free
+  pool. Every full-suite/coverage-evidence run on protected `main` (and every PR rebasing onto it)
+  inherited these two failures regardless of its own diff. Swapped the `openai` rows in both tests
+  for `bytez` (also `is_free`-eligible but, unlike `openai`, still in `FREE_POOL_CREDENTIAL_NAMES`),
+  preserving each test's original intent — three distinct provider accounts each capped at 2, and a
+  single provider's rows truncated to the configured limit — without depending on the now-removed
+  OpenAI free-pool admission. No production code changed.
+- **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
+  Building on the draft-poll exemption's live PR/head validation, Devin Review found two
+  further defects. (1) The concurrency group was keyed only by repository and PR number, so
+  a delayed run for an *older* head could cancel the *newer*, authoritative head's still-valid
+  run before that older run's own live-head check ever had a chance to reject it (GitHub cancels
+  whichever run is currently active in a group with no notion of "older"/"newer"). Fixed by also
+  scoping the group by exact head SHA, so different heads no longer share a cancellation domain
+  while same-head events (a `converted_to_draft`/`ready_for_review` transition, a `synchronize`
+  retry) still do. (2) A delayed non-closed event ignored a live-closed PR, since `live_pr` only
+  ever extracted `head` and `draft`. Both admission blocks now also validate live `state` and exit
+  before any further API call when it is `"closed"`, failing closed on a missing, null,
+  non-string, or otherwise unrecognized value rather than assuming open. New regressions: a
+  structural contract test for the head-scoped concurrency group; step-body coverage for a stale
+  non-closed event against a live-closed PR (both admission steps), live-closed state taking
+  precedence over a stale live-draft flag, and each invalid `state` shape failing closed. Full
+  suite: 2294 passed, 1 skipped, 21 subtests; `scripts/ci` coverage and docstrings both 100%.
+  A third Devin Review round then found that head-scoping the concurrency group above, while
+  fixing the wrong-direction cancellation, also disabled the legitimate one: a genuine new
+  commit no longer cancels its own PR's now-obsolete previous-head poll, which would otherwise
+  occupy a runner until GitHub's own per-job ceiling. Added a `cancel-superseded-opencode-review-runs`
+  job, scoped to `synchronize` events, mirroring the already-established live-head-validated
+  cleanup pattern in `strix.yml`'s `cancel-superseded-pr-runs` job: it re-verifies the live head
+  immediately before both listing candidates and cancelling each one, so a delayed/stale
+  invocation of this same job cannot itself wrongly cancel a still-authoritative run. New
+  regressions: the embedded run-selection `jq` filter executed against synthetic run payloads
+  (superseded-run selection, current-head/self-run/other-PR/other-workflow exclusion, and
+  `pull_requests[]` metadata matching), plus a structural test for the job's trigger and
+  permissions. Full suite: 2301 passed, 1 skipped, 21 subtests; coverage and docstrings both 100%.
+- **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
+  of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
+  `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
+  outside the surrounding `try`/`except`, which only guarded the JSON-decode and
+  validation steps after a successful response. A genuine `HTTP Error 502: Bad
+  Gateway` from the completion request therefore crashed the whole required
+  check with an unhandled traceback instead of getting the same one-time
+  repair-retry the malformed-verdict path already has. Widened the `try` to
+  also cover the request itself and added `urllib.error.URLError` alongside
+  `RuntimeError` to the existing repair-retry `except` clause — a transient
+  transport failure now gets one retry, then fails closed with a clean
+  `RuntimeError` on a second failure, exactly like a malformed verdict already
+  does. Verified genuine RED (the exact `HTTPError: Bad Gateway` reproduced
+  uncaught) before the fix, GREEN after; full suite 2248 passed, 1 skipped, 21
+  subtests. (Repo-wide coverage independently confirmed at 99% both before and
+  after this change — a pre-existing gap in
+  `pr_review_fix_scheduler.py`/`pr_review_merge_scheduler.py` unrelated to this
+  diff.) Devin Review then found the transport-error boundary still missed a
+  mid-response failure: `response.read()` can raise `http.client
+  .IncompleteRead` (or another `http.client.HTTPException`/raw `OSError`) when
+  the server closes the connection before delivering the full
+  `Content-Length` body, and none of those are `RuntimeError` or
+  `urllib.error.URLError`. Widened the `except` clause to
+  `(RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError)`
+  and simplified the repair-retry re-raise to "re-raise as-is only when it's
+  already our own `RuntimeError`; otherwise wrap in a clean `RuntimeError`" so
+  the fail-closed behavior generalizes to any transport exception type rather
+  than needing another isinstance check added per exception class. Verified
+  genuine RED (`IncompleteRead` reproduced uncaught) before this second fix,
+  GREEN after. A third distinct exception path (a raw `TimeoutError` reaching
+  `opener.open()` directly, never wrapped as `URLError`) was added per the
+  repo owner's explicit request on `#1566` for at least one timeout/disconnect
+  family exercising a genuinely different branch than the HTTPError/URLError
+  and IncompleteRead cases above — also RED→GREEN verified. Full suite 2252
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` itself at 100%
+  line/branch coverage. (A separate, pre-existing SIGPIPE flake in
+  `tests/test_opencode_required_verdict_regression.py`, unrelated to this
+  file, was also reproduced and fixed in its own PR during this verification.)
+  Devin Review then found a fourth, distinct bug in the fix itself: gating the
+  retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is
+  this the second attempt" with "does the caught exception have display
+  text" — several transport exceptions (a bare `OSError()`/`TimeoutError()`,
+  or an `http.client.HTTPException` raised with no message) stringify to an
+  empty string, so an empty-message failure on the first attempt would keep
+  `repair_error` falsy on the recursive call too and retry unboundedly instead
+  of failing closed after one attempt. Added an explicit `is_retry: bool`
+  parameter to track retry state independently of the exception's text, used
+  it (not `repair_error`) as the sole gate in both the prompt-injection branch
+  and the except clause, and threaded it through the recursive call. Verified
+  genuine RED with a bounded-recursion regression test (an `AssertionError`
+  fires if `call_llm` retries more than once, rather than letting it recurse
+  to CPython's own limit) before this fourth fix, GREEN after. Full suite 2254
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at 100%
+  line/branch coverage, 100% docstrings.
+- Avoid redundant merge-scheduler wakes when the trusted receipt predicate
+  already finds a substantive exact-head OpenCode verdict. Missing, stale, or
+  fallback-only evidence still dispatches review work, while receipt lookup or
+  parsing failures remain fail-closed. The shared predicate explicitly rejects
+  fallback markers even when a normal overview heading is present, and its
+  live Reviews API reader slurps and flattens every pagination page.
+- Grant the Strix stale-run cleanup job read-only pull-request access so its
+  job token can revalidate live heads in private repositories when optional
+  scheduler credentials are unavailable.
+- Fail closed when the first top-level Noema JSON candidate is malformed,
+  preventing a later approval object from overriding malformed preface data;
+  multiple-object output remains supported when its first object is valid.
+- Restore the exact-head dispatch contract after the default-branch rollback:
+  queued requests whose supplied head no longer matches the live pull request
+  fail before model work, and the workflow security assertions and reviewed
+  blob pin now enforce that behavior.
+- Reject excessively nested Noema LLM JSON responses with an explicit,
+  string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
+  checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of
+  relying on `raw_decode`'s own recursion behavior to reject deep input
+  (review follow-up on #1507): a real 20,000-level-deep payload raises
+  `RecursionError` from the C-accelerated scanner on Python 3.11-3.13 but
+  decodes successfully with no exception at all on the Python 3.14 hosted
+  runner this job actually runs on, so relying on that behavior made the
+  fail-closed guarantee a property of whichever CPython version happened to
+  run the job rather than of this code. Restored the excessive-nesting
+  regression to a real deep payload (not a monkeypatch) now that this bound
+  makes the real case reproducible everywhere; the synthetic
+  `RecursionError`-from-the-decoder test remains as supplemental coverage.
+- Match JSON delimiter types while discovering Noema verdict candidates, so
+  malformed wrappers such as `[}` or `{]` cannot release a later nested
+  object as an apparently top-level verdict.
+- Convert JSON decoder recursion failures from deeply nested Noema responses
+  into the existing bounded, fingerprinted fail-closed diagnostic instead of
+  allowing an unhandled `RecursionError` to crash the required review.
+- Restrict wrapped Noema JSON recovery to top-level brace groups so a valid
+  nested object cannot escape a malformed outer object and become a verdict.
+- Keep Noema's native concurrency head-specific, then explicitly cancel the
+  same PR's older-head runs only after a `pull_request_target` event proves its
+  payload SHA is still live. New commits stop obsolete four-hour model calls,
+  while delayed workflow events and manual reruns of old attempts cannot
+  cancel the current-head review; cleanup rejects newer run ids and rechecks
+  the live head before each cancellation. Guard that per-cancellation
+  live-head re-check against a transient `gh api` failure (Devin review on
+  #1507): it was an unguarded command substitution under `set -euo
+  pipefail`, so a rate limit or network blip on that one ancillary call
+  would exit the whole cleanup step non-zero and fail the job, blocking a
+  perfectly valid, live-head Noema review over a housekeeping hiccup
+  unrelated to the review itself. Treat "cannot verify" the same as
+  "verified stale": stop cancelling further runs, but exit 0 so the job --
+  and the actual review later in it -- proceeds.
+- Prevent a cancelled upstream `workflow_run` notification from cancelling a
+  live same-head Noema review and then skipping its own Noema job. The shared
+  head-specific group remains serialized, but cancelled upstream completions
+  no longer receive `cancel-in-progress` authority and use a run-unique group,
+  so GitHub cannot evict an already-pending actionable review either.
+- Replace the required OpenCode workflow's two chained 325-minute polling jobs
+  with event-driven continuation. The required run dispatches the authenticated
+  multi-hour review, checks once, and fails closed without retaining a hosted
+  runner; after a formal exact-head receipt is published, the privileged
+  dispatch reruns only that required run's failed job. Long model and coverage
+  budgets remain unchanged. Fork PRs still fail closed before dispatch;
+  maintainers must first materialize them on a trusted base-repository branch.
+  The required workflow passes its immutable run ID in the authenticated
+  dispatch; the continuation fetches that target-repository run directly and
+  revalidates its event, central workflow path, and live PR `head_sha` before
+  rerunning it, independent of queue duration. Scheduler-originated review
+  retries now carry the same run ID parsed from the required check's GitHub
+  Actions details URL, so their valid receipts wake the failed required job too.
+  The wake step now uses its job-scoped `actions: write` workflow token only for
+  native runs and requires `PR_REVIEW_MERGE_TOKEN` or
+  `OPENCODE_APPROVE_TOKEN` for sibling runs; it no longer falls through to the
+  review-only OpenCode app token or an unusable central workflow token.
+- Skip Noema's one-time repair-retry LLM request when the PR head has moved
+  since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
+  now takes `expected_head` and re-checks it against a fresh `fetch_pr`
+  lookup, lowercased like `inspect_and_review`'s existing two stale-head
+  checks, before firing the retry — avoiding a second, potentially
+  multi-hour `NOEMA_LLM_TIMEOUT_SECONDS` call for a verdict
+  `inspect_and_review`'s own post-call check would have discarded anyway. A
+  new `StaleHeadDuringRepairRetryError` reports this distinctly from the
+  existing "stale before model work" / "stale before publication" cases,
+  and `inspect_and_review` treats it the same way: a clean skip, not a
+  failure.
+- Re-pin the reviewed-blob contract test's SHA to the current
+  `opencode-review-dispatch.yml` content after the review run timeout change,
+  restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.
+- Let Contextual Orchestrator use the full 11,700-second review budget in every
+  cadence and the central-review fallback, so reviews exceeding two hours are
+  bounded only by the existing provider-pool watchdog.
+- Cancel queued and running Noema reviews from every historical head group when
+  their pull request closes, preventing abandoned model calls from consuming
+  runner capacity for the long-running review window. Selection is scoped by PR
+  number only (the run's structured display title), never by a bare shared
+  head SHA, so a different open PR that happens to share a commit is never
+  swept up. The five active-status queries stay repository-scoped and
+  server-side status-filtered (not a per-workflow-file, unfiltered-then-
+  client-filtered snapshot, which is not guaranteed to resolve for the
+  sibling-repository runs this cleanup exists to cancel) and now re-scan for
+  up to three bounded passes so a run transitioning between statuses
+  mid-sweep is still caught.
+- Reject caller-controlled uppercase Noema trigger SHAs before model work so
+  equivalent SHA casing cannot create concurrent duplicate reviews.
+- Bind Noema workflow concurrency to the triggering PR head so a delayed
+  OpenCode/Strix completion from an older head cannot cancel the current-head
+  review run. The trigger head is also checked against the live PR before
+  credential/model setup and again before review publication, preventing a
+  stale run from reviewing or publishing against a newer live head. Completion
+  events use the associated pull request's head rather than the workflow's
+  trusted base SHA, and hexadecimal comparison is case-insensitive.
+- Keep the Noema malformed-response UUID fixture covered by gitleaks without
+  weakening the secret gate: the historical ignore is limited to the exact
+  superseded commit, test path, rule, and line, with an executable contract.
+- Allow a Contextual Orchestrator-backed Noema review request to run for up to
+  four hours instead of failing long reviews at a hard-coded 120 seconds.
+- Stop logging raw (even regex-scrubbed) LLM response text in Noema's
+  malformed-JSON fail-closed diagnostic (Devin Review security finding on
+  PR #1507): `noema-review.yml` is a `pull_request_target` workflow with
+  public Actions logs, and a finite secret-scrub pattern list cannot
+  guarantee an LLM-echoed or hallucinated credential in an unrecognized
+  shape is caught. `extract_json_object` now logs only a content length and
+  a SHA-256 fingerprint. Also close a related unhandled-crash gap: a
+  malformed OpenAI-compatible HTTP envelope (non-JSON body, non-object
+  top-level JSON, wrong-shaped `choices`/`message`, non-string `content`)
+  previously crashed `call_llm` before it ever reached the JSON-repair
+  boundary; a new `extract_llm_message_content` validates the envelope
+  explicitly and now shares the same one-time repair-retry and fail-closed
+  `RuntimeError` path as a malformed verdict.
+- Give Noema one bounded schema-repair request when Contextual Orchestrator
+  returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
+  if the corrected response is still invalid.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
@@ -764,6 +1025,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Prefer the job-scoped `github.token` when the central OpenCode dispatch
+  publishes a commit status back to the same `.github` repository. The job's
+  declared `statuses: write` permission now reaches the endpoint instead of an
+  unrelated OpenCode App installation token that can lack commit-status write
+  permission; cross-repository status publication keeps the existing explicit
+  PAT/App credential chain.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.
@@ -787,7 +1054,6 @@ Semantic Versioning where the repository publishes a release.
   `gpt-5.6-luna` was retired. This prevents every consumer repository's
   required Strix check from failing on a stale central assertion or selecting a
   nonexistent direct model.
-
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.
