@@ -1,0 +1,46 @@
+name: Temporary PR 1606 merge conflict inspection
+
+on:
+  push:
+    branches:
+      - fix/noema-truncated-completion-contract-20260901
+    paths:
+      - .github/workflows/tmp-pr1606-merge-inspect.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Inspect semantic conflicts against protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git fetch https://github.com/ContextualWisdomLab/.github.git main
+          main_sha="$(git rev-parse FETCH_HEAD)"
+          git config user.name contextualwisdomlab-inspector
+          git config user.email contextualwisdomlab-inspector@users.noreply.github.com
+          set +e
+          git merge --no-commit --no-ff "$main_sha"
+          rc="$?"
+          set -e
+          echo "merge_rc=$rc"
+          echo "main_sha=$main_sha"
+          git status --short
+          if [ "$rc" -ne 0 ]; then
+            for path in $(git diff --name-only --diff-filter=U); do
+              echo "===== CONFLICT: $path ====="
+              git checkout --conflict=merge -- "$path"
+              sed -n '1,2200p' "$path"
+            done
+          fi
+          exit 0
