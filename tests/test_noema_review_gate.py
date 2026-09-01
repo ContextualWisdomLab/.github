@@ -540,6 +540,7 @@ def test_inspect_and_review_rechecks_for_a_concurrent_submission_before_posting(
     monkeypatch.setattr(noema, "fetch_pr", fake_fetch_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: [])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))

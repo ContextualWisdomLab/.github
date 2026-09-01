@@ -5,6 +5,14 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Merged `main` into `fix/noema-review-race-and-dead-field` to resolve a real conflict in
+  `scripts/ci/noema_review_gate.py`'s `inspect_and_review`: this branch's pre-POST re-check for a
+  concurrent Noema submission (narrowing the duplicate-verdict race window to one GraphQL round trip)
+  and `main`'s newly-landed `changed_paths` threading into `call_llm` both touched the same call site.
+  Kept both — the re-check now runs after the `changed_paths`-aware `call_llm` call. Updated
+  `test_inspect_and_review_rechecks_for_a_concurrent_submission_before_posting` to mock the
+  now-present `fetch_changed_file_paths` call (previously unmocked in this branch, so it fell through
+  to a real `gh` subprocess call and failed with `FileNotFoundError` once merged).
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
