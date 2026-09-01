@@ -1,4 +1,4 @@
-"""Regression coverage for bounded-latency review-sidecar startup preflight."""
+"""Regression coverage for evidence-backed review-sidecar preflight concurrency."""
 
 from __future__ import annotations
 
@@ -11,22 +11,45 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 
 
-class _BarrierProbeClient:
-    """Require every catalog route to enter transport before any may complete."""
+class _ProviderBarrierProbeClient:
+    """Require independent providers to progress together without same-account bursts."""
 
-    def __init__(self, agent_count: int) -> None:
-        self._barrier = threading.Barrier(agent_count, timeout=0.5)
-        self.calls: list[str] = []
+    def __init__(self, provider_count: int) -> None:
+        self._provider_count = provider_count
+        self._started_providers: set[str] = set()
+        self._active_by_provider: dict[str, int] = {}
+        self._providers_started = threading.Event()
         self._lock = threading.Lock()
+        self.calls: list[str] = []
+        self.same_provider_overlap = False
 
-    def proxy_send_once(self, agent: object, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
-        """Fail a sequential implementation while allowing concurrent probes through."""
+    def proxy_send_once(
+        self, agent: object, endpoint: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        """Expose both cross-provider progress and same-provider overlap deterministically."""
         assert endpoint == "chat/completions"
         assert payload["max_tokens"] == 16
+        provider = str(getattr(agent, "provider_name"))
         with self._lock:
+            active = self._active_by_provider.get(provider, 0)
+            if active:
+                self.same_provider_overlap = True
+            self._active_by_provider[provider] = active + 1
+            self._started_providers.add(provider)
             self.calls.append(str(getattr(agent, "id")))
-        self._barrier.wait()
-        return {"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}
+            if len(self._started_providers) >= self._provider_count:
+                self._providers_started.set()
+
+        if not self._providers_started.wait(timeout=0.5):
+            raise RuntimeError("independent provider probes did not start concurrently")
+
+        with self._lock:
+            self._active_by_provider[provider] -= 1
+        return {
+            "choices": [
+                {"finish_reason": "stop", "message": {"content": "OK"}}
+            ]
+        }
 
 
 def _load_launcher() -> dict[str, object]:
@@ -34,22 +57,23 @@ def _load_launcher() -> dict[str, object]:
     return runpy.run_path(str(_LAUNCHER))
 
 
-def test_full_catalog_preflight_starts_routes_concurrently_and_preserves_evidence_order() -> None:
-    """A slow first route must not serialize every later admitted route at startup.
+def test_preflight_parallelizes_independent_providers_without_same_account_burst() -> None:
+    """Provider accounts are concurrent lanes, while routes sharing one stay serialized.
 
-    This is the executable regression for the externally demonstrated false
-    negative on PR #1629: sequential startup work made review latency scale as
-    the sum of per-provider delays and could consume the workflow deadline
-    before the sidecar began serving.  The barrier makes that defect causal and
-    deterministic rather than asserting a fragile wall-clock threshold.
+    The review fleet has observed shared-key 429 storms when every model backed by
+    one credential starts at once. Admission still includes the full catalog;
+    only transport concurrency is keyed by the independently credentialed
+    provider/account identity. Distinct providers must make progress together,
+    and completion timing must not reorder persisted evidence.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
     agents = [
-        SimpleNamespace(id=f"route_{index}", provider_name="provider", model=f"model-{index}")
-        for index in range(3)
+        SimpleNamespace(id="provider_a_model_1", provider_name="provider_a", model="model-1"),
+        SimpleNamespace(id="provider_a_model_2", provider_name="provider_a", model="model-2"),
+        SimpleNamespace(id="provider_b_model_1", provider_name="provider_b", model="model-1"),
     ]
-    client = _BarrierProbeClient(len(agents))
+    client = _ProviderBarrierProbeClient(provider_count=2)
 
     viable, report = preflight(agents, client=client)
 
@@ -60,3 +84,12 @@ def test_full_catalog_preflight_starts_routes_concurrently_and_preserves_evidenc
     assert [row["agent_id"] for row in report["routes"]] == [agent.id for agent in agents]
     assert [row["status"] for row in report["routes"]] == ["ready"] * len(agents)
     assert sorted(client.calls) == sorted(agent.id for agent in agents)
+    assert client.same_provider_overlap is False
+
+
+def test_preflight_worker_cardinality_tracks_provider_accounts_not_route_count() -> None:
+    """The executor must derive concurrency from evidence identities, not a route cap."""
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    assert "provider_lanes" in source
+    assert "max_workers=len(provider_lanes)" in source
+    assert "max_workers=len(agents)" not in source
