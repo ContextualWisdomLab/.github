@@ -53,6 +53,10 @@ Semantic Versioning where the repository publishes a release.
   rerunning it, independent of queue duration. Scheduler-originated review
   retries now carry the same run ID parsed from the required check's GitHub
   Actions details URL, so their valid receipts wake the failed required job too.
+  The wake step now uses its job-scoped `actions: write` workflow token only for
+  native runs and requires `PR_REVIEW_MERGE_TOKEN` or
+  `OPENCODE_APPROVE_TOKEN` for sibling runs; it no longer falls through to the
+  review-only OpenCode app token or an unusable central workflow token.
 - Skip Noema's one-time repair-retry LLM request when the PR head has moved
   since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
   now takes `expected_head` and re-checks it against a fresh `fetch_pr`

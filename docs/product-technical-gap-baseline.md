@@ -2299,7 +2299,10 @@ central workflow path, and live PR `head_sha` before rerunning it. This remains 
 queue delay exceeds the model jobs' declared timeout sum and avoids dependence on context-specific title
 or `workflow_url` rendering. Scheduler review retries propagate the same immutable run ID from the
 required check's Actions details URL, so the scheduler and direct required-workflow entrypoints share one
-continuation contract.
+continuation contract. Native wake calls use the privileged dispatch job's narrowly scoped `actions:
+write` workflow token. Sibling wake calls require `PR_REVIEW_MERGE_TOKEN` or
+`OPENCODE_APPROVE_TOKEN` and fail closed when neither is configured; the review-only OpenCode app token
+and the central repository's workflow token are never presented as cross-repository Actions credentials.
 
 ## 2026-08-31 `ORCHESTRATOR_PIN_SHA` bumped to carry #925's stream_options/tools fix
 

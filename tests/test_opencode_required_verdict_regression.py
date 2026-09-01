@@ -144,6 +144,16 @@ def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> N
     assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
     assert "select(.head_sha == $head)" in dispatched
     wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
+    target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
+    target_permissions = target_job.split("    env:\n", 1)[0]
+    assert "actions: write" in target_permissions
+    assert (
+        "needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token"
+    ) in wake_step
+    assert "steps.opencode_app_token.outputs.token" not in wake_step
+    assert "WAKE_TOKEN_SOURCE" in wake_step
+    assert '"$WAKE_TOKEN_SOURCE" = "unavailable"' in wake_step
     assert "--paginate" not in wake_step
     # Identity is the immutable target-repository run id plus event/path/head;
     # do not depend on context-specific title or workflow_url rendering.
@@ -243,8 +253,10 @@ exit 1
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "FAKE_CALLS": str(calls),
             "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "GH_TOKEN": "actions-write-token",
             "PR_HEAD_SHA": HEAD,
             "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         },
         capture_output=True,
         text=True,
@@ -255,3 +267,28 @@ exit 1
     assert "actions/runs/42/rerun-failed-jobs" in recorded
     assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded
     assert "--paginate" not in recorded
+
+
+def test_sibling_formal_receipt_fails_closed_without_actions_token() -> None:
+    """A sibling wake without either Actions-capable PAT fails before GitHub I/O."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    script = textwrap.dedent(
+        step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    )
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "GH_TOKEN": "",
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_HEAD_SHA": HEAD,
+            "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "unavailable",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Actions-capable wake credential is unavailable" in result.stdout
