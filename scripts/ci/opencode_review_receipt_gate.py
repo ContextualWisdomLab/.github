@@ -38,6 +38,14 @@ PRODUCT_MARKERS = (
     "OpenCode reviewed the current-head product diff",
     "OpenCode reviewed the current-head bounded evidence",
 )
+FALLBACK_APPROVAL_MARKERS = (
+    "deterministic current-head evidence",
+    "deterministic fallback approval",
+    "model-unavailable evidence fallback",
+    "did not emit a usable current-head control block",
+    "scope: `unsupported`",
+    "model-pool outcome: `unknown`",
+)
 MENTION_RE = re.compile(r"^@opencode-agent\b", re.IGNORECASE)
 
 AFIPC_230_HEAD = "5eda857066c9207786d3bdde49826f8f94b98c12"
@@ -122,6 +130,10 @@ def is_formal_receipt(
     body = str(review.get("body") or "")
     if is_mention_or_malformed(body):
         return False, "mention, status-only, or malformed payload is not a formal review"
+    if state == "APPROVED" and any(
+        marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
+    ):
+        return False, "fallback approval is not a substantive formal review"
     if is_draft and state == "APPROVED":
         return False, "draft must never receive bot APPROVE"
     return True, "current-head formal review"
@@ -148,6 +160,8 @@ def evaluate_receipts(
         if ok:
             return review, reason
         if "never receive bot APPROVE" in reason:
+            return None, reason
+        if "fallback approval" in reason:
             return None, reason
         if reason.startswith("stale"):
             stale_hits += 1
@@ -191,8 +205,12 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
         detail = (completed.stderr or completed.stdout or "gh reviews lookup failed").strip()
         raise ReceiptGateError(f"formal review receipt lookup failed: {detail}")
     loaded = json.loads(completed.stdout or "[]")
-    if isinstance(loaded, list) and all(isinstance(page, list) for page in loaded):
-        return [item for page in loaded for item in page if isinstance(item, Mapping)]
+    if (
+        isinstance(loaded, list)
+        and all(isinstance(page, list) for page in loaded)
+        and all(isinstance(item, Mapping) for page in loaded for item in page)
+    ):
+        return [item for page in loaded for item in page]
     raise ReceiptGateError("formal review receipt lookup returned malformed JSON")
 
 

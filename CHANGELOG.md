@@ -8,7 +8,9 @@ Semantic Versioning where the repository publishes a release.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
-  parsing failures remain fail-closed.
+  parsing failures remain fail-closed. The shared predicate explicitly rejects
+  fallback markers even when a normal overview heading is present, and its
+  live Reviews API reader slurps and flattens every pagination page.
 - Grant the Strix stale-run cleanup job read-only pull-request access so its
   job token can revalidate live heads in private repositories when optional
   scheduler credentials are unavailable.

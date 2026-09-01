@@ -154,7 +154,7 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         ([{"id": 8, **review(state="CHANGES_REQUESTED", body="## Verdict\nRequest changes")}], 0),
         ([], 1),
         ([{"id": 9, **review(state="APPROVED", commit_id="b" * 40, body="## Verdict\nApprove")}], 1),
-        ([{"id": 10, **review(state="APPROVED", body="deterministic fallback approval")}], 1),
+        ([{"id": 10, **review(state="APPROVED", body="## Pull request overview\n\ndeterministic fallback approval")}], 1),
     ),
 )
 def test_scheduler_wake_reuses_trusted_receipt_predicate(
@@ -171,7 +171,7 @@ set -euo pipefail
 if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
-  printf '%s' "$FAKE_REVIEWS"
+  printf '[%s]' "$FAKE_REVIEWS"
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
   printf 'dispatch\n' >>"$DISPATCH_CALLS"
 fi
