@@ -13,7 +13,8 @@ Semantic Versioning where the repository publishes a release.
   worker job 3.6x its own budget, so a legitimate slow-but-successful review
   was indistinguishable from a genuinely broken dispatch — confirmed with
   concrete timestamps across `.github#1500`, `#1506`, and
-  `contextual-orchestrator#968`/`#946`. Raised the poll job to
+  `ContextualWisdomLab/contextual-orchestrator#968`/`ContextualWisdomLab/contextual-orchestrator#946`.
+  Raised the poll job to
   `timeout-minutes: 340` / 660 attempts (~330m), and added
   `test_verdict_poll_budget_covers_the_dispatched_review_jobs_own_ceiling`
   so the two workflows' budgets cannot silently drift out of alignment
