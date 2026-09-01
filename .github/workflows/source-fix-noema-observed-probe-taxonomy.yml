@@ -1,0 +1,38 @@
+name: One-shot Noema observed-probe taxonomy RED
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/source-fix-noema-observed-probe-taxonomy.yml
+      - tests/test_noema_observed_defect_probe_taxonomy.py
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Verify focused regression is RED on exact head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt >/dev/null
+          set +e
+          PYTHONPATH=. python3 -m pytest -q tests/test_noema_observed_defect_probe_taxonomy.py >red.log 2>&1
+          status=$?
+          set -e
+          cat red.log
+          test "$status" -ne 0
+          grep -Eq "(DID NOT RAISE|generic_correctness|mutable_alias|time_of_check_time_of_use|execution_identity)" red.log
