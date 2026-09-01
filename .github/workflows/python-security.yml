@@ -66,14 +66,14 @@ jobs:
         run: |
           set -euo pipefail
           has_python=false
-          if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
+          if find . -type f -name '*.py' -not -path './.git/*' -print -quit | grep -q .; then
             has_python=true
           fi
           has_manifest=false
           if find . -type f \
               \( -name 'requirements*.txt' -o -name 'pyproject.toml' \
                  -o -name 'pylock.*.toml' \) \
-              -not -path './.git/*' | head -1 | grep -q .; then
+              -not -path './.git/*' -print -quit | grep -q .; then
             has_manifest=true
           fi
           echo "has_python=${has_python}" >> "$GITHUB_OUTPUT"
@@ -272,7 +272,7 @@ jobs:
           # Audit the project itself when a PEP 621 / lock manifest exists.
           if find . -maxdepth 2 -type f \
               \( -name 'pyproject.toml' -o -name 'pylock.*.toml' \) \
-              -not -path './.git/*' | head -1 | grep -q .; then
+              -not -path './.git/*' -print -quit | grep -q .; then
             echo "::group::pip-audit . (project manifest)"
             pip-audit --strict --desc=on . || status=1
             echo "::endgroup::"
