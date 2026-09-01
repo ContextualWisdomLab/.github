@@ -169,6 +169,7 @@ CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
 )
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
+ACTIONS_RUN_DETAILS_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/job/\d+)?(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
     "is not mergeable",
@@ -1272,6 +1273,17 @@ def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
         job_id = actions_job_id_from_details_url(node.get("detailsUrl"))
         if job_id:
             return job_id
+    return None
+
+
+def matching_actions_run_id(pr: dict[str, Any], predicate: Any) -> int | None:
+    """Return the latest matching check-run workflow run id, if exposed."""
+    for node in reversed(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun" or not predicate(node):
+            continue
+        match = ACTIONS_RUN_DETAILS_URL_RE.search(node.get("detailsUrl") or "")
+        if match:
+            return int(match.group(1))
     return None
 
 
@@ -2864,6 +2876,17 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     head_ref = validate_git_ref(pr["headRefName"])
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
+    client_payload: dict[str, Any] = {
+        "target_repository": target_repo,
+        "pr_number": int(pr["number"]),
+        "pr_base_ref": base_ref,
+        "pr_base_sha": base_sha,
+        "pr_head_ref": head_ref,
+        "pr_head_sha": head_sha,
+    }
+    required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
+    if required_run_id is not None:
+        client_payload["required_run_id"] = required_run_id
     run_github_dispatch(
         [
             "gh",
@@ -2877,14 +2900,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         stdin=json.dumps(
             {
                 "event_type": "opencode-review",
-                "client_payload": {
-                    "target_repository": target_repo,
-                    "pr_number": int(pr["number"]),
-                    "pr_base_ref": base_ref,
-                    "pr_base_sha": base_sha,
-                    "pr_head_ref": head_ref,
-                    "pr_head_sha": head_sha,
-                },
+                "client_payload": client_payload,
             }
         ),
     )

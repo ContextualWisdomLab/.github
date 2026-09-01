@@ -4223,7 +4223,20 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
 
-    pr = make_pr(baseRefName="develop", baseRefOid=base_sha, headRefOid=head_sha)
+    pr = make_pr(
+        baseRefName="develop",
+        baseRefOid=base_sha,
+        headRefOid=head_sha,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(
+                        details_url="https://github.com/owner/repo/actions/runs/42/job/101"
+                    )
+                ]
+            }
+        },
+    )
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -4270,6 +4283,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             "pr_base_sha": base_sha,
             "pr_head_ref": "feature",
             "pr_head_sha": head_sha,
+            "required_run_id": 42,
         },
     }
 

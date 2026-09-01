@@ -2297,7 +2297,9 @@ polling per PR. The authenticated dispatch carries the immutable triggering requ
 continuation fetches that target-repository run directly and validates its `pull_request_target` event,
 central workflow path, and live PR `head_sha` before rerunning it. This remains correct even when runner
 queue delay exceeds the model jobs' declared timeout sum and avoids dependence on context-specific title
-or `workflow_url` rendering.
+or `workflow_url` rendering. Scheduler review retries propagate the same immutable run ID from the
+required check's Actions details URL, so the scheduler and direct required-workflow entrypoints share one
+continuation contract.
 
 ## 5. 실행 루프와 고객의 다음 행동
 

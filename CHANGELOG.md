@@ -50,7 +50,9 @@ Semantic Versioning where the repository publishes a release.
   The required workflow passes its immutable run ID in the authenticated
   dispatch; the continuation fetches that target-repository run directly and
   revalidates its event, central workflow path, and live PR `head_sha` before
-  rerunning it, independent of queue duration.
+  rerunning it, independent of queue duration. Scheduler-originated review
+  retries now carry the same run ID parsed from the required check's GitHub
+  Actions details URL, so their valid receipts wake the failed required job too.
 - Skip Noema's one-time repair-retry LLM request when the PR head has moved
   since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
   now takes `expected_head` and re-checks it against a fresh `fetch_pr`
