@@ -188,3 +188,96 @@ def test_verdict_output_cardinality_and_text_are_bounded() -> None:
                 ],
             }
         )
+
+
+
+def test_call_llm_rejects_non_string_rendered_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A comment verdict cannot expand list/object evidence into a review body."""
+    malformed = json.dumps(
+        {
+            "decision": "comment",
+            "summary": "bounded",
+            "findings": [],
+            "reviewed_lines": [
+                {
+                    "path": "src/example.py",
+                    "line": 7,
+                    "side": "RIGHT",
+                    "analysis": ["x" * noema.NOEMA_MAX_VERDICT_TEXT_CHARS],
+                }
+            ],
+        }
+    )
+    opener = _Opener([_envelope(malformed, "stop"), _envelope(malformed, "stop")])
+    _configure(monkeypatch, opener)
+
+    with pytest.raises(RuntimeError, match="reviewed_lines.analysis must be a string"):
+        noema.call_llm("owner/repo", 7, _pr(), "diff", False, HEAD)
+
+    assert len(opener.requests) == 2
+
+
+def test_verdict_output_bounds_type_check_every_rendered_probe_field() -> None:
+    """Every adversarial field interpolated into Markdown has a typed bound."""
+    base_probe = {
+        "path": "src/example.py",
+        "line": 8,
+        "side": "RIGHT",
+        "outcome": "inconclusive",
+        "hypothesis": "bounded hypothesis",
+        "attack_or_counterexample": "bounded attack",
+        "evidence": "bounded evidence",
+    }
+    for field in (
+        "path",
+        "side",
+        "outcome",
+        "hypothesis",
+        "attack_or_counterexample",
+        "evidence",
+    ):
+        probe = dict(base_probe)
+        probe[field] = ["not", "text"]
+        with pytest.raises(RuntimeError, match=rf"probes\.{field} must be a string"):
+            noema.validate_verdict_output_bounds(
+                {
+                    "summary": "bounded",
+                    "findings": [],
+                    "adversarial_validation": {
+                        "residual_risk": "bounded",
+                        "probes": [probe],
+                    },
+                }
+            )
+
+    bad_line = dict(base_probe)
+    bad_line["line"] = [8]
+    with pytest.raises(RuntimeError, match="probes.line must be a positive integer"):
+        noema.validate_verdict_output_bounds(
+            {
+                "summary": "bounded",
+                "findings": [],
+                "adversarial_validation": {
+                    "residual_risk": "bounded",
+                    "probes": [bad_line],
+                },
+            }
+        )
+
+
+def test_call_llm_types_repeated_schema_invalid_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded but schema-invalid verdict gets a stable retry diagnostic."""
+    malformed = json.dumps(
+        {"decision": "unsupported", "summary": "bounded", "findings": []}
+    )
+    opener = _Opener([_envelope(malformed, "stop"), _envelope(malformed, "stop")])
+    _configure(monkeypatch, opener)
+
+    with pytest.raises(RuntimeError, match="invalid_verdict_after_retry"):
+        noema.call_llm("owner/repo", 7, _pr(), "diff", False, HEAD)
+
+    assert len(opener.requests) == 2
