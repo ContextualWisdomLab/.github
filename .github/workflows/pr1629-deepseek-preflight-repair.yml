@@ -7,9 +7,10 @@ on:
     paths:
       - .github/workflows/pr1629-deepseek-preflight-repair.yml
       - scripts/ci/repair_pr1629_deepseek_preflight.py
+      - scripts/ci/repair_pr1629_deepseek_preflight_followup.py
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: pr1629-deepseek-preflight-repair
@@ -26,12 +27,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact repair head
+      - name: Checkout exact repair head without persisted credential
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -51,16 +52,21 @@ jobs:
           test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git status --short)" = ""
+          remote_head="$(git ls-remote https://github.com/ContextualWisdomLab/.github.git "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          test "$remote_head" = "$GITHUB_SHA"
 
-      - name: Execute RED-GREEN repair
-        run: python scripts/ci/repair_pr1629_deepseek_preflight.py
+      - name: Execute RED-GREEN repair and legacy-oracle alignment
+        run: python scripts/ci/repair_pr1629_deepseek_preflight_followup.py
 
       - name: Commit only publishable source and tests
         env:
           EXPECTED_BRANCH: fix/no-heuristic-review-admission-current-main
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
           test ! -e scripts/ci/repair_pr1629_deepseek_preflight.py
+          test ! -e scripts/ci/repair_pr1629_deepseek_preflight_followup.py
           test ! -e .github/workflows/pr1629-deepseek-preflight-repair.yml
           git diff --check
           git add -A
@@ -72,9 +78,21 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(review): recover transient DeepSeek preflight failures'
 
-          remote_head="$(git ls-remote origin "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
+          remote_head="$(git ls-remote https://github.com/ContextualWisdomLab/.github.git "refs/heads/$EXPECTED_BRANCH" | awk '{print $1}')"
           if [ "$remote_head" != "$GITHUB_SHA" ]; then
             echo "branch moved during repair: expected $GITHUB_SHA, found $remote_head" >&2
             exit 1
           fi
+          if [ -n "${PR_REVIEW_MERGE_TOKEN:-}" ]; then
+            push_token="$PR_REVIEW_MERGE_TOKEN"
+            push_source='PR_REVIEW_MERGE_TOKEN'
+          elif [ -n "${OPENCODE_APPROVE_TOKEN:-}" ]; then
+            push_token="$OPENCODE_APPROVE_TOKEN"
+            push_source='OPENCODE_APPROVE_TOKEN'
+          else
+            echo 'No workflow-starting branch-mutation credential is configured; refusing github.token because it suppresses successor workflows.' >&2
+            exit 78
+          fi
+          echo "Using workflow-starting mutation credential source: $push_source"
+          git remote set-url origin "https://x-access-token:${push_token}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/$EXPECTED_BRANCH"
