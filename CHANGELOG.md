@@ -16,7 +16,19 @@ Semantic Versioning where the repository publishes a release.
   mechanism dead code for OpenRouter specifically. OpenRouter rows are now
   exempt from this exclusion; a genuinely non-servable OpenRouter row is
   still excluded by the existing, provider-agnostic chat-capability check
-  every other provider's rows already go through.
+  every other provider's rows already go through. `_routable_discovered_models()`
+  also now excludes a `spend_admitted=False` row the same way it excludes
+  `evidence_only=True`, so a credit-exhausted priced OpenRouter row cannot
+  reach `orchestrator/auto`'s served catalog.
+- Avoid redundant merge-scheduler wakes when the trusted receipt predicate
+  already finds a substantive exact-head OpenCode verdict. Missing, stale, or
+  fallback-only evidence still dispatches review work, while receipt lookup or
+  parsing failures remain fail-closed. The shared predicate explicitly rejects
+  fallback markers even when a normal overview heading is present, and its
+  live Reviews API reader slurps and flattens every pagination page.
+- Grant the Strix stale-run cleanup job read-only pull-request access so its
+  job token can revalidate live heads in private repositories when optional
+  scheduler credentials are unavailable.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

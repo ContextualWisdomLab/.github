@@ -251,14 +251,83 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     steps:
-      - name: Resolve current-head formal OpenCode verdict
-        id: verdict
+      - name: Request current-head OpenCode review execution
+        if: github.event.action != 'closed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          helper="$(mktemp)"
+          trap 'rm -f "$helper"' EXIT
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$helper"
+          receipt_state="$(python3 - "$helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" "$PR_DRAFT" <<'PY'
+          import importlib.machinery
+          import importlib.util
+          import sys
+
+          helper_path, repository, number, head_sha, draft = sys.argv[1:]
+          loader = importlib.machinery.SourceFileLoader(
+              "trusted_opencode_receipt_gate", helper_path
+          )
+          spec = importlib.util.spec_from_loader(loader.name, loader)
+          if spec is None or spec.loader is None:
+              raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
+          gate = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(gate)
+          reviews = gate.fetch_reviews(repository, int(number))
+          receipt, _reason = gate.evaluate_receipts(
+              reviews, head_sha, is_draft=draft.lower() == "true"
+          )
+          print("present" if receipt is not None else "missing")
+          PY
+          )"
+          if [ "$receipt_state" = "present" ]; then
+            echo "Current-head substantive OpenCode verdict already exists; scheduler wake skipped."
+            exit 0
+          fi
+          if [ "$receipt_state" != "missing" ]; then
+            echo "::error::Trusted OpenCode receipt helper returned an invalid state."
+            exit 1
+          fi
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::OpenCode review dispatch requires GitHub OIDC."
+            exit 1
+          fi
+          separator='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::OpenCode review dispatch could not obtain its OIDC token."
+            exit 1
+          fi
+          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          if [ -z "$app_token" ]; then
+            echo "::error::OpenCode review dispatch could not obtain its repository-scoped app token."
+            exit 1
+          fi
+          echo "::add-mask::$app_token"
+          jq -cn \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg base_branch "$BASE_BRANCH" \
+            '{event_type:"merge-scheduler",client_payload:{target_repository:$target_repository,pr_number:$pr_number,base_branch:$base_branch,max_prs:"1",review_dispatch_limit:"1",trigger_reviews:true,enable_auto_merge:false,update_branches:false,dry_run:false}}' |
+            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+
+      - name: Fail closed without a current-head OpenCode verdict
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
@@ -269,17 +338,16 @@ jobs:
           set -euo pipefail
           if [ "$PR_ACTION" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
-            echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
           fi
-          if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
-            reviews="[]"
-          fi
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+          verdict=""
+          while :; do
+            reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+            verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
                 .[]
@@ -307,62 +375,13 @@ jobs:
                 empty
               end
           ')"
-          echo "verdict=${verdict}" >>"$GITHUB_OUTPUT"
-          if [ -n "$verdict" ]; then
-            echo "Current-head OpenCode verdict: ${verdict}."
-          fi
-
-      - name: Request current-head OpenCode review execution
-        if: github.event.action != 'closed' && steps.verdict.outputs.verdict == ''
-        env:
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "::error::OpenCode review dispatch requires GitHub OIDC."
-            exit 1
-          fi
-          separator='&'
-          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
-          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
-          if [ -z "$oidc_token" ]; then
-            echo "::error::OpenCode review dispatch could not obtain its OIDC token."
-            exit 1
-          fi
-          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
-          if [ -z "$app_token" ]; then
-            echo "::error::OpenCode review dispatch could not obtain its repository-scoped app token."
-            exit 1
-          fi
-          echo "::add-mask::$app_token"
-          jq -cn \
-            --arg target_repository "$TARGET_REPOSITORY" \
-            --argjson pr_number "$PR_NUMBER" \
-            --arg pr_base_ref "$BASE_BRANCH" \
-            --arg pr_base_sha "$BASE_SHA" \
-            --arg pr_head_ref "$HEAD_BRANCH" \
-            --arg pr_head_sha "$HEAD_SHA" \
-            --argjson required_run_id "$GITHUB_RUN_ID" \
-            '{event_type:"opencode-review",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,required_run_id:$required_run_id}}' |
-            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
-
-      - name: Fail closed without a current-head OpenCode verdict
-        env:
-          VERDICT: ${{ steps.verdict.outputs.verdict }}
-        run: |
-          set -euo pipefail
-          if [ "$VERDICT" = "CLOSED" ]; then
-            exit 0
-          fi
-          if [ -z "$VERDICT" ]; then
+            if [ -n "$verdict" ]; then
+              break
+            fi
+            sleep 30
+          done
+          if [ -z "$verdict" ]; then
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
             exit 1
           fi
-          echo "Current-head OpenCode verdict: ${VERDICT}."
+          echo "Current-head OpenCode verdict: ${verdict}."
