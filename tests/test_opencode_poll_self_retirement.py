@@ -34,10 +34,12 @@ def _run_poll_loop(
     live_pr: dict[str, object],
     reviews: list[dict[str, object]] | None = None,
     fail_live_pr_attempts: int = 0,
+    fail_review_attempts: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Execute the production poll body against a deterministic fake ``gh``."""
     call_log = tmp_path / "gh-calls.log"
-    fail_counter = tmp_path / "live-pr-failures"
+    live_fail_counter = tmp_path / "live-pr-failures"
+    review_fail_counter = tmp_path / "review-failures"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         """#!/bin/sh
@@ -46,14 +48,23 @@ printf '%s\\n' "$*" >> "$GH_CALL_LOG"
 [ "${1:-}" = "api" ] || exit 90
 shift
 if [ "${1:-}" = "--paginate" ]; then
+  count=0
+  if [ -e "$GH_REVIEW_FAIL_COUNTER" ]; then
+    count="$(cat "$GH_REVIEW_FAIL_COUNTER")"
+  fi
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$GH_REVIEW_FAIL_COUNTER"
+  if [ "$count" -le "${GH_FAIL_REVIEW_ATTEMPTS:-0}" ]; then
+    exit 1
+  fi
   printf '%s\\n' "$GH_REVIEWS"
 else
   count=0
-  if [ -e "$GH_FAIL_COUNTER" ]; then
-    count="$(cat "$GH_FAIL_COUNTER")"
+  if [ -e "$GH_LIVE_FAIL_COUNTER" ]; then
+    count="$(cat "$GH_LIVE_FAIL_COUNTER")"
   fi
   count=$((count + 1))
-  printf '%s\\n' "$count" > "$GH_FAIL_COUNTER"
+  printf '%s\\n' "$count" > "$GH_LIVE_FAIL_COUNTER"
   if [ "$count" -le "${GH_FAIL_LIVE_PR_ATTEMPTS:-0}" ]; then
     exit 1
   fi
@@ -78,7 +89,8 @@ fi
             "set -euo pipefail",
             'verdict=""',
             'live_poll_failures=0',
-            'max_live_poll_failures=3',
+            'review_poll_failures=0',
+            'max_poll_transport_failures=3',
             "while :; do",
             _poll_loop(),
             "done",
@@ -93,7 +105,9 @@ fi
             "HEAD_SHA": head_sha,
             "GH_CALL_LOG": str(call_log),
             "GH_FAIL_LIVE_PR_ATTEMPTS": str(fail_live_pr_attempts),
-            "GH_FAIL_COUNTER": str(fail_counter),
+            "GH_FAIL_REVIEW_ATTEMPTS": str(fail_review_attempts),
+            "GH_LIVE_FAIL_COUNTER": str(live_fail_counter),
+            "GH_REVIEW_FAIL_COUNTER": str(review_fail_counter),
             "GH_LIVE_PR": json.dumps(live_pr),
             "GH_REVIEWS": json.dumps(reviews or []),
         }
@@ -117,7 +131,7 @@ def test_poll_revalidates_live_pr_before_every_reviews_api_read() -> None:
         '"repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"'
     )
     reviews_lookup = (
-        'reviews="$(gh api --paginate '
+        'reviews="$(timeout 30s gh api --paginate '
         '"repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"'
     )
 
@@ -235,7 +249,7 @@ def test_poll_retries_transient_live_state_failure_before_reviews_read(
 def test_poll_fails_closed_after_bounded_live_state_transport_failures(
     tmp_path: Path,
 ) -> None:
-    """Repeated transport failures release the runner without fabricating evidence."""
+    """Repeated live-state failures release the runner without fabricated evidence."""
     head_sha = "f" * 40
     result, calls = _run_poll_loop(
         tmp_path,
@@ -245,9 +259,59 @@ def test_poll_fails_closed_after_bounded_live_state_transport_failures(
     )
 
     assert result.returncode == 1
-    assert "failed 3 consecutive times" in result.stdout
+    assert "Live pull request read failed 3 consecutive times" in result.stdout
     assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"] * 3
     assert all("reviews" not in call for call in calls)
+
+
+def test_poll_retries_transient_reviews_failure_after_revalidating_head(
+    tmp_path: Path,
+) -> None:
+    """A Reviews API transport failure retries only after re-reading live PR state."""
+    head_sha = "1" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        reviews=[
+            {
+                "user": {"login": "opencode-agent"},
+                "commit_id": head_sha,
+                "state": "APPROVED",
+                "body": "Source-backed current-head semantic review.",
+            }
+        ],
+        fail_review_attempts=1,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Reviews API read failed while polling" in result.stdout
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+    ]
+
+
+def test_poll_fails_closed_after_bounded_reviews_transport_failures(
+    tmp_path: Path,
+) -> None:
+    """Repeated Reviews API failures stop after a finite number of attempts."""
+    head_sha = "2" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        fail_review_attempts=3,
+    )
+
+    assert result.returncode == 1
+    assert "Reviews API read failed 3 consecutive times" in result.stdout
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+    ] * 3
 
 
 def test_self_retirement_does_not_replace_semantic_review_with_a_short_timeout() -> None:
