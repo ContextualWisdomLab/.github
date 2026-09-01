@@ -1,0 +1,109 @@
+name: Source fix scheduler stuck job timeout
+
+on:
+  push:
+    branches:
+      - fix/scheduler-stuck-job-timeout-20260902
+    paths:
+      - .github/source-fix-scheduler-stuck-job-timeout.trigger
+
+concurrency:
+  group: source-fix-scheduler-stuck-job-timeout
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/scheduler-stuck-job-timeout-20260902
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove stale scheduler job has no wall-clock bound
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/pr-review-merge-scheduler.yml').read_text(encoding='utf-8')
+          scan = workflow.split('  scan-pr-queue:\n', 1)[1].split('\n  org-queue-sweep:', 1)[0]
+          if 'runs-on: ubuntu-24.04' not in scan:
+              raise SystemExit('scan-pr-queue runner anchor changed')
+          if 'timeout-minutes:' in scan.split('    steps:\n', 1)[0]:
+              raise SystemExit('protected main already bounds scan-pr-queue; repair is obsolete')
+          print('RED: scan-pr-queue has no job-level timeout and can hold a runner indefinitely')
+          PY
+      - name: Bound single-repository scheduler wall clock and add regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          job_start = workflow.index('  scan-pr-queue:\n')
+          job_end = workflow.index('\n  org-queue-sweep:', job_start)
+          scan = workflow[job_start:job_end]
+          anchor = '    runs-on: ubuntu-24.04\n'
+          if scan.count(anchor) != 1:
+              raise SystemExit(f'expected one scan-pr-queue runner anchor, found {scan.count(anchor)}')
+          if 'timeout-minutes:' in scan.split('    steps:\n', 1)[0]:
+              raise SystemExit('scan-pr-queue timeout unexpectedly appeared during repair')
+          repaired = scan.replace(
+              anchor,
+              anchor + '    # A malformed API/provider response or an unbounded scheduler path must not\n'
+                       '    # pin scarce Actions capacity indefinitely. The org-wide sweep has its own\n'
+                       '    # 60-minute budget; one repository scan is intentionally tighter.\n'
+                       '    timeout-minutes: 30\n',
+              1,
+          )
+          workflow_path.write_text(workflow[:job_start] + repaired + workflow[job_end:], encoding='utf-8')
+
+          test_path = Path('tests/test_scheduler_job_timeout_contract.py')
+          test_path.write_text('''"""Wall-clock contracts for central scheduler jobs."""\n\nfrom pathlib import Path\n\n\nWORKFLOW = Path(".github/workflows/pr-review-merge-scheduler.yml")\n\n\ndef test_scan_pr_queue_has_bounded_wall_clock() -> None:\n    """A per-repository scheduler run must never occupy a runner indefinitely."""\n    workflow = WORKFLOW.read_text(encoding="utf-8")\n    scan = workflow.split("  scan-pr-queue:\\n", 1)[1].split("\\n  org-queue-sweep:", 1)[0]\n    header = scan.split("    steps:\\n", 1)[0]\n    assert "runs-on: ubuntu-24.04" in header\n    assert header.count("timeout-minutes: 30") == 1\n\n\ndef test_org_sweep_keeps_separate_larger_budget() -> None:\n    """Do not accidentally collapse the intentionally larger organization sweep budget."""\n    workflow = WORKFLOW.read_text(encoding="utf-8")\n    sweep = workflow.split("  org-queue-sweep:\\n", 1)[1]\n    header = sweep.split("    steps:\\n", 1)[0]\n    assert header.count("timeout-minutes: 60") == 1\n''', encoding='utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          log = changelog.read_text(encoding='utf-8')
+          anchor = '## [Unreleased]\n'
+          entry = (
+              '- **Bound single-repository merge-scheduler runtime to prevent Actions capacity leaks.** '
+              'Live queue RCA found protected-main scheduler runs still `in_progress` more than eleven hours after entering `Inspect PR review and merge queue`; `scan-pr-queue` had no job-level timeout while the separate org sweep was already bounded to 60 minutes. The per-repository job now has a 30-minute wall-clock ceiling, with a regression that preserves the distinct 60-minute sweep budget.\n'
+          )
+          if log.count(anchor) != 1:
+              raise SystemExit('changelog Unreleased anchor changed')
+          if entry not in log:
+              log = log.replace(anchor, anchor + entry, 1)
+          changelog.write_text(log, encoding='utf-8')
+          PY
+          python3 -m pytest -q tests/test_scheduler_job_timeout_contract.py
+          git diff --check
+      - name: Self-remove and publish non-force repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-scheduler-stuck-job-timeout.yml \
+            .github/source-fix-scheduler-stuck-job-timeout.trigger
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(scheduler): bound per-repository run time'
+          git fetch --no-tags origin fix/scheduler-stuck-job-timeout-20260902
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            git merge --no-edit "$remote_head"
+            python3 -m pytest -q tests/test_scheduler_job_timeout_contract.py
+            git diff --check
+          fi
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/scheduler-stuck-job-timeout-20260902
