@@ -337,20 +337,17 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   itself be exactly the unjustified heuristic this ADR's convergence principle already rejects.
   Tracked as `ContextualWisdomLab/.github#1458`; revisit if real hosted-run telemetry (already required
   below) shows a specific, evidenced bias worth correcting.
-- **Layer 2** (bounded only by the job's own 120-minute ceiling, per the org's stated "accuracy over
+- **Layer 2** (bounded by the candidate job's 335-minute ceiling, per the org's stated "accuracy over
   speed" policy already reasoned in this file — *not* by the 180s Layer 1 budget, which has already
-  completed by the time Layer 2 runs): keep the existing per-attempt timeout (**120s, unchanged** — not
-  shortened, per Context above) and the existing **`4096` budget, unchanged throughout — Layer 2 never
+  completed by the time Layer 2 runs): do not impose a curl total-time timeout; retain only a
+  10-second connection timeout. Keep the existing **`4096` budget, unchanged throughout — Layer 2 never
   escalates** (already proven working on a real hosted run, `contextual-orchestrator#921`; see Decision
   §1 for why an escalation tier was considered and dropped here). Allow up to
   `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3` total attempts, consumed only by Trigger A (transport
   failure/hang/non-2xx) — Trigger B (empty + either its `finish_reason == "length"` or
-  reasoning-without-content signature) is not retried at Layer 2 at all (Decision §1). **Worst case**:
-  3 × 120s = **360s (6 minutes)** —
-  explicit, bounded, and small relative to the job's 120-minute ceiling; the previous design's worst
-  case was already 120s for one unconditional attempt with no chance of recovery, so this trades a
-  bounded amount of additional worst-case latency for surviving exactly the transient-hang class of
-  failure reproduced live on this ADR's own PR.
+  reasoning-without-content signature) is not retried at Layer 2 at all (Decision §1). The job timeout
+  is the single fail-closed wall-clock bound; when it fires, the cross-job workflow advances to the
+  next candidate instead of reporting curl's former synthetic 120-second transport failure.
 - **Initial values are reused precedent, not new guesses** (Devin Review's fourth finding): every
   number above is either already deployed in this exact codebase today (`10s`, `120s`, `4096`, `12`)
   or has direct external documentation backing it (`16` — the pre-#1436 value this codebase already

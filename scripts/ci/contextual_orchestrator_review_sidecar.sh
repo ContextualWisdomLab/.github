@@ -592,21 +592,10 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # decision layered on top of it.
 printf '{"model":"%s","orchestration":"route","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
-# 30s (this check's previous bound) is too tight for a real completion from a
-# reasoning-capable free-tier model: exact-evidence reproduction (Strix run
-# 33306775025 on ContextualWisdomLab/contextual-orchestrator#921, job
-# 99244624298) shows the routing probe marking a DeepSeek NIM route "ready"
-# in 18s, then this identical request against that same healthy route being
-# cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
-# request could not reach the local sidecar" is this curl failure, not an
-# actual connectivity problem. This required-workflow job already budgets
-# 120 minutes (see timeout-minutes in strix.yml/noema-review.yml), and the
-# org's own stated policy accepts multi-hour central review latency in
-# favor of accuracy over speed -- a 30s bound on one preflight self-check
-# contradicted that policy and rejected a route the routing probe had just
-# proven healthy. 120s keeps this a bounded, fail-closed check while giving
-# a real reasoning generation room to finish. This value is deliberately kept
-# unchanged by ADR-0005 -- shortening it would regress the fix just described.
+# Do not impose a curl total-time ceiling on a real reasoning completion. The
+# former 120s limit produced a synthetic transport failure for healthy routes.
+# Connection establishment remains bounded; the candidate job's 335-minute
+# timeout is the fail-closed execution ceiling and advances to the next job.
 #
 # ADR-0005 Trigger A: this request goes to the virtual pool, not one pinned
 # candidate, so a transport failure or non-2xx status here (unreachable
@@ -652,7 +641,7 @@ gateway_attempt=1
 gateway_http_status=""
 while :; do
   if gateway_http_status="$(
-    curl -sS --max-time 120 \
+    curl -sS --connect-timeout 10 \
       -o "$gateway_preflight_response" \
       -w '%{http_code}' \
       -X POST \
