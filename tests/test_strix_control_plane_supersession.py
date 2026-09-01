@@ -37,6 +37,8 @@ def test_strix_validates_live_pr_before_expensive_setup() -> None:
     )
     assert "if: github.event_name == 'pull_request_target'" in early
     assert "GH_TOKEN: ${{ github.token }}" in early
+    assert "pull-requests: read" in workflow.split("  strix:", 1)[1].split("    steps:", 1)[0]
+    assert "if ! pull_request_json=" in early
     assert "TARGET_REPOSITORY:" in early
     assert "PR_NUMBER:" in early
     assert "EXPECTED_HEAD_SHA:" in early
@@ -74,6 +76,12 @@ def test_strix_revalidates_before_evidence_publication() -> None:
     assert '"$live_state" != "open"' in recheck
     assert '"$live_head_sha" != "$EXPECTED_HEAD_SHA"' in recheck
     assert "exit 1" in recheck
+    assert "id: live_publication" in recheck
+    assert "always() && github.event_name == 'pull_request_target'" in recheck
+    collect = _step(workflow, "Collect Strix reports for artifact upload")
+    upload = _step(workflow, "Upload Strix reports artifact")
+    assert "steps.live_publication.outputs.current == 'true'" in collect
+    assert "steps.live_publication.outputs.current == 'true'" in upload
 
 
 def test_strix_preserves_provider_serialization_and_timeout_repair() -> None:

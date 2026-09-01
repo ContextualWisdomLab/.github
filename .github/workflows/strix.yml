@@ -103,6 +103,7 @@ jobs:
       contents: read
       id-token: write
       models: read
+      pull-requests: read
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -112,6 +113,26 @@ jobs:
         with:
           egress-policy: audit
           disable-file-monitoring: true
+
+      - name: Validate live pull request before Strix setup
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Unable to revalidate live pull request before Strix setup."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix event is stale or the pull request is no longer open before setup."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -487,6 +508,26 @@ jobs:
           echo 'enabled=true' >> "$GITHUB_OUTPUT"
           echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
 
+      - name: Revalidate live pull request before provider execution
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Unable to revalidate live pull request before provider execution."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix event is stale or the pull request is no longer open before provider execution."
+            exit 1
+          fi
+
       - name: Provision contextual-orchestrator Strix sidecar
         if: steps.gate.outputs.enabled == 'true'
         env:
@@ -803,8 +844,30 @@ jobs:
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
           exit "$strix_rc"
 
+      - name: Revalidate live pull request before evidence publication
+        id: live_publication
+        if: ${{ always() && github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Unable to revalidate live pull request before evidence publication."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Strix event is stale or the pull request is no longer open before evidence publication."
+            exit 1
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+
       - name: Collect Strix reports for artifact upload
-        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true') }}
         env:
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
         run: |
@@ -834,7 +897,7 @@ jobs:
           fi
 
       - name: Upload Strix reports artifact
-        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: strix-reports
