@@ -13,6 +13,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import sys
 import urllib.error
@@ -34,6 +35,7 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_CODEGRAPH_CONTEXT_CHARS = 20000
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 OBSERVED_REVIEW_PROBE_KINDS = frozenset(
     {
@@ -665,14 +667,71 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def load_codegraph_context(expected_head_sha: str) -> str:
+    """Load trusted structural evidence and bind it to the reviewed exact head.
+
+    The workflow writes this file under ``runner.temp`` after indexing a
+    credential-free PR-source clone. When the workflow declares the context
+    required, absence, a non-regular target, an oversized packet, or a stale
+    head marker fails closed before model execution.
+    """
+    required_value = os.environ.get("NOEMA_REQUIRE_CODEGRAPH_CONTEXT", "").strip()
+    if required_value not in {"", "0", "1"}:
+        raise RuntimeError("NOEMA_REQUIRE_CODEGRAPH_CONTEXT must be 0 or 1")
+    required = required_value == "1"
+    context_path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
+    if not context_path:
+        if required:
+            raise RuntimeError("Required Noema CodeGraph context path was not configured")
+        return ""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
+        raise RuntimeError("Noema CodeGraph context requires a canonical exact head SHA")
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("Noema CodeGraph context requires no-follow file access")
+
+    try:
+        descriptor = os.open(context_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        if required:
+            raise RuntimeError("Required Noema CodeGraph context was unavailable") from exc
+        return ""
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError("Noema CodeGraph context was not a regular file")
+        with os.fdopen(descriptor, "r", encoding="utf-8", errors="replace") as handle:
+            descriptor = -1
+            text = handle.read(MAX_CODEGRAPH_CONTEXT_CHARS + 1)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    if len(text) > MAX_CODEGRAPH_CONTEXT_CHARS:
+        raise RuntimeError("Noema CodeGraph context exceeded its bounded evidence budget")
+    if "# Trusted CodeGraph current-head evidence" not in text:
+        raise RuntimeError("Noema CodeGraph context was missing its trusted evidence marker")
+    match = re.search(
+        r"(?m)^- Head SHA: `([0-9a-fA-F]{40})`\s*$",
+        text,
+    )
+    if match is None:
+        raise RuntimeError("Noema CodeGraph context was missing its exact-head marker")
+    if match.group(1).lower() != expected_head_sha.lower():
+        raise RuntimeError("CodeGraph context head does not match the pull request head")
+    return text.strip()
+
+
 def build_review_context(
     repo: str,
     number: int,
     pr: dict[str, Any],
     changed_files: Sequence[tuple[str, str]] | None = None,
 ) -> str:
-    """Build bounded non-diff context from review threads and changed files."""
+    """Build bounded non-diff context from trusted structural and source evidence."""
     sections: list[str] = []
+    codegraph = load_codegraph_context(str(pr.get("headRefOid") or ""))
+    if codegraph:
+        sections.append("## CodeGraph context\n" + codegraph)
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)

@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Bind Noema to trusted exact-head CodeGraph evidence (`#1589`).** The required reviewer now materializes the PR source as data, removes GitHub credentials before lock-pinned CodeGraph indexing/exploration, passes a bounded head-marked structural evidence packet to the reviewer, and fails closed if required evidence is missing or stale. Target-owned test/build commands remain outside this trusted path.
 - **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
   Building on the draft-poll exemption's live PR/head validation, Devin Review found two
   further defects. (1) The concurrency group was keyed only by repository and PR number, so

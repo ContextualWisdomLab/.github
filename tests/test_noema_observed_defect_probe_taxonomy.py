@@ -161,7 +161,7 @@ def test_rendered_prompt_contains_every_class_specific_witness_schema(monkeypatc
     )
     assert result["decision"] == "approve"
     prompt_text = captured["payload"]["messages"][1]["content"]
-    assert "CodeGraph context" not in prompt_text
+    assert "bounded changed-file context" in prompt_text
     for probe_kind, fields in CLASS_EVIDENCE_FIELDS.items():
         assert probe_kind in prompt_text
         for field in fields:

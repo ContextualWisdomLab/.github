@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from scripts.ci import noema_review_gate as gate
+
 
 ROOT = Path(__file__).resolve().parents[1]
 NOEMA_WORKFLOW = ROOT / ".github/workflows/noema-review.yml"
@@ -23,7 +27,7 @@ def test_noema_workflow_materializes_trusted_codegraph_before_review() -> None:
 
 
 def test_noema_codegraph_helper_keeps_pr_source_data_only() -> None:
-    """CodeGraph setup may parse exact-head source but must not execute target-owned tooling."""
+    """CodeGraph may parse exact-head source but must not execute target-owned tooling."""
     helper = CODEGRAPH_HELPER.read_text(encoding="utf-8")
     for required in (
         "CODEGRAPH_NO_DOWNLOAD=1",
@@ -58,3 +62,28 @@ def test_noema_gate_requires_exact_head_bound_codegraph_when_workflow_requests_i
     assert "NOEMA_CODEGRAPH_CONTEXT_PATH" in source
     assert "Trusted CodeGraph current-head evidence" in source
     assert "CodeGraph context head does not match the pull request head" in source
+
+
+def test_codegraph_loader_accepts_only_the_exact_reviewed_head(monkeypatch, tmp_path: Path) -> None:
+    """Exact-head packets are admitted while predecessor packets are rejected."""
+    current_head = "a" * 40
+    packet = tmp_path / "codegraph.md"
+    packet.write_text(
+        "# Trusted CodeGraph current-head evidence\n\n"
+        f"- Head SHA: `{current_head}`\n\n"
+        "## Changed-scope exploration\nsource-backed graph evidence\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NOEMA_REQUIRE_CODEGRAPH_CONTEXT", "1")
+    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(packet))
+    assert "source-backed graph evidence" in gate.load_codegraph_context(current_head)
+    with pytest.raises(RuntimeError, match="head does not match"):
+        gate.load_codegraph_context("b" * 40)
+
+
+def test_codegraph_loader_fails_closed_when_required_packet_is_missing(monkeypatch) -> None:
+    """Required structural context cannot silently degrade to changed-file context only."""
+    monkeypatch.setenv("NOEMA_REQUIRE_CODEGRAPH_CONTEXT", "1")
+    monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="path was not configured"):
+        gate.load_codegraph_context("a" * 40)

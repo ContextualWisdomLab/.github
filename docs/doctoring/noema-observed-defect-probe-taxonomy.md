@@ -28,7 +28,7 @@ The initial corpus was grounded in independently observed findings on `Contextua
 
 The review prompt instructs the model to attack the closed taxonomy explicitly. The deterministic validator rejects non-string, missing, or unknown `probe_kind` values and requires an exact class-specific `class_evidence` witness schema before a label can count toward diversity. Each class-specific witness field must be an exact `{path, line, side}` reference equal to the probe's changed-side location; free-form boilerplate and borrowing another changed line fail closed. For example, mutable-alias evidence must supply the alias-origin, mutation-attempt, and post-validation-observation roles, while TOCTOU evidence must supply checked-value, intervening-change, and later-use roles. The source binding is deterministic; semantic interpretation remains auditable through the class-specific role names plus the probe's concrete hypothesis, attack/counterexample, outcome, and evidence. Published review evidence includes each validated probe class so operators can inspect what was actually attacked rather than infer coverage from generic prose.
 
-The prompt no longer claims CodeGraph context is supplied: no trusted Noema workflow currently wires that input, so only actual changed-file and review-thread context is advertised. Protected-main deleted-file evidence remains intact: current `main` supplies immutable merge-base lookup and pre-deletion content for removed paths, and the reconciled branch preserves that stronger context boundary.
+The trusted Noema workflow now materializes bounded CodeGraph evidence from an exact-head PR-source clone before model execution. The clone is treated strictly as data: the helper executes only the lock-pinned central CodeGraph CLI, removes GitHub credentials before indexing/exploration, forbids target-owned test/build tooling in the helper contract, and writes a current-head marker under `runner.temp`. The Python gate requires that packet when the workflow enables it and fails closed on missing, oversized, non-regular, or stale-head evidence. Protected-main deleted-file evidence remains intact: current `main` supplies immutable merge-base lookup and pre-deletion content for removed paths, and the reconciled branch preserves that stronger context boundary.
 
 ## Verification contract
 
@@ -41,8 +41,9 @@ The focused regression suite must prove at least the following:
 5. a class witness cannot borrow another changed line as its probe evidence;
 6. two material-change probes using the same validated class fail the diversity requirement;
 7. two valid source-bound class probes can satisfy the formal verdict contract;
-8. an exercised `call_llm` request contains every supported class and its witness-field schema while making no unwired CodeGraph claim; and
-9. every requirements file installed by the permanent observed-probe workflow is included in that workflow's `pull_request.paths`, so lockfile-only environment changes cannot bypass the focused contracts.
+8. an exercised `call_llm` request contains every supported class and its witness-field schema while preserving the supplied bounded evidence;
+9. trusted CodeGraph evidence is generated before review, exact-head bound, required by the gate, and produced without executing target-owned test/build commands; and
+10. every requirements file installed by the permanent observed-probe workflow is included in that workflow's `pull_request.paths`, so lockfile-only environment changes cannot bypass the focused contracts.
 
 Historical TDD evidence remains predecessor evidence only: hosted RED run `33499442683` established the missing taxonomy contract, and hosted GREEN run `33500648307` passed the then-current focused and full suites. A later independent Devin review demonstrated that non-empty free-form `class_evidence` could still manufacture apparent diversity; the follow-up regression rejects generic prose and unrelated changed-line references, and the validator now requires exact structured changed-line references for every class-specific witness field.
 
