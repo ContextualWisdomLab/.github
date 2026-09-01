@@ -200,6 +200,11 @@
       "repository": "supply-chain-control-plane",
       "issue": 1,
       "type": "feature"
+    },
+    {
+      "repository": "governance-risk-compliance",
+      "issue": 65,
+      "type": "documentation"
     }
   ]
 }
