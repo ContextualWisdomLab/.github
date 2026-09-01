@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci" / "reconcile_repository_metadata.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "repository-metadata-reconcile.yml"
 SPEC = importlib.util.spec_from_file_location("reconcile_repository_metadata_pages", SCRIPT)
 assert SPEC and SPEC.loader
 RECONCILER = importlib.util.module_from_spec(SPEC)
@@ -29,6 +30,20 @@ def desired(**overrides):
     }
     state.update(overrides)
     return state
+
+
+def test_metadata_pr_validation_cancels_superseded_head_runs() -> None:
+    """A new PR head must retire the older metadata-validation run, not the hourly apply."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+
+    assert (
+        "repository-metadata-reconcile-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}"
+        in concurrency
+    )
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in concurrency
+    assert "github.event.pull_request.head.sha" not in concurrency
 
 
 def test_manifest_accepts_explicit_workflow_pages_mode() -> None:
