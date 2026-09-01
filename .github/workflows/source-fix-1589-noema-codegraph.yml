@@ -21,38 +21,31 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: true
-      - name: Apply source-only GREEN transform
+      - name: Apply non-workflow CodeGraph source repair
         env:
           TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          log="${RUNNER_TEMP}/source-fix-1589.log"
-          set +e
-          {
-            python3 scripts/ci/source_fix_1589_noema_codegraph.py &&
-            python3 -m py_compile scripts/ci/noema_review_gate.py tests/test_noema_codegraph_context_contract.py &&
-            bash -n scripts/ci/noema_codegraph_context.sh &&
-            git diff --check &&
-            test ! -e .github/workflows/source-fix-1589-noema-codegraph.yml &&
-            test ! -e scripts/ci/source_fix_1589_noema_codegraph.py
-          } >"$log" 2>&1
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            cat "$log" >&2
-            git reset --hard HEAD
-            cp "$log" scripts/ci/source_fix_1589_failure.log
-            git config user.name "cwl-source-fix"
-            git config user.email "actions@users.noreply.github.com"
-            git add scripts/ci/source_fix_1589_failure.log
-            git commit -m "ci: capture Noema CodeGraph source-fix failure"
-            git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
-            exit "$status"
-          fi
+
+          python3 scripts/ci/source_fix_1589_noema_codegraph.py
+          python3 -m py_compile scripts/ci/noema_review_gate.py tests/test_noema_codegraph_context_contract.py
+          bash -n scripts/ci/noema_codegraph_context.sh
+
+          # The transformer also edits noema-review.yml and removes this
+          # one-shot workflow. GITHUB_TOKEN intentionally has no workflow
+          # mutation permission, so keep those two paths unchanged in this
+          # commit. The trusted connector performs that workflow-file mutation
+          # separately after the source/helper/tests are published.
+          git checkout HEAD -- .github/workflows/noema-review.yml
+          git checkout HEAD -- .github/workflows/source-fix-1589-noema-codegraph.yml
+
+          git diff --check
           git config user.name "cwl-source-fix"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git commit -m "fix(noema): bind review to exact-head CodeGraph context"
+          test -e scripts/ci/noema_codegraph_context.sh
+          test ! -e scripts/ci/source_fix_1589_noema_codegraph.py
+          git commit -m "fix(noema): prepare exact-head CodeGraph evidence boundary"
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
