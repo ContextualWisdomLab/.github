@@ -73,6 +73,7 @@ def _repository_ruleset_payload() -> dict:
                     "dismiss_stale_reviews_on_push": True,
                     "require_last_push_approval": False,
                     "required_review_thread_resolution": True,
+                    "required_reviewers": [],
                     "require_extra_approval_for_unattributed_changes": True,
                     "allowed_merge_methods": ["merge", "squash"],
                 },
@@ -91,3 +92,29 @@ def test_central_ruleset_accepts_zero_approvals_without_last_push_approval() -> 
 def test_repository_ruleset_accepts_zero_approvals_without_last_push_approval() -> None:
     """The control-plane repository must use the same satisfiable admission model."""
     assert audit.audit_repository_ruleset(_repository_ruleset_payload()) == []
+
+
+def test_central_ruleset_rejects_synthetic_required_reviewer() -> None:
+    """A named reviewer cannot manufacture independence in a one-human fleet."""
+    payload = _central_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_reviewers"] = [
+        {"reviewer_id": 1234, "reviewer_type": "User"}
+    ]
+
+    assert audit.audit_ruleset(payload) == [
+        "central solo-maintainer ruleset must not configure required reviewers"
+    ]
+
+
+def test_repository_ruleset_rejects_synthetic_required_reviewer() -> None:
+    """The owner repository cannot reintroduce the same deadlock by reviewer identity."""
+    payload = _repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_reviewers"] = [
+        {"reviewer_id": 1234, "reviewer_type": "User"}
+    ]
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository solo-maintainer ruleset must not configure required reviewers"
+    ]
