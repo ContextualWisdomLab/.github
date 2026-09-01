@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "ci" / "agent_mention_router.py"
 
@@ -138,19 +136,42 @@ def test_reaction_failure_does_not_hide_successful_dispatch(capsys) -> None:
     assert "::warning::" in capsys.readouterr().out
 
 
-def test_acknowledgement_comment_failure_remains_visible() -> None:
-    """A missing durable receipt still fails so a later sweep can repair it."""
+def test_acknowledgement_comment_failure_does_not_hide_dispatch(capsys) -> None:
+    """A cosmetic comment failure preserves dispatch and permits a retry."""
 
     module = load_module()
     central = FakeClient()
     target = FakeClient(fail_comment=True)
+    cache = {}
 
-    with pytest.raises(RuntimeError, match="comment publication failed"):
-        module.dispatch_request(
-            request(module),
-            target_client=target,
-            dispatch_client=central,
-            opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
-        )
+    assert module.dispatch_request(
+        request(module),
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
+        ledger_artifact_cache=cache,
+    ) == ("@opencode-agent",)
 
     assert len(dispatch_mutations(central)) == 1
+    assert len(acknowledgement_comments(target)) == 1
+    assert not any(key.startswith("acknowledgement:") for key in cache)
+    assert (
+        capsys.readouterr().out
+        == "::warning::Agent mention acknowledgement comment failed; "
+        "durable dispatch state is preserved: comment publication failed\n"
+    )
+
+    target.fail_comment = False
+    assert module.dispatch_request(
+        request(module),
+        target_client=target,
+        dispatch_client=central,
+        opencode_allowlist=frozenset({"ContextualWisdomLab/.github"}),
+        ledger_artifact_cache=cache,
+    ) == ()
+
+    assert len(dispatch_mutations(central)) == 1
+    comments = acknowledgement_comments(target)
+    assert len(comments) == 2
+    assert "Already queued @opencode-agent" in comments[-1]["body"]
+    assert any(key.startswith("acknowledgement:") for key in cache)

@@ -148,7 +148,7 @@ def test_merge_scheduler_targeted_dispatch_run_block_is_valid_bash():
 
 
 def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
-    """Only an allowlisted same-repository open PR reaches scheduler outputs."""
+    """Allowlisted open PRs keep exact outputs even when their head is a fork."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -170,8 +170,17 @@ def test_merge_scheduler_targeted_dispatch_validates_live_exact_pr(tmp_path):
         """#!/usr/bin/env bash
 set -euo pipefail
 test "$1" = api
-test "$2" = repos/ContextualWisdomLab/naruon/pulls/1179
-printf '%s\\n' "$FAKE_PULL_JSON"
+case "$2" in
+  repos/ContextualWisdomLab/naruon/pulls/1179)
+    printf '%s\\n' "$FAKE_PULL_JSON"
+    ;;
+  repos/ContextualWisdomLab/naruon)
+    printf '%s\\n' 'main'
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 """,
         encoding="utf-8",
     )
@@ -217,7 +226,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
     assert accepted.returncode == 0, accepted.stderr
     assert output.read_text(encoding="utf-8").splitlines() == [
         "repository=ContextualWisdomLab/naruon",
-        "base_branch=develop",
+        "base_branch=main",
         "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
     ]
 
@@ -260,6 +269,35 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         env=cross_repo_env,
     )
 
-    assert cross_repo.returncode == 1
-    assert "cross-repository" in cross_repo.stdout
+    assert cross_repo.returncode == 0, cross_repo.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "repository=ContextualWisdomLab/naruon",
+        "base_branch=main",
+        "head_sha=4afd4af7ad343660356791873d940aa2846f40c2",
+    ]
+
+    output.unlink()
+    malformed_head_env = {
+        **env,
+        "FAKE_PULL_JSON": json.dumps(
+            {
+                **cross_repo_pull,
+                "head": {
+                    **cross_repo_pull["head"],
+                    "repo": {"full_name": "outside/fork/extra"},
+                },
+            }
+        ),
+    }
+    malformed_head = subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=malformed_head_env,
+    )
+
+    assert malformed_head.returncode == 1
+    assert "malformed live PR metadata" in malformed_head.stdout
     assert not output.exists()

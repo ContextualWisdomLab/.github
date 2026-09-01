@@ -80,6 +80,34 @@ def inherited_ruleset_payload() -> dict:
     return payload
 
 
+def stacked_ruleset_payload() -> dict:
+    """Return the workflow-only non-default-branch ruleset shape."""
+    return {
+        "id": 21732164,
+        "name": "CWL Stacked OpenCode required workflow",
+        "target": "branch",
+        "enforcement": "evaluate",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["~DEFAULT_BRANCH"]},
+        },
+        "rules": [
+            {
+                "type": "workflows",
+                "parameters": {
+                    "do_not_enforce_on_create": True,
+                    "workflows": [
+                        {
+                            "repository_id": 1274066402,
+                            "path": ".github/workflows/opencode-review.yml",
+                            "ref": "refs/heads/main",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
 def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(ruleset_payload())))
 
@@ -92,6 +120,72 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
+
+
+def test_expected_stacked_ruleset_passes(monkeypatch, capsys) -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"][0]["parameters"]["workflows"][0]["sha"] = "a" * 40
+    monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(payload)))
+
+    assert audit.main(["--stacked"]) == 0
+    assert (
+        "PASS: ruleset 21732164 audits 1 central required workflows in evaluate mode"
+        in capsys.readouterr().out
+    )
+
+
+def test_stacked_ruleset_rejects_merge_policy_and_wrong_scope() -> None:
+    payload = stacked_ruleset_payload()
+    payload["conditions"]["ref_name"] = {"include": ["~DEFAULT_BRANCH"], "exclude": []}
+    payload["rules"].append({"type": "pull_request", "parameters": {}})
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset does not include all branches",
+        "stacked ruleset does not exclude only default branches",
+        "stacked ruleset has forbidden rule types: ['pull_request']",
+    ]
+
+
+def test_stacked_ruleset_rejects_additional_excluded_refs() -> None:
+    payload = stacked_ruleset_payload()
+    payload["conditions"]["ref_name"]["exclude"].append("refs/heads/release/**")
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset does not exclude only default branches"
+    ]
+
+
+def test_stacked_ruleset_rejects_wrong_workflow_contract() -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"][0]["parameters"] = None
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked OpenCode workflow does not exempt branch creation",
+        "stacked ruleset must require only the central OpenCode workflow",
+    ]
+
+
+def test_stacked_ruleset_reports_typeless_rules_as_drift() -> None:
+    payload = stacked_ruleset_payload()
+    payload["rules"].append({"parameters": {}})
+
+    assert audit.audit_stacked_ruleset(payload) == [
+        "stacked ruleset has forbidden rule types: ['<missing>']"
+    ]
+
+
+def test_stacked_ruleset_reports_structural_drift() -> None:
+    assert audit.audit_stacked_ruleset({"rules": "invalid"}) == [
+        "expected stacked ruleset id 21732164",
+        "expected stacked ruleset name CWL Stacked OpenCode required workflow",
+        "stacked ruleset target is not branch",
+        "stacked ruleset enforcement is not evaluate",
+        "stacked ruleset does not include all branches",
+        "stacked ruleset does not exclude only default branches",
+        "expected one stacked workflows rule, found 0",
+        "stacked OpenCode workflow does not exempt branch creation",
+        "stacked ruleset must require only the central OpenCode workflow",
+    ]
 
 
 def test_inherited_scope_allows_private_exclusion_outside_token_visibility() -> None:
@@ -283,6 +377,10 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert "HTTP 404" in workflow
     assert "audit_central_required_workflows.py" in workflow
     assert "Ruleset audit could not read inherited organization ruleset" in workflow
+    assert 'STACKED_RULESET_ID: "21732164"' in workflow
+    assert "audit_central_required_workflows.py --stacked" in workflow
+    assert "CWL Stacked OpenCode required workflow" in rollout
+    assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
 
@@ -293,6 +391,23 @@ def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results(
     )
 
     assert "--output=semgrep-results.raw.sarif" in workflow
+    assert (
+        'SEMGREP_IMAGE: "semgrep/semgrep@sha256:'
+        "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942\""
+    ) in workflow
+    assert (
+        workflow.count(
+            "2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+        )
+        == 1
+    )
+    semgrep_job = workflow.split("\n  semgrep:\n", 1)[1]
+    job_header, steps = semgrep_job.split("\n    steps:\n", 1)
+    assert 'SEMGREP_IMAGE: "semgrep/semgrep@sha256:' in job_header
+    assert 'echo "Using ${SEMGREP_IMAGE}"' in steps
+    assert 'docker manifest inspect "${SEMGREP_IMAGE}"' in steps
+    assert '--entrypoint semgrep \\\n            "${SEMGREP_IMAGE}" \\\n' in steps
+    assert "Verify pinned Semgrep manifest" in workflow
     assert "Remove explicitly suppressed findings from Semgrep SARIF" in workflow
     assert ".suppressions // []" in workflow
     assert "SEMGREP_SUPPRESSED_COUNT" in workflow

@@ -5,12 +5,26 @@ engine**.
 
 - `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
   of every hour.
+- `orgmetra-hourly-review-repair.yml` owns Orgmetra's heartbeat at minute 58
+  of every hour against protected `develop`.
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit
   repository and base branch.
 - `pr-review-autofix.yml` is the bounded write-capable worker. It uses OpenCode
-  with NVIDIA NIM and does not approve or merge pull requests.
+  routed through the vendored contextual-orchestrator gateway and does not approve or merge pull
+  requests.
+
+Every product caller, Orgmetra included, is provider-neutral by construction: the worker's model
+boundary is the contextual-orchestrator gateway (ADR-0003). Available provider credentials (Bytez,
+NVIDIA NIM primary/sub, OpenRouter, and the separately governed OpenAI credential) stay in the
+sidecar's process-local registry; discovery selects only routes eligible for the requested virtual
+model policy. An individual provider credential may be absent without making the gateway invalid.
+For scheduled repair, the fail-closed `contextual-orchestrator/orchestrator/free` path proceeds with
+remaining eligible providers and fails only when required gateway configuration is unavailable or
+discovery yields no eligible free-tier route. A caller schedule is not evidence that gateway
+configuration, discovery, or a live OpenCode tool loop are available; those facts require exact
+worker-run evidence.
 
 Merge eligibility remains owned by the separate merge scheduler, branch
 protection, required checks, independent review, and unresolved-thread policy.
@@ -35,9 +49,28 @@ The scheduled heartbeat is `23 * * * *`. Repository-scoped concurrency and
 not overlap its successor. At most one repair dispatch is created per run.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
-`OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward
-`NVIDIA_NIM_API_KEY`; the model credential is scoped exclusively to the two
-OpenCode execution steps in the separately reviewed autofix worker.
+`OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward any of the five
+gateway provider secrets; those are scoped exclusively to the sidecar-provisioning step in the
+separately reviewed autofix worker (see
+[`docs/doctoring/hourly-nvidia-nim-autofix.md`](../doctoring/hourly-nvidia-nim-autofix.md)).
+
+## Orgmetra execution contract
+
+The Orgmetra caller provides the following immutable operating parameters:
+
+```yaml
+target_repository: ContextualWisdomLab/Orgmetra
+base_branch: develop
+max_prs: "50"
+max_dispatches: "1"
+retry_hours: "2"
+```
+
+Its heartbeat is `58 * * * *` with non-cancelling concurrency. It passes only
+the established scheduler credentials and does not receive provider model
+secrets. Orgmetra's HCM checks, PostgreSQL evidence, Rust/GPU psychometric
+evidence, browser evidence, independent approval, and protected merge gates
+remain target-repository responsibilities.
 
 ## Reusable target-selection contract
 
@@ -173,7 +206,11 @@ organization-level queue inspection and bounded repair dispatch.
 When a scheduled run fails, classify the result before rerunning:
 
 - no actionable file-scoped feedback: expected no-op;
-- missing `NVIDIA_NIM_API_KEY`: central secret configuration failure;
+- missing required sidecar configuration (`CONTEXTUAL_ORCHESTRATOR_BASE_URL` or
+  `CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE`): central gateway configuration failure;
+- one or more individual provider credentials absent: continue discovery with
+  the credentials that are available; classify a model-admission failure only
+  if the requested policy has no eligible route after discovery;
 - head changed: safe optimistic-concurrency refusal; inspect the new head rather
   than retrying predecessor evidence;
 - out-of-scope or ignored-path change: treat as a security failure and preserve
@@ -199,8 +236,9 @@ Permanent tests prove:
 - the dispatch budget and same-head retry floor remain one;
 - caller and reusable-workflow secrets are explicit and never use
   `secrets: inherit`;
-- immutable source, NVIDIA-only model authentication, child-process credential
-  stripping, live-head guards, and independent reviewer identity remain intact;
+- immutable source, gateway-only model authentication (never a directly bound provider key),
+  child-process credential stripping, live-head guards, and independent reviewer identity remain
+  intact;
 - ordinary and conflict repair share the complete ignored-inclusive snapshot and
   NUL-delimited allowlist boundary;
 - the RCA and remediation-feasibility gate prevents speculative or
