@@ -2585,7 +2585,9 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' not in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" != "$live_head_sha" ]' in metadata_step
+    assert "proceeding with the live head" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in metadata_step
