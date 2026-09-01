@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 ORGANIZATION = "ContextualWisdomLab"
@@ -80,8 +81,14 @@ def load_taxonomy(path: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
     return type_map, assignments
 
 
-def _gh_api(method: str, endpoint: str, *, body: Any = None) -> str:
-    """Call GitHub CLI with a bounded endpoint and optional JSON body."""
+def _gh_api(
+    method: str,
+    endpoint: str,
+    *,
+    body: Any = None,
+    allow_not_found: bool = False,
+) -> str:
+    """Call GitHub CLI with bounded JSON and optional idempotent 404 handling."""
 
     command = ["gh", "api", "--method", method, endpoint]
     if body is not None:
@@ -95,6 +102,9 @@ def _gh_api(method: str, endpoint: str, *, body: Any = None) -> str:
         timeout=30,
     )
     if completed.returncode != 0:
+        combined = f"{completed.stdout}\n{completed.stderr}"
+        if allow_not_found and ("HTTP 404" in combined or "Not Found" in combined):
+            return ""
         raise RuntimeError(f"GitHub API request failed for {endpoint}")
     return completed.stdout
 
@@ -121,7 +131,7 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
 def reconcile_assignment(
     assignment: dict[str, Any], type_map: dict[str, str]
 ) -> None:
-    """Reconcile one issue or pull request while preserving unrelated labels."""
+    """Mutate only taxonomy labels and preserve concurrent unrelated labels."""
 
     repository = assignment["repository"]
     issue = assignment["issue"]
@@ -130,10 +140,32 @@ def reconcile_assignment(
     endpoint = f"repos/{ORGANIZATION}/{repository}/issues/{issue}"
     payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
     current = _label_names(payload)
-    desired = [label for label in current if label not in managed]
-    desired.append(desired_label)
-    if current != desired:
-        _gh_api("PATCH", endpoint, body={"labels": desired})
+    obsolete = [
+        label for label in current if label in managed and label != desired_label
+    ]
+    missing_desired = desired_label not in current
+    if not obsolete and not missing_desired:
+        return
+
+    if missing_desired:
+        _gh_api("POST", f"{endpoint}/labels", body={"labels": [desired_label]})
+    for label in obsolete:
+        encoded_label = quote(label, safe="")
+        _gh_api(
+            "DELETE",
+            f"{endpoint}/labels/{encoded_label}",
+            allow_not_found=True,
+        )
+
+    verified_payload = _plain_dict(
+        json.loads(_gh_api("GET", endpoint)), field="GitHub issue"
+    )
+    verified = _label_names(verified_payload)
+    managed_after = {label for label in verified if label in managed}
+    if managed_after != {desired_label}:
+        raise RuntimeError(
+            f"managed labels did not converge for {repository}#{issue}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
