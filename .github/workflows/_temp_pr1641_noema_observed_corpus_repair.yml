@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   repair:
-    if: github.repository == 'ContextualWisdomLab/.github'
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event.head_commit.message == 'ci(temp): execute repaired PR1641 writer'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -37,22 +39,57 @@ jobs:
         run: >-
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Verify the committed regression is RED before production mutation
+      - name: Verify the committed taxonomy regression is specifically RED
         shell: bash
         run: |
           set -euo pipefail
+          red_log="${RUNNER_TEMP}/pr1641-taxonomy-red.log"
           set +e
-          PYTHONPATH=. python3 -m pytest -q tests/test_noema_observed_defect_corpus_current_main.py
+          PYTHONPATH=. python3 -m pytest -q tests/test_noema_observed_defect_corpus_current_main.py >"$red_log" 2>&1
           red_rc=$?
           set -e
+          cat "$red_log"
           if [ "$red_rc" -eq 0 ]; then
             echo '::error::Expected the current-main regression corpus to fail before the causal repair.'
             exit 1
           fi
-          echo "Verified RED regression corpus against pre-repair source (pytest rc=$red_rc)."
+          if ! grep -Fq "has no attribute 'OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS'" "$red_log"; then
+            echo '::error::RED failed for an unexpected reason; refusing production mutation.'
+            exit 1
+          fi
+          if grep -Fq 'ERROR collecting' "$red_log"; then
+            echo '::error::RED was a collection/environment error rather than the expected missing-contract assertion path.'
+            exit 1
+          fi
+          echo "Verified expected missing-taxonomy RED against pre-repair source (pytest rc=$red_rc)."
 
-      - name: Apply smallest trusted validator, prompt, and traceability repair
+      - name: Apply first-stage trusted validator and prompt repair
         run: python3 scripts/ci/_temp_pr1641_apply_review_corpus.py
+
+      - name: Prove generic relabeling remains RED before the review-followup repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          red_log="${RUNNER_TEMP}/pr1641-generic-evidence-red.log"
+          set +e
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_class_evidence_observation_contract.py::test_location_only_class_evidence_cannot_relabel_generic_probes \
+            >"$red_log" 2>&1
+          red_rc=$?
+          set -e
+          cat "$red_log"
+          if [ "$red_rc" -eq 0 ]; then
+            echo '::error::Expected location-only generic evidence to be accepted by the first-stage implementation.'
+            exit 1
+          fi
+          if ! grep -Fq 'DID NOT RAISE' "$red_log"; then
+            echo '::error::Generic-evidence RED failed for an unexpected reason; refusing the follow-up production mutation.'
+            exit 1
+          fi
+          echo "Verified generic relabeling RED against first-stage implementation (pytest rc=$red_rc)."
+
+      - name: Apply review-followup observation-evidence repair
+        run: python3 scripts/ci/_temp_pr1641_finish_review_findings.py
 
       - name: Verify GREEN focused and broader contracts
         shell: bash
@@ -60,10 +97,14 @@ jobs:
           set -euo pipefail
           PYTHONPATH=. python3 -m pytest -q \
             tests/test_noema_observed_defect_corpus_current_main.py \
+            tests/test_noema_class_evidence_observation_contract.py \
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_review_gate.py
           PYTHONPATH=. python3 -m pytest -q
-          interrogate --fail-under=100 scripts/ci/noema_review_gate.py scripts/ci/_temp_pr1641_apply_review_corpus.py
+          interrogate --fail-under=100 \
+            scripts/ci/noema_review_gate.py \
+            scripts/ci/_temp_pr1641_apply_review_corpus.py \
+            scripts/ci/_temp_pr1641_finish_review_findings.py
           python3 -m compileall -q scripts/ci tests
           git diff --check
 
@@ -73,9 +114,11 @@ jobs:
           set -euo pipefail
           rm -f \
             .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml \
-            scripts/ci/_temp_pr1641_apply_review_corpus.py
+            scripts/ci/_temp_pr1641_apply_review_corpus.py \
+            scripts/ci/_temp_pr1641_finish_review_findings.py
           test ! -e .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml
           test ! -e scripts/ci/_temp_pr1641_apply_review_corpus.py
+          test ! -e scripts/ci/_temp_pr1641_finish_review_findings.py
           git config user.name 'ContextualWisdomLab repair automation'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
