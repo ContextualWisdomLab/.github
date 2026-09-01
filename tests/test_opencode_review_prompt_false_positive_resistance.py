@@ -81,6 +81,21 @@ def test_naming_blocker_paragraph_requires_source_backed_causal_surface(
 
 
 @pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda path: path.name)
+def test_review_prompts_preserve_new_database_object_naming_contract(
+    prompt_path: Path,
+) -> None:
+    """False-positive hardening must not erase the binding new-DB naming rule."""
+    prompt = prompt_path.read_text(encoding="utf-8")
+    naming_review = paragraph_starting(prompt, "Review object naming and reserved-word safety")
+    naming_policy = paragraph_starting(prompt, "For newly added or renamed identifiers")
+
+    assert "New database objects are the repository-specific exception" in naming_review
+    assert "at least two words in snake_case" in naming_review
+    assert "existing CamelCase/PascalCase database objects are grandfathered" in naming_review
+    assert "outside the explicit new-database-object naming contract" in naming_policy
+
+
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda path: path.name)
 def test_review_prompts_attack_observed_false_negative_classes(
     prompt_path: Path,
 ) -> None:
