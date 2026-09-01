@@ -366,9 +366,13 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert 'endswith("@" + $head_sha)' in cleanup_job
     assert "/force-cancel" in cleanup_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}"' in cleanup_job
-    assert "could not re-verify the live pull request before cancelling" in cleanup_job
+    assert "could not verify the live pull request" in cleanup_job
+    assert "target changed before run selection" in cleanup_job
     assert "target changed before cancellation" in cleanup_job
-    assert cleanup_job.index('live_pr_json="$(gh api') < cleanup_job.index(
+    assert cleanup_job.index("if ! live_target_matches") < cleanup_job.index(
+        'runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"'
+    )
+    assert cleanup_job.rindex("if ! live_target_matches") < cleanup_job.index(
         'gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel"'
     )
     assert "actions: write" in cleanup_job
@@ -422,6 +426,98 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
         check=True,
     )
     assert result.stdout.splitlines() == ["1"]
+
+
+def _run_strix_cleanup(tmp_path: Path, pull_states: list[dict[str, object]]) -> str:
+    """Execute the production cleanup step against a stateful fake ``gh``."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup")
+    step = workflow_step(
+        workflow_text("strix.yml"),
+        "Cancel queued and running scans for superseded or closed pull request heads",
+    )
+    run_block = step.split("        run: |\n", 1)[1].split("\n  strix:", 1)[0]
+    script = textwrap.dedent(run_block)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    pulls = tmp_path / "pulls"
+    pulls.write_text(
+        "\n".join(json.dumps(state) for state in pull_states) + "\n",
+        encoding="utf-8",
+    )
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"/pulls/7"* ]]; then
+  count_file="${FAKE_PULLS}.count"
+  count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$count_file"
+  sed -n "${count}p" "$FAKE_PULLS"
+  exit 0
+fi
+if [[ "$*" == *"actions/runs?status=queued"* ]]; then
+  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  exit 0
+fi
+if [[ "$*" == *"actions/runs?status="* ]]; then
+  printf '%s\n' '{"workflow_runs":[]}'
+  exit 0
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_CALLS": str(calls),
+        "FAKE_PULLS": str(pulls),
+        "TARGET_REPOSITORY": "owner/repo",
+        "TARGET_PR_NUMBER": "7",
+        "TARGET_PR_HEAD_SHA": "current",
+        "PR_ACTION": "synchronize",
+        "CURRENT_RUN_ID": "999",
+    }
+    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+    return calls.read_text(encoding="utf-8")
+
+
+def test_old_strix_cleanup_never_lists_or_cancels_after_live_head_advanced(
+    tmp_path: Path,
+) -> None:
+    """A late old synchronize job must stop before selecting current runs."""
+    calls = _run_strix_cleanup(
+        tmp_path, [{"state": "open", "head": {"sha": "newer"}}] * 5
+    )
+
+    assert "actions/runs?status=" not in calls
+    assert "/cancel" not in calls
+    assert "/force-cancel" not in calls
+
+
+def test_strix_cleanup_revalidates_after_selection_before_cancellation(
+    tmp_path: Path,
+) -> None:
+    """A head advance after selection must prevent the pending mutation."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [
+            {"state": "open", "head": {"sha": "current"}},
+            {"state": "open", "head": {"sha": "newer"}},
+        ]
+        + [{"state": "open", "head": {"sha": "newer"}}] * 4,
+    )
+
+    assert "actions/runs?status=queued" in calls
+    assert "/actions/runs/100/cancel" not in calls
+    assert "/actions/runs/100/force-cancel" not in calls
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:

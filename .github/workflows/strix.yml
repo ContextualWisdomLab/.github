@@ -99,8 +99,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          live_target_matches() {
+            local live_pr_json live_action
+            if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not verify the live pull request; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
+              return 1
+            fi
+            live_action="$(jq -r '[.state, .head.sha // ""] | @tsv' <<<"$live_pr_json")"
+            { [ "$PR_ACTION" = "closed" ] && [ "$live_action" = $'closed\t'"$TARGET_PR_HEAD_SHA" ]; } ||
+              { [ "$PR_ACTION" = "synchronize" ] && [ "$live_action" = $'open\t'"$TARGET_PR_HEAD_SHA" ]; }
+          }
+
           cancel_runs() {
             local status="$1"
+            if ! live_target_matches; then
+              echo "::notice::Strix cleanup target changed before run selection; leaving runs unchanged."
+              return 0
+            fi
             local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
             local runs_json
             if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-cleanup-gh-error)"; then
@@ -137,15 +153,7 @@ jobs:
             fi
             while IFS= read -r run_id; do
               [ -n "$run_id" ] || continue
-              local live_pr_json live_action
-              if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
-                echo "::warning::Strix cleanup could not re-verify the live pull request before cancelling; leaving runs unchanged."
-                sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
-                return 0
-              fi
-              live_action="$(jq -r '[.state, .head.sha // ""] | @tsv' <<<"$live_pr_json")"
-              if { [ "$PR_ACTION" = "closed" ] && [ "$live_action" != $'closed\t'"$TARGET_PR_HEAD_SHA" ]; } ||
-                { [ "$PR_ACTION" = "synchronize" ] && [ "$live_action" != $'open\t'"$TARGET_PR_HEAD_SHA" ]; }; then
+              if ! live_target_matches; then
                 echo "::notice::Strix cleanup target changed before cancellation; leaving runs unchanged."
                 return 0
               fi
