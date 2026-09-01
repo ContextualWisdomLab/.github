@@ -57,6 +57,14 @@ def _head_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
     return repository, ref, sha
 
 
+def _base_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Normalize a PR-style base object to repository, ref, and lowercase SHA."""
+    repository = ((value.get("repo") or {}).get("full_name") or "")
+    ref = str(value.get("ref") or "")
+    sha = str(value.get("sha") or "").lower()
+    return repository, ref, sha
+
+
 def _run_matches_head_identity(
     run_data: Mapping[str, Any], *, repository: str, branch: str, head_sha: str
 ) -> bool:
@@ -142,19 +150,23 @@ def _run_pr_scope_is_safe(
     current_pr_number: int,
     associated_prs: Mapping[int, Mapping[str, Any]],
 ) -> bool:
-    """Keep evidence isolated across live PRs while allowing closed predecessors."""
+    """Keep evidence isolated across live PRs while allowing exact closed predecessors."""
     associations = _pull_request_associations(run_data)
     if not associations:
         return False
-    live_repo, live_ref, live_sha = _head_tuple(live_pr.get("head") or {})
-    live_base_ref = str(((live_pr.get("base") or {}).get("ref") or ""))
+    live_head = _head_tuple(live_pr.get("head") or {})
+    live_base = _base_tuple(live_pr.get("base") or {})
+    if not all(live_head) or not all(live_base) or not GIT_SHA_RE.fullmatch(live_base[2]):
+        return False
     saw_current = False
     saw_closed_predecessor = False
     for association in associations:
         number = _association_number(association)
         if number is None:
             return False
-        if _head_tuple(association.get("head") or {}) != (live_repo, live_ref, live_sha):
+        if _head_tuple(association.get("head") or {}) != live_head:
+            return False
+        if _base_tuple(association.get("base") or {}) != live_base:
             return False
         if number == current_pr_number:
             saw_current = True
@@ -164,15 +176,9 @@ def _run_pr_scope_is_safe(
             return False
         if other.get("state") == "open":
             return False
-        other_repo, other_ref, other_sha = _head_tuple(other.get("head") or {})
-        other_base_ref = str(((other.get("base") or {}).get("ref") or ""))
-        if (
-            other_repo != live_repo
-            or other_ref != live_ref
-            or other_sha != live_sha
-            or not live_base_ref
-            or other_base_ref != live_base_ref
-        ):
+        if _head_tuple(other.get("head") or {}) != live_head:
+            return False
+        if _base_tuple(other.get("base") or {}) != live_base:
             return False
         saw_closed_predecessor = True
     return saw_current or saw_closed_predecessor
