@@ -70,5 +70,28 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "type": "feature",
         },
         {"repository": "noema", "issue": 530, "type": "feature"},
+        {"repository": "bandscope", "issue": 1125, "type": "documentation"},
+        {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
+        {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
+        {
+            "repository": "semantic-data-portal",
+            "issue": 90,
+            "type": "documentation",
+        },
+        {
+            "repository": "accounting-information-platform",
+            "issue": 45,
+            "type": "documentation",
+        },
+        {"repository": "clearfolio", "issue": 538, "type": "documentation"},
+        {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
+        {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
+        {"repository": "keyverse", "issue": 127, "type": "documentation"},
+        {
+            "repository": "mhtml-etl-gateway",
+            "issue": 56,
+            "type": "documentation",
+        },
+        {"repository": "j-planner", "issue": 2, "type": "documentation"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
