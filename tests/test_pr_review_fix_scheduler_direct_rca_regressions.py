@@ -72,6 +72,31 @@ def test_failed_check_rca_precedes_ordinary_review(monkeypatch: Any, is_draft: b
     assert captured["resolve_conflict"] is False
 
 
+@pytest.mark.parametrize(
+    ("is_draft", "expected_reason"),
+    [
+        (True, "draft PR"),
+        (False, "merge conflict is not authorized for repair"),
+    ],
+)
+def test_conflicted_pr_stays_fail_closed_without_repair_authority(
+    is_draft: bool,
+    expected_reason: str,
+) -> None:
+    """A conflict cannot be widened into RCA without conflict-repair authority."""
+    pr = make_pr(is_draft=is_draft)
+    pr["mergeStateStatus"] = "DIRTY"
+    pr["reviews"] = {"nodes": []}
+    args = fix.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    )
+
+    assert fix.inspect_pr("owner/repo", pr, args) == (
+        "skip",
+        (expected_reason,),
+    )
+
+
 def test_scan_queue_control_plane_failure_does_not_trigger_rca() -> None:
     """A failed queue scanner cannot consume a source-repair retry by itself."""
     pr = make_pr()
