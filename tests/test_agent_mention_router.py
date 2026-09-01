@@ -265,6 +265,30 @@ def test_exact_mentions_rejects_trailing_path_continuation(body: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/oc?mode=docs",
+        "/opencode?next=x",
+    ],
+)
+def test_exact_mentions_rejects_trailing_query_string(body: str) -> None:
+    """A query string glued directly onto the alias is not a mention.
+
+    Seventh-round finding on #1537's successor PR (CodeRabbit): the shared
+    trailing boundary excluded a following letter, digit, underscore,
+    hyphen, or slash, but not a following ``?``, so a query string with no
+    separator (``/oc?mode=docs``, ``/opencode?next=x``) still matched as a
+    complete mention — the same "alias text is a complete match, but
+    something non-word continues right after it" shape as the sixth-round
+    trailing-slash finding, just with ``?`` instead of ``/``. The fix adds
+    ``?`` to the same shared trailing exclusion.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
