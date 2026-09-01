@@ -60,6 +60,12 @@ def test_load_taxonomy_contracts(tmp_path) -> None:
     bad_payloads = [
         [],
         {
+            "schema_version": 1,
+            "type": {"feature": "enhancement"},
+            "assignments": [],
+            "extra": True,
+        },
+        {
             "schema_version": True,
             "type": {"feature": "enhancement"},
             "assignments": [],
@@ -80,6 +86,18 @@ def test_load_taxonomy_contracts(tmp_path) -> None:
             "schema_version": 1,
             "type": {"feature": "enhancement"},
             "assignments": [[]],
+        },
+        {
+            "schema_version": 1,
+            "type": {"feature": "enhancement"},
+            "assignments": [
+                {
+                    "repository": "Repo",
+                    "issue": 1,
+                    "type": "feature",
+                    "extra": True,
+                }
+            ],
         },
         {
             "schema_version": 1,
@@ -252,6 +270,22 @@ def test_parse_args_and_main_modes(monkeypatch, tmp_path, capsys) -> None:
         LABELS.main()
 
     seen = []
+    monkeypatch.setattr(
+        LABELS,
+        "parse_args",
+        lambda: argparse.Namespace(
+            taxonomy=path, validate_only=False, repository=["Repo"]
+        ),
+    )
+    monkeypatch.setattr(
+        LABELS,
+        "reconcile_assignment",
+        lambda assignment, type_map: seen.append(assignment["repository"]),
+    )
+    assert LABELS.main() == 0
+    assert seen == ["Repo"]
+
+    seen.clear()
     monkeypatch.setattr(
         LABELS,
         "parse_args",
