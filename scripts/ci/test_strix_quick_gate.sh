@@ -773,12 +773,12 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
+	assert_file_contains "$workflow_file" 'timeout-minutes: 305' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' "opencode primary review uses the full pool review budget"
 assert_file_contains "$workflow_file" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' "opencode free-tier failover timeout is hour-class (~3600s)"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "opencode review uses the gateway endpoint for all model candidates"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "opencode review uses the gateway credential for all model candidates"
@@ -950,7 +950,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
+	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "11700"' "opencode catalog fallback uses the full pool review budget"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" '"enabled_providers": ["contextual-orchestrator"]' "opencode review keeps the generated provider set gateway-only"
@@ -5382,6 +5382,14 @@ EOS
 		echo "Error: PR changed-file scope missing CI support dependency ($target_path)" >&2
 		exit 55
 		;;
+	pr-changed-scope-includes-opencode-normalizer)
+		if [ -f "$target_path/fuzz/fuzz_opencode_review_normalize_output.py" ] && [ -f "$target_path/scripts/ci/opencode_review_normalize_output.py" ]; then
+			echo "scan ok with opencode normalizer support dependency"
+			exit 0
+		fi
+		echo "Error: PR changed-file scope missing opencode normalizer support dependency ($target_path)" >&2
+		exit 64
+		;;
 	pr-deployment-scope-entrypoint-context)
 		if [ ! -f "$target_path/Dockerfile" ]; then
 			echo "Error: deployment scope missing Dockerfile ($target_path)" >&2
@@ -5579,6 +5587,10 @@ EOS
 		echo 'def real_changed_endpoint(): pass' >"$repo_root_dir/backend/api/emails.py"
 	elif [ "$scenario" = "pr-changed-scope-bounded" ]; then
 		echo 'class Unrelated {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
+	elif [ "$scenario" = "pr-changed-scope-includes-opencode-normalizer" ]; then
+		mkdir -p "$repo_root_dir/fuzz"
+		echo 'from scripts.ci import opencode_review_normalize_output as normalizer' >"$repo_root_dir/fuzz/fuzz_opencode_review_normalize_output.py"
+		echo 'def iter_json_objects(text): return []' >"$repo_root_dir/scripts/ci/opencode_review_normalize_output.py"
 	elif [ "$scenario" = "pr-python-scope-context" ]; then
 		mkdir -p "$repo_root_dir/backend/api" "$repo_root_dir/backend/core" "$repo_root_dir/backend/db" "$repo_root_dir/backend/services"
 		touch "$repo_root_dir/backend/api/__init__.py"
@@ -11824,6 +11836,32 @@ run_gate_case "pr-changed-scope-includes-ci-dependency" \
 	"0" \
 	"pull_request" \
 	"scripts/ci/strix_quick_gate.sh"
+
+# The real, live Atheris fuzz target that imports
+# scripts/ci/opencode_review_normalize_output.py is
+# fuzz/fuzz_opencode_review_normalize_output.py (not the deleted
+# fuzz/fuzz_opencode_normalize_output.py duplicate). A PR that changes only
+# that fuzz target must still pull the normalizer module into scan scope.
+run_gate_case "pr-changed-scope-includes-opencode-normalizer" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with opencode normalizer support dependency" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"fuzz/fuzz_opencode_review_normalize_output.py"
 
 run_gate_case "pr-ci-test-harness-only-skip" \
 	"openai/gpt-4o-mini" \

@@ -5,7 +5,7 @@ run-name: >-
   github.event.client_payload.pr_number || github.event.pull_request.number ||
   github.event.workflow_run.pull_requests[0].number || 'event' }}@${{
   github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
-  github.event.workflow_run.head_sha || github.sha }}
+  github.event.workflow_run.pull_requests[0].head.sha || github.sha }}
 
 on:
   pull_request_target:
@@ -24,8 +24,16 @@ concurrency:
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
     github.event.client_payload.pr_number ||
-    github.run_id }}
-  cancel-in-progress: true
+    github.run_id }}-${{
+    github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha ||
+    github.event.workflow_run.pull_requests[0].head.sha || github.sha }}-${{
+    github.event_name == 'workflow_run' &&
+    github.event.workflow_run.conclusion == 'cancelled' &&
+    format('cancelled-{0}', github.run_id) ||
+    'actionable' }}
+  # A cancelled upstream review emits a workflow_run event whose Noema job is
+  # skipped. It must not cancel a live same-head Noema review before skipping.
+  cancel-in-progress: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled' }}
 
 permissions:
   contents: read
@@ -37,8 +45,146 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+      - name: Cancel queued and running Noema reviews for the closed pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # cancel_runs prints the number of runs it matched for $1's status
+          # on stdout (its only stdout output) so the multi-pass loop below
+          # can tell whether a pass found anything; all human-facing log
+          # lines go to stderr so they don't pollute that count.
+          #
+          # The runs list is scoped to this repository, not to a specific
+          # workflow file: noema-review.yml runs against sibling
+          # repositories only through the organization's required-workflow
+          # ruleset (README.md's "또 같이" / "siblings call it" section) and
+          # is never itself committed to those repositories, so
+          # actions/workflows/noema-review.yml/runs is not guaranteed to
+          # resolve there -- GitHub's List repository workflows family
+          # enumerates workflow files that exist in that repository's own
+          # tree. actions/runs plus the run object's own `.path` field is
+          # this repo's own already-proven pattern for this exact cross-repo
+          # cleanup (see strix.yml's identical job).
+          # Status stays a server-side filter -- bounding each query to only
+          # the currently active runs -- rather than an unfiltered
+          # per-workflow fetch filtered client-side, since noema-review.yml
+          # is this org's central, highest-volume review workflow and an
+          # unbounded history walk on every PR close is a real rate-limit
+          # and latency risk here.
+          cancel_runs() {
+            local status="$1"
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/noema-close-gh-error)"; then
+              echo "::warning::Noema close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
+              sed 's/^/  /' /tmp/noema-close-gh-error >&2 || true
+              echo 0
+              return 0
+            fi
+            local run_ids
+            # PR-scoped by two independent, OR'd signals -- neither alone
+            # covers every trigger this job serves. The rendered
+            # display_title (this workflow's own run-name, embedding the
+            # target repository/PR number/head SHA) is this workflow's
+            # original signal, and stays reliable for repository_dispatch
+            # and workflow_run triggers. But GitHub does not consistently
+            # render run-name for an organization-required-workflow
+            # pull_request_target run materialized in a sibling repository
+            # (Devin Review, PR #1507: "Sibling Noema runs evade
+            # cancellation") -- `name` and `display_title` can both collapse
+            # to the bare workflow name and the plain PR title there,
+            # matching neither the old `.name ==` filter nor the
+            # display_title prefix below. GitHub's own `pull_requests[]`
+            # array on the run object closes that gap: it is populated for
+            # this workflow's pull_request_target runs because the
+            # noema-review job itself only ever processes same-repository,
+            # non-fork pull requests (its own `if:` requires
+            # `head.repo.full_name == github.repository`), so the cross-fork
+            # "empty pull_requests[]" caveat that rules this field out
+            # elsewhere in this org's tooling does not apply here. Neither
+            # signal alone is sufficient for every trigger type, so this
+            # matches on either one -- never a bare head_sha, which two
+            # different open PRs can share (e.g. a duplicate PR opened from
+            # the same branch against another target) and which would let
+            # closing one cancel the other's still-needed run. Matching by
+            # PR number rather than by the closed PR's current head SHA also
+            # means historical-head runs from earlier pushes to this same PR
+            # are still caught. `.path` pins the workflow identity in place
+            # of the old `.name ==` filter: unlike `.name` (which, like
+            # display_title, only carries the bare workflow name for a
+            # required-workflow-ruleset run), `.path` was independently
+            # confirmed stable across both native and sibling contexts.
+            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" \
+              --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(.path == ".github/workflows/noema-review.yml")
+                | select((.name // "") | startswith("Required Noema Review"))
+                | select(
+                    ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                    or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                  )
+                | .id
+              ' <<<"$runs_json")"; then
+              echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
+              echo 0
+              return 0
+            fi
+            local matched=0
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              matched=$((matched + 1))
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/noema-close-cancel-error; then
+                echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}." >&2
+              else
+                echo "::warning::Noema close cleanup could not cancel run ${run_id}; it may have finished or the token lacks Actions write access." >&2
+                sed 's/^/  /' /tmp/noema-close-cancel-error >&2 || true
+              fi
+            done <<<"$run_ids"
+            echo "$matched"
+          }
+
+          # A run can transition between the five active statuses between
+          # one status's fetch and the next (e.g. it is "requested" when the
+          # already-fetched "queued" list was read, then becomes "queued"
+          # moments later, after this pass has already moved past checking
+          # "queued") -- a real GitHub Actions run lifecycle race, not a
+          # hypothetical. A single sequential sweep can let such a run
+          # escape cancellation entirely. Re-scan every active status for up
+          # to three passes: always run at least two full passes (a run that
+          # slips through every status query in pass 1 has, by definition,
+          # settled into a checkable status by the time pass 2 queries it
+          # again), and only skip the third when both prior passes matched
+          # nothing, bounding the retries so API flakiness cannot loop this
+          # forever.
+          max_passes=3
+          pass=1
+          found_any=0
+          while [ "$pass" -le "$max_passes" ]; do
+            pass_matches=0
+            for active_status in queued in_progress requested waiting pending; do
+              matched="$(cancel_runs "$active_status")"
+              pass_matches=$((pass_matches + matched))
+            done
+            echo "Noema close cleanup pass ${pass}/${max_passes} matched ${pass_matches} run(s) across active statuses." >&2
+            if [ "$pass_matches" -gt 0 ]; then
+              found_any=1
+            fi
+            if [ "$pass" -ge 2 ] && [ "$pass_matches" -eq 0 ] && [ "$found_any" -eq 0 ]; then
+              break
+            fi
+            pass=$((pass + 1))
+          done
 
   noema-review:
     name: noema-review
@@ -54,10 +200,17 @@ jobs:
         && github.event.action != 'closed'
         && github.event.pull_request.head.repo.full_name == github.repository
       )
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      id-token: write
+      pull-requests: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.pull_requests[0].head.sha || '' }}
     steps:
       - name: Skip events without pull request context
         if: env.PR_NUMBER == ''
@@ -132,6 +285,100 @@ jobs:
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
+
+      - name: Reject a stale trigger before credential or model setup
+        if: env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
+            exit 1
+          fi
+          live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+            echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD}, observed ${live_head}."
+            exit 1
+          fi
+
+      - name: Cancel superseded Noema runs after live-head validation
+        if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          declare -A seen=()
+          cancelled=0
+          for pass in 1 2; do
+            for active_status in queued in_progress requested waiting pending; do
+              if ! runs_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100")"; then
+                echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              # See the close-cleanup job's matching comment above cancel_runs's
+              # own selector for the full rationale: display_title only
+              # renders this workflow's PR/head-bearing run-name reliably for
+              # a native trigger, so a sibling-repository required-workflow
+              # run is additionally matched via GitHub's own pull_requests[]
+              # array (populated here because noema-review only ever
+              # processes same-repository, non-fork pull requests), and
+              # `.path` pins workflow identity where `.name` cannot. The
+              # live-head exclusion below is independently reinforced with a
+              # direct `.head_sha` comparison -- the run object's own
+              # head_sha field, unlike display_title, is populated and
+              # accurate regardless of run-name rendering, so it protects the
+              # current run even when its display_title never rendered a
+              # matching "@$head" suffix to exclude by.
+              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
+                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" '
+                  .workflow_runs[]
+                  | select(.id < $current)
+                  | select(.path == ".github/workflows/noema-review.yml")
+                  | select((.name // "") | startswith("Required Noema Review"))
+                  | select(
+                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                    )
+                  | select(((.display_title // "") | endswith("@" + $head)) | not)
+                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
+                  | .id
+                ' <<<"$runs_json")"; then
+                echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                [ -z "${seen[$run_id]:-}" ] || continue
+                seen[$run_id]=1
+                # A transient failure here (rate limit, network blip) must
+                # never crash this step under set -e: this is a housekeeping
+                # cleanup, and letting an ancillary API hiccup fail the whole
+                # job would block a perfectly valid, live-head review over
+                # something unrelated to it. Treat "cannot verify" the same
+                # as "verified stale": stop cancelling rather than risk a
+                # wrong cancellation, but let the job continue.
+                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/noema-supersede-live-head-error)"; then
+                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
+                  sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
+                  exit 0
+                fi
+                if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+                  echo "::notice::Noema cleanup stopped because the PR head advanced."
+                  exit 0
+                fi
+                if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  cancelled=$((cancelled + 1))
+                  echo "Cancelled superseded Noema run ${run_id} for PR #${PR_NUMBER}."
+                else
+                  echo "::warning::Could not cancel superseded Noema run ${run_id}; it may already be terminal."
+                fi
+              done <<<"$run_ids"
+            done
+            echo "Superseded Noema cleanup pass ${pass}/2 complete."
+          done
+          echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
 
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
@@ -354,4 +601,5 @@ jobs:
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
           python3 -m scripts.ci.noema_review_gate \
             --repo "$TARGET_REPOSITORY" \
-            --pr-number "$PR_NUMBER"
+            --pr-number "$PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD"
