@@ -38,13 +38,15 @@ on:
     # path filters against the PR's full base..head diff, so a PR is skipped only
     # when EVERY changed file is a non-executable doc/image asset; any code,
     # config, build, or workflow change still triggers the scan. The run-name
-    # includes the PR number and head SHA for status grouping. Strix's expensive
-    # provider-backed job is serialized per repository/event class and never uses
-    # unordered same-PR native cancellation: delayed synchronize/closed deliveries
-    # must not be able to cancel a newer live-head run. The trusted merge scheduler
-    # owns predecessor retirement after live PR/head validation. Same-head Strix
-    # evidence is still forced at merge time via repository_dispatch (which
-    # paths-ignore does not affect), so merged code never loses evidence.
+    # includes the PR number and head SHA for status grouping, while the
+    # concurrency group is scoped per repository and event class to prevent
+    # shared-provider key rate-limit storms. Strix runs intentionally do not
+    # cancel in progress because a pre-job cancellation leaves no scanner log to
+    # review. GitHub keeps one active and one pending run per group; the merge
+    # scheduler re-dispatches exact-head evidence when a pending run is
+    # superseded. For PRs the merge scheduler manages, same-head Strix evidence
+    # is still forced at merge time via repository_dispatch (which paths-ignore
+    # does not affect), so merged code never loses evidence.
     paths-ignore:
       - '**/*.md'
       - '**/*.markdown'
@@ -75,12 +77,106 @@ permissions:
   models: read
 
 jobs:
+  cancel-superseded-pr-runs:
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
+    runs-on: ubuntu-24.04
+    # Prefer the established scheduler credential, but let the close event use
+    # its job-scoped token so abandoned scans are cancelled even when that
+    # optional secret is unavailable. This job never checks out PR code.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+      TARGET_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_ACTION: ${{ github.event.action }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Cancel queued and running scans for superseded or closed pull request heads
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          live_target_matches() {
+            local live_pr_json live_action
+            if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not verify the live pull request; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
+              return 1
+            fi
+            live_action="$(jq -r '[.state, .head.sha // ""] | @tsv' <<<"$live_pr_json")"
+            { [ "$PR_ACTION" = "closed" ] && [ "$live_action" = $'closed\t'"$TARGET_PR_HEAD_SHA" ]; } ||
+              { [ "$PR_ACTION" = "synchronize" ] && [ "$live_action" = $'open\t'"$TARGET_PR_HEAD_SHA" ]; }
+          }
+
+          cancel_runs() {
+            local status="$1"
+            if ! live_target_matches; then
+              echo "::notice::Strix cleanup target changed before run selection; leaving runs unchanged."
+              return 0
+            fi
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
+              return 0
+            fi
+            local run_ids
+            if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
+              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(.name == "Strix Security Scan")
+                | select(.event == "pull_request_target")
+                | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
+                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
+                | select($title_matches or $metadata_matches)
+                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr)
+                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
+                  )) as $metadata_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr) and ((.head.sha // "") != "")
+                  )) as $metadata_has_head
+                | select(
+                    $action == "closed"
+                    or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
+                  )
+                | .id
+              ' <<<"$runs_json")"; then
+              echo "::warning::Strix cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              if ! live_target_matches; then
+                echo "::notice::Strix cleanup target changed before cancellation; leaving runs unchanged."
+                return 0
+              fi
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-cleanup-cancel-error ||
+                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/strix-cleanup-cancel-error; then
+                echo "Cancelled obsolete Strix run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
+              else
+                echo "::warning::Strix cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
+                sed 's/^/  /' /tmp/strix-cleanup-cancel-error >&2 || true
+              fi
+            done <<<"$run_ids"
+          }
+
+          for active_status in queued in_progress requested waiting pending; do
+            cancel_runs "$active_status"
+          done
+
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
     concurrency:
-      # Keep provider-backed scans serial per repository and event class. Same-PR
-      # predecessor/closed runs are retired by the trusted merge scheduler only
-      # after live PR/head validation, so delayed events cannot cancel newer work.
+      # Keep provider-backed scans serial per repository and event class while
+      # allowing the trusted cleanup job above to retire an obsolete head now.
       group: >-
         strix-${{
           (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
@@ -94,7 +190,7 @@ jobs:
     # scans may take more than two hours per model (docs/product-goal-directive.md).
     # Inference has no wall-clock deadline; cancellation is reserved for an
     # explicit operator action or a superseded head.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
     # from the scan job only.
@@ -103,7 +199,6 @@ jobs:
       contents: read
       id-token: write
       models: read
-      pull-requests: read
       statuses: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -113,26 +208,6 @@ jobs:
         with:
           egress-policy: audit
           disable-file-monitoring: true
-
-      - name: Validate live pull request before Strix setup
-        if: github.event_name == 'pull_request_target'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
-            echo "::error::Unable to revalidate live pull request before Strix setup."
-            exit 1
-          fi
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "::error::Strix event is stale or the pull request is no longer open before setup."
-            exit 1
-          fi
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -508,26 +583,6 @@ jobs:
           echo 'enabled=true' >> "$GITHUB_OUTPUT"
           echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
 
-      - name: Revalidate live pull request before provider execution
-        if: github.event_name == 'pull_request_target'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
-            echo "::error::Unable to revalidate live pull request before provider execution."
-            exit 1
-          fi
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "::error::Strix event is stale or the pull request is no longer open before provider execution."
-            exit 1
-          fi
-
       - name: Provision contextual-orchestrator Strix sidecar
         if: steps.gate.outputs.enabled == 'true'
         env:
@@ -844,30 +899,8 @@ jobs:
           echo "Strix reported security findings or failed for a non-backend reason; failing the required check (gate exit ${strix_rc})." >&2
           exit "$strix_rc"
 
-      - name: Revalidate live pull request before evidence publication
-        id: live_publication
-        if: ${{ always() && github.event_name == 'pull_request_target' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
-            echo "::error::Unable to revalidate live pull request before evidence publication."
-            exit 1
-          fi
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "::error::Strix event is stale or the pull request is no longer open before evidence publication."
-            exit 1
-          fi
-          echo "current=true" >> "$GITHUB_OUTPUT"
-
       - name: Collect Strix reports for artifact upload
-        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true') }}
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         env:
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
         run: |
@@ -897,7 +930,7 @@ jobs:
           fi
 
       - name: Upload Strix reports artifact
-        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true') }}
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: strix-reports
@@ -986,7 +1019,7 @@ jobs:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       statuses: write # Required for downscoped OIDC status publication.
