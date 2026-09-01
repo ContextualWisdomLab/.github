@@ -277,6 +277,10 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "PR is a draft; a current-head OpenCode review is not requested until it is marked ready for review."
+            exit 0
+          fi
           helper="$(mktemp)"
           trap 'rm -f "$helper"' EXIT
           gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \

@@ -234,6 +234,77 @@ def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> N
     assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
 
 
+def _run_request_review_step(
+    tmp_path: Path,
+    *,
+    pr_draft: str = "false",
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Request current-head OpenCode review execution" step body.
+
+    A fake ``gh`` that fails loudly is installed on ``PATH`` so a draft
+    early exit that reaches any API call at all -- fetching the receipt-gate
+    helper source, or the Reviews API it wraps -- fails the test
+    immediately.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_refusing_gh(bin_dir)
+    return subprocess.run(
+        [bash, "-c", request_review_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "OIDC_AUDIENCE": "opencode-github-action",
+            "OPENCODE_API_BASE_URL": "https://api.opencode.ai",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "1437",
+            "HEAD_SHA": HEAD,
+            "PR_DRAFT": pr_draft,
+            "BASE_BRANCH": "main",
+            "WORKFLOW_SHA": "c" * 40,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_request_review_step_exempts_a_pr_converted_to_draft_before_any_api_call(
+    tmp_path: Path,
+) -> None:
+    """A PR converted to draft must not dispatch a new review request either.
+
+    Devin Review on `#1568` found that `converted_to_draft` firing this
+    workflow only fixed the "Fail closed" step's own poll -- the sibling
+    "Request current-head OpenCode review execution" step (which runs first)
+    had no draft exemption at all, so it still fetched the receipt-gate
+    helper source and queried the Reviews API, and could reach OIDC token
+    exchange and a `repository_dispatch` scheduler wake, before the "Fail
+    closed" step's exemption ever ran. This proves the request step now
+    exits before any API call -- helper-source fetch included -- when
+    `PR_DRAFT` is `"true"` (the value GitHub sends for `converted_to_draft`),
+    while `ready_for_review` and explicit draft-review dispatch paths
+    elsewhere (`pr_review_merge_scheduler.py`'s own draft handling) are
+    untouched by this step-body change.
+    """
+    result = _run_request_review_step(tmp_path, pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR is a draft; a current-head OpenCode review is not requested" in result.stdout
+
+
+def test_request_review_step_still_dispatches_for_a_non_draft_pr(
+    tmp_path: Path,
+) -> None:
+    """A non-draft PR must still reach the receipt-gate helper fetch."""
+    result = _run_request_review_step(tmp_path, pr_draft="false")
+    assert result.returncode == 17, result.stderr
+    assert "unexpected gh invocation" in result.stderr
+
+
 def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
     tmp_path: Path,
 ) -> None:
