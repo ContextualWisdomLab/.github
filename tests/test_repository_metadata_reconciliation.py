@@ -84,6 +84,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "supply-chain-control-plane": ("supply-chain", "rust"),
         "learning-management-platform": ("learning-management-system", "rust"),
         "learning-content-studio": ("lcms", "content-authoring"),
+        "learning-record-store": ("learning-record-store", "xapi"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
