@@ -24,7 +24,7 @@ class StrixRequiredSmokeAvailabilityTest(unittest.TestCase):
 
     @staticmethod
     def _copy_smoke_fixture(root: Path) -> None:
-        """Copy every executable and policy input consumed by the smoke test."""
+        """Copy real smoke dependencies plus the separately checked guidance."""
         for source in (
             SMOKE,
             WORKFLOW,
@@ -55,6 +55,7 @@ class StrixRequiredSmokeAvailabilityTest(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=False,
+                timeout=10,
             )
 
         output = result.stdout + result.stderr
@@ -63,10 +64,19 @@ class StrixRequiredSmokeAvailabilityTest(unittest.TestCase):
 
     def test_repository_guidance_still_documents_the_free_route(self) -> None:
         """Central quality tests, not consumer runtime, keep guidance aligned."""
-        guidance = " ".join(AGENT_POLICY.read_text(encoding="utf-8").split())
-        self.assertIn("Strix", guidance)
-        self.assertIn("zero-cost", guidance)
-        self.assertIn("`orchestrator/free`", guidance)
+        paragraphs = (
+            " ".join(paragraph.split())
+            for paragraph in AGENT_POLICY.read_text(encoding="utf-8").split("\n\n")
+        )
+        self.assertTrue(
+            any(
+                "Strix" in paragraph
+                and "zero-cost" in paragraph
+                and "`orchestrator/free`" in paragraph
+                for paragraph in paragraphs
+            ),
+            "AGENTS.md must document Strix on the zero-cost orchestrator/free route",
+        )
 
 
 if __name__ == "__main__":
