@@ -2344,6 +2344,47 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 opencode-review.yml draft-gate fix (`.github#1443`): three-round live-state hardening, tied to `#1531` queue pressure
+
+**Buyer/control-plane effect.** Before this fix, every draft PR org-wide showed the required
+`opencode-review` check as a hard, permanent `exit 1` failure: `scripts/ci/pr_review_merge_scheduler.py`
+deliberately never dispatches an OpenCode review request for a draft PR
+(`if pr.get("isDraft"): return Decision(number, "skip", "draft PR")`), but the required check had no
+draft handling and unconditionally demanded a current-head verdict. Net effect: draft PRs allocated
+required-workflow OpenCode review dispatch work they could never complete or merge from — the exact
+kind of wasted required-workflow queue allocation `#1531` tracks — while presenting a false-alarm
+failure with no actionable next step for the PR author.
+
+**Fix, in three review-driven rounds, all on `.github#1443`:**
+1. The `Resolve current-head formal OpenCode verdict` step now exits early (`verdict=DRAFT`) for a
+   draft PR, mirroring its existing `closed` early exit, and the `Request current-head OpenCode review
+   execution` dispatch step's own `if:` matches — so a draft PR no longer dispatches OpenCode review
+   work it can never merge from. `converted_to_draft` was added to the workflow's `pull_request_target`
+   trigger types so a ready-to-draft conversion with no new commit still gets a fresh required-workflow
+   run that can apply the exemption.
+2. Devin review found the draft/closed decision, and later the dispatch step's own `if:`, were still
+   reading `github.event.action`/`github.event.pull_request.draft` — the *triggering event's own stored
+   payload*. A manual re-run of an old workflow run (e.g. a stale `converted_to_draft` run) replays that
+   payload verbatim, so a since-ready, unreviewed PR at the same head SHA could pass the required check
+   on a stale "still draft" reading, or a since-ready PR's real dispatch could stay wrongly suppressed.
+   Both steps now decide from the pull request's *live* state (one `gh api repos/.../pulls/<number>`
+   fetch per run), failing closed if the lookup itself fails.
+3. Devin review (third round) found that even with the dispatch step correctly gated on the live
+   verdict, it still built its `repository_dispatch` payload's `pr_base_ref`/`pr_base_sha`/
+   `pr_head_ref`/`pr_head_sha` from that same stale event payload — so a re-run after the base branch
+   advanced could still have its dispatch rejected by `opencode-review-dispatch.yml`'s live
+   `validate-pr-metadata` check, leaving the required check red with no review ever requested. The
+   verdict step now exposes `base_ref`/`base_sha`/`head_ref`/`head_sha` as step outputs from that same
+   live fetch, and the dispatch step builds its payload from those outputs instead.
+
+**Net result.** Stale workflow reruns can no longer grant a draft/closed exemption or dispatch stale
+base/head metadata — both the pass/fail decision and the dispatch payload are sourced from one live
+PR-state fetch per run, never from the frozen triggering-event payload. Full regression coverage in
+`tests/test_opencode_required_verdict_regression.py` executes each step's actual production bash body
+against fake `gh` fixtures. This closes one confirmed, now-eliminated source of required-workflow queue
+waste (draft PRs); it does not by itself resolve the separate org-wide runner-capacity congestion
+`#1531` also tracks.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
