@@ -242,9 +242,9 @@ def build_zdr_prioritized_catalog(
     OpenAI model may remain visible to audit or ``orchestrator/auto`` while
     contributing zero free-pool candidates.
 
-    The returned report's ``free_account_diversity`` counts the distinct
-    credential accounts among free-pool-admitted discovered free routes,
-    independent of ``pool`` or the per-account selection cap.
+    Existing discovery-wide counters keep their historical meaning so runtime
+    enrichment cannot silently rewrite the contract. Additional
+    ``free_pool_*`` fields expose the narrower admitted subset explicitly.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
@@ -336,6 +336,9 @@ def build_zdr_prioritized_catalog(
         )
 
     free_account_diversity = len(
+        {provider_account(str(row["provider"])) for row in all_free_rows}
+    )
+    free_pool_account_diversity = len(
         {provider_account(str(row["provider"])) for row in free_pool_rows}
     )
 
@@ -345,12 +348,13 @@ def build_zdr_prioritized_catalog(
         "report": {
             "pool": f"orchestrator/{pool}",
             "total_routes": len(all_rows),
-            "total_zero_cost_routes": len(all_free_rows),
-            "total_free_routes": len(free_pool_rows),
-            "excluded_free_source_count": len(all_free_rows) - len(free_pool_rows),
+            "total_free_routes": len(all_free_rows),
+            "free_account_diversity": free_account_diversity,
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(all_free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": free_pool_account_diversity,
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
-            "free_account_diversity": free_account_diversity,
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": selected_evidence.count(COST_FREE),
