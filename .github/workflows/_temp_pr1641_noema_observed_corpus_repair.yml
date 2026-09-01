@@ -1,0 +1,259 @@
+name: Temporary PR1641 Noema observed-corpus repair
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-corpus-current-main-20260902
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1641-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact writer head without persisted credential
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a stale writer head
+        shell: bash
+        run: |
+          set -euo pipefail
+          live="$(git ls-remote https://github.com/ContextualWisdomLab/.github.git "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$live"
+          test "$live" = "$GITHUB_SHA"
+
+      - name: Install repository-declared pinned review test toolchain
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify the committed regression is RED before production mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          PYTHONPATH=. python3 -m pytest -q tests/test_noema_observed_defect_corpus_current_main.py
+          red_rc=$?
+          set -e
+          if [ "$red_rc" -eq 0 ]; then
+            echo '::error::Expected the current-main regression corpus to fail before the causal repair.'
+            exit 1
+          fi
+          echo "Verified RED regression corpus against pre-repair source (pytest rc=$red_rc)."
+
+      - name: Apply smallest trusted validator and prompt repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/ci/noema_review_gate.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one source anchor, found {count}: {old[:80]!r}')
+              text = text.replace(old, new, 1)
+
+          constants_anchor = 'DIFF_HUNK_RE = re.compile(r"^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@")\n'
+          constants = '''DIFF_HUNK_RE = re.compile(r"^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@")
+          OBSERVED_REVIEW_PROBE_KINDS = frozenset(
+              {
+                  "mutable_alias",
+                  "time_of_check_time_of_use",
+                  "execution_identity",
+                  "coercion_boundary",
+                  "test_oracle",
+                  "cross_contract",
+                  "authority_boundary",
+                  "dependency_context",
+                  "state_machine_race",
+              }
+          )
+          OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+              "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+              "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+              "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+              "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+              "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+              "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+              "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+              "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+              "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+          }
+          '''
+          replace_once(constants_anchor, constants)
+
+          helper_anchor = '''    return value.removeprefix(prefix)\n\n\ndef validate_substantive_verdict(\n'''
+          helper = '''    return value.removeprefix(prefix)
+
+
+def _canonical_changed_location(record: dict[str, Any], label: str) -> tuple[str, int, str]:
+              """Return a canonical changed-side location without bool/int coercion."""
+              path_value = record.get("path")
+              line_value = record.get("line")
+              side_value = record.get("side")
+              if not isinstance(path_value, str) or not path_value.strip():
+                  raise NoemaModelOutputError(f"{label} requires a canonical changed-side path")
+              if type(line_value) is not int or line_value <= 0:
+                  raise NoemaModelOutputError(f"{label} requires a canonical positive integer line")
+              if side_value not in {"LEFT", "RIGHT"}:
+                  raise NoemaModelOutputError(f"{label} requires canonical LEFT/RIGHT side")
+              return (path_value, line_value, side_value)
+
+
+def _validate_observed_probe_class_evidence(
+              probe: dict[str, Any], probe_kind: str, index: int, location: tuple[str, int, str]
+          ) -> None:
+              """Require defect-class witnesses to bind to the probe's exact changed line."""
+              class_evidence = probe.get("class_evidence")
+              required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+              if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+                  expected = ", ".join(required_fields)
+                  raise NoemaModelOutputError(
+                      f"Noema adversarial probe {index} class_evidence for {probe_kind} "
+                      f"must contain exactly: {expected}"
+                  )
+              for field in required_fields:
+                  source_ref = class_evidence.get(field)
+                  if not isinstance(source_ref, dict) or set(source_ref) != {"path", "line", "side"}:
+                      raise NoemaModelOutputError(
+                          f"Noema adversarial probe {index} class_evidence.{field} requires a "
+                          "source-bound changed-line reference"
+                      )
+                  source_location = _canonical_changed_location(
+                      source_ref, f"Noema adversarial probe {index} class_evidence.{field}"
+                  )
+                  if source_location != location:
+                      raise NoemaModelOutputError(
+                          f"Noema adversarial probe {index} class_evidence.{field} must bind to "
+                          "the probe location"
+                      )
+
+
+def validate_substantive_verdict(
+          '''
+          replace_once(helper_anchor, helper)
+
+          replace_once(
+              '        location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))\n',
+              '        location = _canonical_changed_location(reviewed, f"Noema reviewed line {index}")\n',
+          )
+          replace_once(
+              '    identities: set[tuple[Any, ...]] = set()\n    for index, probe in enumerate(probes, start=1):\n',
+              '    identities: set[tuple[Any, ...]] = set()\n    probe_kinds: set[str] = set()\n    enforce_observed_taxonomy = bool(changed_paths)\n    for index, probe in enumerate(probes, start=1):\n',
+          )
+          replace_once(
+              '        location = (probe.get("path"), probe.get("line"), probe.get("side"))\n        if location not in locations:\n',
+              '        location = _canonical_changed_location(probe, f"Noema adversarial probe {index}")\n        if location not in locations:\n',
+          )
+          replace_once(
+              '        outcome = probe.get("outcome")\n        if outcome not in {"falsified", "confirmed"}:\n            raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")\n        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())\n',
+              '        outcome = probe.get("outcome")\n        if outcome not in {"falsified", "confirmed"}:\n            raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")\n        if enforce_observed_taxonomy:\n            probe_kind = probe.get("probe_kind")\n            if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:\n                raise NoemaModelOutputError(\n                    f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"\n                )\n            _validate_observed_probe_class_evidence(probe, probe_kind, index, location)\n            probe_kinds.add(probe_kind)\n        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())\n',
+          )
+          replace_once(
+              '    if decision == "approve" and confirmed:\n',
+              '    if enforce_observed_taxonomy and len(probe_kinds) < required_probes:\n        raise NoemaModelOutputError(\n            f"Noema {decision} requires at least {required_probes} distinct probe_kind values"\n        )\n\n    if decision == "approve" and confirmed:\n',
+          )
+
+          replace_once(
+              '                                    **location_example,\n                                    "hypothesis": "...",\n',
+              '                                    **location_example,\n                                    "probe_kind": "mutable_alias",\n                                    "class_evidence": {\n                                        field: location_example\n                                        for field in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS["mutable_alias"]\n                                    },\n                                    "hypothesis": "...",\n',
+          )
+          replace_once(
+              '                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",\n',
+              '                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; material source or test changes require at least two distinct probe_kind values and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",\n                "Observed defect taxonomy and required source-bound class_evidence keys: "\n                + json.dumps(\n                    {kind: list(fields) for kind, fields in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS.items()},\n                    sort_keys=True,\n                    separators=(",", ":"),\n                ),\n                "Actively attack mutable alias/immutability escapes, time-of-check/time-of-use or changing-getter behavior, execution/tenant/request identity confusion, coercion boundaries, weak or vacuous test oracles, cross-file/cross-document contract contradictions, internal-vs-external authority overreach, missing causal dependency context, and security/reliability state-machine races. Distinguish confirmed defects from falsified hypotheses; do not manufacture findings to satisfy the taxonomy.",\n',
+          )
+          replace_once(
+              '                f"- `{probe.get(\'path\')}:{probe.get(\'line\')} ({probe.get(\'side\')})` "\n                f"{probe.get(\'outcome\')}: {str(probe.get(\'hypothesis\') or \'\').strip()} — "\n',
+              '                f"- [{probe.get(\'probe_kind\') or \'legacy\'}] `{probe.get(\'path\')}:{probe.get(\'line\')} ({probe.get(\'side\')})` "\n                f"{probe.get(\'outcome\')}: {str(probe.get(\'hypothesis\') or \'\').strip()} — "\n',
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Update operator and product traceability
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          doctor = Path('docs/doctoring/noema-observed-defect-corpus-current-main.md')
+          doctor.write_text('''# Noema observed-defect review corpus\n\nThe trusted Noema review gate treats externally demonstrated review misses as executable regression evidence, not as benchmark claims. Material source/test reviews must exercise at least two distinct observed defect classes and every admitted class witness remains bound to an exact changed-side source coordinate.\n\nThe current closed taxonomy is: `mutable_alias`, `time_of_check_time_of_use`, `execution_identity`, `coercion_boundary`, `test_oracle`, `cross_contract`, `authority_boundary`, `dependency_context`, and `state_machine_race`. Each class has class-specific witness keys. Witness values are exact `{path,line,side}` references to the probe location; prose labels alone do not satisfy the deterministic validator.\n\nThe model is explicitly asked to attack mutable/immutability escapes, changing getters/TOCTOU, request or tenant identity confusion, weak/vacuous oracles, cross-contract contradictions, authority overreach, missing causal dependency context, and reliability/security state-machine races. A falsified hypothesis is valid evidence and must not be promoted into a finding merely to satisfy taxonomy diversity.\n\nJSON booleans are rejected as line coordinates even though Python considers `True == 1`: changed-line evidence requires `type(line) is int` and a positive value. Production review calls always provide the complete changed-path manifest, which activates the observed taxonomy; direct validator unit tests may omit that manifest to exercise lower-level generic schema boundaries independently.\n\nThis repair is a narrow current-main successor to the heavily diverged PR #1589 evidence lineage. It does not copy CodeRabbitAI or Devin wording and makes no superiority claim.\n''', encoding='utf-8')
+
+          baseline = Path('docs/product-technical-gap-baseline.md')
+          baseline_text = baseline.read_text(encoding='utf-8')
+          marker = '### 2026-09-02 — Noema observed-defect false-negative corpus (#1641)'
+          if marker not in baseline_text:
+              baseline_text += f'''\n\n{marker}\n\n- **Verified gap:** protected current main admitted Noema adversarial evidence by count/prose identity and compared model line coordinates with Python integers without excluding booleans. Thus `true` could alias line `1`, and two differently worded probes could satisfy material-change diversity without proving distinct observed defect shapes.\n- **Repair:** exact changed-side coordinates now require canonical positive integers; production review verdicts use a closed observed-defect taxonomy with class-specific, source-bound witness fields and distinct classes for material changes; the prompt actively attacks the same external-review failure families.\n- **Regression evidence:** `tests/test_noema_observed_defect_corpus_current_main.py` is committed before the causal production change and covers boolean aliasing, malformed/unknown class labels, duplicate-class diversity, witness/source binding, a valid multi-class verdict, and rendered prompt coverage.\n- **Authority boundary:** no reviewer, provider, routing, merge, or repository-write authority is widened. The taxonomy is evaluation/admission evidence only.\n'''
+              baseline.write_text(baseline_text, encoding='utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          changelog_text = changelog.read_text(encoding='utf-8')
+          entry = '- **Require source-bound observed defect classes in Noema formal reviews (#1641).** Canonical changed-line coordinates now reject JSON booleans, material reviews must cover distinct classes from the executable external-finding corpus, class witnesses bind to exact changed-side source coordinates, and the prompt explicitly attacks mutable-alias, TOCTOU, identity, oracle, contract, authority, dependency-context, coercion, and state-machine failure shapes without fabricating benchmark claims.\n'
+          if entry not in changelog_text:
+              anchor = '## [Unreleased]\n'
+              if changelog_text.count(anchor) != 1:
+                  raise SystemExit('could not locate unique Unreleased changelog anchor')
+              changelog_text = changelog_text.replace(anchor, anchor + entry, 1)
+              changelog.write_text(changelog_text, encoding='utf-8')
+          PY
+
+      - name: Verify GREEN focused and broader contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_observed_defect_corpus_current_main.py \
+            tests/test_noema_model_output_failure_classification.py \
+            tests/test_noema_review_gate.py
+          PYTHONPATH=. python3 -m pytest -q
+          interrogate --fail-under=100 scripts/ci/noema_review_gate.py
+          python3 -m compileall -q scripts/ci tests
+          git diff --check
+
+      - name: Remove temporary repair mechanism and commit publishable tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml
+          test ! -e .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml
+          git config user.name 'ContextualWisdomLab repair automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add scripts/ci/noema_review_gate.py \
+            tests/test_noema_observed_defect_corpus_current_main.py \
+            docs/doctoring/noema-observed-defect-corpus-current-main.md \
+            docs/product-technical-gap-baseline.md \
+            CHANGELOG.md \
+            .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml
+          git diff --cached --check
+          git commit -m 'fix(noema): enforce observed defect-class evidence'
+
+      - name: Push only if writer head is still exact
+        shell: bash
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          live="$(git ls-remote https://github.com/ContextualWisdomLab/.github.git "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ "$live" != "$GITHUB_SHA" ]; then
+            echo "::error::Writer branch moved from $GITHUB_SHA to ${live:-missing}; refusing overwrite."
+            exit 75
+          fi
+          git config core.hooksPath /dev/null
+          git remote set-url origin "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
