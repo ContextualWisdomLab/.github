@@ -1,0 +1,82 @@
+name: Source fix PR1629 strict free pool
+
+on:
+  push:
+    branches:
+      - fix/no-heuristic-review-admission-current-main
+    paths:
+      - .github/source-fix-1629-strict-free.trigger
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-1629-strict-free
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/no-heuristic-review-admission-current-main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+
+      - name: Prove strict-free regression is RED
+        shell: bash
+        run: |
+          set +e
+          uv run --group dev pytest -q tests/test_contextual_orchestrator_central_free_only.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::strict-free regression unexpectedly passed before source repair"
+            exit 1
+          fi
+
+      - name: Apply strict-free source repair
+        run: python scripts/ci/repair_pr1629_strict_free.py
+
+      - name: Verify focused contracts
+        run: >-
+          uv run --group dev pytest -q
+          tests/test_contextual_orchestrator_central_free_only.py
+          tests/test_contextual_orchestrator_no_heuristic_admission.py
+          tests/test_contextual_orchestrator_review_policy.py
+          tests/test_contextual_orchestrator_review_runtime_preflight.py
+
+      - name: Remove one-shot repair artifacts
+        shell: bash
+        run: |
+          rm -f \
+            .github/workflows/source-fix-1629-strict-free.yml \
+            .github/source-fix-1629-strict-free.trigger \
+            scripts/ci/repair_pr1629_strict_free.py
+
+      - name: Push repaired exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch='fix/no-heuristic-review-admission-current-main'
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          local_head="$(git rev-parse HEAD)"
+          if [ "$remote_head" != "$local_head" ]; then
+            echo "::error::writer branch moved during source-fix; refusing stale push"
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(ci): enforce strict free-only review entrypoints'
+          git push origin "HEAD:$branch"
