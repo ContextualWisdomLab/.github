@@ -12,10 +12,9 @@ on:
     # `converted_to_draft` is included so a PR going draft mid-poll fires a
     # fresh run of this same workflow: the PR-scoped concurrency group below
     # (`cancel-in-progress: true`) cancels any in-flight non-draft
-    # "Fail closed without a current-head OpenCode verdict" poll for that PR,
-    # and the fresh run's own draft exemption (see that step) exits before
-    # ever calling the Reviews API, instead of polling toward the job's
-    # runtime ceiling for a verdict a draft PR will never receive.
+    # "Fail closed without a current-head OpenCode verdict" poll for that PR.
+    # Each draft exemption revalidates the live PR/head before succeeding so
+    # out-of-order draft/ready events cannot publish a stale success.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
@@ -278,8 +277,22 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$PR_DRAFT" = "true" ]; then
-            echo "PR is a draft; a current-head OpenCode review is not requested until it is marked ready for review."
-            exit 0
+            live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+            live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+            live_draft="$(printf '%s' "$live_pr" | jq -r '.draft // empty')"
+            if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
+              echo "::error::Could not validate live pull request state before draft exemption."
+              exit 1
+            fi
+            if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+              echo "::error::Pull request head moved while validating draft exemption."
+              exit 1
+            fi
+            if [ "$live_draft" = "true" ]; then
+              echo "PR is still a draft on the live exact head; a current-head OpenCode review is not requested until it is marked ready for review."
+              exit 0
+            fi
+            echo "Event draft snapshot is stale; continuing current-head OpenCode review dispatch for the live ready PR."
           fi
           helper="$(mktemp)"
           trap 'rm -f "$helper"' EXIT
@@ -353,8 +366,22 @@ jobs:
             exit 0
           fi
           if [ "$PR_DRAFT" = "true" ]; then
-            echo "PR is a draft; a current-head OpenCode verdict is not required until it is marked ready for review."
-            exit 0
+            live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+            live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+            live_draft="$(printf '%s' "$live_pr" | jq -r '.draft // empty')"
+            if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
+              echo "::error::Could not validate live pull request state before draft verdict exemption."
+              exit 1
+            fi
+            if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+              echo "::error::Pull request head moved while validating draft verdict exemption."
+              exit 1
+            fi
+            if [ "$live_draft" = "true" ]; then
+              echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
+              exit 0
+            fi
+            echo "Event draft snapshot is stale; continuing verdict polling for the live ready PR."
           fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
