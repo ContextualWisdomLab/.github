@@ -14,6 +14,13 @@ def test_org_queue_sweep_is_hourly_not_quarter_hourly() -> None:
     assert '*/15 * * * *' not in workflow
 
 
+def test_org_queue_sweep_wall_clock_fallback_matches_hourly_cadence() -> None:
+    """Fallback rotation must advance once per hourly sweep, not four offsets at once."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert workflow.count("$(date -u +%s) / 3600") == 2
+    assert "$(date -u +%s) / 900" not in workflow
+
+
 def test_repository_scheduler_keeps_event_driven_wakes() -> None:
     """Capacity repair must preserve event-driven admission rather than polling only."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
