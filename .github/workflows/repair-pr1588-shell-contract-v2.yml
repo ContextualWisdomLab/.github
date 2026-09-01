@@ -43,6 +43,10 @@ jobs:
                   'assert_file_contains "$workflow_file" "re-dispatches exact-head evidence" "strix workflow documents current-head queue recovery"',
                   'assert_file_contains "$workflow_file" "Validate live pull request before Strix setup" "strix workflow validates live PR identity before setup"\n\tassert_file_contains "$workflow_file" "Revalidate live pull request before provider execution" "strix workflow revalidates live PR identity before provider work"\n\tassert_file_contains "$workflow_file" "Revalidate live pull request before evidence publication" "strix workflow revalidates live PR identity before publication"\n\tassert_file_contains "$workflow_file" "steps.live_publication.outputs.current == \'true\'" "strix workflow gates publication on current live-head identity"',
               ),
+              (
+                  'assert_file_contains "$workflow_file" \'export LLM_TIMEOUT=0\' "strix disables the model client inference timeout"',
+                  'assert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"',
+              ),
           )
           for old, new in replacements:
               if old not in text:
@@ -54,6 +58,7 @@ jobs:
           grep -Fq 'assert_file_not_contains "$workflow_file" "cancel-superseded-pr-runs:"' scripts/ci/test_strix_quick_gate.sh
           grep -Fq 'Revalidate live pull request before evidence publication' scripts/ci/test_strix_quick_gate.sh
           grep -Fq 'export LLM_TIMEOUT=300' scripts/ci/test_strix_quick_gate.sh
+          ! grep -Fq 'export LLM_TIMEOUT=0' scripts/ci/test_strix_quick_gate.sh
           git diff --check
 
           latest_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1588" --jq '.head.sha')"
