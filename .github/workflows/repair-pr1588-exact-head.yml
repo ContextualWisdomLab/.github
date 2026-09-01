@@ -75,16 +75,14 @@ jobs:
               text = text.replace(marker, validation_step(before_provider) + marker, 1)
 
           before_publish = 'Revalidate live pull request before evidence publication'
+          publication_condition = '$' + "{{ always() && github.event_name == 'pull_request_target' }}"
           if before_publish not in text:
               marker = '      - name: Collect Strix reports for artifact upload\n'
               if marker not in text:
                   raise SystemExit('missing publication marker')
               text = text.replace(
                   marker,
-                  validation_step(
-                      before_publish,
-                      "${{ always() && github.event_name == 'pull_request_target' }}",
-                  ) + marker,
+                  validation_step(before_publish, publication_condition) + marker,
                   1,
               )
 
@@ -93,7 +91,11 @@ jobs:
           test_path = Path('tests/test_strix_control_plane_supersession.py')
           tests = test_path.read_text(encoding='utf-8')
           publication_anchor = '''    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'''
-          publication_assert = '''    assert "if: ${{ always() && github.event_name == 'pull_request_target' }}" in recheck\n'''
+          publication_assert = (
+              '    assert "if: '
+              + publication_condition
+              + '" in recheck\n'
+          )
           if publication_assert not in tests:
               if publication_anchor not in tests:
                   raise SystemExit('missing publication regression anchor')
