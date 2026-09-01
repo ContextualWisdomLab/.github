@@ -5,8 +5,8 @@ The model phase can legitimately outlive a one-hour GitHub App installation
 credential. This trusted helper therefore seals the already validated model
 verdict to a runner-local file, then a later workflow step reopens that file
 only after the reviewer credential has been refreshed. Publication always
-re-fetches the live pull request and verifies its exact head before submitting
-any review evidence.
+re-fetches the live pull request and verifies its exact head and base before
+submitting any review evidence.
 """
 
 from __future__ import annotations
@@ -36,6 +36,14 @@ def _canonical_head(value: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{40}", head):
         raise RuntimeError("Noema two-phase handoff requires a canonical 40-character Git SHA")
     return head
+
+
+def _canonical_base(pull_request: dict[str, Any]) -> str:
+    """Return the exact base commit that defined the reviewed diff/context."""
+    base = str(pull_request.get("baseRefOid") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        raise RuntimeError("Noema two-phase handoff requires a canonical 40-character base SHA")
+    return base
 
 
 def _reviewer_actor() -> str:
@@ -128,6 +136,7 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
     except RuntimeError:
         print("Pull request is closed or stale; Noema verdict preparation skipped.")
         return 0
+    expected_base = _canonical_base(pull_request)
     actor = _reviewer_actor()
     if pull_request.get("isDraft"):
         print("PR is draft; Noema verdict preparation skipped.")
@@ -162,15 +171,19 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             "repository": repo,
             "pull_request_number": number,
             "expected_head": expected,
+            "expected_base": expected_base,
             "verdict": verdict,
         },
     )
-    print(f"Prepared Noema verdict for {repo}#{number} at {expected}; publication is deferred.")
+    print(
+        f"Prepared Noema verdict for {repo}#{number} at head {expected} / base {expected_base}; "
+        "publication is deferred."
+    )
     return 0
 
 
 def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:
-    """Publish a prepared verdict only with fresh exact-head reviewer authority."""
+    """Publish a prepared verdict only with fresh exact-head/base reviewer authority."""
     expected = _canonical_head(expected_head)
     try:
         payload = _read_envelope(path)
@@ -179,6 +192,7 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             "repository",
             "pull_request_number",
             "expected_head",
+            "expected_base",
             "verdict",
         }
         if set(payload) != required_keys:
@@ -189,6 +203,9 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             raise RuntimeError("Noema verdict envelope target identity does not match publication")
         if payload["expected_head"] != expected:
             raise RuntimeError("Noema verdict envelope head does not match publication")
+        expected_base = str(payload["expected_base"]).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", expected_base):
+            raise RuntimeError("Noema verdict envelope base does not contain a canonical Git SHA")
         verdict = payload["verdict"]
         if not isinstance(verdict, dict):
             raise RuntimeError("Noema verdict envelope verdict must be an object")
@@ -198,6 +215,9 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             gate.require_expected_head(current_pull_request, expected)
         except RuntimeError:
             print("Pull request closed or advanced after model review; prepared verdict was not published.")
+            return 0
+        if _canonical_base(current_pull_request) != expected_base:
+            print("Pull request base advanced after model review; stale prepared verdict was not published.")
             return 0
         actor = _reviewer_actor()
         if current_pull_request.get("isDraft"):
