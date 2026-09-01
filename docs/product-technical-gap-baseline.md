@@ -3546,6 +3546,37 @@ owner `seonghobae`가 `.github#1438`에 직접 남긴 코멘트(진짜 사람 �
 
 owner 코멘트에 대한 전체 답변은 `.github#1438`에 코멘트로 남겼다(항목별 근거·PR 링크 포함).
 
+## 2026-09-01 시간별 재개: naruon#1486 Devin CI-wiring 지적 검증 — 실재 확인, 수정 중 별개 회귀 2건 추가 발견
+
+Devin이 `naruon#1486`(`tests/test_stacked_pr_workflow_contract.py:16`)에 남긴 새 지적: "Application CI가
+`backend`에서 pytest를 실행하므로 `test_governed_pull_request_workflows_accept_stacked_base_branches`가
+전혀 collect되지 않는다"를 추측이 아니라 실제 워크플로/스크립트를 직접 읽어 검증했다.
+
+1. **✅ 실재 확인 후 수정.** `app-ci.yml`의 backend job은 `cd backend && python -m pytest -q`만
+   실행하므로 repo-root `tests/`는 collection 경로 밖이다. `pr-governance.yml`(다른 유일한
+   `scripts/ci`-연관 워크플로)도 `scripts/ci/pr_governance_gate.sh`를 직접 실행할 뿐,
+   `scripts/ci/test_pr_governance_gate.sh`(bash 자체-테스트)나 이 pytest 파일을 전혀 건드리지
+   않는다 — owner 코멘트의 "`test_pr_governance_gate: PASS`"는 그 bash 스크립트의 로컬 실행
+   증거일 뿐, 이 pytest 계약의 CI 배선 증거가 아니었다. `app-ci.yml`의 backend job에
+   `python -m pytest -q tests` 스텝을 추가하고, 이를 잠그는 회귀 테스트
+   (`backend/tests/test_release_governance.py::test_app_ci_collects_repository_root_governance_contract_tests`)를
+   추가해 진짜 RED(스텝 부재로 assert 실패) → GREEN 확인.
+2. **🔴 별개 발견(수정 중 우연히 드러남, 이 지적과 무관하지만 같은 head의 실재 결함): 같은
+   `a4e01191`이 stacked-PR 지원을 위해 4개 워크플로(`app-ci.yml`, `bandit.yml`,
+   `dependency-review.yml`, `docker-publish.yml`)의 `pull_request:` 트리거에서 `branches:`
+   제한을 제거했는데, 그 리터럴 브랜치 목록(`release/**`, `develop`)을 그대로 assert하던 기존
+   계약 테스트 2개가 이미 깨져 있었다.** `backend/tests/test_release_governance.py`만 단독
+   실행하면 2 failed — owner 코멘트의 "workflow/Alembic contracts 29 passed"는 이 파일 전체를
+   포함한 실행이 아니었던 것으로 보인다. 두 테스트(`test_app_ci_runs_backend_and_frontend_checks_without_duplicate_release_pushes`,
+   `test_docker_publish_validates_pr_images_and_publishes_semver_images_only_on_tags`)를 새 의도
+   (`branches:`가 `pull_request:` 아래 전혀 없어야 스택형 PR 베이스를 배제하지 않는다)에 맞게
+   갱신 — 워크플로 자체를 되돌리지 않음(`test_stacked_pr_workflow_contract.py`가 이미 그 방향을
+   명시적으로 요구).
+
+커밋 `db97962c`(naruon). 전체 백엔드 스위트 1906 passed / 40 skipped, repo-root `tests/` 1 passed,
+ruff clean, `scripts/ci/test_pr_governance_gate.sh: PASS`. Devin 스레드
+(`PRRT_kwDOSNjZ2s6d9SmZ`)에 근거를 남기고 resolve 처리했다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
