@@ -45,6 +45,7 @@ jobs:
           RULESET_SENTINEL_REPOSITORY: naruon
         run: |
           set -euo pipefail
+          audit_status=0
           ruleset_json="$RUNNER_TEMP/central-required-workflow-ruleset.json"
           ruleset_with_scope_json="$RUNNER_TEMP/central-required-workflow-ruleset-with-scope.json"
           ruleset_error="$RUNNER_TEMP/central-required-workflow-ruleset.error"
@@ -90,7 +91,9 @@ jobs:
           jq --slurpfile scope "$scope_json" \
             '. + {"_audit_repository_scope": $scope[0]}' \
             "$ruleset_json" >"$ruleset_with_scope_json"
-          python3 scripts/ci/audit_central_required_workflows.py "$ruleset_with_scope_json"
+          if ! python3 scripts/ci/audit_central_required_workflows.py "$ruleset_with_scope_json"; then
+            audit_status=1
+          fi
 
           repository_ruleset_json="$RUNNER_TEMP/owner-repository-ruleset.json"
           repository_ruleset_error="$RUNNER_TEMP/owner-repository-ruleset.error"
@@ -100,7 +103,9 @@ jobs:
             sed 's/^/    /' "$repository_ruleset_error"
             exit 1
           fi
-          python3 scripts/ci/audit_central_required_workflows.py --repository "$repository_ruleset_json"
+          if ! python3 scripts/ci/audit_central_required_workflows.py --repository "$repository_ruleset_json"; then
+            audit_status=1
+          fi
 
           stacked_ruleset_json="$RUNNER_TEMP/stacked-opencode-ruleset.json"
           stacked_ruleset_error="$RUNNER_TEMP/stacked-opencode-ruleset.error"
@@ -110,4 +115,11 @@ jobs:
             sed 's/^/    /' "$stacked_ruleset_error"
             exit 1
           fi
-          python3 scripts/ci/audit_central_required_workflows.py --stacked "$stacked_ruleset_json"
+          if ! python3 scripts/ci/audit_central_required_workflows.py --stacked "$stacked_ruleset_json"; then
+            audit_status=1
+          fi
+
+          if [[ "$audit_status" -ne 0 ]]; then
+            echo "::error::One or more fetched rulesets drift from the declared governance contract."
+            exit "$audit_status"
+          fi
