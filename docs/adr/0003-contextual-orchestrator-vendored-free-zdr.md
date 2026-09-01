@@ -7,7 +7,7 @@
 
 ## Current decision
 
-Every central review model call goes through the vendored `ContextualWisdomLab/contextual-orchestrator` sidecar. OpenCode, Noema, and Strix use the virtual model `orchestrator/free`; private/internal targets additionally require ZDR and fail closed when no eligible ZDR route exists.
+Every central review model call goes through the vendored `ContextualWisdomLab/contextual-orchestrator` sidecar. OpenCode, Noema, and Strix use the virtual model `orchestrator/free`; private/internal targets additionally require ZDR and fail closed when no eligible ZDR route exists. The current reviewed sidecar source is pinned exactly to contextual-orchestrator commit `8cd99f139915131ba0239bce12a5d6a5fd85394e`; changing that supply-chain identity requires ordinary exact-head review and verification rather than an inferred compatible version.
 
 All five GitHub Secrets may be supplied to global contextual-orchestrator discovery: `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY`. Credential discovery and free-pool candidate admission are separate contracts. `OPENAI_API_KEY` may be registered and may globally discover OpenAI models, but any row sourced through `OPENAI_API_KEY` is excluded from `orchestrator/free` candidate generation, preflight, routing, failover, fallback, serving, and durable free-pool persistence. The eligible provider-account sources for `orchestrator/free` are `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, and `OPENROUTER_API_KEY`, subject to the remaining explicit free/privacy/capability evidence predicates.
 
@@ -16,6 +16,8 @@ All five GitHub Secrets may be supplied to global contextual-orchestrator discov
 The historical twelve-route total catalog cap, eight-route primary cap, per-account cap, `priority=-rank`, cost/provider ordering, and Strix `orchestrator/auto` paid-fallback design are superseded. Incident evidence that motivated those controls remains useful for observability and research, but an incident-derived rule is not a valid decision policy without an explicit mathematical/statistical/psychometric model, authoritative standard, experimentally validated evidence, or documented research-backed algorithm with executable provenance.
 
 No heuristic, rule of thumb, hand-tuned threshold, arbitrary weight, ad-hoc score, undocumented tie break, name-based inference, or magic-number decision rule may determine routing, model selection, test-time-compute allocation, response-quality scoring, RAG evaluation, weighting, thresholding, admission, fallback order, or prioritization. If the required evidence is unavailable, the system fails closed or records unresolved evidence; it does not invent a substitute heuristic.
+
+Model inference has no repository- or application-configured fixed wall-clock cutoff. OpenCode, Noema, Strix, and the contextual-orchestrator sidecar **MUST NOT impose a fixed wall-clock timeout on model inference**, including initial completion probes, warm-up, retry, repair verdicts, or substantive review calls. A slow reasoning model is not classified as unavailable merely because it runs for minutes or hours. Explicit operator cancellation, exact-head supersession, and an external runner/platform termination remain observable lifecycle events; an externally interrupted run is incomplete evidence and cannot become an approval or availability judgment. The same principle applies to bootstrap discovery/readiness paths when a fixed local deadline would silently convert an otherwise usable provider into a negative routing signal.
 
 Reference-free/model-response quality evaluation uses the `ContextualWisdomLab/fast-mlsirm` psychometric/statistical boundary where applicable. The GitHub policy layer does not synthesize a model-quality scalar.
 
@@ -32,7 +34,8 @@ Executable tests must prove at least that:
 5. more than the historical catalog cap can remain admitted without truncation or launcher failure;
 6. legacy cap arguments cannot alter admission, ordering, or priority;
 7. private targets cannot bypass ZDR admission;
-8. logs and artifacts contain no secret values.
+8. logs and artifacts contain no secret values;
+9. the accepted ADR names the exact vendored sidecar commit and forbids fixed wall-clock inference timeouts.
 
 ## References
 
