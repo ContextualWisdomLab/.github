@@ -2472,6 +2472,41 @@ under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/
 writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
 that PR for its own evidence.
 
+## 2026-09-01 four-pillars#38 downstream canary: central review-control-plane liveness incident, root cause, closure
+
+**Downstream canary**: `ContextualWisdomLab/four-pillars#38@d4750b15ad80e50dd547c7c8dca9d9a93c4dd0cd` had a
+real required `opencode-review` failure. Exact job logs show OIDC/app-token acquisition and repository
+dispatch succeeded, then the trusted required workflow from central policy snapshot
+`1cbb6aaf0a24c3628d24c3dd6d9dcaa8a7eec0c5` exhausted its then-fixed 180×30s current-head-verdict wait
+and failed closed. Ordinary coverage/source evidence on the same head was green throughout.
+**Classification**: central review-control-plane liveness, not downstream product code, permissions, or
+a substantive security/test failure -- exactly the class of "fixed wall-clock cutoff meets an
+uncapped-inference model" bug this repo's own operating directive (`docs/product-goal-directive.md` §8)
+already accepts central reviews may exceed two hours.
+
+**Owning central repair (already shipped, dated entries above)**: `.github#1546` merged as
+`5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`, removing the fixed model/review wall-clock cutoffs while
+retaining exact-head/stale-head/fail-closed semantics and routing through the vendored
+contextual-orchestrator `orchestrator/free` path. Its ADR changes in
+`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` explicitly prohibit fixed model-inference
+timeouts and supersede ADR 0005's timeout budgets. A separate, related scheduler-trigger gap was also
+repaired: `.github#1496` merged as `69dc697379d3ebdee40896732ed984ba0cc966be`, adding
+`pull_request_review` to the guarded review-dispatch path so a review/thread-state change can wake
+exact-head OpenCode work instead of leaving the required check stranded.
+
+**Verification**: current protected `.github/main@960b08456de4c87a5a833938220d6d83f68d61c1` re-fetched
+after those merges landed; no terminal failed exact-head check-run in the observed set.
+
+**Recovery action on `four-pillars`**: a fresh exact-head `@opencode-agent` review-only invocation was
+posted through the current central integration, and the originally-failed job was safely rerun. The new
+exact-head `opencode-review` job/check `99833307821` was queued at incident time; queued is non-passing
+evidence and no status was synthesized from it -- this record does not claim that rerun as a passing
+result, only that the underlying liveness cause is fixed centrally and recovery was initiated correctly.
+
+**Predecessor-head evidence**: none transferred. The original `four-pillars#38` failure's evidence is
+recorded here as closed-and-explained incident history, not as passing evidence for any current or
+future head of that PR.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
