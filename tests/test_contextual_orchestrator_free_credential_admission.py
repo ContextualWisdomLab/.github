@@ -47,9 +47,13 @@ def test_free_pool_excludes_openai_while_global_discovery_keeps_all_five() -> No
         "openrouter",
     }
     assert all(agent["credential_key"] != "OPENAI_API_KEY" for agent in result["agents"])
-    assert result["report"]["total_zero_cost_routes"] == 5
-    assert result["report"]["total_free_routes"] == 4
-    assert result["report"]["excluded_free_source_count"] == 1
+    # Discovery-wide counters keep their established meaning; narrower pool
+    # admission gets separate fields so runtime enrichment cannot relabel them.
+    assert result["report"]["total_free_routes"] == 5
+    assert result["report"]["free_account_diversity"] == 5
+    assert result["report"]["free_pool_admitted_routes"] == 4
+    assert result["report"]["free_pool_excluded_source_count"] == 1
+    assert result["report"]["free_pool_account_diversity"] == 4
 
 
 def test_auto_pool_may_retain_globally_discovered_openai() -> None:
@@ -64,6 +68,8 @@ def test_auto_pool_may_retain_globally_discovered_openai() -> None:
         "openrouter",
         "openai",
     }
+    assert result["report"]["free_pool_admitted_routes"] == 1
+    assert result["report"]["free_pool_excluded_source_count"] == 1
 
 
 def test_openai_only_zero_cost_discovery_fails_closed_for_free_pool() -> None:
