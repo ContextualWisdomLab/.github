@@ -79,6 +79,30 @@
       "topics": ["document-viewer", "document-conversion", "file-preview", "pdf", "java", "spring-boot", "javascript", "web-app", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "DiagramWeave": {
+      "description": "DiagramWeave — a source-first, AI-assisted editor and tooling platform for PlantUML diagrams.",
+      "topics": ["diagram-editor", "plantuml", "developer-tools", "language-server", "javascript", "ai-assisted", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "semantic-data-portal": {
+      "description": "Semantic Data Portal — governed discovery, graph traversal, and semantic search for enterprise data catalogs.",
+      "topics": ["data-catalog", "knowledge-graph", "ontology", "semantic-web", "semantic-search", "data-governance", "postgresql", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "contextual-orchestrator": {
+      "description": "Contextual Orchestrator — an OpenAI-compatible control plane for model routing, delegation, verification, and multi-agent orchestration.",
+      "topics": ["enterprise-admin", "llm-orchestration", "model-orchestration", "model-routing", "ai-agents", "openai-compatible", "research", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "mhtml-etl-gateway": {
+      "description": "Enterprise MHTML ingestion gateway that converts browser, SAP ALV, and Excel Web Archive exports into governed PostgreSQL data assets.",
+      "topics": ["mhtml", "etl", "data-ingestion", "sap", "postgresql", "data-governance", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
