@@ -44,7 +44,7 @@ permissions:
 jobs:
   required-workflow-bootstrap:
     name: required-workflow-bootstrap
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Materialize the required review workflow
         run: >-
@@ -250,7 +250,7 @@ jobs:
   coverage-source-tree:
     name: coverage-source-tree
     needs: [required-workflow-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: >-
           echo "PR-head source and coverage execution are delegated to the
@@ -259,7 +259,7 @@ jobs:
   coverage-evidence:
     name: coverage-evidence
     needs: [coverage-source-tree]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: >-
           echo "This required-workflow job preserves the stable branch-protection
@@ -268,7 +268,7 @@ jobs:
   opencode-review-target:
     name: opencode-review
     needs: [coverage-evidence]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -475,7 +475,7 @@ jobs:
     # immediately beforehand, so a run for this job that is itself somehow
     # delayed/stale cannot wrongly cancel a still-authoritative run.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
       contents: read

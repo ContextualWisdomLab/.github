@@ -12,6 +12,7 @@ on:
       - "tests/test_repository_metadata_identity.py"
       - "tests/test_repository_metadata_live_verification.py"
       - "tests/test_repository_metadata_workflow.py"
+      - "tests/test_repository_metadata_workflow_pages.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - "tests/test_repository_label_convergence.py"
@@ -26,7 +27,7 @@ permissions:
 
 concurrency:
   group: repository-metadata-reconcile-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -73,7 +74,8 @@ jobs:
             -m pytest -q \
             tests/test_repository_metadata_reconciliation.py \
             tests/test_repository_metadata_identity.py \
-            tests/test_repository_metadata_live_verification.py
+            tests/test_repository_metadata_live_verification.py \
+            tests/test_repository_metadata_workflow_pages.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
