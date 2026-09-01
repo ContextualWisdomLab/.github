@@ -93,5 +93,15 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "type": "documentation",
         },
         {"repository": "j-planner", "issue": 2, "type": "documentation"},
+        {
+            "repository": "learning-record-store",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-record-store",
+            "issue": 7,
+            "type": "documentation",
+        },
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
