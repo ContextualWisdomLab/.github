@@ -29,6 +29,29 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent",
 }
 GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
+# Wraps the start of the fixed-format footer submit_review() writes below the
+# LLM-generated summary/findings text. This lets noema_review_handoff.py
+# locate the footer by *position* (the trusted, machine-emitted span between
+# this marker and the closing "<!-- noema-review-gate head_sha=... -->"
+# comment) instead of by scanning for a content pattern that the LLM's own
+# unsanitized output could coincidentally reproduce. Keep this literal in
+# exact sync with NOEMA_REVIEW_FOOTER_MARKER in noema_review_handoff.py.
+NOEMA_REVIEW_FOOTER_MARKER = "<!-- noema-review-gate-footer -->"
+# Must stay byte-for-byte identical to NOEMA_REVIEW_MARKER in
+# noema_review_handoff.py. Used only to isolate the closing marker's
+# position, not as a content-pattern check — see
+# _noema_review_footer_and_marker_tail().
+NOEMA_REVIEW_CLOSING_MARKER_PREFIX = "<!-- noema-review-gate "
+# Must stay byte-for-byte identical to NOEMA_MARKER_HEAD_RE in
+# noema_review_handoff.py, so existing_noema_review() applies the exact same
+# exact-head structural validation noema_review_state() requires before a
+# review can suppress republication.
+NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
+    r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->"
+)
+# Must stay byte-for-byte identical to NOEMA_BODY_HEAD_RE in
+# noema_review_handoff.py.
+NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -194,21 +217,58 @@ def review_commit(review: dict[str, Any]) -> str:
     return ((review.get("commit") or {}).get("oid") or "").strip()
 
 
+def _noema_review_footer_and_marker_tail(body: str) -> tuple[str, str]:
+    """Return the trusted footer span and marker tail of a Noema review body.
+
+    Mirrors ``noema_review_handoff.py``'s ``_isolate_trusted_footer()`` and
+    ``_isolate_trusted_marker_tail()`` exactly: both spans are located by
+    *position*, strictly between the machine-emitted
+    ``NOEMA_REVIEW_FOOTER_MARKER`` and (for the footer span) the closing
+    ``<!-- noema-review-gate head_sha=... decision=... -->`` comment, never by
+    scanning for a content pattern the LLM's own unsanitized summary/findings
+    text could coincidentally reproduce. Returns ``("", "")`` when the footer
+    marker is absent, so the caller's exact-one-match check fails closed.
+    """
+    marker_tail_parts = body.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    marker_tail = marker_tail_parts[1] if len(marker_tail_parts) == 2 else ""
+
+    before_closing_marker = body.rsplit(NOEMA_REVIEW_CLOSING_MARKER_PREFIX, 1)[0]
+    footer_parts = before_closing_marker.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    footer_text = footer_parts[1] if len(footer_parts) == 2 else ""
+    return footer_text, marker_tail
+
+
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
-    """Return whether Noema already reviewed the current head."""
+    """Return whether Noema already posted a trusted verdict for the current head.
+
+    Applies the exact same exact-head structural validation
+    ``noema_review_handoff.py``'s ``noema_review_state()`` requires before
+    accepting a review as a valid current-head verdict — not just marker
+    presence. A review whose markers are both present but whose body-side
+    bullet or closing-marker SHA is missing, malformed, or duplicated (for
+    example a hand-edited or corrupted review, or one predating the footer
+    marker) is a review ``noema_review_state()`` can never recognize as a
+    valid current-head verdict; treating it as "already reviewed" here would
+    let it silently suppress every future publish attempt for an otherwise
+    unchanged head, stalling the PR forever.
+    """
     head_sha = str(pr.get("headRefOid") or "")
-    marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if review_commit(review) != head_sha:
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if (
-            actor
-            and review_author(review) == actor
-            and marker in str(review.get("body") or "")
-        ):
-            return True
+        if not actor or review_author(review) != actor:
+            continue
+        body = str(review.get("body") or "")
+        footer_text, marker_tail = _noema_review_footer_and_marker_tail(body)
+        marker_heads = NOEMA_REVIEW_CLOSING_MARKER_RE.findall(marker_tail)
+        body_heads = NOEMA_REVIEW_BODY_HEAD_RE.findall(footer_text)
+        if len(marker_heads) != 1 or len(body_heads) != 1:
+            continue
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
+            continue
+        return True
     return False
 
 
@@ -1260,6 +1320,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "### Findings",
             *(findings or ["- No blocking findings."]),
             "",
+            NOEMA_REVIEW_FOOTER_MARKER,
             f"- Result: {event}",
             f"- Head SHA: `{head_sha}`",
             f"- Reviewer credential: `{source}`",
