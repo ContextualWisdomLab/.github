@@ -410,11 +410,11 @@ def main() -> int:
         ) as exc:
             failures.append(f"{repository}: {exc}")
             print(
-                f"repository metadata operation failed for {repository}: {exc}",
+                f"repository metadata reconciliation failed for {repository}: {exc}",
                 file=sys.stderr,
             )
     if failures:
-        raise RuntimeError("metadata operation failed: " + "; ".join(failures))
+        raise RuntimeError("metadata reconciliation failed: " + "; ".join(failures))
     return 0
 
 
