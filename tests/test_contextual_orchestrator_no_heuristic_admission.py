@@ -82,3 +82,22 @@ def test_auto_pool_admission_does_not_rank_cost_or_provider_identity() -> None:
         priced["model"],
     }
     assert {entry["priority"] for entry in result["agents"]} == {0}
+
+
+def test_legacy_ignored_inputs_accept_arbitrary_values() -> None:
+    """Ignored compatibility inputs cannot become an accidental admission contract."""
+    rows = [_free_row(index) for index in range(3)]
+    sentinel = object()
+
+    result = policy.build_zdr_prioritized_catalog(
+        rows,
+        pool="free",
+        limit="retired-limit",
+        account_cap=sentinel,
+    )
+
+    assert [entry["model"] for entry in result["agents"]] == [
+        row["model"] for row in rows
+    ]
+    assert result["report"]["legacy_limit_ignored"] is True
+    assert result["report"]["legacy_account_cap_ignored"] is True
