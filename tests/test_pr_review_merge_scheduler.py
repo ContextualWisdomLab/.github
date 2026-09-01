@@ -4574,6 +4574,32 @@ def test_complete_paginated_pr_contexts_finds_required_run_after_first_100(monke
     assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 142
 
 
+def test_complete_paginated_pr_contexts_rejects_missing_cursor():
+    """Fail closed when GitHub advertises a page without a cursor."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [], "pageInfo": {"hasNextPage": True}}
+        }
+    )
+    with pytest.raises(RuntimeError, match="did not provide an end cursor"):
+        sched.complete_paginated_pr_contexts("owner/repo", pr)
+
+
+def test_complete_paginated_pr_contexts_bounds_repeated_pages(monkeypatch):
+    """Fail closed when GitHub never terminates status-context pagination."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [],
+                "pageInfo": {"hasNextPage": True, "endCursor": "loop"},
+            }
+        }
+    )
+    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 0)
+    with pytest.raises(RuntimeError, match="exceeded its safety bound"):
+        sched.complete_paginated_pr_contexts("owner/repo", pr)
+
+
 @pytest.mark.parametrize(
     ("workflow_name", "run_title"),
     [
