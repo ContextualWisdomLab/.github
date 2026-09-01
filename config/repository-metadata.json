@@ -25,6 +25,12 @@
       "topics": ["email", "threading", "imap", "rfc5256", "python", "mail", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "RankWeave": {
+      "description": "RankWeave — deterministic retrieval fusion, evaluation, statistical comparison, and auditable ranking workflows for Python.",
+      "topics": ["information-retrieval", "ranking", "retrieval", "reciprocal-rank-fusion", "trec", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
