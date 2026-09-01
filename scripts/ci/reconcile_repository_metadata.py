@@ -249,7 +249,7 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
 
 
 def _repository_file_exists(repository: str, default_branch: str, path: str) -> bool:
-    """Return whether a reviewed default-branch file exists at the exact path."""
+    """Return whether a reviewed default-branch regular file exists at the exact path."""
 
     endpoint = f"repos/{ORGANIZATION}/{repository}/contents/{path}?ref={default_branch}"
     command = ["gh", "api", endpoint]
@@ -261,7 +261,8 @@ def _repository_file_exists(repository: str, default_branch: str, path: str) -> 
         timeout=30,
     )
     if completed.returncode == 0:
-        return True
+        payload = json.loads(completed.stdout)
+        return type(payload) is dict and payload.get("type") == "file"
     combined = f"{completed.stdout}\n{completed.stderr}"
     if "HTTP 404" in combined or "Not Found" in combined:
         return False
@@ -344,6 +345,22 @@ def _pages_precondition(repository: str, default_branch: str, desired: dict[str,
         )
 
 
+def _workflow_pages_live_precondition(repository: str, desired: dict[str, Any]) -> None:
+    """Require existing Actions-backed Pages before any repository metadata mutation."""
+
+    if not desired["pages"] or desired.get("pages_mode", "legacy") != "workflow":
+        return
+    if not _pages_exists(repository):
+        raise RuntimeError(
+            f"workflow Pages requested for {repository} but Pages is not configured"
+        )
+    current_pages = _pages_configuration(repository)
+    if not _workflow_pages_configuration_matches(current_pages):
+        raise RuntimeError(
+            f"workflow Pages requested for {repository} but live Pages is not Actions-backed"
+        )
+
+
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
@@ -364,6 +381,7 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
             f"DeepWiki badge is disabled for {repository} but the exact badge is still on {default_branch}"
         )
     _pages_precondition(repository, default_branch, desired)
+    _workflow_pages_live_precondition(repository, desired)
 
     if repository_payload.get("description") != desired["description"]:
         _gh_api(
@@ -382,21 +400,12 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
             body={"names": desired["topics"]},
         )
 
+    pages_mode = desired.get("pages_mode", "legacy")
+    if desired["pages"] and pages_mode == "workflow":
+        return
+
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
-        pages_mode = desired.get("pages_mode", "legacy")
-        if pages_mode == "workflow":
-            if not pages_exists:
-                raise RuntimeError(
-                    f"workflow Pages requested for {repository} but Pages is not configured"
-                )
-            current_pages = _pages_configuration(repository)
-            if not _workflow_pages_configuration_matches(current_pages):
-                raise RuntimeError(
-                    f"workflow Pages requested for {repository} but live Pages is not Actions-backed"
-                )
-            return
-
         pages_body = {
             "build_type": "legacy",
             "source": {"branch": default_branch, "path": "/docs"},
