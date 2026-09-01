@@ -1,0 +1,36 @@
+name: One-shot PR 1591 escalation-order repair
+
+on:
+  push:
+    branches:
+      - fix/no-heuristic-free-review-admission
+    paths:
+      - .github/workflows/source-fix-1591-escalation-order.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Reconcile current main and run RED-GREEN repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/no-heuristic-free-review-admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          PYTHONPATH=. python3 scripts/ci/source_fix_1591_escalation_order.py
