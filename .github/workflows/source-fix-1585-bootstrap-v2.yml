@@ -1,0 +1,75 @@
+name: One-shot PR 1585 verified repair bootstrap
+
+on:
+  push:
+    branches:
+      - fix/strix-control-plane-supersession-20260901
+    paths:
+      - .github/workflows/source-fix-1585-bootstrap-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      TARGET_BRANCH: fix/strix-control-plane-supersession-20260901
+    steps:
+      - name: Execute exact reviewed source-fix payload and retire repair machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          expected_blob="19c93ab4df20d44ddd6555083d66f7796c0a6bc6"
+          actual_blob="$(git hash-object .github/workflows/source-fix-1585-strix-control-plane-supersession.yml)"
+          test "$actual_blob" = "$expected_blob"
+
+          python3 -m pip install --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path(".github/workflows/source-fix-1585-strix-control-plane-supersession.yml")
+          lines = source.read_text(encoding="utf-8").splitlines()
+          marker = "        run: |"
+          start = lines.index(marker) + 1
+          body: list[str] = []
+          for line in lines[start:]:
+              if line and not line.startswith("          "):
+                  break
+              body.append(line[10:] if line.startswith("          ") else "")
+          if not body or body[0] != "set -euo pipefail":
+              raise SystemExit("unexpected source-fix run payload")
+          Path("/tmp/pr1585-source-fix.sh").write_text("\n".join(body) + "\n", encoding="utf-8")
+          PY
+
+          cd "$GITHUB_WORKSPACE"
+          bash /tmp/pr1585-source-fix.sh
+
+          cd repo
+          git fetch origin "$TARGET_BRANCH"
+          git reset --hard "origin/$TARGET_BRANCH"
+          for path in \
+            .github/workflows/source-fix-1585-bootstrap-v2.yml \
+            .github/workflows/source-fix-1585-bootstrap.yml \
+            .github/workflows/source-fix-1585-repair-regression.yml; do
+            if [ -e "$path" ]; then
+              git rm "$path"
+            fi
+          done
+          if ! git diff --cached --quiet; then
+            git diff --cached --check
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(ci): retire PR 1585 source-fix machinery"
+            git push origin "HEAD:${TARGET_BRANCH}"
+          fi
