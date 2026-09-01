@@ -4,6 +4,7 @@
 from pathlib import Path
 
 
+# Temporary writer-token retry trigger; this helper is deleted by the repair.
 TEST = Path(__file__).resolve().parents[2] / "tests/test_noema_review_gate.py"
 
 
