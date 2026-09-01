@@ -926,6 +926,163 @@ def test_build_catalog_shared_domain_cap_does_not_starve_second_account() -> Non
     assert sum(counts.values()) == 4
 
 
+PRICED_PRICE = {
+    "prompt_price_per_1k": 0.01,
+    "completion_price_per_1k": 0.01,
+    "currency_code": "USD",
+}
+
+
+def test_build_catalog_guarantee_domain_coverage_leaves_single_domain_unchanged() -> None:
+    """A single competing domain behaves exactly as the unmodified admission loop did."""
+    report = {
+        "models": [
+            {"provider": "openrouter", "model": f"r{i}", "agent_id": f"or_{i}", "is_free": False, **PRICED_PRICE}
+            for i in range(6)
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    without_flag = policy.build_zdr_prioritized_catalog(
+        rows, limit=4, account_cap=4, pool="auto"
+    )
+    with_flag = policy.build_zdr_prioritized_catalog(
+        rows, limit=4, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    assert len(without_flag["agents"]) == len(with_flag["agents"]) == 4
+
+
+def test_build_catalog_guarantee_domain_coverage_fixes_single_domain_starvation() -> None:
+    """Regression for Devin Review's "fallback remains single-domain" finding on `.github#1474`.
+
+    With both ``limit`` and ``account_cap`` at 4 (the review sidecar's real
+    priced-fallback shape), an outage domain with at least ``limit`` priced
+    rows used to exhaust the whole stage before a second, genuinely
+    independent domain's row was ever considered -- the per-domain cap
+    provided no diversity protection for this specific stage. Four
+    same-domain priced routes plus one independent priced route (Devin's
+    own suggested regression shape) must now leave room for the
+    independent route.
+    """
+    report = {
+        "models": [
+            {"provider": "nvidia_nim", "model": f"n{i}", "agent_id": f"nim_{i}", "is_free": False, **PRICED_PRICE}
+            for i in range(4)
+        ]
+        + [{"provider": "openrouter", "model": "independent", "agent_id": "or_0", "is_free": False, **PRICED_PRICE}]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=4, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    providers = {agent["provider_name"] for agent in result["agents"]}
+    assert providers == {"nvidia_nim", "openrouter"}
+
+
+def test_build_catalog_guarantee_domain_coverage_uses_full_budget_on_uneven_split() -> None:
+    """Regression for Devin Review's "fallback quota wastes probe slots" finding.
+
+    A uniform ``limit // domain_count`` floor (this fix's own first
+    revision) correctly guarantees every domain a seat but wastes capacity
+    whenever ``limit`` does not divide evenly: ``limit=4`` across 3 domains
+    floors to 1 each, admitting only 3 routes even though a 4th eligible
+    row exists. Three domains (bytez, openrouter, openai), each with 2
+    priced rows, ``limit=4``, ``account_cap=4``: every domain must still be
+    represented, and the full 4-route budget must be used, not left at 3.
+    """
+    report = {
+        "models": [
+            {"provider": provider, "model": f"{provider}-{i}", "agent_id": f"{provider}_{i}", "is_free": False, **PRICED_PRICE}
+            for provider in ("bytez", "openrouter", "openai")
+            for i in range(2)
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=4, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    providers = {agent["provider_name"] for agent in result["agents"]}
+    assert providers == {"bytez", "openrouter", "openai"}
+    assert len(result["agents"]) == 4
+
+
+def test_build_catalog_guarantee_domain_coverage_uses_full_budget_on_eight_over_three() -> None:
+    """Devin Review's own second suggested non-divisible split (8 routes, 3 domains).
+
+    Three domains, each with ample priced rows (5 each -- comfortably above
+    both ``account_cap`` and any per-domain share of ``limit``), ``limit=8``,
+    ``account_cap=4``: every domain represented, the full 8-route budget
+    used, and no domain exceeds ``account_cap``.
+    """
+    report = {
+        "models": [
+            {"provider": provider, "model": f"{provider}-{i}", "agent_id": f"{provider}_{i}", "is_free": False, **PRICED_PRICE}
+            for provider in ("bytez", "openrouter", "openai")
+            for i in range(5)
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=8, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    counts: dict[str, int] = {}
+    for agent in result["agents"]:
+        counts[agent["provider_name"]] = counts.get(agent["provider_name"], 0) + 1
+    assert set(counts) == {"bytez", "openrouter", "openai"}
+    assert sum(counts.values()) == 8
+    assert all(count <= 4 for count in counts.values())
+
+
+def test_build_catalog_guarantee_domain_coverage_still_bounded_by_account_cap() -> None:
+    """The first-pass diversity guarantee never lets a domain skip its own cap.
+
+    A single domain with far more rows than ``account_cap`` must still stop
+    at ``account_cap``, exactly as the unmodified admission loop already
+    guarantees -- ``guarantee_domain_coverage`` only changes *when* other
+    domains get a turn, never the per-domain ceiling itself.
+    """
+    report = {
+        "models": [
+            {"provider": "openrouter", "model": f"r{i}", "agent_id": f"or_{i}", "is_free": False, **PRICED_PRICE}
+            for i in range(10)
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=8, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    assert len(result["agents"]) == 4
+
+
+def test_build_catalog_guarantee_domain_coverage_caps_at_limit_when_domains_outnumber_it() -> None:
+    """More competing domains than ``limit`` still stops exactly at ``limit``.
+
+    Five independent single-account domains only exist in this fixture set
+    via distinct providers, but this codebase registers only five providers
+    total (see ``PROVIDER_BASE_URLS``); ``nvidia_nim``/``nvidia_nim_sub``
+    share one domain, so the maximum distinct domains available is four.
+    With ``limit=3`` and four competing domains, full domain coverage is
+    structurally impossible -- the first admission pass itself must stop at
+    ``limit`` before every domain gets a turn, exercising that pass's own
+    ``len(picked) >= limit`` bound (never reached by the other
+    ``guarantee_domain_coverage`` tests, which all keep ``limit >=
+    domain_count``). Exactly ``limit`` routes are admitted, each from a
+    different domain.
+    """
+    report = {
+        "models": [
+            {"provider": provider, "model": f"{provider}-0", "agent_id": f"{provider}_0", "is_free": False, **PRICED_PRICE}
+            for provider in ("bytez", "nvidia_nim", "openrouter", "openai")
+        ]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=3, account_cap=4, pool="auto", guarantee_domain_coverage=True
+    )
+    assert len(result["agents"]) == 3
+    providers = {agent["provider_name"] for agent in result["agents"]}
+    assert len(providers) == 3
+
+
 def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {

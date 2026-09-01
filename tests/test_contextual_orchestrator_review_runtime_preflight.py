@@ -1488,88 +1488,12 @@ def test_catalog_account_cap_honors_an_explicit_override(
     assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
 
 
-def test_fallback_domain_aware_account_cap_leaves_the_single_domain_case_unchanged() -> None:
-    """One priced domain still gets ``min(configured_cap, fallback_limit)``."""
-    namespace = _load_launcher()
-    fallback_cap = namespace["_fallback_domain_aware_account_cap"]
-    rows = [{"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"}] * 6
-    assert (
-        fallback_cap(
-            rows,
-            fallback_limit=4,
-            configured_cap=4,
-            outage_domain=policy._outage_domain,
-        )
-        == 4
-    )
-
-
-def test_fallback_domain_aware_account_cap_shrinks_for_competing_domains() -> None:
-    """Regression for Devin Review's "fallback remains single-domain" finding on `.github#1474`.
-
-    With both defaults at 4 (``fallback_limit == configured_cap``), one
-    outage domain with at least ``fallback_limit`` priced rows used to
-    exhaust the whole priced-fallback stage before a second, genuinely
-    independent domain's row was ever considered -- the per-domain cap
-    provided no diversity protection for this specific stage. Four
-    same-domain priced routes plus one independent priced route (Devin's
-    own suggested regression shape) must now leave room for the
-    independent route.
-    """
-    namespace = _load_launcher()
-    fallback_cap = namespace["_fallback_domain_aware_account_cap"]
-    dominant_domain_rows = [
-        {"provider": "nvidia_nim", "base_url": "https://integrate.api.nvidia.com/v1"}
-    ] * 4
-    independent_domain_rows = [
-        {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"}
-    ]
-    cap = fallback_cap(
-        [*dominant_domain_rows, *independent_domain_rows],
-        fallback_limit=4,
-        configured_cap=4,
-        outage_domain=policy._outage_domain,
-    )
-    assert cap < 4
-    assert cap * 2 <= 4
-
-
-def test_fallback_domain_aware_account_cap_keeps_both_domains_admitted_end_to_end() -> None:
-    """The computed cap, fed back into ``build_zdr_prioritized_catalog``, admits both domains.
-
-    Exercises the fix at the same boundary the priced-fallback call site in
-    ``main()`` actually uses: compute the domain-aware cap from the
-    candidate rows, then build the catalog with it, exactly as
-    ``main()``'s own ``fallback_result = build_zdr_prioritized_catalog(...,
-    account_cap=_fallback_domain_aware_account_cap(...), ..., pool="auto")``
-    call does. Four same-domain (``nvidia_nim``) priced rows that would,
-    unmodified, fill the whole 4-route fallback budget must not exclude one
-    independent (``openrouter``) priced row.
-    """
-    namespace = _load_launcher()
-    fallback_cap = namespace["_fallback_domain_aware_account_cap"]
-    priced = {"is_free": False, "prompt_price_per_1k": 0.01, "completion_price_per_1k": 0.01, "currency_code": "USD"}
-    report = {
-        "models": [
-            {"provider": "nvidia_nim", "model": f"dominant/model-{index}", "agent_id": f"nim_{index}", **priced}
-            for index in range(4)
-        ]
-        + [{"provider": "openrouter", "model": "independent/model", "agent_id": "or_0", **priced}]
-    }
-    rows = policy.parse_discovery_report(report)
-    fallback_limit = 4
-    cap = fallback_cap(
-        rows,
-        fallback_limit=fallback_limit,
-        configured_cap=4,
-        outage_domain=policy._outage_domain,
-    )
-    result = policy.build_zdr_prioritized_catalog(
-        rows, limit=fallback_limit, account_cap=cap, pool="auto"
-    )
-    providers = {agent["provider_name"] for agent in result["agents"]}
-    assert "nvidia_nim" in providers
-    assert "openrouter" in providers
+def test_main_wires_guarantee_domain_coverage_for_the_priced_fallback_stage() -> None:
+    """``main()``'s priced-fallback ``build_zdr_prioritized_catalog`` call opts into coverage."""
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    fallback_call_start = source.index('pool == "auto"\n        and admitted_free_rows')
+    fallback_call = source[fallback_call_start : fallback_call_start + 800]
+    assert "guarantee_domain_coverage=True" in fallback_call
 
 
 def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:
@@ -1582,13 +1506,13 @@ def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -
     source-level contract test pins both ``build_zdr_prioritized_catalog``
     call sites in ``main()`` to the single source of truth and forbids the
     total-routes constant from ever reappearing as the account-cap fallback.
-    The primary-stage call site passes ``_catalog_account_cap(DEFAULT_ACCOUNT_CAP)``
-    directly; the priced-fallback call site passes it as
-    ``_fallback_domain_aware_account_cap``'s ``configured_cap`` (see that
-    helper's own regression tests for the domain-diversity fix it adds on
-    top) -- both still source the same single default, so the substring
-    check below counts ``_catalog_account_cap(DEFAULT_ACCOUNT_CAP)`` alone,
-    not the full ``account_cap=`` keyword-argument spelling.
+    Both the primary-stage and priced-fallback call sites pass
+    ``_catalog_account_cap(DEFAULT_ACCOUNT_CAP)`` directly as
+    ``account_cap=``; the fallback call site additionally sets
+    ``guarantee_domain_coverage=True`` (see
+    ``policy.build_zdr_prioritized_catalog``'s own regression tests for the
+    domain-diversity fix that flag adds), which does not change what value
+    the cap itself is sourced from.
     """
     source = _LAUNCHER.read_text(encoding="utf-8")
     assert source.count("_catalog_account_cap(DEFAULT_ACCOUNT_CAP)") == 2

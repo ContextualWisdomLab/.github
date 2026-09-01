@@ -486,6 +486,7 @@ def build_zdr_prioritized_catalog(
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
+    guarantee_domain_coverage: bool = False,
 ) -> dict[str, Any]:
     """Select a free-first, ZDR-aware, outage-domain-diverse catalog.
 
@@ -528,6 +529,37 @@ def build_zdr_prioritized_catalog(
     that either domain is presently reachable. A caller needing readiness,
     not just discovery-time diversity, must combine this with the runtime
     preflight report the sidecar already produces.
+
+    ``guarantee_domain_coverage`` (default ``False``, preserving every
+    existing caller's behavior unchanged) fixes a narrower gap a uniform
+    ``account_cap`` cannot: when ``limit`` is small relative to the number
+    of competing outage domains -- the review sidecar's priced-fallback
+    stage's own real shape, where ``limit`` and ``account_cap`` can both be
+    4 -- a single scalar cap forces an uncomfortable choice between two
+    failure modes. A cap left at ``account_cap`` lets one dominant domain
+    exhaust ``limit`` before a second domain is ever considered (Devin
+    Review: "fallback remains single-domain"). Shrinking the cap to
+    ``limit // domain_count`` fixes that but wastes admittable capacity
+    whenever ``limit`` does not divide evenly (Devin Review, same PR:
+    "fallback quota wastes probe slots" -- concretely, ``limit=4`` across 3
+    domains admits only 3 routes under a uniform floor of 1, even though a
+    4th eligible row exists in one of those domains). When set, admission
+    runs in two passes instead of one: the first pass admits at most one
+    row per outage domain (bounded by ``account_cap`` and ``limit``, in the
+    same priority order the single-pass loop already uses), guaranteeing
+    every domain with an eligible row is represented before any domain
+    claims a second seat; the second pass then fills any remaining
+    ``limit`` budget from the rows the first pass did not pick, still
+    respecting each domain's ``account_cap`` ceiling (inclusive of what the
+    first pass already gave it), from whichever domain's next-highest-
+    priority row comes first -- so the full budget is used whenever enough
+    eligible rows exist anywhere, not artificially left idle. The picked
+    order places every first-pass (diversity) row ahead of every
+    second-pass (fill) row: for a fallback pool whose entire purpose is
+    outage-domain resilience, trying one candidate from each domain before
+    a second candidate from an already-represented domain is the more
+    useful preflight order, not merely a side effect of the two-pass
+    implementation.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
@@ -555,14 +587,38 @@ def build_zdr_prioritized_catalog(
 
     per_domain: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
-    for row in _fair_admission_order(eligible_rows, zdr_endpoints=zdr_endpoints):
-        domain = _outage_domain(row)
-        if per_domain[domain] >= account_cap:
-            continue
-        per_domain[domain] += 1
-        picked.append(row)
-        if len(picked) >= limit:
-            break
+    ordered_rows = _fair_admission_order(eligible_rows, zdr_endpoints=zdr_endpoints)
+    if guarantee_domain_coverage:
+        covered_domains: set[str] = set()
+        for row in ordered_rows:
+            if len(picked) >= limit:
+                break
+            domain = _outage_domain(row)
+            if domain in covered_domains or per_domain[domain] >= account_cap:
+                continue
+            covered_domains.add(domain)
+            per_domain[domain] += 1
+            picked.append(row)
+        first_pass_ids = {id(row) for row in picked}
+        for row in ordered_rows:
+            if len(picked) >= limit:
+                break
+            if id(row) in first_pass_ids:
+                continue
+            domain = _outage_domain(row)
+            if per_domain[domain] >= account_cap:
+                continue
+            per_domain[domain] += 1
+            picked.append(row)
+    else:
+        for row in ordered_rows:
+            domain = _outage_domain(row)
+            if per_domain[domain] >= account_cap:
+                continue
+            per_domain[domain] += 1
+            picked.append(row)
+            if len(picked) >= limit:
+                break
 
     if not picked:
         route_kind = "attested ZDR" if require_zdr else pool
