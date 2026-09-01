@@ -1,0 +1,53 @@
+name: One-shot PR 1589 reconciliation anchor repair
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/repair-reconcile-1589-anchor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Repair exact anchor and self-remove
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+          RECONCILE_WORKFLOW: .github/workflows/reconcile-1589-main.yml
+          REPAIR_WORKFLOW: .github/workflows/repair-reconcile-1589-anchor.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/reconcile-1589-main.yml")
+          text = path.read_text(encoding="utf-8")
+          old = '''          marker = ''' + "'''" + '''    if decision == \"approve\" and confirmed:\n              raise RuntimeError(\"Noema approve cannot contain a confirmed adversarial probe\")\n          ''' + "'''" + '''\n'''
+          new = '''          marker = ''' + "'''" + '''    if decision == \"approve\" and confirmed:\n        raise RuntimeError(\"Noema approve cannot contain a confirmed adversarial probe\")\n''' + "'''" + '''\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one malformed post-probe marker, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+          git rm "$REPAIR_WORKFLOW"
+          git add "$RECONCILE_WORKFLOW"
+          git diff --cached --check
+          test ! -e "$REPAIR_WORKFLOW"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(ci): repair PR 1589 reconciliation anchor"
+          git push origin "HEAD:${TARGET_BRANCH}"
