@@ -831,7 +831,7 @@ def test_build_catalog_applies_account_cap() -> None:
             for i in range(6)
         ]
         + [
-                {"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+                {"provider": "openrouter", "model": f"o{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
             for i in range(3)
         ]
     }
@@ -842,7 +842,7 @@ def test_build_catalog_applies_account_cap() -> None:
     for agent in result["agents"]:
         account = policy.provider_account(agent["provider_name"])
         account_counts[account] = account_counts.get(account, 0) + 1
-    assert account_counts == {"nvidia_nim": 1, "nvidia_nim_sub": 1, "openai": 2}
+    assert account_counts == {"nvidia_nim": 1, "nvidia_nim_sub": 1, "openrouter": 2}
     assert len(result["agents"]) == 4
 
 
@@ -1151,7 +1151,7 @@ def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {
         "models": [
-                {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+                {"provider": "openrouter", "model": f"m{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
             for i in range(20)
         ]
     }

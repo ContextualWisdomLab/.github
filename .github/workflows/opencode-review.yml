@@ -9,13 +9,31 @@ on:
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    # `converted_to_draft` is included so a PR going draft mid-poll fires a
+    # fresh run of this same workflow: the head-scoped concurrency group below
+    # (`cancel-in-progress: true`) cancels any in-flight non-draft
+    # "Fail closed without a current-head OpenCode verdict" poll for that
+    # exact same head. Every non-closed admission path revalidates the live
+    # PR/head/state before dispatching, exempting, or polling so out-of-order
+    # draft/ready/closed events cannot publish stale evidence or wait on an
+    # impossible verdict.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
+  # Scoped by exact head SHA (not just PR number) so a delayed, out-of-order
+  # run for an older head cannot cancel the authoritative run already active
+  # for a newer head -- GitHub cancels whichever run is currently active in
+  # the group when a new one starts, with no notion of "older"/"newer", so
+  # sharing a group across different heads let a stale event retire the
+  # current head's still-valid run before its own live-head check could ever
+  # reject it (Devin Review on `#1568`). Same-head events (draft<->ready
+  # transitions, a synchronize retry) still share one group, so
+  # `converted_to_draft` still cancels an active same-head verdict poll.
   group: >-
     opencode-review-bootstrap-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event.pull_request.number || github.run_id }}
+    github.event.pull_request.number || github.run_id }}-${{
+    github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -270,11 +288,39 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before review dispatch."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
+            echo "::error::Could not validate live pull request state before review dispatch."
+            exit 1
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "::error::Pull request head moved while validating live review state."
+            exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head OpenCode review is not requested."
+            exit 0
+          fi
+          if [ "$live_draft" = "true" ]; then
+            echo "PR is still a draft on the live exact head; a current-head OpenCode review is not requested until it is marked ready for review."
+            exit 0
+          fi
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "Event draft snapshot is stale; continuing current-head OpenCode review dispatch for the live ready PR."
+          fi
+          effective_pr_draft="$live_draft"
           helper="$(mktemp)"
           trap 'rm -f "$helper"' EXIT
           gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode >"$helper"
-          receipt_state="$(python3 - "$helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" "$PR_DRAFT" <<'PY'
+          receipt_state="$(python3 - "$helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" "$effective_pr_draft" <<'PY'
           import importlib.machinery
           import importlib.util
           import sys
@@ -334,6 +380,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTION: ${{ github.event.action }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
           if [ "$PR_ACTION" = "closed" ]; then
@@ -343,6 +390,33 @@ jobs:
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before verdict admission."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
+            echo "::error::Could not validate live pull request state before verdict admission."
+            exit 1
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "::error::Pull request head moved while validating live verdict state."
+            exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ "$live_draft" = "true" ]; then
+            echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
+            exit 0
+          fi
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "Event draft snapshot is stale; continuing verdict polling for the live ready PR."
           fi
           verdict=""
           while :; do
@@ -385,3 +459,100 @@ jobs:
             exit 1
           fi
           echo "Current-head OpenCode verdict: ${verdict}."
+
+  cancel-superseded-opencode-review-runs:
+    # Scoping the concurrency group above by exact head SHA (so a delayed
+    # old-head run can no longer cancel the authoritative newer-head run --
+    # Devin Review on `#1568`) also means a *legitimate* new commit no
+    # longer auto-cancels its own PR's now-obsolete previous-head poll: that
+    # older run's own live-head check only ran once, before it entered its
+    # unbounded Reviews API wait, and nothing in that wait loop re-validates
+    # the head. Left alone, it would occupy a runner until GitHub's own
+    # per-job ceiling. This job retires it directly, mirroring the
+    # live-head-validated cleanup pattern in strix.yml's own
+    # `cancel-superseded-pr-runs` job: every cancellation candidate and
+    # every cancellation itself is re-verified against the live PR head
+    # immediately beforehand, so a run for this job that is itself somehow
+    # delayed/stale cannot wrongly cancel a still-authoritative run.
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+      TARGET_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Cancel queued and running OpenCode review runs for a superseded pull request head
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          live_head_matches() {
+            local live_head
+            if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" --jq '.head.sha' 2>/tmp/opencode-cleanup-gh-error)"; then
+              echo "::warning::OpenCode review cleanup could not verify the live pull request head; leaving runs unchanged."
+              sed 's/^/  /' /tmp/opencode-cleanup-gh-error >&2 || true
+              return 1
+            fi
+            [ "${live_head,,}" = "${TARGET_PR_HEAD_SHA,,}" ]
+          }
+
+          cancel_runs() {
+            local status="$1"
+            if ! live_head_matches; then
+              echo "::notice::OpenCode review cleanup target changed before run selection; leaving runs unchanged."
+              return 0
+            fi
+            local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
+            local runs_json
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/opencode-cleanup-gh-error)"; then
+              echo "::warning::OpenCode review cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
+              sed 's/^/  /' /tmp/opencode-cleanup-gh-error >&2 || true
+              return 0
+            fi
+            local run_ids
+            if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
+              --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
+                .workflow_runs[]
+                | select((.id | tostring) != $current)
+                | select(.name == "Required OpenCode Review")
+                | select(.event == "pull_request_target")
+                | ((.display_title // "") | startswith("Required OpenCode Review " + $repo + "#" + $pr + "@")) as $title_matches
+                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
+                | select($title_matches or $metadata_matches)
+                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr)
+                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
+                  )) as $metadata_is_current
+                | select(($title_is_current or $metadata_is_current) | not)
+                | .id
+              ' <<<"$runs_json")"; then
+              echo "::warning::OpenCode review cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              if ! live_head_matches; then
+                echo "::notice::OpenCode review cleanup target changed before cancellation; leaving runs unchanged."
+                return 0
+              fi
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/opencode-cleanup-cancel-error ||
+                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/opencode-cleanup-cancel-error; then
+                echo "Cancelled superseded Required OpenCode Review run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
+              else
+                echo "::warning::OpenCode review cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
+                sed 's/^/  /' /tmp/opencode-cleanup-cancel-error >&2 || true
+              fi
+            done <<<"$run_ids"
+          }
+
+          for active_status in queued in_progress requested waiting pending; do
+            cancel_runs "$active_status"
+          done
+          echo "Superseded OpenCode review run cleanup completed."

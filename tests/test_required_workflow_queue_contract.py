@@ -253,6 +253,16 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             )
         elif filename == "opencode-review.yml":
             assert "opencode-review-bootstrap-" in concurrency_contract
+            # Unlike the other required pull-request workflows below, this
+            # group is deliberately also scoped by exact head SHA: a
+            # delayed, out-of-order run for an older head must not be able
+            # to cancel the authoritative run already active for a newer
+            # head (Devin Review on `#1568`). Same-head events still share
+            # one group and can still cancel each other.
+            assert (
+                "github.event.pull_request.head.sha || github.run_id"
+                in concurrency_contract
+            )
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
@@ -268,7 +278,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename != "noema-review.yml":
+        if filename not in {"noema-review.yml", "opencode-review.yml"}:
             assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -578,7 +588,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
-    assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in (
+    assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" in (
         opencode_bootstrap
     )
     assert "actions/checkout" not in opencode_bootstrap
@@ -936,6 +946,16 @@ def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> N
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "github.event.workflow_run.pull_requests[0].number" in workflow
+
+
+def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
+    """Let the scheduler dispatch OpenCode when a review event clears its last blocker."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+
+    assert "github.event_name == 'pull_request_review'" in scan_job.split(
+        "TRIGGER_REVIEWS:", 1
+    )[1].splitlines()[0]
 
 
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
