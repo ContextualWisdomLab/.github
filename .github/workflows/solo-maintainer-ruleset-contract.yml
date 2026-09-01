@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/solo-maintainer-ruleset-contract.yml"
       - "scripts/ci/audit_central_required_workflows.py"
+      - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_solo_maintainer_ruleset_policy.py"
 
 permissions:
@@ -27,6 +28,9 @@ jobs:
           import importlib.util
           from pathlib import Path
 
+          regression_path = Path("tests/test_central_required_workflow_ruleset_audit.py")
+          compile(regression_path.read_text(encoding="utf-8"), str(regression_path), "exec")
+
           test_path = Path("tests/test_solo_maintainer_ruleset_policy.py")
           spec = importlib.util.spec_from_file_location("solo_ruleset_contract", test_path)
           if spec is None or spec.loader is None:
@@ -35,4 +39,6 @@ jobs:
           spec.loader.exec_module(module)
           module.test_central_ruleset_accepts_zero_approvals_without_last_push_approval()
           module.test_repository_ruleset_accepts_zero_approvals_without_last_push_approval()
+          module.test_central_ruleset_rejects_synthetic_required_reviewer()
+          module.test_repository_ruleset_rejects_synthetic_required_reviewer()
           PY
