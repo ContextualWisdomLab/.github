@@ -1,2 +1,2 @@
 repair PR1588 live-state admission contract
-retry=unbounded-inference-preserved-20260901T2212+0900
+retry=parse-safe-verified-20260901T2215+0900
