@@ -10,6 +10,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/ci/noema_review_gate.py"
 TEST = ROOT / "tests/test_noema_model_output_failure_classification.py"
+CHANGELOG = ROOT / "CHANGELOG.md"
+ARCHITECTURE = ROOT / "ARCHITECTURE.md"
+BASELINE = ROOT / "docs/product-technical-gap-baseline.md"
+DOCTORING = ROOT / "docs/doctoring/noema-model-output-repair-boundary.md"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -17,6 +21,16 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if count != 1:
         raise RuntimeError(f"{label}: expected exactly one match, found {count}")
     return text.replace(old, new, 1)
+
+
+def replace_exact_count(
+    text: str, old: str, new: str, expected_count: int, label: str
+) -> str:
+    """Replace a reviewed generated fragment only when its multiplicity is exact."""
+    count = text.count(old)
+    if count != expected_count:
+        raise RuntimeError(f"{label}: expected {expected_count} matches, found {count}")
+    return text.replace(old, new)
 
 
 def update_source() -> None:
@@ -71,6 +85,19 @@ def update_source() -> None:
 
 def update_tests() -> None:
     text = TEST.read_text(encoding="utf-8")
+
+    # Three earlier one-shot transforms assert the model-controlled validator
+    # detail after call_llm().  The final contract intentionally exposes only a
+    # stable trusted code at that boundary; the direct validator regression at
+    # the top of the file keeps its detailed assertion.
+    text = replace_exact_count(
+        text,
+        '    assert "outcome must be falsified or confirmed" in message\n',
+        '    assert "model-output-contract-invalid" in message\n',
+        3,
+        "generated call_llm stable-diagnostic assertions",
+    )
+
     marker = "def test_unparseable_diff_remains_source_evidence"
     if marker in text:
         raise RuntimeError("follow-up #1617 regressions already present")
@@ -185,9 +212,36 @@ def test_repair_deadline_requires_main_thread_signal_registration(monkeypatch) -
     TEST.write_text(text, encoding="utf-8")
 
 
+def update_docs() -> None:
+    """Keep traceability aligned with the non-reflecting diagnostic contract."""
+    replacements = {
+        CHANGELOG: (
+            "NoemaTransportError preserves the first validator diagnostic plus the later transport class/status without logging raw model output or secrets.",
+            "NoemaTransportError preserves the stable model-output contract code plus the later transport class/status without logging raw model output or secrets.",
+        ),
+        ARCHITECTURE: (
+            "transport error retains both the first trusted-validator diagnostic and the\nlater transport class/status while omitting raw model content and secrets.",
+            "transport error retains both the stable model-output contract code and the\nlater transport class/status while omitting raw model content and secrets.",
+        ),
+        BASELINE: (
+            "the final fail-closed diagnostic preserves the sanitized first validator error plus the later typed transport evidence.",
+            "the final fail-closed diagnostic preserves a stable model-output contract code plus the later typed transport evidence without reflecting model-controlled values.",
+        ),
+        DOCTORING: (
+            "A corrective transport failure is `NoemaTransportError` and carries the sanitized first validator diagnostic plus the later transport exception class/status.",
+            "A corrective transport failure is `NoemaTransportError` and carries a stable model-output contract code plus the later transport exception class/status; model-controlled validator values are not reflected into the retry prompt or public diagnostic.",
+        ),
+    }
+    for path, (old, new) in replacements.items():
+        text = path.read_text(encoding="utf-8")
+        text = replace_once(text, old, new, f"stable diagnostic docs: {path}")
+        path.write_text(text, encoding="utf-8")
+
+
 def main() -> None:
     update_source()
     update_tests()
+    update_docs()
 
 
 if __name__ == "__main__":
