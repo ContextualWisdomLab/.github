@@ -20,6 +20,7 @@ try:
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -79,7 +81,7 @@ RCA_IGNORED_CHECK_NAMES = frozenset(
     }
 )
 FAILED_CHECK_CONCLUSIONS = frozenset(
-    {"ACTION_REQUIRED", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
+    {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
 )
 FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 
@@ -233,7 +235,9 @@ def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
     """Return terminal failed checks that can carry source-backed RCA evidence."""
     failed: list[str] = []
-    for node in context_nodes(pr):
+    rollup = pr.get("statusCheckRollup") or {}
+    nodes = rollup if isinstance(rollup, list) else context_nodes(pr)
+    for node in latest_check_run_attempts(nodes):
         if node.get("__typename") == "CheckRun":
             name = str(node.get("name") or "").strip()
             conclusion = str(node.get("conclusion") or "").upper()
@@ -381,32 +385,40 @@ def inspect_pr(
             "external PR head is not writable by repository workflow credentials",
         )
 
+    conflicted = str(pr.get("mergeStateStatus") or "").upper() in CONFLICT_MERGE_STATES
+    if conflicted:
+        if pr.get("isDraft"):
+            return "skip", ("draft PR",)
+        needs_resolve, resolve_reasons = needs_conflict_resolution(
+            pr,
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
+        )
+        if not needs_resolve:
+            return "skip", ("merge conflict is not authorized for repair",)
+        needs_fix = True
+        reasons = resolve_reasons
+        repair_mode = "conflict"
+        resolve_conflict = True
+    else:
+        needs_fix, reasons = needs_autofix(pr)
+        repair_mode = "review"
+        resolve_conflict = False
+
     draft_rca, draft_rca_reasons = needs_rca_repair(pr)
     if pr.get("isDraft") and not draft_rca:
         return "skip", ("draft PR",)
 
-    needs_fix, reasons = needs_autofix(pr)
-    repair_mode = "review"
-    resolve_conflict = False
-    if not needs_fix:
+    if not needs_fix and not conflicted:
         needs_rca, rca_reasons = draft_rca, draft_rca_reasons
         if needs_rca:
             repair_mode = "rca"
             reasons = rca_reasons
         else:
-            needs_resolve, resolve_reasons = needs_conflict_resolution(
-                pr,
-                allow_unreviewed=bool(
-                    getattr(args, "resolve_unreviewed_conflicts", False)
-                ),
+            return "skip", (
+                "no current-head autofixable review, failed-check RCA, or approved merge conflict",
             )
-            if not needs_resolve:
-                return "skip", (
-                    "no current-head autofixable review, failed-check RCA, or approved merge conflict",
-                )
-            resolve_conflict = True
-            repair_mode = "conflict"
-            reasons = resolve_reasons
 
     if comments is None:
         comments = issue_comments(repo, number)
