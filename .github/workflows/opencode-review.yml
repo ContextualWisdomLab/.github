@@ -9,7 +9,14 @@ on:
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    # `converted_to_draft` is included so a PR going draft mid-poll fires a
+    # fresh run of this same workflow: the PR-scoped concurrency group below
+    # (`cancel-in-progress: true`) cancels any in-flight non-draft
+    # "Fail closed without a current-head OpenCode verdict" poll for that PR,
+    # and the fresh run's own draft exemption (see that step) exits before
+    # ever calling the Reviews API, instead of polling toward the job's
+    # runtime ceiling for a verdict a draft PR will never receive.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
   group: >-

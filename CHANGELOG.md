@@ -22,7 +22,13 @@ Semantic Versioning where the repository publishes a release.
   fix -- closed unmerged as superseded by this redesign, on the (partially
   incorrect) premise that the redesign already exempted drafts -- reproduced
   and fixed fresh against current `main` per that closure's own guidance,
-  rather than reviving the superseded branch.
+  rather than reviving the superseded branch. A second Devin Review finding
+  on the same PR then showed the exemption above was unreachable for a PR
+  converted to draft mid-poll: `on.pull_request_target.types` never listed
+  `converted_to_draft`, so no fresh run ever fired to cancel the stale
+  non-draft poll via the workflow's PR-scoped `cancel-in-progress: true`
+  concurrency group. `converted_to_draft` is now in the trigger list, so
+  that conversion fires a fresh run that reaches the same draft exemption.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

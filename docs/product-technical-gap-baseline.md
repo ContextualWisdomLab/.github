@@ -2373,6 +2373,31 @@ this stale branch"), fixed fresh on a new branch from current `main` rather than
 `closed` exit. Minimal, scoped to the one missing exemption; the receipt-gate/scheduler
 architecture itself is otherwise untouched.
 
+**Round 2 -- Devin Review caught the trigger-level gap in that fix, on `#1543`'s successor
+`#1568`**: the `Fail closed` step's `PR_DRAFT` exemption above is correct step-body logic, but
+`on.pull_request_target.types` (`[opened, synchronize, reopened, ready_for_review, closed]`)
+never listed `converted_to_draft`. A PR converted to draft *while* an earlier event's poll was
+already in flight (e.g. a `synchronize` push, or `ready_for_review` reverted) never fired a fresh
+workflow run for that PR, so the stale non-draft poll -- started before the conversion, unaware
+of it -- kept calling the Reviews API every 30s toward the job's own runtime ceiling, exactly the
+hang this whole fix line exists to prevent, just reached from the opposite direction (ready
+&#8594; draft instead of always-draft).
+
+**Fix**: added `converted_to_draft` to `on.pull_request_target.types`. The workflow's existing
+PR-scoped `concurrency` group (`cancel-in-progress: true`, keyed on PR number) then cancels the
+stale in-flight non-draft poll for that PR the moment the fresh `converted_to_draft` run starts,
+and that fresh run reaches the same pre-existing `PR_DRAFT` exemption above, exiting before ever
+calling the Reviews API. No step-body logic changed -- the gap was purely that the trigger never
+fired for this event.
+
+**Regression**: `test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll` proves the step
+body exits closed for the exact `PR_ACTION=converted_to_draft` value GitHub sends for this event.
+`test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion` pins that `converted_to_draft`
+is actually present in the workflow's own trigger block (a step-level test alone cannot prove the
+fix is reachable in production -- GitHub only re-invokes the workflow for listed event types).
+Both existing literal trigger-type contract pins (`tests/test_required_workflow_queue_contract.py`,
+`scripts/ci/test_strix_quick_gate.sh`) were updated to the new six-element list.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

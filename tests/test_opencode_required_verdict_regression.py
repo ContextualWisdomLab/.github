@@ -234,6 +234,51 @@ def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> N
     assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
 
 
+def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
+    tmp_path: Path,
+) -> None:
+    """A PR converted to draft while a poll is in flight exits before polling.
+
+    Devin Review on `#1568` found that `converted_to_draft` was missing from
+    this workflow's `pull_request_target.types`, so converting a PR to draft
+    while an earlier event's "Fail closed" poll was still running never fired
+    a fresh run to cancel it via the PR-scoped `cancel-in-progress: true`
+    concurrency group -- the stale non-draft poll kept waiting for a verdict
+    the now-draft PR can never receive. Adding `converted_to_draft` to the
+    trigger set lets a fresh run's draft exemption below take over; this test
+    proves that exemption exits before ever reaching the Reviews API for the
+    exact `PR_ACTION=converted_to_draft` value GitHub sends for that event
+    (`PR_DRAFT` is always `"true"` on that event, mirroring GitHub's own
+    payload).
+    """
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="converted_to_draft", pr_draft="true"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
+
+
+def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
+    """The workflow's own trigger set -- not just the step body -- covers it.
+
+    A step-level test alone cannot prove the draft exemption above is
+    actually reachable in production: GitHub only re-invokes this workflow
+    for event types listed in `pull_request_target.types`. This pins that
+    `converted_to_draft` is present there, so a mid-poll draft conversion
+    fires a fresh run at all.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    trigger_block = workflow.split("  pull_request_target:\n", 1)[1].split(
+        "\n\nconcurrency:", 1
+    )[0]
+    assert "converted_to_draft" in trigger_block
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, "
+        "converted_to_draft, closed]"
+    ) in trigger_block
+    assert "cancel-in-progress: true" in workflow
+
+
 def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:
     """The pre-existing ``closed`` early exit still runs before the new draft check."""
     result = _run_fail_closed_step(tmp_path, pr_action="closed", pr_draft="true")
@@ -275,6 +320,7 @@ if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
+  cat >/dev/null
   printf 'dispatch\n' >>"$DISPATCH_CALLS"
 fi
 """,
