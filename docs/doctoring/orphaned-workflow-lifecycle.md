@@ -49,10 +49,11 @@ reviewer cannot treat "the YAML is gone" as "no writer remains enabled."
 
 ## Trust boundary
 
-The inventory CLI consumes only a caller-collected JSON fixture. A separate
-least-privilege caller may read the Actions registry and git tree to assemble
-that fixture, but this script performs no live API reads. Neither boundary
-receives repository write permission, `secrets: inherit`, or a guessed PAT.
+The production CLI uses `--live` with the established central `GH_TOKEN`
+transport. It paginates all visible repositories and workflows, rejects a
+truncated recursive tree, and re-reads each default-branch head. A mandatory
+API receipt file content-binds every read. Fixture input remains available for
+deterministic tests. Neither boundary receives `secrets: inherit` or a guessed PAT.
 GitHub-owned `dynamic/` identities are never treated as deleted repository
 files.
 
@@ -64,7 +65,15 @@ refuses the mutation.
 
 ## Operator contract
 
-Feed a JSON payload with `organization`, `observed_at`,
+For a live read-only sweep, run:
+
+```bash
+python3 scripts/ci/inventory_orphaned_workflows.py --live \
+  --output /tmp/workflow-lifecycle-ledger.json \
+  --receipt-output /tmp/workflow-lifecycle-api-receipts.json
+```
+
+For fixture verification, feed a JSON payload with `organization`, `observed_at`,
 `repository_inventory_complete: true`, and one object per visible non-archived
 repository. The completeness flag is mandatory: a partial repository list must
 fail closed instead of producing a ledger that overstates fleet coverage. Each
@@ -79,9 +88,12 @@ python3 scripts/ci/inventory_orphaned_workflows.py \
   --output /tmp/workflow-lifecycle-ledger.json
 ```
 
-`--fail-on-orphan-active` is reserved for a later reviewed live sweep.
-This increment's default is to emit the ledger so CI can prove
-classification without disabling sibling-repository writers.
+The scanner never mutates. The separate `disable_confirmed_orphan` operator
+primitive accepts only an immutable `orphan_active` record and an identical
+fresh head SHA, then addresses its exact numeric workflow ID. After a reviewed
+operator pass, rerun the organization sweep and retain both receipt sets.
+Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live
+evidence to their governance issues without heuristic issue creation.
 
 ## Rollback
 

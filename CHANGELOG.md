@@ -890,6 +890,9 @@ Semantic Versioning where the repository publishes a release.
 - Require orphan-workflow lifecycle fixtures to prove complete organization
   repository visibility before emitting an audit ledger, preventing partial
   inventories from overstating fleet coverage.
+- Add a live, paginated organization workflow inventory with content-bound API
+  receipts, exact default-head revalidation, and a separately reviewed,
+  ledger-bound operator disable primitive.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.

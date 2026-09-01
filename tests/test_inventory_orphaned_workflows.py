@@ -739,6 +739,101 @@ def test_example_fixture_classifies_without_masking_identities() -> None:
     assert classes["dynamic/pages/pages-build-deployment"] == "dynamic_owned"
 
 
+class _LiveClient:
+    """Record deterministic live API calls for collector tests."""
+
+    def __init__(self, responses: dict[str, Any]) -> None:
+        self.responses = responses
+        self.calls: list[str] = []
+
+    def request(self, path: str, *, method: str = "GET", payload: Any = None) -> Any:
+        """Return one canned response and retain its exact request path."""
+        if method in {"PUT", "POST"}:
+            self.calls.append(path)
+            return self.responses.get(path)
+        assert method == "GET"
+        assert payload is None
+        self.calls.append(path)
+        value = self.responses[path]
+        if path.endswith("/commits/main") and isinstance(value, list):
+            return value.pop(0)
+        return value
+
+
+def test_collect_live_organization_paginates_and_rechecks_head() -> None:
+    """The live collector consumes every page and binds both head reads."""
+    repo = "ContextualWisdomLab/appguardrail"
+    responses = {
+        "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1": [
+            {"name": "appguardrail", "full_name": repo, "archived": False, "default_branch": "main"}
+        ],
+        f"/repos/{repo}/commits/main": [{"sha": SHA}, {"sha": SHA}],
+        f"/repos/{repo}/git/trees/{SHA}?recursive=1": {
+            "truncated": False,
+            "tree": [{"type": "blob", "path": ".github/workflows/ci.yml"}],
+        },
+        f"/repos/{repo}/actions/workflows?per_page=100&page=1": {
+            "total_count": 2,
+            "workflows": [
+                _workflow(1, ".github/workflows/ci.yml"),
+                _workflow(2, ".github/workflows/gone.yml"),
+            ],
+        },
+    }
+    client = _LiveClient(responses)
+    payload, receipts = inventory.collect_live_organization(client)
+    ledger = inventory.inventory_organization(payload)
+    assert ledger["counts"]["orphan_active"] == 1
+    assert payload["repository_inventory_complete"] is True
+    assert len(receipts) == len(client.calls)
+    assert client.calls.count(f"/repos/{repo}/commits/main") == 2
+
+
+def test_collect_live_organization_fails_on_truncated_tree_or_head_move() -> None:
+    """Incomplete trees and a moving default branch never produce a ledger."""
+    repo = "ContextualWisdomLab/naruon"
+    base = {
+        "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1": [
+            {"name": "naruon", "full_name": repo, "archived": False, "default_branch": "main"}
+        ],
+        f"/repos/{repo}/commits/main": [{"sha": SHA}, {"sha": SHA_B}],
+        f"/repos/{repo}/git/trees/{SHA}?recursive=1": {"truncated": False, "tree": []},
+        f"/repos/{repo}/actions/workflows?per_page=100&page=1": {"total_count": 0, "workflows": []},
+    }
+    with pytest.raises(inventory.InventoryError, match="moved"):
+        inventory.collect_live_organization(_LiveClient(base))
+    base[f"/repos/{repo}/commits/main"] = [{"sha": SHA}, {"sha": SHA}]
+    base[f"/repos/{repo}/git/trees/{SHA}?recursive=1"] = {"truncated": True, "tree": []}
+    with pytest.raises(inventory.InventoryError, match="truncated"):
+        inventory.collect_live_organization(_LiveClient(base))
+
+
+def test_operator_disable_is_ledger_and_head_bound() -> None:
+    """The mutation path accepts only a reviewed orphan on its unchanged head."""
+    record = {"repository": "appguardrail", "workflow_id": 9, "classification": "orphan_active", "default_branch_sha": SHA}
+    client = _LiveClient({})
+    inventory.disable_confirmed_orphan(client, record, confirmed_head_sha=SHA)
+    assert client.calls == ["/repos/ContextualWisdomLab/appguardrail/actions/workflows/9/disable"]
+    with pytest.raises(inventory.InventoryError, match="only"):
+        inventory.disable_confirmed_orphan(client, {**record, "classification": "present_active"}, confirmed_head_sha=SHA)
+    with pytest.raises(inventory.InventoryError, match="moved"):
+        inventory.disable_confirmed_orphan(client, record, confirmed_head_sha=SHA_B)
+
+
+def test_owner_issue_update_and_create_are_explicit() -> None:
+    """Known owners receive an update; unknown owners receive one bounded issue."""
+    known = {"repository": "appguardrail", "workflow_id": 9, "path": ".github/workflows/gone.yml", "classification": "orphan_active", "default_branch_sha": SHA}
+    client = _LiveClient({})
+    assert inventory.publish_owner_issue(client, known, ledger_sha256="c" * 64).endswith("#929")
+    assert client.calls[-1].endswith("/issues/929/comments")
+    unknown = {**known, "repository": "new-product"}
+    create_path = "/repos/ContextualWisdomLab/new-product/issues"
+    creator = _LiveClient({create_path: {"number": 41}})
+    assert inventory.publish_owner_issue(creator, unknown, ledger_sha256="d" * 64).endswith("#41")
+    with pytest.raises(inventory.InventoryError, match="ledger digest"):
+        inventory.publish_owner_issue(client, known, ledger_sha256="bad")
+
+
 def test_known_fleet_fixture_routes_owner_issues() -> None:
     """The three named fleet incidents remain routed, not heuristically deleted."""
     payload = _payload(
