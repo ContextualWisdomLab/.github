@@ -28,15 +28,16 @@ permissions:
 
 concurrency:
   group: ruleset-governance-reconcile-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'owner-plane' }}
-  cancel-in-progress: true
+  # PR validation may safely supersede itself. Privileged owner-plane runs must
+  # finish their PUT + immutable-history verification/recovery critical section;
+  # cancelling them after PUT can strand an unverified overwrite.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
-    if: >-
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
+    # Every trigger, including a disabled hourly owner-plane schedule, validates
+    # the reviewed source/manifest offline. The enable variable gates mutation,
+    # not detection of configuration or regression drift.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
