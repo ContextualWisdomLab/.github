@@ -45,8 +45,19 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
     monkeypatch.setattr(
         fix,
         "run_json",
-        lambda args: requests.append(args) or [{
-            "workflow_runs": [
+        lambda args: requests.append(args)
+        or [
+            {
+                "workflow_runs": [
+                    {
+                        "id": 99,
+                        "status": "completed",
+                        "display_title": "unrelated first page",
+                    }
+                ]
+            },
+            {
+                "workflow_runs": [
                 {
                     "id": 1,
                     "status": "in_progress",
@@ -63,8 +74,9 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
                     "display_title": f"PR Review Autofix owner/repo#8@{stale}",
                 },
                 {"id": 4, "status": "in_progress", "display_title": "malformed"},
-            ]
-        }],
+                ]
+            },
+        ],
     )
     cancelled = []
     monkeypatch.setattr(
