@@ -1220,9 +1220,14 @@ def _read_sealed(path: str) -> dict[str, Any]:
     return payload
 
 
-def prepare_review(repo: str, number: int, output: str) -> int:
+def prepare_review(repo: str, number: int, output: str, expected_head: str) -> int:
     """Seal immutable review input without calling a model or writing GitHub."""
+    expected_head = expected_head.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
+        raise RuntimeError("Noema prepare requires a canonical lowercase exact head SHA")
     pr = fetch_pr(repo, number)
+    if str(pr.get("headRefOid") or "").lower() != expected_head:
+        raise RuntimeError("Noema prepare refused a stale trigger head")
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
@@ -1239,7 +1244,7 @@ def prepare_review(repo: str, number: int, output: str) -> int:
     _write_sealed(output, {
         "repo": repo,
         "number": number,
-        "head_sha": pr.get("headRefOid"),
+        "head_sha": expected_head,
         "pr": pr,
         "diff": diff,
         "truncated": truncated,
@@ -1304,8 +1309,8 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
-    if args.mode == "prepare" and args.output:
-        return prepare_review(args.repo, args.pr_number, args.output)
+    if args.mode == "prepare" and args.output and args.expected_head:
+        return prepare_review(args.repo, args.pr_number, args.output, args.expected_head)
     if args.mode == "evaluate" and args.input and args.output:
         return evaluate_review(args.input, args.output)
     if args.mode == "finalize" and args.input and args.verdict:

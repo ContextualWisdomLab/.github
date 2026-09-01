@@ -492,11 +492,34 @@ def test_absolute_response_deadline_restores_signal_state(monkeypatch):
     make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}),
 ])
 def test_prepare_review_skips_before_model_handoff(monkeypatch, tmp_path, pr):
+    expected_head = "a" * 40
+    pr["headRefOid"] = expected_head
+    for existing_review in pr["reviews"]["nodes"]:
+        existing_review["commit"]["oid"] = expected_head
+        existing_review["body"] = (
+            f"<!-- noema-review-gate head_sha={expected_head} -->"
+        )
     output = tmp_path / "input.json"
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda *args: (_ for _ in ()).throw(AssertionError("diff must not load")))
-    assert noema.prepare_review("owner/repo", 7, str(output)) == 0
+    assert noema.prepare_review("owner/repo", 7, str(output), expected_head) == 0
+    assert not output.exists()
+
+
+def test_prepare_review_rejects_head_change_before_sealing(monkeypatch, tmp_path):
+    """Preparation cannot adopt a head newer than its validated trigger."""
+    output = tmp_path / "input.json"
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="b" * 40))
+    monkeypatch.setattr(
+        noema,
+        "current_actor",
+        lambda: (_ for _ in ()).throw(AssertionError("identity must not load")),
+    )
+
+    with pytest.raises(RuntimeError, match="refused a stale trigger head"):
+        noema.prepare_review("owner/repo", 7, str(output), "a" * 40)
+
     assert not output.exists()
 
 

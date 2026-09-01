@@ -82,9 +82,10 @@ jobs:
               while IFS= read -r run_id; do
                 [ -n "$run_id" ] || continue
                 [ -z "${seen[$run_id]:-}" ] || continue
-                seen[$run_id]=1
                 pass_matches=$((pass_matches + 1))
-                if ! gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  seen[$run_id]=1
+                else
                   echo "::warning::Noema close cleanup could not cancel run ${run_id}."
                 fi
               done <<<"$run_ids"
@@ -98,6 +99,11 @@ jobs:
     # Preparation is network/API work only; model serving is isolated in the
     # two bounded candidate jobs below.
     timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+      checks: read
+      pull-requests: read
     outputs:
       require_zdr: ${{ steps.target_visibility.outputs.require_zdr }}
       review_ready: ${{ steps.seal.outputs.review_ready }}
@@ -207,6 +213,62 @@ jobs:
             echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD}, observed ${live_head}."
             exit 1
           fi
+
+      - name: Cancel superseded Noema runs after live-head validation
+        if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          declare -A seen=()
+          cancelled=0
+          for pass in 1 2; do
+            for active_status in queued in_progress requested waiting pending; do
+              if ! runs_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100")"; then
+                echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
+                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" '
+                  .workflow_runs[]
+                  | select(.id < $current)
+                  | select(.path == ".github/workflows/noema-review.yml")
+                  | select((.name // "") | startswith("Required Noema Review"))
+                  | select(
+                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                    )
+                  | select(((.display_title // "") | endswith("@" + $head)) | not)
+                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
+                  | .id
+                ' <<<"$runs_json")"; then
+                echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                [ -z "${seen[$run_id]:-}" ] || continue
+                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"; then
+                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup."
+                  exit 0
+                fi
+                if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+                  echo "::notice::Noema cleanup stopped because the PR head advanced."
+                  exit 0
+                fi
+                if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  seen[$run_id]=1
+                  cancelled=$((cancelled + 1))
+                  echo "Cancelled superseded Noema run ${run_id} for PR #${PR_NUMBER}."
+                else
+                  echo "::warning::Could not cancel superseded Noema run ${run_id}; a later pass may retry it."
+                fi
+              done <<<"$run_ids"
+            done
+            echo "Superseded Noema cleanup pass ${pass}/2 complete."
+          done
+          echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
 
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
@@ -375,6 +437,7 @@ jobs:
             --repo "$TARGET_REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --mode prepare \
+            --expected-head "$EXPECTED_HEAD" \
             --output "${RUNNER_TEMP}/noema-input.json"
           if [ -s "${RUNNER_TEMP}/noema-input.json" ] && [ -s "${RUNNER_TEMP}/noema-input.json.sha256" ]; then
             echo "review_ready=true" >>"$GITHUB_OUTPUT"

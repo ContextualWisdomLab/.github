@@ -140,6 +140,61 @@ fi
     assert "/actions/runs/105/cancel" not in calls
 
 
+def test_noema_close_cleanup_retries_a_transient_cancel_failure(tmp_path: Path) -> None:
+    """A failed close cancellation remains eligible in the bounded rescan."""
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Cancel queued and running Noema reviews for the closed pull request",
+        ).split("        run: |\n", 1)[1].split("\n  prepare:", 1)[0]
+    )
+    fixture = tmp_path / "runs.json"
+    fixture.write_text(
+        json.dumps({"workflow_runs": [{
+            "id": 101,
+            "path": ".github/workflows/noema-review.yml",
+            "name": "Required Noema Review",
+            "display_title": "Required Noema Review ContextualWisdomLab/demo#7@old",
+            "pull_requests": [{"number": 7}],
+        }]}),
+        encoding="utf-8",
+    )
+    attempts = tmp_path / "attempts"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS_FILE"; exit 0; fi
+if [[ "$*" == *"/actions/runs/101/cancel"* ]]; then
+  count=0; [[ ! -f "$ATTEMPTS_FILE" ]] || count="$(cat "$ATTEMPTS_FILE")"
+  count=$((count + 1)); printf '%s' "$count" >"$ATTEMPTS_FILE"
+  [[ "$count" -gt 1 ]]
+  exit
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
+            "CLOSED_PR_NUMBER": "7",
+            "CURRENT_RUN_ID": "999",
+            "FAKE_RUNS_FILE": str(fixture),
+            "ATTEMPTS_FILE": str(attempts),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert attempts.read_text(encoding="utf-8") == "2"
+
+
 def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     """Require reviewer credentials and the sidecar; the public NIM hardcode is gone."""
     workflow = workflow_text("noema-review.yml")
@@ -220,6 +275,87 @@ def test_peer_workflow_completion_does_not_cancel_long_noema_review() -> None:
         "cancel-in-progress: ${{ github.event_name != 'workflow_run' || "
         "github.event.workflow_run.conclusion != 'cancelled' }}"
     ) in workflow
+
+
+def test_noema_prepare_and_superseded_cleanup_preserve_exact_head_binding() -> None:
+    """Only a validated live PR trigger may cancel bounded older-head runs."""
+    workflow = workflow_text("noema-review.yml")
+    seal = workflow_step(workflow, "Seal exact-head Noema review input")
+    cleanup = workflow_step(
+        workflow, "Cancel superseded Noema runs after live-head validation"
+    )
+
+    assert '--expected-head "$EXPECTED_HEAD"' in seal
+    assert "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''" in cleanup
+    assert 'select(.id < $current)' in cleanup
+    assert 'select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))' in cleanup
+    assert cleanup.index('live_head="$(gh api') < cleanup.index('/actions/runs/${run_id}/cancel')
+    assert cleanup.index('seen[$run_id]=1') > cleanup.index('/actions/runs/${run_id}/cancel')
+
+
+def test_superseded_cleanup_retries_a_transient_cancel_failure(tmp_path: Path) -> None:
+    """Do not mark an older-head run seen until GitHub accepts cancellation."""
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Cancel superseded Noema runs after live-head validation",
+        ).split("        run: |\n", 1)[1]
+    )
+    old_head, current_head = "a" * 40, "b" * 40
+    runs_file = tmp_path / "runs.json"
+    runs_file.write_text(
+        json.dumps({
+            "workflow_runs": [{
+                "id": 100,
+                "path": ".github/workflows/noema-review.yml",
+                "name": "Required Noema Review",
+                "display_title": (
+                    "Required Noema Review ContextualWisdomLab/demo#7@" + old_head
+                ),
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            }]
+        }),
+        encoding="utf-8",
+    )
+    attempts = tmp_path / "attempts"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS_FILE"; exit 0; fi
+if [[ "$*" == *"/pulls/7"* ]]; then printf '%s\n' "$EXPECTED_HEAD"; exit 0; fi
+if [[ "$*" == *"/actions/runs/100/cancel"* ]]; then
+  count=0; [[ ! -f "$ATTEMPTS_FILE" ]] || count="$(cat "$ATTEMPTS_FILE")"
+  count=$((count + 1)); printf '%s' "$count" >"$ATTEMPTS_FILE"
+  [[ "$count" -gt 1 ]]
+  exit
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD": current_head,
+            "CURRENT_RUN_ID": "200",
+            "FAKE_RUNS_FILE": str(runs_file),
+            "ATTEMPTS_FILE": str(attempts),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert attempts.read_text(encoding="utf-8") == "2"
 
 
 def test_noema_normalizes_github_app_identity_in_both_phases() -> None:
