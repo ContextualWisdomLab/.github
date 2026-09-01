@@ -27,6 +27,71 @@ flowchart LR
   Products -->|"standalone or as module"| Operator
 ```
 
+## Repository public-surface reconciliation
+
+Repository-facing metadata is an organization control-plane responsibility,
+while product README content remains owned by each sibling repository. The
+reviewed desired state lives in `config/repository-metadata.json` and
+`config/repository-label-taxonomy.json`. Pull requests validate both manifests
+and their reconciliation behavior without write authority. Scheduled apply
+runs only from trusted `.github/main` after validation; branch-selected manual
+dispatch is intentionally absent under the central workflow trust contract.
+
+```mermaid
+flowchart TD
+  Desired["reviewed metadata + label desired state"]
+  Validate["read-only exact-revision validation"]
+  Preconditions{"README + reviewed Pages source + live mode valid?"}
+  Apply["trusted protected-main apply"]
+  Repo["description + topics"]
+  Legacy["legacy /docs create/update/delete"]
+  Workflow["workflow Pages preserve-only"]
+  Labels["reviewed issue / PR labels"]
+  Verify["live public-state re-read"]
+  Hold["fail this leaf before writes; continue siblings"]
+
+  Desired --> Validate
+  Validate --> Preconditions
+  Preconditions -->|"no"| Hold
+  Preconditions -->|"yes"| Apply
+  Apply --> Repo
+  Apply --> Legacy
+  Apply --> Workflow
+  Apply --> Labels
+  Repo --> Verify
+  Legacy --> Verify
+  Workflow --> Verify
+  Labels --> Verify
+```
+
+The metadata reconciler is convergent and mode-aware. Already-correct
+descriptions/topics and legacy default-branch `/docs` Pages sites receive no
+write; absent or drifted legacy Pages state is created/updated, and disabled
+Pages is deleted. An explicit `pages_mode: workflow` instead preserves an
+already-configured Actions-backed site: `.github/workflows/pages.yml` must be a
+regular file on the protected default branch and the live Pages configuration
+must already report `build_type: workflow`. The central control plane never
+creates or converts workflow mode. These source/live-mode preconditions run
+before repository description or topic mutation, so an invalid workflow Pages
+declaration cannot leave a partially applied repository record. Contents API
+source probes accept only a single `type: file` object; directories and listings
+are not valid source evidence.
+
+Topic equality is set-based so GitHub presentation ordering cannot manufacture
+drift. Exact DeepWiki badge state is a leaf-owned precondition, including a
+fail-closed contradiction when desired state disables DeepWiki while the badge
+remains live. Label reconciliation adds/removes only taxonomy-declared labels
+through individual endpoints, preserving unrelated concurrent
+priority/status/area labels. Metadata and label failures retain independent
+exit statuses, so a blocked metadata leaf does not prevent eligible label work
+in the same apply. Failures aggregate after independent repositories or
+assignments are attempted, so one blocked leaf never serializes the fleet.
+Pull-request metadata validation keeps a PR-stable concurrency lineage and
+cancels superseded validations; scheduled protected-main apply is deliberately
+non-cancellable so a newer heartbeat cannot abandon partially updated fleet
+state. See ADR-0020 and the operational baseline for the authority and
+live-verification contract.
+
 ## OriginWeave hourly caller
 
 `originweave-hourly-review-repair.yml` is a thin, read-only caller at minute
@@ -123,6 +188,11 @@ sequenceDiagram
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- Repository public-surface writes execute only from trusted `.github/main`;
+  pull-request validation remains read-only and leaf README changes keep their
+  repository-local review boundary. Workflow-backed Pages is preserve-only and
+  must pass its source/live-mode precondition before any repository metadata
+  write.
 - Central Semgrep binds one job-level `SEMGREP_IMAGE` digest for log
   evidence, manifest inspect, and `docker run` so buyers can reconstruct
   the exact scanner that produced SARIF.
@@ -156,7 +226,12 @@ sequenceDiagram
 `scripts/ci/` ships with 100% statement/branch coverage and 100% docstrings.
 CI installs Python tools only with `pip install --require-hashes`. Contract
 tests pin workflow structure and governance prose so drift fails closed. The
-trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
+repository-public-surface workflow additionally holds both reconciliation
+scripts to 100% statement/branch coverage and 100% docstrings before its
+privileged apply job can run. Workflow-mode regressions specifically require
+fail-before-write behavior and reject directory/listing responses as Pages
+source evidence.
+The trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
 An exact-base `uv.lock` may additionally expose source from an organization-owned
 GitHub repository pinned to a full commit: the secret-free image build verifies
@@ -177,6 +252,10 @@ resolver conflict.
   — bot/agent exact-head review and merge procedure.
 - [`PR_GOVERNANCE_AUDIT.md`](PR_GOVERNANCE_AUDIT.md) — live review/merge
   contract.
+- [`docs/adr/0020-repository-public-surface-reconciliation.md`](docs/adr/0020-repository-public-surface-reconciliation.md)
+  — desired-state ownership, trust boundary, and convergence decision.
+- [`docs/doctoring/repository-public-surface-reconciliation.md`](docs/doctoring/repository-public-surface-reconciliation.md)
+  — current operational baseline and live-verification contract.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md)

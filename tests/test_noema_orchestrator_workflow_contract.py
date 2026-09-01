@@ -172,8 +172,13 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
-    assert "python3 -m scripts.ci.noema_review_gate" in workflow
-    assert "python3 scripts/ci/noema_review_gate.py" not in workflow
+    prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
+    assert '.github/actions/noema-review/two_phase.py' in prepare
+    assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert '.github/actions/noema-review/two_phase.py' in publish
+    assert '--publish-verdict-file "$verdict_file"' in publish
+    assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
@@ -339,7 +344,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     noema_script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
+            "Prepare Noema model verdict",
         ).split("        run: |\n", 1)[1]
     )
     noema_env = {

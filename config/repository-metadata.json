@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "organization": "ContextualWisdomLab",
+  "repositories": {
+    "CalendarWeave": {
+      "description": "CalendarWeave — governed calendar resources, iCalendar semantics, and interoperable scheduling infrastructure.",
+      "topics": ["calendar", "caldav", "icalendar", "scheduling", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "ConceptWeave": {
+      "description": "ConceptWeave — turn enterprise data into governed semantic models and reusable meaning.",
+      "topics": ["semantic-model", "ontology", "knowledge-graph", "data-governance", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "context-graph-contracts": {
+      "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
+      "topics": ["interoperability", "json-schema", "asyncapi", "cloudevents", "provenance", "context-graph", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "ThreadWeave": {
+      "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
+      "topics": ["email", "threading", "imap", "rfc5256", "python", "mail", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "RankWeave": {
+      "description": "RankWeave — deterministic retrieval fusion, evaluation, statistical comparison, and auditable ranking workflows for Python.",
+      "topics": ["information-retrieval", "ranking", "retrieval", "reciprocal-rank-fusion", "trec", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "fast-mlsirm": {
+      "description": "fast-mlsirm — high-performance psychometric modeling, calibration, and evaluation with a Rust numerical core.",
+      "topics": ["irt", "item-response-theory", "mlsirm", "psychometrics", "calibration", "measurement", "rust", "python", "simulation", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "EgressWeave": {
+      "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
+      "topics": ["egress", "ssrf", "dns-rebinding", "http", "network-security", "httpx", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "psychometrics-commons": {
+      "description": "Psychometrics Commons — governed psychometric assessment, longitudinal measurement, and consent-aware research workflows.",
+      "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    }
+  }
+}
