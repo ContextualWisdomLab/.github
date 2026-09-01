@@ -221,8 +221,8 @@ def update_docs() -> None:
     """Keep traceability aligned with the bounded actionable diagnostic contract."""
     replacements = {
         CHANGELOG: (
-            "NoemaTransportError preserves the first validator diagnostic plus the later transport class/status without logging raw model output or secrets.",
-            "NoemaTransportError preserves the first trusted structural validator diagnostic plus the later transport class/status without reflecting model-controlled values or secrets.",
+            "`NoemaTransportError` preserves the first validator diagnostic plus the later transport class/status without logging raw model output or secrets.",
+            "`NoemaTransportError` preserves the first trusted structural validator diagnostic plus the later transport class/status without reflecting model-controlled values or secrets.",
         ),
         ARCHITECTURE: (
             "transport error retains both the first trusted-validator diagnostic and the\nlater transport class/status while omitting raw model content and secrets.",
