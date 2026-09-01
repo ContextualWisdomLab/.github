@@ -24,6 +24,10 @@ def main() -> int:
         'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")',
         'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")',
     )
+    text = text.replace(
+        'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")',
+        'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")',
+    )
 
     start_marker = "def test_review_context_builders_include_codegraph_threads_and_files"
     end_marker = "\n\nclass FakeResponse:"
@@ -38,8 +42,10 @@ def main() -> int:
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
+    original_fetch_files = noema.fetch_changed_files
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
+    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_files)
 
     encoded = base64.b64encode(b"print('hello')\\n").decode("ascii")
     calls = []
@@ -125,6 +131,8 @@ def test_review_context_reports_omitted_files(monkeypatch):
         raise SystemExit("obsolete fetch_changed_file_paths fixture remains")
     if "load_codegraph_context" in text:
         raise SystemExit("obsolete CodeGraph fixture remains")
+    if 'lambda repo, number, pr: "context"' in text:
+        raise SystemExit("obsolete three-argument build_review_context fixture remains")
 
     PATH.write_text(text, encoding="utf-8")
     return 0
