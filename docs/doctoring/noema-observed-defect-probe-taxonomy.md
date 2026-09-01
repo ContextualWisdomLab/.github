@@ -38,7 +38,7 @@ The focused regression suite must prove at least the following:
 4. two valid observed classes can satisfy the formal verdict contract; and
 5. the prompt retains every supported class name.
 
-The initial hosted RED run was `33499442683`. The final hosted GREEN run was `33500648307`; it passed 118 focused Noema tests, the two exact-base free-pool fixture regressions exposed during full-suite verification, and the complete repository suite (`2278 passed, 1 skipped, 21 subtests passed`). The one-shot workflow and transform scripts removed themselves before the final branch was published.
+The initial hosted RED run was `33499442683`. The hosted GREEN implementation run was `33500648307`; it passed 118 focused Noema tests, the two exact-base free-pool fixture regressions exposed during full-suite verification, and the complete repository suite (`2278 passed, 1 skipped, 21 subtests passed`). That run proved the implementation before this permanent doctoring/quality-gate follow-up; the pull request's exact current head must regenerate its own required evidence. The one-shot workflow and transform scripts removed themselves before the implementation branch was published.
 
 ## Related exact-base correction
 
@@ -46,7 +46,7 @@ The full-suite verification also exposed two stale test inputs left by the immed
 
 ## Rollback
 
-Rollback the production validator, prompt, new regression suite, migrated test fixtures, and the two stale generic free-pool fixture corrections together. Do not retain tests that require `probe_kind` while reverting production parsing, and do not restore OpenAI as a generic `orchestrator/free` test input unless the free-pool source contract itself is intentionally changed in a separately reviewed policy decision.
+Rollback the production validator, prompt, new regression suite, migrated test fixtures, quality workflow, and the two stale generic free-pool fixture corrections together. Do not retain tests that require `probe_kind` while reverting production parsing, and do not restore OpenAI as a generic `orchestrator/free` test input unless the free-pool source contract itself is intentionally changed in a separately reviewed policy decision.
 
 ## References
 
