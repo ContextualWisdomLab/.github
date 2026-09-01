@@ -190,7 +190,6 @@ def test_verdict_output_cardinality_and_text_are_bounded() -> None:
         )
 
 
-
 def test_call_llm_rejects_non_string_rendered_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -213,7 +212,7 @@ def test_call_llm_rejects_non_string_rendered_evidence(
     opener = _Opener([_envelope(malformed, "stop"), _envelope(malformed, "stop")])
     _configure(monkeypatch, opener)
 
-    with pytest.raises(RuntimeError, match="reviewed_lines.analysis must be a string"):
+    with pytest.raises(RuntimeError, match=r"reviewed_lines\.analysis must be a string"):
         noema.call_llm("owner/repo", 7, _pr(), "diff", False, HEAD)
 
     assert len(opener.requests) == 2
@@ -254,7 +253,7 @@ def test_verdict_output_bounds_type_check_every_rendered_probe_field() -> None:
 
     bad_line = dict(base_probe)
     bad_line["line"] = [8]
-    with pytest.raises(RuntimeError, match="probes.line must be a positive integer"):
+    with pytest.raises(RuntimeError, match=r"probes\.line must be a positive integer"):
         noema.validate_verdict_output_bounds(
             {
                 "summary": "bounded",
