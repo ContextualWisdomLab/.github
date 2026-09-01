@@ -30,7 +30,7 @@ def workflow_run_script(workflow: str, name: str) -> str:
 
 
 def run_exchange_script(
-    tmp_path: Path, token_response: dict[str, object]
+    tmp_path: Path, token_response: dict[str, object] | str
 ) -> subprocess.CompletedProcess[str]:
     """Execute the production exchange shell with a deterministic fake transport."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -67,7 +67,11 @@ else:
                 "noema-review.yml@refs/heads/main"
             ),
             "GITHUB_OUTPUT": str(github_output),
-            "FAKE_TOKEN_RESPONSE": json.dumps(token_response),
+            "FAKE_TOKEN_RESPONSE": (
+                token_response
+                if isinstance(token_response, str)
+                else json.dumps(token_response)
+            ),
         }
     )
     return subprocess.run(
@@ -89,6 +93,9 @@ def test_oidc_exchange_consumes_noema_standard_success_envelope() -> None:
     assert 'if [ -z "${GITHUB_WORKFLOW_REF:-}" ]; then' in exchange
     assert '--arg target_repository "$TARGET_REPOSITORY"' in exchange
     assert '--arg workflow_ref "$GITHUB_WORKFLOW_REF"' in exchange
+    assert "jq -e -s" in exchange
+    assert "length == 1" in exchange
+    assert "(.[0] |" in exchange
     assert ".ok == true" in exchange
     assert "(.data | type == \"object\")" in exchange
     assert '(.data.token | type == "string" and test("^[!-~]+\\\\z"))' in exchange
@@ -100,7 +107,7 @@ def test_oidc_exchange_consumes_noema_standard_success_envelope() -> None:
     assert 'strftime("%Y-%m-%dT%H:%M:%S")' in exchange
     assert "$expires_at > now" in exchange
     assert "(.trace_id | type == \"string\" and length > 0)" in exchange
-    assert 'app_token="$(jq -r \'.data.token\' <<<"$token_response")"' in exchange
+    assert 'app_token="$(jq -r -s \'.[0].data.token\' <<<"$token_response")"' in exchange
 
 
 def test_oidc_exchange_keeps_token_out_of_diagnostics() -> None:
@@ -156,7 +163,8 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
             "token=synthetic-app-token\n"
         )
 
-    invalid_responses = [
+    invalid_responses: list[dict[str, object] | str] = [
+        f"{json.dumps(valid)}\n{json.dumps(valid)}",
         {"ok": True, "token": "synthetic-app-token"},
         {**valid, "data": {**valid["data"], "repository": "ExampleOrg/other"}},
         {

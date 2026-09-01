@@ -490,11 +490,13 @@ jobs:
             fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
-          if ! jq -e \
+          if ! jq -e -s \
             --arg target_repository "$TARGET_REPOSITORY" \
             --arg workflow_ref "$GITHUB_WORKFLOW_REF" '
-            .ok == true
-            and (.data | type == "object")
+            length == 1
+            and (.[0] |
+              .ok == true
+              and (.data | type == "object")
             and (.data.token | type == "string" and test("^[!-~]+\\z"))
             and .data.repository == $target_repository
             and .data.workflow_ref == $workflow_ref
@@ -510,12 +512,13 @@ jobs:
               ) catch null) as $expires_at
               | ($expires_at | type == "number") and $expires_at > now
             )
-            and (.trace_id | type == "string" and length > 0)
+              and (.trace_id | type == "string" and length > 0)
+            )
           ' >/dev/null <<<"$token_response"; then
             fail_unavailable "Noema app token exchange unavailable: response envelope was invalid."
           fi
 
-          app_token="$(jq -r '.data.token' <<<"$token_response")"
+          app_token="$(jq -r -s '.[0].data.token' <<<"$token_response")"
           if [ -z "$app_token" ]; then
             fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
