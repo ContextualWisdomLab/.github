@@ -92,7 +92,7 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_existing_noema_review_matches_actor_and_head():
-    noema_marker = "<!-- noema-review-gate head_sha=head -->"
+    noema_marker = noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->"
     assert noema.existing_noema_review(
         make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
         "noema",
@@ -111,6 +111,22 @@ def test_existing_noema_review_matches_actor_and_head():
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+
+
+def test_existing_noema_review_rejects_legacy_body_without_footer_marker():
+    """A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a rerun.
+
+    noema_review_handoff.py's noema_review_state() can never recognize such a
+    review as a valid current-head verdict (its trusted-span helpers return
+    empty without the footer marker), so treating it as "already reviewed"
+    here would stall an unchanged PR forever: the gate skips republishing,
+    and the handoff never accepts what was already posted.
+    """
+    legacy_marker = "<!-- noema-review-gate head_sha=head -->"
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="noema", body=legacy_marker)]}),
+        "noema",
+    )
 
 
 def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
@@ -482,7 +498,19 @@ def test_inspect_and_review_skip_paths(monkeypatch):
 
     cases = [
         (make_pr(isDraft=True), "noema"),
-        (make_pr(reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+        (
+            make_pr(
+                reviews={
+                    "nodes": [
+                        review(
+                            login="noema",
+                            body=noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->",
+                        )
+                    ]
+                }
+            ),
+            "noema",
+        ),
     ]
     for pr, actor in cases:
         calls.clear()
@@ -490,6 +518,19 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7) == 0
         assert calls == []
+
+    # A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a
+    # rerun: noema_review_handoff.py's noema_review_state() can never accept
+    # it as a valid current-head verdict, so the gate must republish rather
+    # than silently stall the PR on an unchanged head.
+    legacy_pr = make_pr(
+        reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7) == 0
+    assert calls
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "")

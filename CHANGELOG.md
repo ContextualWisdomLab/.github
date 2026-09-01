@@ -5,6 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
+  `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
+  `noema_review_handoff.py`'s `noema_review_state()` can never recognize such a review as a
+  valid current-head verdict (its trusted-span helpers return empty without the footer marker),
+  so an unchanged PR carrying only a legacy review would stall forever: the gate skips
+  republishing believing it is done, and the handoff never accepts what was already posted.
+  `existing_noema_review()` now also requires `NOEMA_REVIEW_FOOTER_MARKER` before treating a
+  review as already covering the head, so a legacy review no longer suppresses a rerun that
+  would publish a current-format replacement.
 - Fix a broken CI contract test that was blocking every open `.github`-repo
   PR: `test_strix_quick_gate.sh`'s
   `assert_opencode_review_uses_codegraph_and_contextual_orchestrator` used an

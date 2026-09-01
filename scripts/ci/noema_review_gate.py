@@ -184,7 +184,17 @@ def review_commit(review: dict[str, Any]) -> str:
 
 
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
-    """Return whether Noema already reviewed the current head."""
+    """Return whether Noema already posted a trusted verdict for the current head.
+
+    Requires ``NOEMA_REVIEW_FOOTER_MARKER`` alongside the base marker, matching
+    the trust boundary ``noema_review_handoff.py``'s ``noema_review_state()``
+    enforces. A review predating that footer marker (a "legacy" review, from
+    before this exact position-anchored binding existed) is a review
+    ``noema_review_state()`` can never recognize as a valid current-head
+    verdict; treating it as "already reviewed" here would let it silently
+    suppress every future publish attempt for an otherwise-unchanged head,
+    stalling the PR until its head changes for an unrelated reason.
+    """
     head_sha = str(pr.get("headRefOid") or "")
     marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
@@ -192,10 +202,12 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
+        body = str(review.get("body") or "")
         if (
             actor
             and review_author(review) == actor
-            and marker in str(review.get("body") or "")
+            and marker in body
+            and NOEMA_REVIEW_FOOTER_MARKER in body
         ):
             return True
     return False
