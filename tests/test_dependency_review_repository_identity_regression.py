@@ -1,4 +1,4 @@
-"""Regressions for dependency-review repository identity validation."""
+"""Regressions for dependency-review immutable identity validation."""
 
 from __future__ import annotations
 
@@ -25,7 +25,13 @@ def _support_probe_script() -> str:
     return textwrap.dedent(block[run_start:])
 
 
-def _run_probe(tmp_path: Path, repository: str) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+def _run_probe(
+    tmp_path: Path,
+    repository: str,
+    *,
+    base_sha: str = "a" * 40,
+    head_sha: str = "b" * 40,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the probe with a fake curl and return process plus evidence paths."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -45,8 +51,8 @@ def _run_probe(tmp_path: Path, repository: str) -> tuple[subprocess.CompletedPro
         {
             "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             "GH_TOKEN": "test-token",
-            "BASE_SHA": "a" * 40,
-            "HEAD_SHA": "b" * 40,
+            "BASE_SHA": base_sha,
+            "HEAD_SHA": head_sha,
             "REPOSITORY": repository,
             "REPOSITORY_VISIBILITY": "public",
             "GITHUB_API_URL": "https://api.github.invalid",
@@ -70,12 +76,42 @@ def test_dependency_review_rejects_dot_path_components_before_curl(tmp_path: Pat
     for index, repository in enumerate(
         ("../.github", "ContextualWisdomLab/..", "ContextualWisdomLab/.", "./.github")
     ):
-        case_dir = tmp_path / str(index)
+        case_dir = tmp_path / f"dot-{index}"
         case_dir.mkdir()
         result, curl_marker, _output = _run_probe(case_dir, repository)
         assert result.returncode != 0, repository
         assert not curl_marker.exists(), repository
         assert "repository identity" in result.stdout.lower(), repository
+
+
+def test_dependency_review_rejects_non_owner_name_identity_before_curl(tmp_path: Path) -> None:
+    """Reject repository values that are not exactly one owner/name pair."""
+    for index, repository in enumerate(
+        ("ContextualWisdomLab", "ContextualWisdomLab/Orgmetra/extra", "/Orgmetra")
+    ):
+        case_dir = tmp_path / f"shape-{index}"
+        case_dir.mkdir()
+        result, curl_marker, _output = _run_probe(case_dir, repository)
+        assert result.returncode != 0, repository
+        assert not curl_marker.exists(), repository
+        assert "repository identity" in result.stdout.lower(), repository
+
+
+def test_dependency_review_rejects_named_revisions_before_curl(tmp_path: Path) -> None:
+    """Require immutable 40- or 64-hex Git object ids before comparison."""
+    cases = (("main", "b" * 40), ("a" * 40, "develop"), ("a" * 39, "b" * 40))
+    for index, (base_sha, head_sha) in enumerate(cases):
+        case_dir = tmp_path / f"revision-{index}"
+        case_dir.mkdir()
+        result, curl_marker, _output = _run_probe(
+            case_dir,
+            "ContextualWisdomLab/Orgmetra",
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
+        assert result.returncode != 0, (base_sha, head_sha)
+        assert not curl_marker.exists(), (base_sha, head_sha)
+        assert "exact 40- or 64-character hexadecimal" in result.stdout.lower()
 
 
 def test_dependency_review_allows_dotgithub_product_repository(tmp_path: Path) -> None:
