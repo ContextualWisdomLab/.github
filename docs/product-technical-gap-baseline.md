@@ -2788,6 +2788,45 @@ PostgreSQL 16 + pgvector를 직접 설치·기동해 `@pytest.mark.postgres` 테
 세션이 우연히 로컬 Postgres를 기동하지 않았다면 이 20건의 결함(1번 critical 포함)은 계속
 발견되지 않았을 것이다.
 
+## 2026-09-01 시간별 재개: naruon#1486 Devin 재분석 2건 실재 결함(NewsDOM pending 커서 굶주림, reparse-intent 락 없는 경쟁) 수정 + CodeRabbit 2건 검증(1건 반려, 1건 오탐 확인)
+
+이전 항목(head b9b02dd0) 이후 Devin이 head `c1f02e24`를 재분석하며 지적한 2건과, 이후
+CodeRabbit이 지적한 2건을 모두 검증했다.
+
+1. **✅ 수정(Devin, 🟡): NewsDOM 재인식 sweep의 커서가 `RESULT_PENDING`(provider 미설정) 행도
+   해결된 것처럼 취급해 커서를 그 너머로 진행시킴.** `_sweep_attachments`/`_sweep_documents`는
+   이미 "예외 발생 행은 커서를 그 앞에서 멈춘다"는 불변식을 갖고 있었지만
+   `RESULT_PENDING`(예외 없이 정상 반환되지만 상태는 그대로 pending)은 같은 취급을 받지 못해,
+   provider가 나중에 설정되어도 그 뒤로 새 업로드가 계속 들어오는 한 해당 행이 무기한 굶주릴 수
+   있었다. 두 sweep 모두 `RESULT_PENDING`을 예외와 동일하게 취급하도록 수정. 새 테스트 2개로
+   진짜 RED(커서가 배치의 마지막 행까지 진행) 확인 후 GREEN. 기존
+   `test_document_sweep_advances_and_wraps_without_starvation`이 버그 이전 동작을 전제로
+   작성되어 있어 수정된 계약에 맞게 시나리오 재작성.
+2. **✅ 수정(Devin, 🟨): 첨부파일 reparse-intent 엔드포인트가 락 없는 read-then-write로 상태를
+   전이해 TOCTOU 경쟁이 있었음.** `create_attachment_reparse_intent`가 quarantined 상태를
+   확인한 뒤 락 없이 reparse_pending으로 갱신·커밋 — 오래된 읽기를 든 지연된 중복 요청이 그
+   사이 워커가 이미 처리한 최신 상태를 되돌려 덮어쓸 수 있었다.
+   `calendar_conflict_judgment_service.apply_correction`이 이미 쓰는 `with_for_update()` 패턴을
+   `_get_scoped_attachment`에 `lock` 키워드 인자로 추가해 이 엔드포인트에서만 적용. 새 테스트로
+   컴파일된 쿼리에 FOR UPDATE 포함 확인(같은 컨벤션의 기존 테스트와 동일한 검증 수준), 실제
+   PostgreSQL로 JOIN + FOR UPDATE OF 조합이 유효한 SQL임을 별도 확인.
+   두 수정 모두 커밋 `c1f02e24`. 전체 백엔드 스위트: Postgres 기동 시 1942 passed / 3 skipped,
+   중지 시 1905 passed / 40 skipped, ruff clean.
+3. **반려(사전 존재, 범위 밖, CodeRabbit 자신도 "Heavy lift"로 표시): `0001_initial_control_plane.py`가
+   raw SQL(`execute_schema_backfill`) 대신 구조화된 Alembic 연산(`op.add_column` 등)을 써야
+   한다는 지적.** 확인 결과 `0018`/`0020` 등 다른 마이그레이션은 이미 구조화된 연산을 쓰고 있고,
+   `0001`만 이 PR 이전부터 raw SQL을 써온 유일한 예외(baseline 마이그레이션이라 성격이 다름) —
+   이번 fresh-install 크래시 수정은 이 raw-SQL 특성 자체를 바꾸지 않았으므로 별도의 큰 리팩터로
+   남겨둠.
+4. **오탐 확인(CodeRabbit, 🟡): `test_search_postgres.py`의 `_seed_segment_and_project_object`가
+   `ProjectGraphObjectRecord.workspace_id="workspace-primary"`를 하드코딩해 `_make_email`의
+   workspace(`workspace-org-acme`)와 불일치한다는 지적.** 실제 쿼리 로직을 추적한 결과,
+   `build_lexical_project_object_statement`의 owner_filters는 `Email.owner_filters(...)`(classmethod,
+   `cls`=Email)를 그대로 `.where()`에 넣고 `.join(Email, ...)`으로 조인하므로, workspace 필터는
+   전적으로 조인된 Email 행의 workspace_id에만 적용되고 `ProjectGraphObjectRecord.workspace_id`는
+   이 쿼리에서 전혀 참조되지 않음을 확인 — 즉 이 불일치는 검색 정확성에 영향을 주지 않는(하지만
+   지저분한) 테스트 픽스처 값일 뿐. 코드 수정 없이 근거와 함께 반려.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
