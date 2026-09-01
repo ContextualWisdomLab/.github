@@ -197,7 +197,7 @@ jobs:
           fresh_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
           if stale_timeout in quick_gate:
               quick_gate = quick_gate.replace(stale_timeout, fresh_timeout, 1)
-          for forbidden in ('cancel-superseded-pr-runs:', 're-dispatches exact-head evidence', "'export LLM_TIMEOUT=0'"):
+          for forbidden in (stale_cleanup.rstrip('\n'), stale_recovery.rstrip('\n'), stale_timeout.rstrip('\n')):
               if forbidden in quick_gate:
                   raise SystemExit(f'stale Strix quick-gate assertion remains: {forbidden}')
           quick_gate_path.write_text(quick_gate, encoding='utf-8')
