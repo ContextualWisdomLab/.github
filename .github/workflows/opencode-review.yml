@@ -279,7 +279,7 @@ jobs:
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
-          live_draft="$(printf '%s' "$live_pr" | jq -r '.draft // empty')"
+          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
           if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
             echo "::error::Could not validate live pull request state before review dispatch."
             exit 1
@@ -373,7 +373,7 @@ jobs:
           fi
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
-          live_draft="$(printf '%s' "$live_pr" | jq -r '.draft // empty')"
+          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
           if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
             echo "::error::Could not validate live pull request state before verdict admission."
             exit 1
