@@ -75,6 +75,7 @@ def _repair_wall_clock_deadline(seconds: float):
     previous_handler = signal.getsignal(signal.SIGALRM)
 
     def expire(_signum, _frame):
+        """Raise the typed deadline signal without reflecting response content."""
         raise NoemaRepairDeadlineExceeded(
             f"Noema repair exceeded {seconds:g}-second absolute wall-clock deadline"
         )
