@@ -187,6 +187,20 @@ jobs:
               tests = tests.replace(publication_anchor, publication_anchor + extra, 1)
           test_path.write_text(tests, encoding='utf-8')
 
+          timeout_contract_path = Path('tests/test_strix_llm_timeout_contract.py')
+          timeout_contract = timeout_contract_path.read_text(encoding='utf-8')
+          stale_timeout_assertion = '    assert "export LLM_TIMEOUT=300" in workflow\n'
+          current_timeout_assertion = '    assert "export LLM_TIMEOUT=0" in workflow\n'
+          if stale_timeout_assertion in timeout_contract:
+              timeout_contract = timeout_contract.replace(
+                  stale_timeout_assertion,
+                  current_timeout_assertion,
+                  1,
+              )
+          if current_timeout_assertion not in timeout_contract:
+              raise SystemExit('merged Strix timeout regression does not encode zero inference timeout')
+          timeout_contract_path.write_text(timeout_contract, encoding='utf-8')
+
           quick_gate_path = Path('scripts/ci/test_strix_quick_gate.sh')
           quick_gate = quick_gate_path.read_text(encoding='utf-8')
           stale_cleanup = '\tassert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow runs superseded-head cleanup outside the provider scan queue"\n'
