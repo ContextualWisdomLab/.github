@@ -1,0 +1,42 @@
+name: ContextualWisdomLab development agent toolchain
+description: >-
+  Materialize pinned development skills and local code-graph indexes before a
+  credential-bearing OpenCode product-development step.
+
+inputs:
+  target-workspace:
+    description: Exact git worktree root to index and augment with runtime-only skills.
+    required: false
+    default: .
+  opencode-config:
+    description: >-
+      Optional strict-JSON runtime OpenCode config to augment with credential-isolated
+      code-review-graph and CodeGraph MCP servers. Checked-in JSONC is intentionally unsupported.
+    required: false
+    default: ""
+
+outputs:
+  provenance:
+    description: Runtime provenance JSON for the exact installed upstream revisions.
+    value: ${{ steps.install.outputs.provenance }}
+  mcp-snippet:
+    description: Strict JSON containing the two sanitized MCP entries.
+    value: ${{ steps.install.outputs.mcp-snippet }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up pinned uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      with:
+        version: "0.12.4"
+        enable-cache: false
+
+    - name: Materialize pinned development toolchain
+      id: install
+      shell: bash
+      env:
+        CWL_TOOLCHAIN_TARGET: ${{ inputs.target-workspace }}
+        CWL_TOOLCHAIN_OPENCODE_CONFIG: ${{ inputs.opencode-config }}
+        CWL_TOOLCHAIN_RUNTIME: ${{ runner.temp }}/cwl-development-agent-toolchain-${{ github.run_id }}-${{ github.run_attempt }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh"
