@@ -30,6 +30,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           branch_head="$(git rev-parse HEAD)"
 
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
           python3 - <<'PY'
           from pathlib import Path
 
