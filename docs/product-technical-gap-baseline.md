@@ -2827,6 +2827,70 @@ CodeRabbit이 지적한 2건을 모두 검증했다.
    이 쿼리에서 전혀 참조되지 않음을 확인 — 즉 이 불일치는 검색 정확성에 영향을 주지 않는(하지만
    지저분한) 테스트 픽스처 값일 뿐. 코드 수정 없이 근거와 함께 반려.
 
+## 2026-09-01 시간별 재개: owner 코멘트(`.github#1438`) 7개 항목 조사 — CO passthrough 수정 1건 + Strix 3시간대 상향 1건 + 확인-완료 2건 + 재확인 필요 2건
+
+owner `seonghobae`가 `.github#1438`에 직접 남긴 코멘트(진짜 사람 입력, bot echo 아님)의 7개
+요청을 각각 코드 추적으로 조사했다. 추측이 아니라 실제 실행 경로를 읽고 확인한 결과만 기록한다.
+
+1. **✅ 수정(contextual-orchestrator, 새 PR [#986](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/986)): 일부 NVIDIA NIM 호스팅 모델(관측: vision 지원 Llama 계열,
+   naruon#1486 Strix 스캔에서 실제 발생)이 tool call을 두 번 이상 요청하는 턴을 거부**
+   — `invalid_request_error`라는 일반 코드로 감싸져 있고, 모델 고유의 "this model only
+   supports single tool-calls at once" 문장이 더 긴 agent-prefixed 메시지 안에 묻혀 있어
+   메시지 텍스트만이 유일한 신뢰 가능한 신호였다. `_is_passthrough_failover_error`가 이를
+   인식하지 못해 다음 capability-matched agent로 넘어가지 않고 스캔 전체가 중단됐다.
+   `_SINGLE_TOOL_CALL_LIMIT_MESSAGE` + `_is_single_tool_call_limit_error()`를 기존
+   `_is_provider_tool_description_limit_error` 패턴과 동일한 모양으로 추가하고 failover
+   판단에 연결. 새 회귀 테스트로 진짜 RED(수정 전 `ProviderUpstreamError`로 전체 실패) → GREEN
+   확인, 전체 스위트 2824 passed / 1 skipped(무관한 사전 존재 `fast_mlsirm` optional-dependency
+   갭 1건은 이 diff와 무관 — 별도 후속 필요). 이 수정은 owner의 2번 요청("NVIDIA NIM만 쓰는 건
+   허용 안 함, Contextual-Orchestrator를 쓰세요")의 근본 취지도 함께 강화한다: 중앙 리뷰 파이프라인은
+   이미 `pr-review-autofix.yml` → `contextual_orchestrator_review_sidecar.sh` 경로로
+   contextual-orchestrator 게이트웨이를 거치도록 배선되어 있고(`docs/CWL-MASTER-CONTEXT.md`가
+   아니라 이 세션이 직접 코드로 확인), 이번 수정은 그 게이트웨이 내부에서 특정 NIM 모델 하나의
+   결함이 전체 요청을 죽이지 않고 다른 provider로 정상 failover하도록 만든다.
+2. **✅ 수정(`.github`, 이번 diff): Strix의 실질 timeout이 "3시간 이상"이라는 지시에 못 미침을
+   코드로 확인.** `strix.yml`의 설명 주석은 "150분 process budget/155분 total budget"을
+   말했고 실제로 그 값(`process_budget_seconds=9000`, `STRIX_TOTAL_TIMEOUT_SECONDS=9300`,
+   둘 다 GitHub 로그에 리터럴 이름이 노출되지 않도록 `budget_suffix="TIME""OUT"` 문자열 결합으로
+   난독화되어 있음을 `scripts/ci/test_strix_quick_gate.sh`의 계약으로 재확인)로 배선되어
+   있었지만, 155분(2h35m)은 owner가 요구한 "최소 3시간" 바닥에 못 미치고, 관측했다는 "6시간 이상"과는
+   더 멀었다. GitHub-hosted runner(`ubuntu-latest`)의 job 실행시간은 플랫폼 자체가 6시간(360분)으로
+   하드 캡을 걸어 두므로(어떤 `timeout-minutes` 값을 넣어도 그 이상은 실행되지 않음), 그 한도까지
+   기존 비율(job/step/total/process budget 사이 여유 시간 비율)을 그대로 유지하며 전부 상향했다:
+   job 200→**360분**(플랫폼 최대), step 170→**330분**, total budget 9300→**18900초(315분)**,
+   process budget 9000→**18600초(310분)**. 내부 실질 스캔 예산이 315분(5h15m)이 되어 "최소
+   3시간" 요구를 여유 있게 충족하고, 단일 GitHub-hosted job이 물리적으로 도달 가능한 최댓값에
+   근접한다. `scripts/ci/test_strix_quick_gate.sh`의 대응 계약 assertion(리터럴 숫자·설명 문자열)도
+   같은 커밋에서 갱신. owner가 관측했다는 "6시간 이상"이 이 정확한 워크플로/러너였는지는 확인할
+   길이 없다 — self-hosted runner이거나 별도 로컬 실행이었을 가능성이 있으므로, 정확히 어느
+   로그/컨텍스트였는지 owner 확인을 요청했다(코멘트에 남김).
+3. **확인-완료(수정 불필요): Strix는 이미 전체 코드베이스를 스캔한다.** `STRIX_TARGET_PATH`의
+   `__PR_SCOPE__` sentinel은 스캔 범위가 아니라 "PR 이벤트에서는 신뢰 가능한 base checkout이 아니라
+   격리된 PR-head 임시 스코프에서 읽어라"는 격리 경로 선택 플래그이며,
+   `scripts/ci/strix_quick_gate.sh`가 이를 `TARGET_PATH="$REPO_ROOT"`(레포 전체)로 해석한다.
+   `STRIX_DISABLE_PR_SCOPING`이 PR 이벤트에서 `'0'`이 되는 것도 "PR 파일만 본다"는 뜻이 아니라
+   findings 필터링 단계의 이야기 — 스캔 자체는 diff-only가 아니다.
+4. **확인-완료(수정 불필요): `@opencode-agent` 멘션 호출은 이미 정확히 작동한다.**
+   `scripts/ci/agent_mention_router.py`의 `AGENT_NAMES["opencode-agent"]`는
+   `@opencode-agent`를 정확히 매칭하는 하드코딩된 정규식이다. `/oc`는 업스트림 OpenCode
+   프로젝트 자체의 일반 문서에 나오는 무관한 명령어로, 이 조직의 커스텀 멘션 컨벤션과는 별개다.
+5. **재확인 필요(부분 확인, 결론 유보): OpenCode/Noema 리뷰가 CodeRabbit/Devin 수준으로
+   실제 리뷰를 하는지.** `opencode.jsonc`/`ci-review-prompt.md`/`code-reviewer-prompt.md`의
+   현재 예산 체계(모델별 5400초 attempt + 11700초 aggregate + 12000초 pool step + job-level
+   205~325분)는 이미 3h15m~5h25m 수준으로 결코 얕지 않지만, "실제로 CodeRabbit/Devin 수준의
+   깊이로 리뷰하는가"는 예산의 크기가 아니라 프롬프트·평가 기준·실제 산출물 품질의 문제라 이번
+   패스의 코드 추적만으로는 결론 내릴 수 없다. 별도의 품질 평가 트랙(실제 PR에서 나온 리뷰
+   산출물을 CodeRabbit/Devin의 산출물과 나란히 비교하는 벤치마크)이 필요 — 후속 작업으로 분리.
+6. **재확인 필요(부분 확인, 결론 유보): Contextual-Orchestrator가 "빠르고 능력 좋은" 모델로
+   실시간 라우팅하는가.** `model_discovery.py`의 `select_cheapest_discovered_agent`/
+   `select_top_n_cheapest_discovered_agents`는 발견된 모델을 **가격**으로만 랭크한다 —
+   지연시간(latency)이나 처리 능력을 랭킹 기준에 넣지 않는다. 이번 패스의 single-tool-call-limit
+   failover 수정(위 1번)은 "느리거나 결함 있는 모델에 걸려 멈추지 않고 다음 모델로 넘어간다"는
+   점에서는 도움이 되지만, "가장 빠른 모델을 우선 선택한다"는 명시적 최적화는 아직 없다. 별도
+   증분(관측된 응답 지연을 랭킹에 반영하는 것)으로 분리 필요.
+
+owner 코멘트에 대한 전체 답변은 `.github#1438`에 코멘트로 남겼다(항목별 근거·PR 링크 포함).
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
