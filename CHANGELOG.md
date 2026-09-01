@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `opencode-review.yml`'s required `opencode-review-target` check hanging
+  for an ordinary draft PR until the job's own ~360-minute runtime ceiling
+  kills it. `#1546`'s receipt-gate redesign added `PR_DRAFT` to the
+  `Request current-head OpenCode review execution` dispatch step, but that
+  value only narrows which reviews `opencode_review_receipt_gate.py`'s
+  `evaluate_receipts` accepts (`is_draft and state == "APPROVED"` is
+  rejected) -- it never exempts a draft PR from needing a receipt at all,
+  and `pr_review_merge_scheduler.py`'s own draft path skips dispatching a
+  review for an ordinary draft with no `@opencode-agent` mention. With no
+  draft exemption in the `Fail closed without a current-head OpenCode
+  verdict` step, its `while :; do ... sleep 30; done` loop then polls
+  forever for a verdict OpenCode will never post. That step now also reads
+  `PR_DRAFT` and exits early (mirroring its pre-existing `closed` exit) when
+  the PR is a draft. This restores the equivalent of `#1443`'s draft-gate
+  fix -- closed unmerged as superseded by this redesign, on the (partially
+  incorrect) premise that the redesign already exempted drafts -- reproduced
+  and fixed fresh against current `main` per that closure's own guidance,
+  rather than reviving the superseded branch.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

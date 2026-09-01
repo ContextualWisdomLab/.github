@@ -31,6 +31,15 @@ def request_review_script() -> str:
     return textwrap.dedent(block)
 
 
+def fail_closed_script() -> str:
+    """Extract the production "Fail closed without a current-head OpenCode verdict" run block."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Fail closed without a current-head OpenCode verdict\n", 1
+    )[1]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
     """Build one Reviews API record from the OpenCode GitHub App."""
     return {
@@ -145,6 +154,99 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "Review approval remains a separate current-head PR review requirement"
         not in workflow
     )
+
+
+def _write_refusing_gh(bin_dir: Path) -> None:
+    """Install a fake ``gh`` on PATH that fails loudly if it is ever invoked.
+
+    Used to prove an early-exit branch never reaches the Reviews API call.
+    """
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo 'unexpected gh invocation: the early-exit should have short-circuited' >&2\n"
+        "exit 17\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
+
+
+def _run_fail_closed_step(
+    tmp_path: Path,
+    *,
+    pr_action: str = "",
+    pr_draft: str = "false",
+    pr_number: str = "1437",
+    head_sha: str = HEAD,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Fail closed without a current-head OpenCode verdict" step body.
+
+    A fake ``gh`` that fails loudly is installed on ``PATH`` so a closed or
+    draft early exit that reaches the Reviews API call at all fails the test
+    immediately, rather than actually looping (the production step's
+    ``while :; do ... sleep 30; done`` never naturally terminates on a
+    non-matching review, so a real ``gh`` fixture serving no match would hang
+    a test rather than fail it).
+    """
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_refusing_gh(bin_dir)
+    return subprocess.run(
+        [bash, "-c", fail_closed_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": pr_number,
+            "HEAD_SHA": head_sha,
+            "PR_ACTION": pr_action,
+            "PR_DRAFT": pr_draft,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> None:
+    """A draft PR's required check must pass without ever polling Reviews API.
+
+    `#1546` added `PR_DRAFT` to the dispatch step's receipt-gate check
+    (`evaluate_receipts(..., is_draft=...)`), but that only narrows which
+    reviews the gate accepts -- it never exempts a draft PR from needing one,
+    and the scheduler's own draft path
+    (`scripts/ci/pr_review_merge_scheduler.py`'s `inspect_pr`) skips
+    dispatching a review for an ordinary draft entirely (no
+    `@opencode-agent` mention). With no draft exemption here, this step's
+    `while :; do ... sleep 30; done` loop would poll for a verdict OpenCode
+    will never post, until the job's own ~360-minute runtime ceiling kills
+    it -- reproduced against this exact commit before this fix (`#1443`
+    fixed the same class of bug on a now-superseded design; this restores
+    the equivalent exemption on the current receipt/scheduler-gated design).
+    """
+    result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR is a draft; a current-head OpenCode verdict is not required" in result.stdout
+
+
+def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:
+    """The pre-existing ``closed`` early exit still runs before the new draft check."""
+    result = _run_fail_closed_step(tmp_path, pr_action="closed", pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
+    assert "PR is a draft" not in result.stdout
+
+
+def test_fail_closed_step_still_polls_for_a_non_draft_pr(tmp_path: Path) -> None:
+    """A non-draft PR must still reach the Reviews API call (not exempted)."""
+    result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="false")
+    assert result.returncode == 17, result.stderr
+    assert "unexpected gh invocation" in result.stderr
 
 
 @pytest.mark.parametrize(

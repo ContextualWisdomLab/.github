@@ -2344,6 +2344,35 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 opencode-review.yml draft-gate poll: `#1546`'s receipt gate narrows, never exempts
+
+**Context**: an earlier PR (`#1443`) fixed a required `opencode-review-target` check hanging
+forever on a draft PR, against the pre-`#1546` design. `#1546` then redesigned this same
+workflow around `scripts/ci/opencode_review_receipt_gate.py` (a shared receipt predicate) and
+`#1443` was closed unmerged as superseded, on the stated premise that the new design already
+handles drafts via `pr_review_merge_scheduler.py`'s `dispatch_draft_review_only` path and the
+receipt gate's `is_draft` parameter.
+
+**That premise was only half right — reproduced against `main@5686de41`**: `evaluate_receipts`'s
+`is_draft` only narrows what counts as a valid receipt (`if is_draft and state == "APPROVED":
+return False, "draft must never receive bot APPROVE"`); it never returns "no receipt needed for
+a draft." `pr_review_merge_scheduler.py`'s own draft path (`inspect_pr`'s `if pr.get("isDraft")`)
+skips dispatching a review entirely for an ordinary draft with no `@opencode-agent` mention
+(`active_draft_review_request` is documented as "the sole automatic gate for draft review
+dispatch"). Net effect: for an ordinary draft PR, nothing ever posts a verdict, and the
+`Fail closed without a current-head OpenCode verdict` step's `while :; do ... sleep 30; done`
+loop had no draft check at all — it polls until the job's own ~360-minute runtime ceiling kills
+it. `#1443`'s underlying bug still reproduces on current `main`.
+
+**Fix**: per the closure's own guidance ("any residual draft-queue issue must be reproduced
+against current main and fixed in the current receipt/scheduler boundary rather than reviving
+this stale branch"), fixed fresh on a new branch from current `main` rather than reviving
+`#1443`: the `Fail closed` step now also reads `PR_DRAFT: ${{ github.event.pull_request.draft
+}}` (matching the sibling dispatch step's existing sourcing convention exactly, not the live
+`gh api` refetch `#1443`'s branch had introduced) and exits early, mirroring its pre-existing
+`closed` exit. Minimal, scoped to the one missing exemption; the receipt-gate/scheduler
+architecture itself is otherwise untouched.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
