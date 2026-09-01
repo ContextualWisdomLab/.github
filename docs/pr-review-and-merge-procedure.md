@@ -153,11 +153,9 @@ an `APPROVED` or `CHANGES_REQUESTED` receipt, it selects the latest matching
 ruleset-required workflow becomes successful only after the receipt exists,
 without reserving a runner while the model works.
 
-The central dispatch title is immutable and records the head requested by the
-scheduler. Because trusted metadata validation deliberately adopts a newer live
-head after queue delay, active-run deduplication treats that dispatch as owned by
-the pull request rather than cancelling it based on the older title SHA. Final
-review publication remains exact-head guarded.
+The central dispatch title and validated metadata remain bound to the requested
+head. If the pull request advances while queued, validation fails closed and the
+scheduler dispatches a new current-head run; publication is exact-head guarded.
 
 Scheduled review-feedback autofix is also centralized. The
 `PR Review Fix Scheduler` dispatches the central `PR Review Autofix` worker
