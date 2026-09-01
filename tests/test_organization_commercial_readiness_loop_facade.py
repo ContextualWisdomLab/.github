@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 import runpy
 import sys
 from pathlib import Path
@@ -50,3 +51,6 @@ def test_imported_facade_remains_executable_by_public_module_name(
                 run_name="__main__",
             )
     assert raised.value.code == 2
+    assert pickle.loads(pickle.dumps(coordinator.ActionKind.REVIEW_REPAIR)) is (
+        coordinator.ActionKind.REVIEW_REPAIR
+    )

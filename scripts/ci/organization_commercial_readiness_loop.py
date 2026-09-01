@@ -15,6 +15,9 @@ _DDD_MODULE_NAME = "_cwl_organization_commercial_readiness_ddd_contract"
 
 def _load_sibling(module_name: str, filename: str) -> ModuleType:
     """Load one trusted sibling module under a stable private module name."""
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
     path = _MODULE_DIRECTORY / filename
     spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
