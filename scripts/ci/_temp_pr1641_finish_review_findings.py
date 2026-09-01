@@ -53,7 +53,7 @@ def patch_validator() -> None:
         }:
             raise NoemaModelOutputError(
                 f"Noema adversarial probe {index} class_evidence.{field} requires "
-                "path, line, side, exact source_excerpt, and observation"
+                "path, line, side, exact source_excerpt, and non-empty observation"
             )
         source_location = _canonical_changed_location(
             source_ref, f"Noema adversarial probe {index} class_evidence.{field}"
@@ -99,7 +99,7 @@ def patch_validator() -> None:
                 f"Noema adversarial probe {index} class_evidence.{field} observation "
                 "must name a concrete token from source_excerpt"
             )
-        label_tokens = {
+        label_tokens = {probe_kind.casefold(), field.casefold()} | {
             token.casefold()
             for token in re.findall(
                 r"[A-Za-z_][A-Za-z0-9_]{2,}",
