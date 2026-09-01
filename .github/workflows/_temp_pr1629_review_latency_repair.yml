@@ -1,4 +1,4 @@
-name: One-shot PR1629 review latency repair
+name: One-shot PR1629 workflow probe
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  probe:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout writer branch
@@ -18,33 +18,5 @@ jobs:
           ref: ${{ github.ref_name }}
           persist-credentials: true
           fetch-depth: 0
-
-      - name: Apply causal source and contract repair
-        run: python scripts/ci/_temp_pr1629_review_latency_repair.py
-
-      - name: Verify source syntax
-        run: python -m py_compile scripts/ci/contextual_orchestrator_review_launcher.py scripts/ci/contextual_orchestrator_review_policy.py
-
-      - name: Install declared hash-verified quality toolchain
-        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-
-      - name: Verify focused RED-to-GREEN regressions
-        run: python -m pytest -q tests/test_contextual_orchestrator_review_preflight_concurrency.py tests/test_contextual_orchestrator_review_policy_deprecation.py tests/test_contextual_orchestrator_review_runtime_preflight.py tests/test_contextual_orchestrator_review_policy.py tests/test_contextual_orchestrator_central_free_only.py
-
-      - name: Verify repository quality contract
-        run: |
-          python -m coverage run -m pytest tests -q
-          python -m coverage report --show-missing
-          python -m interrogate
-
-      - name: Commit repair and remove temporary surfaces
-        run: |
-          git rm .github/workflows/_temp_pr1629_review_latency_repair.yml
-          git rm .github/_temp_pr1629_trigger.txt
-          git rm scripts/ci/_temp_pr1629_review_latency_repair.py
-          git add scripts/ci/contextual_orchestrator_review_launcher.py scripts/ci/contextual_orchestrator_review_policy.py docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md docs/adr/0005-contextual-orchestrator-review-preflight-budget.md docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md docs/product-technical-gap-baseline.md tests/test_contextual_orchestrator_review_preflight_concurrency.py tests/test_contextual_orchestrator_review_policy_deprecation.py
-          git diff --cached --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix(review): bound full-catalog startup latency"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Prove job creation
+        run: echo workflow-job-started
