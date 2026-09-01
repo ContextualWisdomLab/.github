@@ -1,0 +1,97 @@
+name: Source fix PR1591 free identity
+
+on:
+  push:
+    branches: [fix/no-heuristic-free-review-admission]
+    paths: [.github/source-fix-1591-free-identity.trigger]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/no-heuristic-free-review-admission
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install exact test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Verify RED contract and apply owner-side repair
+        id: patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch_name='fix/no-heuristic-free-review-admission'
+          starting_head="$GITHUB_SHA"
+          echo "starting_head=$starting_head" >>"$GITHUB_OUTPUT"
+          live_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1591" --jq '.state')"
+          pr_head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1591" --jq '.head.ref')"
+          test "$live_ref" = "$starting_head"
+          test "$pr_state" = open
+          test "$pr_head_ref" = "$branch_name"
+
+          if python -m pytest -q \
+            tests/test_contextual_orchestrator_no_heuristic_admission.py \
+            tests/test_contextual_orchestrator_central_free_only.py; then
+            echo '::error::PR #1591 RED regressions unexpectedly pass before production repair.'
+            exit 91
+          fi
+
+          python scripts/ci/source_fix_1591_free_identity.py
+
+          python -m pytest -q \
+            tests/test_contextual_orchestrator_no_heuristic_admission.py \
+            tests/test_contextual_orchestrator_central_free_only.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_runtime_preflight.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py \
+            tests/test_contextual_orchestrator_free_credential_admission.py \
+            tests/test_contextual_orchestrator_review_live_discovery_contract.py
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 scripts/ci
+          git diff --check
+
+          latest_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          latest_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1591" --jq '.state')"
+          latest_head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1591" --jq '.head.ref')"
+          test "$latest_ref" = "$starting_head"
+          test "$latest_state" = open
+          test "$latest_head_ref" = "$branch_name"
+
+          rm -f \
+            .github/workflows/source-fix-1591-free-identity.yml \
+            .github/source-fix-1591-free-identity.trigger \
+            scripts/ci/source_fix_1591_free_identity.py
+          git add -A
+          git diff --cached --check
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git commit -m 'fix(ci): close central free-pool identity gaps'
+
+      - name: Push repaired exact head
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          STARTING_HEAD: ${{ steps.patch.outputs.starting_head }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo '::error::No event-capable branch-write credential is configured.'
+            exit 1
+          fi
+          branch_name='fix/no-heuristic-free-review-admission'
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_name}" --jq '.object.sha')"
+          test "$remote_head" = "$STARTING_HEAD"
+          gh auth setup-git
+          git push origin HEAD:"$branch_name"
