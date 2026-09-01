@@ -37,6 +37,325 @@ def test_recent_fix_marker_is_head_scoped():
     assert not fix.recent_fix_marker_exists([{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}], head, 24 * 3600)
 
 
+def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypatch):
+    """A long-running exact-head worker survives while its older sibling is cancelled."""
+    head = "a" * 40
+    stale = "b" * 40
+    requests = []
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda args: requests.append(args)
+        or [
+            {
+                "workflow_runs": [
+                    {
+                        "id": 99,
+                        "status": "completed",
+                        "display_title": "unrelated first page",
+                    }
+                ]
+            },
+            {
+                "workflow_runs": [
+                {
+                    "id": 1,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{head}",
+                },
+                {
+                    "id": 2,
+                    "status": "queued",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                },
+                {
+                    "id": 3,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#8@{stale}",
+                },
+                {"id": 4, "status": "in_progress", "display_title": "malformed"},
+                ]
+            },
+        ],
+    )
+    cancelled = []
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda repo, ids: cancelled.append((repo, ids)),
+    )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(headRefOid=head),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    )
+    assert cancelled == [(fix.DEFAULT_AUTOFIX_REPOSITORY, ["2"])]
+    assert "--paginate" in requests[0]
+    assert "--slurp" in requests[0]
+
+
+def test_inspect_pr_reports_stale_snapshot_without_dispatch(monkeypatch):
+    """A moved head is not mislabeled as an active worker or dispatched stale."""
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
+    monkeypatch.setattr(fix, "needs_autofix", lambda _pr: (True, ("review",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda _repo, _number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda *_args, **_kwargs: pytest.fail("stale snapshot must not dispatch"),
+    )
+
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("scheduler PR snapshot is stale; retry with the current live head",),
+    )
+
+
+def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys):
+    """Dry-run reports an older head without mutating Actions state."""
+    stale = "b" * 40
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "waiting",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("dry-run must not cancel"),
+    )
+
+    assert not fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=True,
+    )
+    assert "would force-cancel stale autofix runs 2" in capsys.readouterr().out
+
+
+def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monkeypatch):
+    """A stale scheduler snapshot cannot cancel a newer live-head worker."""
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{'b' * 40}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("advanced head must preserve active workers"),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    ) is None
+def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
+    """Exact-head check evidence can start RCA without a circular review prerequisite."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ("Application CI",)
+    assert fix.needs_rca_repair(pr) == (
+        True,
+        ("current-head failed check(s) require RCA: Application CI",),
+    )
+
+
+def test_control_plane_failure_and_pending_checks_do_not_trigger_rca():
+    """The metadata gate and nonterminal checks cannot recursively dispatch repair."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "metadata-only gate evaluation",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "IN_PROGRESS",
+                        "conclusion": None,
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Superseded run",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Approval gate",
+                        "status": "COMPLETED",
+                        "conclusion": "ACTION_REQUIRED",
+                    },
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
+
+
+@pytest.mark.parametrize(
+    ("older_conclusion", "newer_status", "newer_conclusion", "expected"),
+    [
+        ("FAILURE", "COMPLETED", "SUCCESS", ()),
+        ("SUCCESS", "COMPLETED", "FAILURE", ("Application CI",)),
+        ("FAILURE", "IN_PROGRESS", None, ()),
+    ],
+)
+def test_failed_checks_use_only_latest_check_run_attempt(
+    older_conclusion, newer_status, newer_conclusion, expected
+):
+    """Successful or pending reruns supersede stale failures by suite creation time."""
+    def attempt(created_at, status, conclusion):
+        return {
+            "__typename": "CheckRun",
+            "name": "Application CI",
+            "status": status,
+            "conclusion": conclusion,
+            "checkSuite": {
+                "createdAt": created_at,
+                "workflowRun": {"workflow": {"name": "Application CI"}},
+            },
+        }
+
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    attempt("2026-09-01T00:00:00Z", "COMPLETED", older_conclusion),
+                    attempt("2026-09-01T01:00:00Z", newer_status, newer_conclusion),
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == expected
+
+
+def test_draft_with_failed_check_dispatches_rca(monkeypatch):
+    """A draft stays unmergeable while its real source failure reaches bounded RCA."""
+    captured = {}
+    pr = make_pr(
+        isDraft=True,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "Application CI",
+                        "state": "FAILURE",
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"])
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert reasons == ("current-head failed check(s) require RCA: Application CI",)
+    assert captured["repair_mode"] == "rca"
+
+
+def test_conflict_repair_precedes_failed_check_rca(monkeypatch):
+    """A conflicted tree must be repaired before check failures can be diagnosed."""
+    captured = {}
+    pr = make_pr(
+        mergeStateStatus="DIRTY",
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "Application CI",
+                        "state": "FAILURE",
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--resolve-unreviewed-conflicts",
+            "--dry-run",
+        ]
+    )
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert "auto-resolving" in reasons[0]
+    assert captured["resolve_conflict"] is True
+    assert "repair_mode" not in captured
+
+
 def test_needs_autofix_uses_current_head_evidence():
     """Autofix starts from current-head OpenCode change requests."""
     head = "a" * 40
@@ -138,6 +457,7 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("current-head OpenCode requested changes",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -368,6 +688,50 @@ def test_context_explicit_rca_uses_precollected_evidence(monkeypatch, tmp_path):
     assert "redacted exact-head failure" in body
 
 
+def test_context_direct_rca_uses_live_failed_check_without_review(monkeypatch, tmp_path):
+    """Trusted context authorizes direct RCA from live exact-head failure evidence."""
+    head = "a" * 40
+    pr = {
+        "number": 7,
+        "title": "Repair failed checks",
+        "url": "https://example.test/pr/7",
+        "headRefName": "feature",
+        "baseRefName": "main",
+        "headRefOid": head,
+        "baseRefOid": "b" * 40,
+        "mergeStateStatus": "CLEAN",
+        "statusCheckRollup": [
+            {
+                "__typename": "CheckRun",
+                "name": "Application CI",
+                "status": "COMPLETED",
+                "conclusion": "FAILURE",
+            }
+        ],
+    }
+    monkeypatch.setattr(context, "pr_view", lambda repo, number: pr)
+    monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: [])
+    monkeypatch.setattr(context, "review_threads", lambda repo, number: [])
+    monkeypatch.setattr(context, "pr_changed_paths", lambda repo, number: ["src/app.py"])
+    evidence = tmp_path / "failed-checks.md"
+    evidence.write_text("exact-head Application CI failure", encoding="utf-8")
+    output = tmp_path / "context.md"
+
+    context.write_context(
+        "owner/repo",
+        7,
+        head,
+        output,
+        repair_mode="rca",
+        failed_check_evidence_path=evidence,
+    )
+
+    body = output.read_text(encoding="utf-8")
+    assert "Repair mode: failed-check-rca" in body
+    assert "exact-head Application CI failure" in body
+    assert "- `src/app.py`" in body
+
+
 def test_context_inferred_rca_collects_evidence(monkeypatch, tmp_path):
     """Legacy callers still infer RCA and invoke the trusted collector once."""
     head = "a" * 40
@@ -436,7 +800,7 @@ def test_context_explicit_mode_and_evidence_fail_closed(monkeypatch, tmp_path):
     output = tmp_path / "context.md"
 
     monkeypatch.setattr(context, "current_reviews", lambda repo, number, head_sha: [])
-    with pytest.raises(RuntimeError, match="does not match"):
+    with pytest.raises(RuntimeError, match="lacks exact-head"):
         context.write_context("owner/repo", 7, head, output, repair_mode="rca")
 
     evidence = tmp_path / "review-only.md"
@@ -617,6 +981,7 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     assert "DRY-RUN: would create autofix marker" in capsys.readouterr().out
 
     fix.create_fix_marker("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
     fix.dispatch_autofix(
         "owner/repo",
         pr,
@@ -643,6 +1008,25 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     payload = json.loads(calls[-1][1])
     assert payload["event_type"] == "pr-review-autofix"
     assert payload["client_payload"]["target_repository"] == "owner/repo"
+
+
+def test_dispatch_autofix_rejects_advanced_live_head(monkeypatch):
+    """Revalidate the exact head immediately before repository dispatch."""
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("advanced head must not dispatch"),
+    )
+
+    with pytest.raises(RuntimeError, match="live head changed"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            make_pr(),
+            workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+            workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+            dry_run=False,
+        )
 
 
 def test_is_rate_limit_error_matches_known_github_signatures():
@@ -864,6 +1248,7 @@ def test_inspect_pr_dispatches_failed_check_rca(monkeypatch):
     )
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -886,6 +1271,7 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
     """An approved conflicting PR dispatches autofix in resolve_conflict mode."""
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -906,6 +1292,7 @@ def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, caps
     pr = _approved_dirty_pr(baseRefName="feature-base")
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
