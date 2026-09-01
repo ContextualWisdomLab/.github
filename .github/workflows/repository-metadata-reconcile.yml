@@ -11,7 +11,6 @@ on:
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
-  workflow_dispatch:
   schedule:
     - cron: "23 * * * *"
 
