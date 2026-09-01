@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import urlsplit
 
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -49,9 +50,38 @@ def _association_number(association: Mapping[str, Any]) -> int | None:
     return _positive_int(association.get("number"))
 
 
+def _repository_full_name(value: object) -> str:
+    """Normalize full and Actions-embedded repository objects to ``owner/name``."""
+    if not isinstance(value, Mapping):
+        return ""
+    full_name = value.get("full_name")
+    if full_name is not None:
+        return (
+            full_name
+            if isinstance(full_name, str) and REPOSITORY_RE.fullmatch(full_name)
+            else ""
+        )
+    api_url = value.get("url")
+    if not isinstance(api_url, str):
+        return ""
+    parsed = urlsplit(api_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "api.github.com"
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    parts = parsed.path.split("/")
+    if len(parts) != 4 or parts[0] != "" or parts[1] != "repos":
+        return ""
+    candidate = f"{parts[2]}/{parts[3]}"
+    return candidate if REPOSITORY_RE.fullmatch(candidate) else ""
+
+
 def _head_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
     """Normalize a PR-style head object to repository, ref, and lowercase SHA."""
-    repository = ((value.get("repo") or {}).get("full_name") or "")
+    repository = _repository_full_name(value.get("repo"))
     ref = str(value.get("ref") or "")
     sha = str(value.get("sha") or "").lower()
     return repository, ref, sha
@@ -59,7 +89,7 @@ def _head_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
 
 def _base_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
     """Normalize a PR-style base object to repository, ref, and lowercase SHA."""
-    repository = ((value.get("repo") or {}).get("full_name") or "")
+    repository = _repository_full_name(value.get("repo"))
     ref = str(value.get("ref") or "")
     sha = str(value.get("sha") or "").lower()
     return repository, ref, sha
@@ -76,7 +106,7 @@ def _run_matches_head_identity(
         if (
             str(run_data.get("head_sha") or "").lower() == head_sha
             and run_data.get("head_branch") == branch
-            and ((run_data.get("head_repository") or {}).get("full_name") == repository)
+            and _repository_full_name(run_data.get("head_repository")) == repository
         ):
             return True
     for association in _pull_request_associations(run_data):
