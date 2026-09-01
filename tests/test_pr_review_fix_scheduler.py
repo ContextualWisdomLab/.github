@@ -79,6 +79,12 @@ def test_control_plane_failure_and_pending_checks_do_not_trigger_rca():
                         "status": "IN_PROGRESS",
                         "conclusion": None,
                     },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Superseded run",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                    },
                 ]
             }
         }
