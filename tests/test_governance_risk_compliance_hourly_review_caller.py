@@ -5,7 +5,7 @@ from pathlib import Path
 
 CALLER = Path(".github/workflows/governance-risk-compliance-hourly-review-repair.yml")
 DOCTORING = Path("docs/doctoring/governance-risk-compliance-hourly-review-caller.md")
-QUALITY_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+QUALITY_WORKFLOW = Path(".github/workflows/contextual-orchestrator-review-repair-quality.yml")
 
 
 def _read(path: Path) -> str:
