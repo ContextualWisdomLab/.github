@@ -1,2 +1,2 @@
 repair PR1588 live-state and timeout contract
-retry=validated-review-fixes-20260901T2207+0900
+retry=parse-safe-2-20260901T2210+0900
