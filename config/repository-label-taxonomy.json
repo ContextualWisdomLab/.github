@@ -35,6 +35,11 @@
       "repository": "fast-mlsirm",
       "issue": 1717,
       "type": "documentation"
+    },
+    {
+      "repository": "EgressWeave",
+      "issue": 231,
+      "type": "documentation"
     }
   ]
 }
