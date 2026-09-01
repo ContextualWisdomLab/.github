@@ -1,0 +1,38 @@
+name: Solo Maintainer Ruleset Contract
+
+on:
+  push:
+    branches: [fix/stacked-pr-central-required-workflows]
+    paths:
+      - ".github/workflows/solo-maintainer-ruleset-contract.yml"
+      - "scripts/ci/audit_central_required_workflows.py"
+      - "tests/test_solo_maintainer_ruleset_policy.py"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contract:
+    name: Focused solo-maintainer ruleset contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact pushed head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Execute focused contract without third-party test dependencies
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          test_path = Path("tests/test_solo_maintainer_ruleset_policy.py")
+          spec = importlib.util.spec_from_file_location("solo_ruleset_contract", test_path)
+          if spec is None or spec.loader is None:
+              raise RuntimeError(f"unable to load {test_path}")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.test_central_ruleset_accepts_zero_approvals_without_last_push_approval()
+          module.test_repository_ruleset_accepts_zero_approvals_without_last_push_approval()
+          PY
