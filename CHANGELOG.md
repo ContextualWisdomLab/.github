@@ -22,6 +22,135 @@ Semantic Versioning where the repository publishes a release.
   still catches a genuine violation (a synthetic `if:` injected inside
   `required-workflow-bootstrap` itself) and that the full script now passes
   with zero failures.
+- Fail closed when the first top-level Noema JSON candidate is malformed,
+  preventing a later approval object from overriding malformed preface data;
+  multiple-object output remains supported when its first object is valid.
+- Restore the exact-head dispatch contract after the default-branch rollback:
+  queued requests whose supplied head no longer matches the live pull request
+  fail before model work, and the workflow security assertions and reviewed
+  blob pin now enforce that behavior.
+- Reject excessively nested Noema LLM JSON responses with an explicit,
+  string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
+  checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of
+  relying on `raw_decode`'s own recursion behavior to reject deep input
+  (review follow-up on #1507): a real 20,000-level-deep payload raises
+  `RecursionError` from the C-accelerated scanner on Python 3.11-3.13 but
+  decodes successfully with no exception at all on the Python 3.14 hosted
+  runner this job actually runs on, so relying on that behavior made the
+  fail-closed guarantee a property of whichever CPython version happened to
+  run the job rather than of this code. Restored the excessive-nesting
+  regression to a real deep payload (not a monkeypatch) now that this bound
+  makes the real case reproducible everywhere; the synthetic
+  `RecursionError`-from-the-decoder test remains as supplemental coverage.
+- Match JSON delimiter types while discovering Noema verdict candidates, so
+  malformed wrappers such as `[}` or `{]` cannot release a later nested
+  object as an apparently top-level verdict.
+- Convert JSON decoder recursion failures from deeply nested Noema responses
+  into the existing bounded, fingerprinted fail-closed diagnostic instead of
+  allowing an unhandled `RecursionError` to crash the required review.
+- Restrict wrapped Noema JSON recovery to top-level brace groups so a valid
+  nested object cannot escape a malformed outer object and become a verdict.
+- Keep Noema's native concurrency head-specific, then explicitly cancel the
+  same PR's older-head runs only after a `pull_request_target` event proves its
+  payload SHA is still live. New commits stop obsolete four-hour model calls,
+  while delayed workflow events and manual reruns of old attempts cannot
+  cancel the current-head review; cleanup rejects newer run ids and rechecks
+  the live head before each cancellation. Guard that per-cancellation
+  live-head re-check against a transient `gh api` failure (Devin review on
+  #1507): it was an unguarded command substitution under `set -euo
+  pipefail`, so a rate limit or network blip on that one ancillary call
+  would exit the whole cleanup step non-zero and fail the job, blocking a
+  perfectly valid, live-head Noema review over a housekeeping hiccup
+  unrelated to the review itself. Treat "cannot verify" the same as
+  "verified stale": stop cancelling further runs, but exit 0 so the job --
+  and the actual review later in it -- proceeds.
+- Prevent a cancelled upstream `workflow_run` notification from cancelling a
+  live same-head Noema review and then skipping its own Noema job. The shared
+  head-specific group remains serialized, but cancelled upstream completions
+  no longer receive `cancel-in-progress` authority and use a run-unique group,
+  so GitHub cannot evict an already-pending actionable review either.
+- Replace the required OpenCode workflow's two chained 325-minute polling jobs
+  with event-driven continuation. The required run dispatches the authenticated
+  multi-hour review, checks once, and fails closed without retaining a hosted
+  runner; after a formal exact-head receipt is published, the privileged
+  dispatch reruns only that required run's failed job. Long model and coverage
+  budgets remain unchanged. Fork PRs still fail closed before dispatch;
+  maintainers must first materialize them on a trusted base-repository branch.
+  The required workflow passes its immutable run ID in the authenticated
+  dispatch; the continuation fetches that target-repository run directly and
+  revalidates its event, central workflow path, and live PR `head_sha` before
+  rerunning it, independent of queue duration. Scheduler-originated review
+  retries now carry the same run ID parsed from the required check's GitHub
+  Actions details URL, so their valid receipts wake the failed required job too.
+  The wake step now uses its job-scoped `actions: write` workflow token only for
+  native runs and requires `PR_REVIEW_MERGE_TOKEN` or
+  `OPENCODE_APPROVE_TOKEN` for sibling runs; it no longer falls through to the
+  review-only OpenCode app token or an unusable central workflow token.
+- Skip Noema's one-time repair-retry LLM request when the PR head has moved
+  since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
+  now takes `expected_head` and re-checks it against a fresh `fetch_pr`
+  lookup, lowercased like `inspect_and_review`'s existing two stale-head
+  checks, before firing the retry — avoiding a second, potentially
+  multi-hour `NOEMA_LLM_TIMEOUT_SECONDS` call for a verdict
+  `inspect_and_review`'s own post-call check would have discarded anyway. A
+  new `StaleHeadDuringRepairRetryError` reports this distinctly from the
+  existing "stale before model work" / "stale before publication" cases,
+  and `inspect_and_review` treats it the same way: a clean skip, not a
+  failure.
+- Re-pin the reviewed-blob contract test's SHA to the current
+  `opencode-review-dispatch.yml` content after the review run timeout change,
+  restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.
+- Let Contextual Orchestrator use the full 11,700-second review budget in every
+  cadence and the central-review fallback, so reviews exceeding two hours are
+  bounded only by the existing provider-pool watchdog.
+- Cancel queued and running Noema reviews from every historical head group when
+  their pull request closes, preventing abandoned model calls from consuming
+  runner capacity for the long-running review window. Selection is scoped by PR
+  number only (the run's structured display title), never by a bare shared
+  head SHA, so a different open PR that happens to share a commit is never
+  swept up. The five active-status queries stay repository-scoped and
+  server-side status-filtered (not a per-workflow-file, unfiltered-then-
+  client-filtered snapshot, which is not guaranteed to resolve for the
+  sibling-repository runs this cleanup exists to cancel) and now re-scan for
+  up to three bounded passes so a run transitioning between statuses
+  mid-sweep is still caught.
+- Reject caller-controlled uppercase Noema trigger SHAs before model work so
+  equivalent SHA casing cannot create concurrent duplicate reviews.
+- Bind Noema workflow concurrency to the triggering PR head so a delayed
+  OpenCode/Strix completion from an older head cannot cancel the current-head
+  review run. The trigger head is also checked against the live PR before
+  credential/model setup and again before review publication, preventing a
+  stale run from reviewing or publishing against a newer live head. Completion
+  events use the associated pull request's head rather than the workflow's
+  trusted base SHA, and hexadecimal comparison is case-insensitive.
+- Keep the Noema malformed-response UUID fixture covered by gitleaks without
+  weakening the secret gate: the historical ignore is limited to the exact
+  superseded commit, test path, rule, and line, with an executable contract.
+- Allow a Contextual Orchestrator-backed Noema review request to run for up to
+  four hours instead of failing long reviews at a hard-coded 120 seconds.
+- Reconcile two independent fixes for that same 120-second timeout (this
+  branch's own `NOEMA_LLM_REQUEST_TIMEOUT_SECONDS` and the flat four-hour
+  `NOEMA_LLM_TIMEOUT_SECONDS` above) into one shared design: a per-call
+  request timeout (10800s/3h) capped by a shared `NOEMA_LLM_TOTAL_BUDGET_SECONDS`
+  (19800s/5.5h) monotonic deadline spanning the initial call and its one
+  possible repair call together, so two independent long calls can never sum
+  past the 6-hour GitHub-hosted job execution ceiling.
+- Stop logging raw (even regex-scrubbed) LLM response text in Noema's
+  malformed-JSON fail-closed diagnostic (Devin Review security finding on
+  PR #1507): `noema-review.yml` is a `pull_request_target` workflow with
+  public Actions logs, and a finite secret-scrub pattern list cannot
+  guarantee an LLM-echoed or hallucinated credential in an unrecognized
+  shape is caught. `extract_json_object` now logs only a content length and
+  a SHA-256 fingerprint. Also close a related unhandled-crash gap: a
+  malformed OpenAI-compatible HTTP envelope (non-JSON body, non-object
+  top-level JSON, wrong-shaped `choices`/`message`, non-string `content`)
+  previously crashed `call_llm` before it ever reached the JSON-repair
+  boundary; a new `extract_llm_message_content` validates the envelope
+  explicitly and now shares the same one-time repair-retry and fail-closed
+  `RuntimeError` path as a malformed verdict.
+- Give Noema one bounded schema-repair request when Contextual Orchestrator
+  returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
+  if the corrected response is still invalid.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
