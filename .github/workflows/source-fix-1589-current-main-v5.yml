@@ -1,0 +1,236 @@
+name: One-shot PR 1589 current-main validation v5
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/source-fix-1589-current-main-v5.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Apply taxonomy repair and migrate current-main tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch origin +main:refs/remotes/origin/main
+          git merge --no-commit --no-ff -X ours refs/remotes/origin/main
+          git checkout refs/remotes/origin/main -- \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_removed_file_context.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+          anchor = 'DIFF_HUNK_RE = re.compile(r"^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@")\n'
+          constants = '''OBSERVED_REVIEW_PROBE_KINDS = frozenset({
+              "mutable_alias", "time_of_check_time_of_use", "execution_identity",
+              "coercion_boundary", "test_oracle", "cross_contract", "authority_boundary",
+              "dependency_context", "state_machine_race",
+          })
+          OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+              "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+              "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+              "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+              "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+              "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+              "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+              "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+              "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+              "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+          }
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit("diff-hunk anchor changed")
+          text = text.replace(anchor, anchor + constants, 1)
+
+          marker = "\ndef validate_substantive_verdict(\n"
+          helper = '''
+          def _validate_observed_probe_class_evidence(probe: dict[str, Any], probe_kind: str, index: int) -> None:
+              """Require the exact deterministic witness schema for a claimed defect class."""
+              class_evidence = probe.get("class_evidence")
+              required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+              if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+                  raise RuntimeError(
+                      f"Noema adversarial probe {index} class_evidence for {probe_kind} must contain exactly: "
+                      + ", ".join(required_fields)
+                  )
+              for field in required_fields:
+                  value = class_evidence.get(field)
+                  if not isinstance(value, str) or not value.strip():
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} class_evidence.{field} requires source-traced witness text"
+                      )
+
+          '''
+          text = text.replace(marker, "\n" + helper + "def validate_substantive_verdict(\n", 1)
+
+          old = '''    confirmed: set[tuple[str, int, str]] = set()
+              identities: set[tuple[Any, ...]] = set()
+              for index, probe in enumerate(probes, start=1):
+                  if not isinstance(probe, dict):
+                      raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+                  location = (probe.get("path"), probe.get("line"), probe.get("side"))
+          '''
+          new = '''    confirmed: set[tuple[str, int, str]] = set()
+              identities: set[tuple[Any, ...]] = set()
+              probe_kinds: set[str] = set()
+              for index, probe in enumerate(probes, start=1):
+                  if not isinstance(probe, dict):
+                      raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+                  probe_kind = probe.get("probe_kind")
+                  if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
+                      )
+                  _validate_observed_probe_class_evidence(probe, probe_kind, index)
+                  probe_kinds.add(probe_kind)
+                  location = (probe.get("path"), probe.get("line"), probe.get("side"))
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("probe loop changed")
+          text = text.replace(old, new, 1)
+          post = '    if decision == "approve" and confirmed:\n'
+          text = text.replace(
+              post,
+              '    if len(probe_kinds) < required_probes:\n        raise RuntimeError(\n            f"Noema {decision} requires at least {required_probes} distinct probe_kind values"\n        )\n\n' + post,
+              1,
+          )
+
+          shape = '''                                {
+                                              **location_example,
+                                              "hypothesis": "...",
+          '''
+          text = text.replace(
+              shape,
+              '''                                {
+                                              **location_example,
+                                              "probe_kind": "mutable_alias|time_of_check_time_of_use|execution_identity|coercion_boundary|test_oracle|cross_contract|authority_boundary|dependency_context|state_machine_race",
+                                              "class_evidence": {"exact_fields_for_selected_probe_kind": "source-traced witness text"},
+                                              "hypothesis": "...",
+          ''',
+              1,
+          )
+          instruction = '                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",\n'
+          text = text.replace(
+              instruction,
+              instruction
+              + '                "Classify every adversarial probe with one observed defect class and use distinct classes when multiple probes are required: mutable_alias, time_of_check_time_of_use, execution_identity, coercion_boundary, test_oracle, cross_contract, authority_boundary, dependency_context, state_machine_race.",\n'
+              + '                "A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific source-traced witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ".",\n'
+              + '                "Actively attack caller-owned mutable aliases and readonly illusions; changing getters or Proxies between validation and use; execution/tenant/request identity confusion; JavaScript or serialization coercion at enum, key, digest, and identity boundaries; weak substring or vacuous test oracles; contradictions across PRD/ADR/architecture/changelog/contracts; component-vs-host authority overreach; omitted causal dependency context; and cancellation/retry/publication state-machine races.",\n',
+              1,
+          )
+          needle = "f\"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — \""
+          text = text.replace(
+              needle,
+              "f\"[{probe.get('probe_kind')}] {probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — \"",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          cp tests/test_noema_observed_defect_probe_taxonomy.py /tmp/taxonomy-test.py
+          cp /tmp/taxonomy-test.py tests/test_noema_observed_defect_probe_taxonomy.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace('"fetch_changed_file_paths"', '"fetch_changed_files"')
+          text = text.replace('noema.fetch_changed_file_paths', 'noema.fetch_changed_files')
+          text = text.replace('lambda repo, number: ["tool.py"]', 'lambda repo, number: [("tool.py", "modified")]')
+          text = text.replace('lambda repo, number, value: "context"', 'lambda repo, number, value, changed_files=None: "context"')
+
+          start = text.index('def test_review_context_builders_include_codegraph_threads_and_files')
+          end = text.index('\n\nclass FakeResponse:', start)
+          replacement = '''def test_review_context_builders_include_threads_and_files(monkeypatch):
+              assert noema.truncate_text("abc", 10) == "abc"
+              assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
+              assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
+              files = [(f"src/file_{index}.py", "modified") for index in range(noema.MAX_CONTEXT_FILES + 1)]
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: files)
+              monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
+              context = noema.changed_file_context("owner/repo", 7, "head")
+              assert "1 changed files omitted from context budget" in context
+
+
+          def test_review_context_does_not_claim_unwired_codegraph(monkeypatch):
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
+              context = noema.build_review_context("owner/repo", 7, make_pr(headRefOid="head"))
+              assert "CodeGraph context" not in context
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          pairs = [
+              ("The assignment was removed.", "coercion_boundary", '{"raw_value": "truthy non-boolean", "conversion_path": "changed assignment", "canonicality_guard": "exact boolean literal"}'),
+              ("The value became false.", "test_oracle", '{"assertion_under_test": "truthiness-only oracle", "negative_control": "truthy string", "distinguishing_observation": "exact boolean literal"}'),
+              ("The value becomes false.", "coercion_boundary", '{"raw_value": "truthy non-boolean", "conversion_path": "changed assignment", "canonicality_guard": "exact boolean literal"}'),
+              ("The assignment is removed.", "test_oracle", '{"assertion_under_test": "presence-only oracle", "negative_control": "present wrong type", "distinguishing_observation": "exact boolean assignment"}'),
+              ("The obsolete claim remains documented.", "cross_contract", '{"first_contract": "deleted claim", "second_contract": "changed contract", "contradiction_or_alignment": "obsolete contradiction removed"}'),
+              ("The safety gate is disabled.", "authority_boundary", '{"component_authority": "component safety gate", "external_authority": "no external bypass", "enforcement_boundary": "changed config value"}'),
+              ("The key was renamed instead.", "cross_contract", '{"first_contract": "prior key", "second_contract": "changed key", "contradiction_or_alignment": "same key changed value"}'),
+          ]
+          for hypothesis, kind, evidence in pairs:
+              needle = f'"hypothesis": "{hypothesis}",'
+              replacement = f'"probe_kind": "{kind}",\n                    "class_evidence": {evidence},\n                    {needle}'
+              text = text.replace(needle, replacement)
+
+          one_line = [
+              ('"hypothesis": "The value is false."', '"probe_kind": "coercion_boundary", "class_evidence": {"raw_value": "truthy non-boolean", "conversion_path": "literal assignment", "canonicality_guard": "exact boolean"}, "hypothesis": "The value is false."'),
+              ('"hypothesis": "The assignment vanished."', '"probe_kind": "test_oracle", "class_evidence": {"assertion_under_test": "presence oracle", "negative_control": "present wrong assignment", "distinguishing_observation": "exact assignment"}, "hypothesis": "The assignment vanished."'),
+          ]
+          for old, new in one_line:
+              text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          for file_name in [
+              "tests/test_repository_branch_coverage_javascript_and_noema.py",
+              "tests/test_repository_branch_coverage_reporting_edges.py",
+          ]:
+              path = Path(file_name)
+              text = path.read_text(encoding="utf-8")
+              text = text.replace('    monkeypatch.setattr(noema, "load_codegraph_context", lambda: "graph")\n', "")
+              text = text.replace('    monkeypatch.setattr(noema, "load_codegraph_context", lambda: "")\n', "")
+              text = text.replace('    assert "CodeGraph context" in context\n', '    assert "CodeGraph context" not in context\n')
+              path.write_text(text, encoding="utf-8")
+          PY
+
+          rm -f \
+            .github/workflows/source-fix-1589-current-main.yml \
+            .github/workflows/source-fix-1589-current-main-v2.yml \
+            .github/workflows/source-fix-1589-current-main-v3.yml \
+            .github/workflows/source-fix-1589-current-main-v4.yml \
+            .github/workflows/source-fix-1589-current-main-v5.yml
+
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_observed_probe_doctoring.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_removed_file_context.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py \
+            tests/test_required_workflow_queue_contract.py
