@@ -323,9 +323,9 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
     the shared NVIDIA NIM key three times, producing litellm.RateLimitError
     storms and fail-closed gate failures on every open PR. The concurrency group
-    now scopes one scan at a time per repository and event class. GitHub retains
-    one active and one pending run per group; the scheduler re-dispatches exact
-    current-head evidence when a pending run is superseded.
+    now scopes the scan job per repository and event class. The cleanup job is
+    outside that queue so a synchronize event can immediately retire an older
+    exact-head run without allowing sibling scans to overlap.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -336,10 +336,6 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert "github.event.client_payload.target_repository" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
-    assert (
-        "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, "
-        "github.event.pull_request.number)"
-    ) in concurrency_contract
     assert (
         "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
         "github.event.pull_request.base.repo.full_name || github.repository)"
@@ -356,9 +352,15 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert "cancel-in-progress: false" in workflow
     assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
     assert "queue: max" not in workflow
-    assert "scheduler" in concurrency_contract
-    assert "default-branch repository_dispatch evidence cannot cancel" in workflow
-    assert "RateLimitError" in concurrency_contract
+    assert workflow.index("cancel-superseded-pr-runs:") < workflow.index("concurrency:")
+    cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
+        "  strix:", 1
+    )[0]
+    assert "github.event.action == 'synchronize'" in cleanup_job
+    assert 'endswith("@" + $head_sha)' in cleanup_job
+    assert "/force-cancel" in cleanup_job
+    assert "actions: write" in cleanup_job
+    assert "actions/checkout" not in cleanup_job
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
@@ -399,15 +401,15 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         workflow = workflow_text(filename)
 
         assert "closed" in workflow
-        assert "cancel-closed-pr-runs:" in workflow
         if filename == "strix.yml":
-            assert "Cancel queued and running scans for the closed pull request" in workflow
+            assert "cancel-superseded-pr-runs:" in workflow
+            assert "Cancel queued and running scans for superseded or closed pull request heads" in workflow
             assert (
                 "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
                 "|| github.token"
             ) in workflow
             assert "DISPATCH_REPOSITORY" not in workflow
-            assert "CLOSED_PR_HEAD_SHA" in workflow
+            assert "TARGET_PR_HEAD_SHA" in workflow
             assert 'select(.event == "pull_request_target")' in workflow
             assert 'select(.event == "repository_dispatch")' not in workflow
             assert "leaving runs unchanged" in workflow
@@ -415,13 +417,14 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
                 "for active_status in queued in_progress requested waiting pending"
                 in workflow
             )
-            cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
+            cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
                 "  strix:", 1
             )[0]
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
         else:
+            assert "cancel-closed-pr-runs:" in workflow
             assert (
                 "PR closed; this run only cancels older runs through workflow concurrency."
                 in workflow
@@ -436,11 +439,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix serializes per repository (rate-limit root-cause fix): close-event
-    # runs still cancel superseded same-PR evidence through their own
-    # cancel-closed-pr-runs job, while scan jobs queue instead of cancelling.
+    # Strix serializes scans per repository while cleanup stays outside that
+    # queue so synchronize and close events can immediately retire old work.
     assert "cancel-in-progress: false" in strix_workflow
-    assert "Serialize Strix scans per repository" in strix_workflow or "per REPOSITORY" in strix_workflow
+    assert "Keep provider-backed scans serial per repository" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
