@@ -5,6 +5,80 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
+  `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
+  `noema_review_handoff.py`'s `noema_review_state()` can never recognize such a review as a
+  valid current-head verdict (its trusted-span helpers return empty without the footer marker),
+  so an unchanged PR carrying only a legacy review would stall forever: the gate skips
+  republishing believing it is done, and the handoff never accepts what was already posted.
+  `existing_noema_review()` now also requires `NOEMA_REVIEW_FOOTER_MARKER` before treating a
+  review as already covering the head, so a legacy review no longer suppresses a rerun that
+  would publish a current-format replacement.
+- Fix a broken CI contract test that was blocking every open `.github`-repo
+  PR: `test_strix_quick_gate.sh`'s
+  `assert_opencode_review_uses_codegraph_and_contextual_orchestrator` used an
+  `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` range to isolate that
+  one job's YAML block in `opencode-review.yml`, intending to assert it has
+  no `if:` condition on any step (a real trust-boundary invariant: this
+  bootstrap job must never depend on event-payload fields). Because job keys
+  in that file are always 2-space indented, `/^[^ ]/` (a truly unindented
+  line) never matches anywhere in the `jobs:` section, so the range never
+  closed and silently swallowed every job defined after
+  `required-workflow-bootstrap` too — including the unrelated,
+  legitimate `if: github.event.action != 'closed'` on a completely different
+  job's step. `required-workflow-bootstrap` itself has always had zero `if:`
+  conditions; only the test's own job-scoping was wrong. Replaced the range
+  with an explicit awk state machine that starts at the bootstrap job header
+  and stops at the next 2-space-indented job key, so it correctly isolates
+  only that job's steps.
+- Close a 99% `scripts/ci` coverage regression on protected main: merged #1546 added an
+  uncovered `live_head_matches` helper, an uncovered no-active/no-stale-runs fall-through in
+  `prepare_autofix_slot`, and an uncovered "current-head autofix run is already queued or
+  running" wait path in `pr_review_fix_scheduler.py::inspect_pr`, while the pre-existing
+  conflicted-draft and conflicted-unauthorized `inspect_pr` returns and the REST
+  `fetch_workflow_names_by_check_suite_rest` pagination/name-filtering/permission-denied paths
+  in `pr_review_merge_scheduler.py` remained untested. Every PR rebasing onto main inherited
+  this failure via the `coverage-evidence` required check regardless of its own diff; this adds
+  test-only coverage for all of the above with no production code change.
+- Fix two `tests/test_contextual_orchestrator_review_policy.py` tests left broken by merged
+  `#1587` ("separate free-pool admission from global discovery"), which intentionally excluded
+  `OPENAI_API_KEY` from `FREE_POOL_CREDENTIAL_NAMES` but did not update
+  `test_build_catalog_applies_account_cap` and `test_build_catalog_respects_limit`, both of which
+  still built discovery reports using `openai` rows and asserted they were admitted to the free
+  pool. Every full-suite/coverage-evidence run on protected `main` (and every PR rebasing onto it)
+  inherited these two failures regardless of its own diff. Swapped the `openai` rows in both tests
+  for `bytez` (also `is_free`-eligible but, unlike `openai`, still in `FREE_POOL_CREDENTIAL_NAMES`),
+  preserving each test's original intent — three distinct provider accounts each capped at 2, and a
+  single provider's rows truncated to the configured limit — without depending on the now-removed
+  OpenAI free-pool admission. No production code changed.
+- **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
+  Building on the draft-poll exemption's live PR/head validation, Devin Review found two
+  further defects. (1) The concurrency group was keyed only by repository and PR number, so
+  a delayed run for an *older* head could cancel the *newer*, authoritative head's still-valid
+  run before that older run's own live-head check ever had a chance to reject it (GitHub cancels
+  whichever run is currently active in a group with no notion of "older"/"newer"). Fixed by also
+  scoping the group by exact head SHA, so different heads no longer share a cancellation domain
+  while same-head events (a `converted_to_draft`/`ready_for_review` transition, a `synchronize`
+  retry) still do. (2) A delayed non-closed event ignored a live-closed PR, since `live_pr` only
+  ever extracted `head` and `draft`. Both admission blocks now also validate live `state` and exit
+  before any further API call when it is `"closed"`, failing closed on a missing, null,
+  non-string, or otherwise unrecognized value rather than assuming open. New regressions: a
+  structural contract test for the head-scoped concurrency group; step-body coverage for a stale
+  non-closed event against a live-closed PR (both admission steps), live-closed state taking
+  precedence over a stale live-draft flag, and each invalid `state` shape failing closed. Full
+  suite: 2294 passed, 1 skipped, 21 subtests; `scripts/ci` coverage and docstrings both 100%.
+  A third Devin Review round then found that head-scoping the concurrency group above, while
+  fixing the wrong-direction cancellation, also disabled the legitimate one: a genuine new
+  commit no longer cancels its own PR's now-obsolete previous-head poll, which would otherwise
+  occupy a runner until GitHub's own per-job ceiling. Added a `cancel-superseded-opencode-review-runs`
+  job, scoped to `synchronize` events, mirroring the already-established live-head-validated
+  cleanup pattern in `strix.yml`'s `cancel-superseded-pr-runs` job: it re-verifies the live head
+  immediately before both listing candidates and cancelling each one, so a delayed/stale
+  invocation of this same job cannot itself wrongly cancel a still-authoritative run. New
+  regressions: the embedded run-selection `jq` filter executed against synthetic run payloads
+  (superseded-run selection, current-head/self-run/other-PR/other-workflow exclusion, and
+  `pull_requests[]` metadata matching), plus a structural test for the job's trigger and
+  permissions. Full suite: 2301 passed, 1 skipped, 21 subtests; coverage and docstrings both 100%.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
@@ -949,6 +1023,12 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Prefer the job-scoped `github.token` when the central OpenCode dispatch
+  publishes a commit status back to the same `.github` repository. The job's
+  declared `statuses: write` permission now reaches the endpoint instead of an
+  unrelated OpenCode App installation token that can lack commit-status write
+  permission; cross-repository status publication keeps the existing explicit
+  PAT/App credential chain.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.
@@ -972,7 +1052,6 @@ Semantic Versioning where the repository publishes a release.
   `gpt-5.6-luna` was retired. This prevents every consumer repository's
   required Strix check from failing on a stale central assertion or selecting a
   nonexistent direct model.
-
 - Publish only the sanitized cumulative Strix report tree, avoiding a later
   copy of relative scanner output that could reintroduce known internal warning
   text into uploaded security evidence.

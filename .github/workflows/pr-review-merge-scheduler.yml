@@ -113,7 +113,7 @@ permissions:
 jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
 
@@ -142,7 +142,7 @@ jobs:
         github.event_name != 'repository_dispatch' ||
         github.event.client_payload.org_sweep != true
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
       checks: read
@@ -157,7 +157,7 @@ jobs:
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
@@ -590,7 +590,7 @@ jobs:
         (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The complete organization walk exceeded the legacy 30-minute boundary in
     # production. Keep one running and one latest pending */15 sweep through the
     # schedule-specific concurrency key above, while allowing the current walk

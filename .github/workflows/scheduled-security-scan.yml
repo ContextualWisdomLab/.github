@@ -54,10 +54,10 @@ jobs:
             matrix=$(echo "$matrix" | jq -c '. + [{"language":"actions","build-mode":"none"}]')
           fi
           if find . -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
-            -not -path './.git/*' | head -1 | grep -q .; then
+            -not -path './.git/*' -print -quit | grep -q .; then
             matrix=$(echo "$matrix" | jq -c '. + [{"language":"javascript-typescript","build-mode":"none"}]')
           fi
-          if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
+          if find . -type f -name '*.py' -not -path './.git/*' -print -quit | grep -q .; then
             matrix=$(echo "$matrix" | jq -c '. + [{"language":"python","build-mode":"none"}]')
           fi
           if [ "$(echo "$matrix" | jq 'length')" -eq 0 ]; then

@@ -1,9 +1,11 @@
 """Build governed contextual-orchestrator review catalogs from discovery evidence.
 
-``orchestrator/free`` remains strictly zero-priced. ``orchestrator/auto`` is
-free-first and then uses fully price-attested routes. Models without a complete
-price vector remain visible in audit counts but are never admitted to CI review.
-Partial, malformed, or contradictory price vectors fail closed.
+``orchestrator/free`` remains strictly zero-priced and admits only provider
+accounts explicitly authorized for that pool. ``orchestrator/auto`` may retain
+other globally discovered providers, including OpenAI, when their independent
+policy permits them. Models without a complete price vector remain visible in
+audit counts but are never admitted to CI review. Partial, malformed, or
+contradictory price vectors fail closed.
 """
 
 from __future__ import annotations
@@ -29,6 +31,20 @@ from scripts.ci.zdr_policy import (
 
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_ACCOUNT_CAP = 4
+
+FREE_POOL_CREDENTIAL_NAMES = frozenset(
+    {
+        "BYTEZ_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "NVIDIA_NIM_API_KEY_SUB",
+        "OPENROUTER_API_KEY",
+    }
+)
+"""Credential sources authorized to contribute to ``orchestrator/free``.
+
+``OPENAI_API_KEY`` is intentionally absent. It may still be present, registered,
+and globally discovered; only candidate admission to the free pool is denied.
+"""
 
 COST_FREE = "free"
 COST_PRICED = "priced"
@@ -147,6 +163,18 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 f"model {provider}/{model} lacks an explicit is_free marker"
             )
 
+        expected_credential_key = PROVIDER_CREDENTIAL_NAMES[provider]
+        supplied_credential_key = row.get("credential_key")
+        credential_key = (
+            expected_credential_key
+            if supplied_credential_key is None
+            else supplied_credential_key
+        )
+        if credential_key != expected_credential_key:
+            raise PolicyError(
+                f"model {provider}/{model} credential source does not match provider evidence"
+            )
+
         is_free = is_free_route(row.get("is_free"))
         route = f"{provider}/{model}"
         cost_evidence, prompt_price, completion_price, currency_code = (
@@ -170,8 +198,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "completion_price_per_1k": completion_price,
                 "currency_code": currency_code,
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
-                "credential_key": row.get("credential_key")
-                or PROVIDER_CREDENTIAL_NAMES[provider],
+                "credential_key": credential_key,
                 "auth_scheme": row.get("auth_scheme")
                 or PROVIDER_AUTH_SCHEMES[provider],
             }
@@ -189,6 +216,15 @@ def _cost_evidence(row: Mapping[str, Any]) -> str:
     return COST_FREE if row.get("is_free") is True else COST_UNKNOWN
 
 
+def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
+    """Return whether a normalized row has an authorized free-pool source."""
+    credential_key = row.get("credential_key")
+    return (
+        isinstance(credential_key, str)
+        and credential_key in FREE_POOL_CREDENTIAL_NAMES
+    )
+
+
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -200,28 +236,26 @@ def build_zdr_prioritized_catalog(
 ) -> dict[str, Any]:
     """Select a free-first, ZDR-aware, credential-account-diverse catalog.
 
-    The returned report's ``free_account_diversity`` counts the distinct
-    credential accounts among *all* discovered free routes, independent of
-    ``pool`` or the per-account selection cap. Vendor identity is not model
-    equivalence; only an explicit contextual-orchestrator ``model_group`` may
-    share routing evidence across routes.
+    ``orchestrator/free`` first applies a source-identity invariant: only rows
+    whose credential source is in :data:`FREE_POOL_CREDENTIAL_NAMES` are free
+    candidates. This is independent from global credential discovery, so an
+    OpenAI model may remain visible to audit or ``orchestrator/auto`` while
+    contributing zero free-pool candidates.
 
-    This counts routes discovery reports as free, not routes runtime
-    preflight has confirmed are actually serving requests: a value of two or
-    more is evidence that one account failure cannot immediately empty the free
-    catalog, not proof that either account is presently reachable. A caller
-    needing readiness, not just discovery-time diversity, must combine this
-    with the runtime preflight report the sidecar already produces.
+    Existing discovery-wide counters keep their historical meaning so runtime
+    enrichment cannot silently rewrite the contract. Additional
+    ``free_pool_*`` fields expose the narrower admitted subset explicitly.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
 
     all_rows = list(rows)
     all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
+    free_pool_rows = [row for row in all_free_rows if _free_pool_source_admitted(row)]
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
     candidate_rows = (
-        all_free_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
+        free_pool_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
     )
     eligible_rows = [
         row
@@ -304,6 +338,9 @@ def build_zdr_prioritized_catalog(
     free_account_diversity = len(
         {provider_account(str(row["provider"])) for row in all_free_rows}
     )
+    free_pool_account_diversity = len(
+        {provider_account(str(row["provider"])) for row in free_pool_rows}
+    )
 
     selected_evidence = [_cost_evidence(row) for row in picked]
     return {
@@ -312,9 +349,12 @@ def build_zdr_prioritized_catalog(
             "pool": f"orchestrator/{pool}",
             "total_routes": len(all_rows),
             "total_free_routes": len(all_free_rows),
+            "free_account_diversity": free_account_diversity,
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(all_free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": free_pool_account_diversity,
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
-            "free_account_diversity": free_account_diversity,
             "zdr_required": require_zdr,
             "selected_count": len(catalog_rows),
             "free_selected_count": selected_evidence.count(COST_FREE),
