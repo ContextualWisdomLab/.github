@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   repair:
-    runs-on: macos-latest
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout repair branch
