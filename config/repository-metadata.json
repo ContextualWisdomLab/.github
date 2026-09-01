@@ -49,6 +49,90 @@
       "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "keyverse": {
+      "description": "Keyverse — passwordless identity, federation, provisioning, account unification, and authorization services for ContextualWisdomLab.",
+      "topics": ["identity", "openid-connect", "oauth2", "scim", "keycloak", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "OriginWeave": {
+      "description": "Let agents use the web without losing control. OriginWeave gives AI agents a Chromium-compatible web runtime with isolated sessions, typed actions, resource governance, and verifiable evidence.",
+      "topics": ["browser-automation", "ai-agents", "chromium", "security", "rust", "web", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "accounting-information-platform": {
+      "description": "Accounting Information Platform — statutory accounting, journal posting, period control, reconciliation, and financial reporting authority for ContextualWisdomLab.",
+      "topics": ["accounting", "ledger", "journal", "reconciliation", "financial-reporting", "postgresql", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "pg-erd-cloud": {
+      "description": "PostgreSQL 스키마를 리버스 엔지니어링하고 ERD·DDL 공유 흐름으로 관리하는 클라우드 서비스.",
+      "topics": ["cloud", "database-schema", "ddl", "erd", "postgresql", "reverse-engineering", "saas", "python", "javascript", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "clearfolio": {
+      "description": "Clearfolio — secure document conversion, tenant-scoped viewing, and controlled artifact delivery.",
+      "topics": ["document-viewer", "document-conversion", "file-preview", "pdf", "java", "spring-boot", "javascript", "web-app", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "DiagramWeave": {
+      "description": "DiagramWeave — a source-first, AI-assisted editor and tooling platform for PlantUML diagrams.",
+      "topics": ["diagram-editor", "plantuml", "developer-tools", "language-server", "javascript", "ai-assisted", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "semantic-data-portal": {
+      "description": "Semantic Data Portal — governed discovery, graph traversal, and semantic search for enterprise data catalogs.",
+      "topics": ["data-catalog", "knowledge-graph", "ontology", "semantic-web", "semantic-search", "data-governance", "postgresql", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "contextual-orchestrator": {
+      "description": "Contextual Orchestrator — an OpenAI-compatible control plane for model routing, delegation, verification, and multi-agent orchestration.",
+      "topics": ["enterprise-admin", "llm-orchestration", "model-orchestration", "model-routing", "ai-agents", "openai-compatible", "research", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "mhtml-etl-gateway": {
+      "description": "Enterprise MHTML ingestion gateway that converts browser, SAP ALV, and Excel Web Archive exports into governed PostgreSQL data assets.",
+      "topics": ["mhtml", "etl", "data-ingestion", "sap", "postgresql", "data-governance", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "PolicyWeave": {
+      "description": "PolicyWeave — local-first privacy-policy fact authoring, completeness review, and deterministic draft generation for web and app operators.",
+      "topics": ["privacy", "privacy-policy", "privacy-engineering", "policy-authoring", "local-first", "react", "typescript", "vite", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "supply-chain-control-plane": {
+      "description": "Supply Chain Control Plane — evidence-backed supply-network dependency modeling and deterministic downstream disruption-impact analysis.",
+      "topics": ["supply-chain", "disruption-management", "dependency-graph", "provenance", "risk-analysis", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-management-platform": {
+      "description": "Learning Management Platform — enrollment, learning-journey, completion, and credential orchestration for employee and external learners.",
+      "topics": ["learning-management-system", "learning-platform", "enrollment", "completion", "credentialing", "rust", "postgresql", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-content-studio": {
+      "description": "Learning Content Studio — evidence-bound LCMS for authoring, approving, releasing, and deterministically publishing reusable learning content.",
+      "topics": ["lcms", "learning-content", "content-authoring", "content-management", "accessibility", "scorm", "cmi5", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-record-store": {
+      "description": "Authoritative xAPI learning-record persistence for the CWL Learning Platform.",
+      "topics": ["learning-record-store", "xapi", "cmi5", "learning-technology", "interoperability", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
