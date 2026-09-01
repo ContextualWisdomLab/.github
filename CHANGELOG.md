@@ -26,6 +26,25 @@ Semantic Versioning where the repository publishes a release.
   now checks Strix's own always-written `run.json` (`"status": "completed"`)
   instead, still attempt-scoped the same way; blocking-finding severity
   scanning over `vulnerabilities/*.md` remains cumulative and unchanged.
+  A third round then found the run.json switch had been applied to the wrong
+  call site too: `has_only_below_threshold_vulnerabilities()`'s presence
+  guard needs proof of genuine severity evidence from an attempt, even one
+  whose process later exited non-zero (e.g. a real below-threshold finding
+  written just before a mid-scan connection error), not proof the attempt
+  reached full completion -- restored the `vulnerabilities/*.md`-based
+  attempt-scoped check there, keeping run.json-based completion only for
+  `run_strix_once()`'s own success acceptance. `has_new_completed_strix_run()`
+  itself was also hardened: structural JSON parsing (via `python3`) instead
+  of a raw-text regex match, so completion text nested under an unrelated
+  field or a malformed record can no longer be mistaken for a genuine
+  top-level `"status": "completed"`, and attempt identity now compares
+  SHA-256 content digests instead of paths alone, so a run.json rewritten in
+  place with new results counts as new evidence while an unchanged
+  predecessor record does not. The test harness's implicit `trap ... EXIT`
+  backstop mechanism (which silently manufactured default evidence for any
+  untested success scenario) was replaced with an explicit helper each
+  scenario that wants that evidence calls deliberately, removing the
+  opt-out list this pattern previously needed.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

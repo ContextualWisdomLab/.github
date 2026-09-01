@@ -3355,43 +3355,45 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
-# Backstop: this stub has dozens of independent "scan succeeded" exit points
-# scattered across the case branches below. Rather than hand-patch every one
-# of them to write a vulnerabilities/*.md report artifact, install a single
-# EXIT trap that fires no matter which branch (or bare fallthrough) produced
-# the zero exit status, and writes one default INFO-severity report only when
-# the run is about to succeed (rc==0) and no branch already wrote a report of
-# its own. The one deliberate exception is the "success-zero-report-artifacts"
-# scenario below, which exists specifically to prove the production
-# zero-evidence fail-closed guard: it must be allowed to exit 0 with no report
-# artifact at all.
+# This stub has dozens of independent "scan succeeded" exit points scattered
+# across the case branches below. Earlier revisions hand-waved default
+# evidence for all of them via a single blanket `trap ... EXIT` handler that
+# fired no matter which branch (or bare fallthrough) produced the zero exit
+# status, and had to carry its own opt-out list for the handful of scenarios
+# that deliberately want no (or different) evidence. That made it hard to
+# tell, for any given branch, whether its evidence was real or manufactured
+# by an implicit handler running behind its back (Devin review on `#1495`'s
+# successor `#1563`, round 4).
 #
-# Some branches above intentionally `sleep` to simulate a hung Strix process
-# for the production timeout enforcement (they are killed with SIGTERM before
-# their own trailing "exit 0" is ever meant to run). When bash's foreground
-# `sleep` is interrupted by a signal, "$?" inside an EXIT trap reflects
-# whatever the shell's last *completed* command status was -- NOT 0 by virtue
-# of having reached an "exit 0" line -- so it can misleadingly read as 0 even
-# though the process never got there. Track real signal delivery explicitly
-# so the backstop is only written for a genuine zero exit status, never for a
-# sleep interrupted mid-flight.
+# Replaced with an explicit, deliberately-called helper,
+# strix_fake_emit_default_success_evidence() below: every branch that wants
+# generic default evidence for an unremarkable successful scan calls it
+# itself, immediately before its own `exit 0`. Nothing is automatic anymore,
+# so nothing needs an opt-out list -- a branch that wants no evidence (e.g.
+# success-zero-report-artifacts), only partial evidence, or genuinely custom
+# evidence (e.g. success-clean-scan-zero-findings, retry-hollow-second-attempt-
+# fails-closed) simply does not call it, which is now the natural,
+# unremarkable case rather than a special exception. This also removes the
+# need to track real signal delivery for the `sleep`-based timeout scenarios
+# above (they are killed with SIGTERM before their own trailing `exit 0` is
+# ever meant to run): a plain sequential call made only on the path that
+# actually reaches `exit 0` cannot run if the process is killed first, unlike
+# a trap that fires unconditionally on any process exit.
 #
-# Production's own success-evidence guard became attempt-scoped (a "success"
+# Production's own success-evidence guard is attempt-scoped (a "success"
 # rc=0 Strix invocation must not be validated by a leftover run record an
 # earlier, already-superseded attempt or model left behind -- Devin review
-# on `#1495`'s successor `#1563`, round 1) and switched from
+# on `#1495`'s successor `#1563`, round 1) and keys off run.json's
+# "completed" status (Strix's own always-written run record) rather than
 # vulnerabilities/*.md (only ever written when there are findings -- a real
-# clean scan makes it hollow-fail-closed too, round 2 of the same review) to
-# run.json's "completed" status (Strix's own always-written run record). This
-# backstop must match: it snapshots which vulnerabilities/*.md and run.json
-# paths already existed before this specific invocation started (a fresh
-# process per attempt, so a plain array survives for its whole lifetime) and
-# only treats each as already covered when a path *not* in that snapshot
-# exists -- i.e. this attempt (or an earlier one reused via the same
-# latest-directory selection just below) itself contributed genuine
+# clean scan makes it hollow-fail-closed too, round 2 of the same review).
+# The helper below must match: it snapshots which vulnerabilities/*.md and
+# run.json paths already existed before this specific invocation started (a
+# fresh process per attempt, so a plain array survives for its whole
+# lifetime) and only treats each as already covered when a path *not* in
+# that snapshot exists -- i.e. this attempt (or an earlier one reused via the
+# same latest-directory selection just below) itself contributed genuine
 # evidence, not merely inherited it.
-strix_fake_signaled=0
-trap 'strix_fake_signaled=1' TERM INT
 strix_fake_preexisting_vuln_files=()
 for strix_fake_preexisting_run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
 	if [ ! -d "$strix_fake_preexisting_run_dir" ]; then
@@ -3429,17 +3431,18 @@ strix_fake_is_preexisting_run_record() {
 	done
 	return 1
 }
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$strix_fake_signaled" -eq 1 ]; then
-		return
-	fi
-	if [ "$rc" -ne 0 ] ||
-		[ "${FAKE_STRIX_SCENARIO:-}" = "success-zero-report-artifacts" ] ||
-		[ "${FAKE_STRIX_SCENARIO:-}" = "retry-hollow-second-attempt-fails-closed" ] ||
-		[ "${FAKE_STRIX_SCENARIO:-}" = "success-clean-scan-zero-findings" ]; then
-		return
-	fi
+# Explicit, deliberately-invoked helper: emits generic INFO-severity
+# vulnerability-report and/or "completed" run.json evidence for a
+# fake-Strix scenario that models an unremarkable successful scan, filling
+# in only whichever piece (if either) the calling branch has not already
+# written for itself -- idempotent and safe to call unconditionally from a
+# success branch, since a branch that already wrote valid new evidence of
+# one or both kinds leaves this a no-op for that kind. Call it explicitly,
+# immediately before `exit 0`, from any case branch below that wants this
+# default evidence; a branch that wants no evidence or genuinely custom
+# evidence simply does not call it (Devin review on `#1495`'s successor
+# `#1563`, round 4).
+strix_fake_emit_default_success_evidence() {
 	local run_dir vuln_file wrote_vuln=0 wrote_run_record=0
 	for run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
 		if [ ! -d "$run_dir" ]; then
@@ -3516,7 +3519,6 @@ REPORT
 RUNRECORD
 	fi
 }
-trap strix_fake_backstop_vuln_report_on_success EXIT
 
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
@@ -3528,6 +3530,7 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
 		echo "scan ok"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	success-zero-report-artifacts)
@@ -3535,7 +3538,8 @@ REPORT
 		# 0 (a clean process exit) but writes no run.json run record
 		# anywhere under STRIX_REPORTS_DIR. This is the regression case for
 		# has_new_completed_strix_run()'s fail-closed guard in
-		# run_strix_once(); see the trap opt-out above.
+		# run_strix_once(); deliberately never calls
+		# strix_fake_emit_default_success_evidence.
 		echo "scan ok with zero report artifacts"
 		exit 0
 		;;
@@ -3548,14 +3552,139 @@ REPORT
 		# Before this fix, requiring a vulnerabilities/*.md artifact made
 		# every clean scan fail exactly like the hollow-success bug it was
 		# meant to catch. This stub models that real shape directly (no
-		# vulnerabilities/ directory at all) rather than relying on the
-		# shared trap's own backstop, so it fails loudly if a future change
-		# reintroduces a vulnerabilities/*.md requirement.
+		# vulnerabilities/ directory at all) rather than calling
+		# strix_fake_emit_default_success_evidence, so it fails loudly if a
+		# future change reintroduces a vulnerabilities/*.md requirement.
 		mkdir -p "$STRIX_REPORTS_DIR/fake-clean-scan"
 		cat >"$STRIX_REPORTS_DIR/fake-clean-scan/run.json" <<'RUNRECORD'
 {"status": "completed"}
 RUNRECORD
 		echo "scan ok with zero findings"
+		exit 0
+		;;
+	run-record-in-place-rewrite-counts-as-new-evidence)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: has_new_completed_strix_run() compares run.json CONTENT
+		# digests, not just path identity, when deciding whether an
+		# attempt produced new evidence. Attempt one writes a completed
+		# run.json to a fixed path and then the wrapping process still
+		# exits non-zero (a transient rate-limit signal after real work
+		# was already done, so run_strix_with_transient_retry retries the
+		# same model); attempt two rewrites the SAME path with genuinely
+		# different content (a distinguishable second completion) and
+		# exits 0. The gate must accept it -- an in-place rewrite of an
+		# already-existing run.json path is still new evidence when its
+		# content actually changed, mirroring production's own
+		# latest_strix_report_dir() mtime-based directory reuse (a fresh
+		# attempt reusing an existing "latest" run directory). This is the
+		# positive mirror of unchanged-run-record-rewrite-fails-closed
+		# below.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/rewrite-retry-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			mkdir -p "$STRIX_REPORTS_DIR/rewrite-retry"
+			if [ "$attempt" -eq 1 ]; then
+				cat >"$STRIX_REPORTS_DIR/rewrite-retry/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "first"}
+RUNRECORD
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			cat >"$STRIX_REPORTS_DIR/rewrite-retry/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "second"}
+RUNRECORD
+			echo "scan ok after in-place run record rewrite"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for in-place run record rewrite scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: in-place run record rewrite path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	unchanged-run-record-rewrite-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: mirrors retry-hollow-second-attempt-fails-closed's
+		# general shape but specifically proves content-identical reuse
+		# does not count as new evidence -- not merely "attempt two
+		# touched nothing" (which retry-hollow-second-attempt-fails-closed
+		# already covers) but "attempt two actively rewrote the exact same
+		# path with byte-identical content" (e.g. because it re-selected
+		# the same latest run directory and reasserted the same
+		# completion, mirroring the in-place-rewrite scenario above except
+		# the rewritten bytes are unchanged). has_new_completed_strix_run()'s
+		# digest comparison must still reject it: the gate fails closed
+		# overall, proving digest equality -- not whether the path was
+		# merely written to again -- is what governs acceptance.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/unchanged-rewrite-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			mkdir -p "$STRIX_REPORTS_DIR/unchanged-rewrite"
+			cat >"$STRIX_REPORTS_DIR/unchanged-rewrite/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "identical"}
+RUNRECORD
+			if [ "$attempt" -eq 1 ]; then
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			echo "scan ok with zero new report artifacts on identical rewrite"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for unchanged run record rewrite scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: unchanged run record rewrite path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	forged-nested-completed-status-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: proves strix_run_record_is_completed() parses run.json
+		# structurally rather than matching the raw text -- a run.json
+		# whose top-level "status" key is NOT "completed", but which
+		# happens to contain the literal substring `"status": "completed"`
+		# nested under some other field (a forged or unrelated occurrence
+		# of the same text), must still fail closed exactly like a
+		# genuinely absent or incomplete run record. A naive
+		# substring/regex match over the raw file content cannot tell this
+		# apart from a genuine top-level completion.
+		mkdir -p "$STRIX_REPORTS_DIR/forged-nested-status"
+		cat >"$STRIX_REPORTS_DIR/forged-nested-status/run.json" <<'RUNRECORD'
+{"status": "running", "child_process": {"status": "completed"}}
+RUNRECORD
+		echo "scan ok but run record status is forged"
+		exit 0
+		;;
+	malformed-run-record-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: proves strix_run_record_is_completed() and
+		# has_new_completed_strix_run() reject a run.json that is not
+		# valid JSON at all -- gracefully, via json.JSONDecodeError, not by
+		# crashing the gate script -- exactly like a genuinely absent
+		# completion record. Proves the *gate script* handles this
+		# end-to-end, not just the python snippet in isolation.
+		mkdir -p "$STRIX_REPORTS_DIR/malformed-run-record"
+		cat >"$STRIX_REPORTS_DIR/malformed-run-record/run.json" <<'RUNRECORD'
+{"status": "completed", this is not valid json
+RUNRECORD
+		echo "scan ok but run record is malformed"
 		exit 0
 		;;
 	contextual-orchestrator-gateway-model-qualification)
@@ -3568,6 +3697,7 @@ RUNRECORD
 			exit 11
 		fi
 		echo "scan ok through contextual-orchestrator gateway"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	scan-working-directory-isolated)
@@ -3580,6 +3710,7 @@ RUNRECORD
 			exit 82
 		fi
 		echo "scan ok with isolated Strix working directory"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	success-with-critical-report)
@@ -3591,15 +3722,18 @@ RUNRECORD
 - Title: Successful process still emitted a blocking vulnerability
 REPORT
 		echo "Vulnerabilities 1"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	slow-timeout)
 		sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	timeout-disabled-success)
 		sleep 1
 		echo "scan ok with timeout disabled"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	vertex-primary-notfound-fallback-success|github-models-fallback-success|github-models-fallback-success-deepseek-v3|github-models-token-limit-fallback-success|github-models-fallback-requires-api-base|github-models-model-prefix-with-api-base-succeeds|github-models-meta-prefix-with-api-base-succeeds|github-models-mistral-prefix-with-api-base-succeeds)
@@ -3611,6 +3745,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok with fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/gpt-5|openai/openai/gpt-5.4|openai/meta/test-github-model|openai/mistral-ai/test-github-model)
@@ -3619,6 +3754,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/deepseek/deepseek-r1-0528)
@@ -3629,10 +3765,12 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/deepseek/deepseek-v3-0324)
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3662,6 +3800,7 @@ REPORT
 				exit 27
 			fi
 			echo "scan ok after direct-OpenAI fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3687,6 +3826,7 @@ REPORT
 				exit 16
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3707,6 +3847,7 @@ REPORT
 	provider-prefix-required)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
 			echo "scan ok with normalized provider"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: provider prefix not normalized (${STRIX_LLM:-})" >&2
@@ -3721,6 +3862,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after fallback normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3732,6 +3874,7 @@ REPORT
 	provider-prefix-required-resource-path-primary-implicit-default-provider | provider-prefix-required-resource-path-primary-explicit-empty-default-provider)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
 			echo "scan ok with resource-path normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: resource-path model not normalized (${STRIX_LLM:-})" >&2
@@ -3746,6 +3889,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after resource-path fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3758,6 +3902,7 @@ REPORT
 		# projects/<p>/locations/<l>/models/<id> (no publishers/ segment)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/my-custom-model-123" ]; then
 			echo "scan ok with custom model resource-path normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: custom model resource-path not normalized (${STRIX_LLM:-})" >&2
@@ -3771,6 +3916,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after status-less not found fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3788,6 +3934,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after compact-status not found fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3799,6 +3946,7 @@ REPORT
 	nonvertex-slash-model-passthrough)
 		if [ "${STRIX_LLM:-}" = "foo/bar" ]; then
 			echo "scan ok with non-vertex slash model passthrough"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: non-vertex slash model was rewritten (${STRIX_LLM:-})" >&2
@@ -3813,6 +3961,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after duplicate-primary skip"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3835,6 +3984,7 @@ REPORT
 			;;
 		vertex_ai/fallback-two)
 			echo "scan ok after multiline fallback parsing"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3851,6 +4001,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after rate-limit fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3867,6 +4018,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after resource exhausted fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3883,6 +4035,7 @@ REPORT
 			;;
 		openai/fallback-one)
 			echo "scan ok after quota fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3899,6 +4052,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after 429 fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3915,6 +4069,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after midstream fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3937,6 +4092,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after same-model retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -3963,6 +4119,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after same-model rate-limit retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -4069,6 +4226,7 @@ RUNRECORD
 				exit 1
 			fi
 			echo "scan ok after same-model api connection retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -4103,6 +4261,7 @@ RUNRECORD
 				exit 1
 			fi
 			echo "scan ok after OpenRouter 502 same-model retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-two)
@@ -4130,6 +4289,7 @@ RUNRECORD
 			;;
 		vertex_ai/fallback-two)
 			echo "scan ok after distant target output"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		esac
@@ -4148,6 +4308,7 @@ RUNRECORD
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after GitHub Models unavailable fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4186,6 +4347,7 @@ RUNRECORD
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after authenticated GitHub Models HTTP 410 retirement"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4204,6 +4366,7 @@ RUNRECORD
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after GitHub Models rate-limit fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4258,6 +4421,7 @@ EOS
 				exit 1
 			fi
 			echo "scan ok after second GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4281,6 +4445,7 @@ EOS
 				exit 1
 			fi
 			echo "scan ok after same-model high-demand retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4299,6 +4464,7 @@ EOS
 			;;
 		nvidia_nim/nvidia/fallback-one)
 			echo "scan ok after NVIDIA overload fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4316,6 +4482,7 @@ EOS
 			;;
 		gemini/fallback-one)
 			echo "scan ok after timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4333,6 +4500,7 @@ EOS
 			;;
 		gemini/fallback-one)
 			echo "scan ok after gemini fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4397,6 +4565,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after hallucinated-endpoint fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4423,6 +4592,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after documented OpenCode env apiKey false positive"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4473,6 +4643,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after generic GitHub Actions workflow false positive"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4517,6 +4688,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after stale-source fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4566,6 +4738,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after stale snapshot snippet fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4666,6 +4839,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after excluded-dir hallucination fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4761,6 +4935,7 @@ EOS
 	nonvertex-slash-model-not-rewritten)
 		if [ "${STRIX_LLM:-}" = "deepseek/models/deepseek-r1" ]; then
 			echo "scan ok with deepseek model passthrough"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: deepseek model was rewritten (${STRIX_LLM:-})" >&2
@@ -4769,6 +4944,7 @@ EOS
 	preserve-existing-api-base)
 		if [ "${LLM_API_BASE:-}" = "https://preexisting.invalid" ]; then
 			echo "scan ok with preserved api base"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: existing LLM_API_BASE was not preserved (${LLM_API_BASE:-<unset>})" >&2
@@ -4783,6 +4959,7 @@ EOS
 			;;
 		vertex_ai/gemini-2.5-pro)
 			echo "scan ok with default fast fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4799,6 +4976,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4823,6 +5001,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after timeout-exhausted fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4839,6 +5018,7 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4855,10 +5035,12 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4879,10 +5061,12 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4893,14 +5077,17 @@ EOS
 		;;
 	provider-fatal-success-signal)
 		echo "Fatal: provider stream aborted"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-warning-success-signal)
 		echo "Warning: provider response included incomplete scan state"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-denied-success-signal)
 		echo "Denied: provider credentials were rejected"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-report-rate-limit-fallback-success)
@@ -4916,6 +5103,7 @@ EOS
 		vertex_ai/fallback-one)
 			mkdir -p "$STRIX_REPORTS_DIR/fake-report-rate-limit-fallback"
 			echo "scan ok after report-only provider fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4944,6 +5132,7 @@ EOS
 EOS
 		ln -s "$outside_report_dir" "$STRIX_REPORTS_DIR/fake-known-internal-warning/linked-outside"
 		echo "scan ok with sanitized internal Strix report notice"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	report-known-internal-warning-variant-sanitized)
@@ -4953,6 +5142,7 @@ EOS
 2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	report-unknown-warning-fails)
@@ -4961,6 +5151,7 @@ EOS
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.provider: provider returned incomplete scan state
 EOS
 		echo "scan ok but unknown report warning remains"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	bare-timeout-with-provider-marker)
@@ -4978,6 +5169,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after bare-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -5088,6 +5280,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after bare-timeout-exhaust fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -5107,6 +5300,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after httpx-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -5133,6 +5327,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after httpcore-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -5536,6 +5731,7 @@ EOS
 			exit 43
 		fi
 		echo "scan ok with bounded changed-file scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-python-scope-context)
@@ -5568,6 +5764,7 @@ EOS
 			exit 61
 		fi
 		echo "scan ok with python dependency scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-changed-scope-full)
@@ -5591,6 +5788,7 @@ EOS
 				exit 46
 			fi
 			echo "scan ok with full changed-file scope"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: unexpected full-scope scan attempt $attempt" >&2
@@ -5609,6 +5807,7 @@ EOS
 		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
 		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
 			echo "scan ok with full configured PR scope"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope did not include the complete changed-file set on one scan attempt $attempt ($target_path)" >&2
@@ -5616,11 +5815,13 @@ EOS
 		;;
 	pr-large-scope-full-set)
 		echo "scan ok with large full PR scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-changed-scope-includes-ci-dependency)
 		if [ -f "$target_path/scripts/ci/strix_quick_gate.sh" ] && [ -f "$target_path/scripts/ci/strix_model_utils.sh" ]; then
 			echo "scan ok with CI support dependency"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope missing CI support dependency ($target_path)" >&2
@@ -5629,6 +5830,7 @@ EOS
 	pr-changed-scope-includes-opencode-normalizer)
 		if [ -f "$target_path/fuzz/fuzz_opencode_review_normalize_output.py" ] && [ -f "$target_path/scripts/ci/opencode_review_normalize_output.py" ]; then
 			echo "scan ok with opencode normalizer support dependency"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope missing opencode normalizer support dependency ($target_path)" >&2
@@ -5656,6 +5858,7 @@ EOS
 			exit 59
 		fi
 		echo "scan ok with deployment entrypoint context"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-rust-workspace-context)
@@ -5670,6 +5873,7 @@ EOS
 			exit 62
 		fi
 		echo "scan ok with Rust workspace context"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	*)
@@ -6432,6 +6636,54 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/fallback-one vertex_ai/fallback-two" \
 			"0" \
 			"scan ok with zero findings" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	run-record-in-place-rewrite-counts-as-new-evidence)
+		run_gate_case_allow_provider_signal "run-record-in-place-rewrite-counts-as-new-evidence" \
+			"vertex_ai/rewrite-retry-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after in-place run record rewrite" \
+			"2" \
+			"vertex_ai/rewrite-retry-primary|vertex_ai/rewrite-retry-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	unchanged-run-record-rewrite-fails-closed)
+		run_gate_case_allow_provider_signal "unchanged-run-record-rewrite-fails-closed" \
+			"vertex_ai/unchanged-rewrite-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"2" \
+			"vertex_ai/unchanged-rewrite-primary|vertex_ai/unchanged-rewrite-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	forged-nested-completed-status-fails-closed)
+		run_gate_case "forged-nested-completed-status-fails-closed" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	malformed-run-record-fails-closed)
+		run_gate_case "malformed-run-record-fails-closed" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
@@ -7307,67 +7559,6 @@ run_pull_request_target_head_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -7418,6 +7609,19 @@ else
 	fi
 fi
 echo "scan ok with PR head content"
+# Explicit success evidence -- see this same function's fake-strix script
+# above for why (Devin review on `#1495`'s successor `#1563`, round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7640,67 +7844,6 @@ run_pull_request_target_bounded_head_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -7723,6 +7866,20 @@ if [ -e "$context_file" ]; then
 	exit 66
 fi
 echo "scan ok with bounded PR head backend context"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7808,67 +7965,6 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -7917,6 +8013,20 @@ if [ "$attempt" -eq 1 ]; then
 		exit 70
 	fi
 	echo "scan ok with changed PR head backend context"
+	# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+	# fake-strix script for why (Devin review on `#1495`'s successor
+	# `#1563`, round 4).
+	reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	mkdir -p "$reports_dir/fake-success/vulnerabilities"
+	cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+	cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 	exit 0
 fi
 
@@ -8045,66 +8155,23 @@ run_pull_request_target_changed_backend_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4). This script has two success exit points below, so the write is
+# factored into a small local helper instead of being duplicated.
+emit_default_success_evidence() {
 	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	mkdir -p "$reports_dir/fake-success/vulnerabilities"
+	cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+	cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
 {"status": "completed"}
 RUNRECORD
-	fi
 }
-trap strix_fake_backstop_vuln_report_on_success EXIT
 
 printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 
@@ -8221,10 +8288,12 @@ if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
 fi
 
 if [ "$matched_backend_context" -eq 1 ]; then
+	emit_default_success_evidence
 	exit 0
 fi
 
 echo "scan ok with non-email backend scope"
+emit_default_success_evidence
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -8364,67 +8433,6 @@ run_pull_request_target_frontend_email_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -8527,6 +8535,20 @@ if grep -Fq -- 'HEAD_THREADING_SERVICE_SHOULD_NOT_BE_SCANNED' "$target_path/back
 fi
 
 echo "scan ok with frontend email trusted backend authorization context"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -8615,67 +8637,21 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+echo "scan ok"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
 {"status": "completed"}
 RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-echo "scan ok"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9174,66 +9150,6 @@ run_full_head_scope_skips_gitlink_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -9257,6 +9173,23 @@ if [ -e "$target_path/vendor/newsdom-api" ]; then
 	exit 69
 fi
 echo "scan ok with PR head content"
+# Explicit success evidence (production's has_new_completed_strix_run()
+# requires a run.json with top-level "status": "completed"; a real Strix
+# always writes one on completion regardless of finding count). This
+# scenario has exactly one success path, so no shared backstop trap is
+# needed -- write it directly (Devin review on `#1495`'s successor
+# `#1563`, round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -9517,72 +9450,26 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
 if [ "${LLM_API_BASE+x}" = "x" ]; then
 	echo "Error: Vertex scan should not receive LLM_API_BASE" >&2
 	exit 64
 fi
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 echo "vertex scan ok without external LLM_API_BASE"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9803,66 +9690,6 @@ run_vertex_without_llm_api_key_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9872,6 +9699,20 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9914,66 +9755,6 @@ run_vertex_with_llm_api_key_file_does_not_forward_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
-# Vulnerability Report
-
-- Severity: INFO
-- Title: Completed scan produced no findings at or above the fail threshold
-REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
-{"status": "completed"}
-RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9983,6 +9764,20 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -10265,67 +10060,21 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Backstop for the zero-evidence "hollow path" bug: writes a run.json run
-# record with status "completed" (production's authoritative success
-# evidence -- real strix-agent always writes one on completion regardless
-# of finding count, unlike vulnerabilities/*.md, which only exists when
-# there are findings) and a default INFO-severity vulnerabilities/*.md
-# report artifact when this stub is about to exit 0 and no branch above
-# already wrote its own. See has_new_completed_strix_run() in
-# strix_quick_gate.sh.
-strix_fake_backstop_vuln_report_on_success() {
-	local rc=$?
-	if [ "$rc" -ne 0 ]; then
-		return
-	fi
-	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
-	local run_dir vuln_file
-	local wrote_vuln=0
-	for run_dir in "$reports_dir"/*/vulnerabilities; do
-		if [ ! -d "$run_dir" ]; then
-			continue
-		fi
-		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
-				wrote_vuln=1
-			fi
-		done
-	done
-	# Reuse the existing *latest* run directory (e.g. one holding only a
-	# strix.log), mirroring production's own latest_strix_report_dir()
-	# mtime selection, instead of creating a brand-new sibling directory --
-	# a new directory would itself become "latest" and shadow whichever run
-	# directory other detection logic (e.g. has_strix_report_failure_signal)
-	# actually depends on inspecting.
-	local target_run_dir=""
-	for run_dir in "$reports_dir"/*; do
-		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
-			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
-				target_run_dir="$run_dir"
-			fi
-		fi
-	done
-	if [ -z "$target_run_dir" ]; then
-		target_run_dir="$reports_dir/fake-success-backstop"
-	fi
-	if [ "$wrote_vuln" -eq 0 ]; then
-		mkdir -p "$target_run_dir/vulnerabilities"
-		cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
 - Title: Completed scan produced no findings at or above the fail threshold
 REPORT
-	fi
-	if [ ! -f "$target_run_dir/run.json" ]; then
-		mkdir -p "$target_run_dir"
-		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
 {"status": "completed"}
 RUNRECORD
-	fi
-}
-trap strix_fake_backstop_vuln_report_on_success EXIT
-printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -11172,6 +10921,89 @@ run_gate_case "success-clean-scan-zero-findings" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"0" \
 	"scan ok with zero findings" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# has_new_completed_strix_run() compares run.json CONTENT digests, not just
+# path identity, when deciding whether an attempt produced new evidence.
+# Attempt one writes a completed run.json to a fixed path and then the
+# wrapping process still exits non-zero (a transient rate-limit signal after
+# real work was already done, so the same model is retried); attempt two
+# rewrites the SAME path with genuinely different content (a distinguishable
+# second completion) and exits 0. The gate must accept it -- an in-place
+# rewrite of an already-existing run.json path is still new evidence when its
+# content actually changed, mirroring production's own
+# latest_strix_report_dir() mtime-based directory reuse. This is the positive
+# mirror of unchanged-run-record-rewrite-fails-closed below.
+run_gate_case_allow_provider_signal "run-record-in-place-rewrite-counts-as-new-evidence" \
+	"vertex_ai/rewrite-retry-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after in-place run record rewrite" \
+	"2" \
+	"vertex_ai/rewrite-retry-primary|vertex_ai/rewrite-retry-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# mirrors retry-hollow-second-attempt-fails-closed's general shape but
+# specifically proves content-identical reuse does not count as new evidence
+# -- not merely "attempt two touched nothing" (which
+# retry-hollow-second-attempt-fails-closed already covers) but "attempt two
+# actively rewrote the exact same path with byte-identical content" (e.g.
+# because it re-selected the same latest run directory and reasserted the
+# same completion, mirroring the in-place-rewrite scenario above except the
+# rewritten bytes are unchanged). has_new_completed_strix_run()'s digest
+# comparison must still reject it: the gate fails closed overall, proving
+# digest equality -- not whether the path was merely written to again -- is
+# what governs acceptance.
+run_gate_case_allow_provider_signal "unchanged-run-record-rewrite-fails-closed" \
+	"vertex_ai/unchanged-rewrite-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"2" \
+	"vertex_ai/unchanged-rewrite-primary|vertex_ai/unchanged-rewrite-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# proves strix_run_record_is_completed() parses run.json structurally rather
+# than matching the raw text -- a run.json whose top-level "status" key is
+# NOT "completed", but which happens to contain the literal substring
+# `"status": "completed"` nested under some other field (a forged or
+# unrelated occurrence of the same text), must still fail closed exactly like
+# a genuinely absent or incomplete run record. A naive substring/regex match
+# over the raw file content cannot tell this apart from a genuine top-level
+# completion.
+run_gate_case "forged-nested-completed-status-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# proves strix_run_record_is_completed() and has_new_completed_strix_run()
+# reject a run.json that is not valid JSON at all -- gracefully, via
+# json.JSONDecodeError, not by crashing the gate script -- exactly like a
+# genuinely absent completion record. Proves the *gate script* handles this
+# end-to-end, not just the python snippet in isolation.
+run_gate_case "malformed-run-record-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"

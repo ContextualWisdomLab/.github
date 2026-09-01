@@ -2435,6 +2435,63 @@ overwriting it (no `vuln-NNNN.md`-style incrementing filename convention applies
 suite: pytest 2246 passed / 1 skipped / 21 subtests, repository-wide coverage 99% (same pre-existing gap
 owned by `#1567`, unaffected by this change); `test_strix_quick_gate.sh` full harness: PASS.
 
+**Round 3 -- the repo owner directly confirmed two round-2 review findings as valid and blocking on
+`#1563`**, requiring both a production fix and a full test-harness redesign before merge-readiness.
+
+**Finding 1 (production regression, self-discovered via CI red after round 2 shipped)**:
+`has_only_below_threshold_vulnerabilities()`'s presence guard had been pointed at the new run.json-based
+`has_new_completed_strix_run()` alongside `run_strix_once()`'s own rc=0 check, but that guard answers a
+narrower question than rc=0 acceptance does -- "is there genuine severity evidence to trust from the
+attempt that just concluded, even if that attempt's own process later exited non-zero" (e.g. a real
+below-threshold INFO finding written just before a mid-scan `ConnectionError`). A real Strix invocation
+that crashes after writing partial findings but before its final `_save_artifacts()` completion pass may
+never record `status: "completed"` at all, so requiring it broke every such partial-crash-with-real-
+findings scenario (`below-threshold-with-connection-error-no-provider` and three siblings failed on
+`#1563`'s own required check). Restored `has_new_strix_vulnerability_report_artifact()` (round 1's
+`vulnerabilities/*.md`-based, attempt-scoped check) for this call site specifically; `run_strix_once()`'s
+own rc=0 acceptance keeps using run.json-based completion, since that is the one path that actually needs
+proof of a genuinely completed (possibly zero-finding) scan.
+
+**Finding 2 (owner-confirmed, from Devin's informational round-2 findings)**: the owner directed that two
+previously-informational (🔍) Devin findings be treated as blocking: (a) `has_new_completed_strix_run()`
+matched `"completed"` via a plain regex over the raw run.json bytes and tracked attempt-start state by
+path only; (b) the test harness's implicit `trap ... EXIT` backstop mechanism manufactured evidence for
+unrelated success scenarios, hiding which branches had real vs. manufactured evidence.
+
+**Fix (a)**: rewrote `has_new_completed_strix_run()` to shell out to `python3` for structural JSON
+parsing -- rejects non-JSON, non-object JSON, symlinks, and completion text that only appears nested in
+some other field rather than the top-level `"status"` key -- and switched attempt identity from path-only
+membership to SHA-256 content-digest comparison (`ATTEMPT_START_RUN_RECORD_DIGESTS`, still keyed by path
+but compared by content), so a run directory reused in place with genuinely new results counts as new
+evidence while an unchanged predecessor record does not.
+
+**Fix (b)**: replaced every `trap strix_fake_backstop_vuln_report_on_success EXIT` registration (the one
+shared signal-aware copy plus 11 duplicated ~50-line per-heredoc copies) with an explicit, deliberately-
+called helper (`strix_fake_emit_default_success_evidence()` in the shared case-statement; a small local
+helper or an inline write in each of the 11 standalone fake-`strix` scripts) invoked immediately before
+`exit 0` by every scenario that wants generic default evidence for an unremarkable successful scan. 76
+call sites needed the explicit call added across the ~170-scenario shared case-statement; scenarios that
+want no evidence or genuinely custom evidence (`success-zero-report-artifacts`,
+`retry-hollow-second-attempt-fails-closed`, `success-clean-scan-zero-findings`) simply do not call it,
+which is now the unremarkable case rather than a tracked exception (no opt-out list needed). This also
+removed the need to track real signal delivery for the `sleep`-based timeout scenarios: a plain sequential
+call made only on the path that actually reaches `exit 0` cannot run if the process is killed by SIGTERM
+first, unlike a trap that fires unconditionally on any process exit.
+
+**New regressions for fix (a)**: `run-record-in-place-rewrite-counts-as-new-evidence` (an attempt reuses
+the same run.json path with genuinely different content after a prior attempt's transient failure -- gate
+accepts it); `unchanged-run-record-rewrite-fails-closed` (the exact positive scenario's mirror -- an
+attempt rewrites the same path with byte-identical content -- gate still fails closed, proving digest
+equality, not mere path reuse, governs acceptance); `forged-nested-completed-status-fails-closed` (a
+run.json whose top-level `status` is not `"completed"` but which contains that literal substring nested
+under an unrelated field -- gate fails closed, proving structural parsing beats substring matching);
+`malformed-run-record-fails-closed` (a run.json that is not valid JSON at all -- gate fails closed
+gracefully end-to-end, not just in the isolated python snippet).
+
+**Validation**: independently re-run (not just the implementing agent's own report) -- full
+`test_strix_quick_gate.sh` harness: PASS; full pytest suite and coverage confirmed clean with the same
+pre-existing 99% repository-wide gap owned by `#1567`, unaffected by this change.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
