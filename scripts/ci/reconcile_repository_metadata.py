@@ -179,8 +179,8 @@ def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
     target = re.escape(f"https://deepwiki.com/{ORGANIZATION}/{repository}")
     markdown = re.compile(rf"\[!\[[^\]]*\]\({image}\)\]\({target}\)")
     html = re.compile(
-        rf"<a\s+[^>]*href=[\"']{target}[\"'][^>]*>.*?"
-        rf"<img\s+[^>]*src=[\"']{image}[\"'][^>]*>.*?</a>",
+        rf"<a\s+[^>]*href=[\"'](?-i:{target})[\"'][^>]*>.*?"
+        rf"<img\s+[^>]*src=[\"'](?-i:{image})[\"'][^>]*>.*?</a>",
         re.IGNORECASE | re.DOTALL,
     )
     return bool(markdown.search(readme) or html.search(readme))
