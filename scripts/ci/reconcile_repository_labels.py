@@ -50,8 +50,8 @@ def load_taxonomy(path: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
         ):
             raise TaxonomyError("type mappings must use non-empty strings")
         type_map[semantic_type] = label
-    if len(set(type_map.values())) != len(type_map):
-        raise TaxonomyError("managed labels must be unique")
+    if len({label.casefold() for label in type_map.values()}) != len(type_map):
+        raise TaxonomyError("managed labels must be unique ignoring case")
 
     raw_assignments = root["assignments"]
     if type(raw_assignments) is not list:
@@ -124,6 +124,7 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
     if type(raw_labels) is not list:
         raise RuntimeError("GitHub issue labels payload is malformed")
     names: list[str] = []
+    seen: set[str] = set()
     for raw in raw_labels:
         if type(raw) is str:
             name = raw
@@ -131,7 +132,9 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
             name = raw["name"]
         else:
             raise RuntimeError("GitHub issue label entry is malformed")
-        if name not in names:
+        identity = name.casefold()
+        if identity not in seen:
+            seen.add(identity)
             names.append(name)
     return names
 
@@ -139,13 +142,13 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
 def _managed_labels(
     assignment: dict[str, Any], type_map: dict[str, str]
 ) -> tuple[str, set[str], str]:
-    """Return issue endpoint, managed label universe, and desired managed label."""
+    """Return issue endpoint, managed casefold identities, and desired label."""
 
     repository = assignment["repository"]
     issue = assignment["issue"]
     desired_label = type_map[assignment["type"]]
     endpoint = f"repos/{ORGANIZATION}/{repository}/issues/{issue}"
-    return endpoint, set(type_map.values()), desired_label
+    return endpoint, {label.casefold() for label in type_map.values()}, desired_label
 
 
 def reconcile_assignment(
@@ -156,10 +159,13 @@ def reconcile_assignment(
     endpoint, managed, desired_label = _managed_labels(assignment, type_map)
     payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
     current = _label_names(payload)
+    desired_identity = desired_label.casefold()
     obsolete = [
-        label for label in current if label in managed and label != desired_label
+        label
+        for label in current
+        if label.casefold() in managed and label.casefold() != desired_identity
     ]
-    missing_desired = desired_label not in current
+    missing_desired = desired_identity not in {label.casefold() for label in current}
     if not obsolete and not missing_desired:
         return
 
@@ -182,8 +188,8 @@ def verify_assignment(assignment: dict[str, Any], type_map: dict[str, str]) -> N
     endpoint, managed, desired_label = _managed_labels(assignment, type_map)
     payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
     current = _label_names(payload)
-    managed_after = {label for label in current if label in managed}
-    if managed_after != {desired_label}:
+    managed_after = {label.casefold() for label in current if label.casefold() in managed}
+    if managed_after != {desired_label.casefold()}:
         repository = assignment["repository"]
         issue = assignment["issue"]
         raise RuntimeError(
