@@ -2873,3 +2873,216 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_parse_args_supports_the_review_submit_phase_split():
+    """``--phase``/``--state-file`` default to the original single-shot mode."""
+    parsed = noema.parse_args(
+        ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40]
+    )
+    assert parsed.phase == "full"
+    assert parsed.state_file is None
+
+    parsed = noema.parse_args(
+        [
+            "--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40,
+            "--phase", "review", "--state-file", "/tmp/noema-review-state.json",
+        ]
+    )
+    assert parsed.phase == "review"
+    assert parsed.state_file == "/tmp/noema-review-state.json"
+
+
+def test_main_phase_review_and_submit_require_a_state_file():
+    """Both split phases need a place to hand the verdict across the credential refresh."""
+    for phase in ("review", "submit"):
+        with pytest.raises(SystemExit, match=f"--state-file is required for --phase {phase}"):
+            noema.main(
+                [
+                    "--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40,
+                    "--phase", phase,
+                ]
+            )
+
+
+def test_main_phase_review_writes_state_file_and_reports_outcome(monkeypatch, tmp_path, capsys):
+    """``--phase review`` hands its verdict to a file and prints only a terse outcome line."""
+    state_file = tmp_path / "state.json"
+    argv = [
+        "--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40,
+        "--phase", "review", "--state-file", str(state_file),
+    ]
+
+    monkeypatch.setattr(
+        noema,
+        "run_noema_review",
+        lambda repo, number, head: {
+            "outcome": "submit",
+            "actor": "noema",
+            "verdict": {"decision": "approve", "summary": "ok", "findings": []},
+        },
+    )
+    assert noema.main(argv) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "outcome=submit"
+    assert json.loads(state_file.read_text(encoding="utf-8")) == {
+        "outcome": "submit",
+        "actor": "noema",
+        "verdict": {"decision": "approve", "summary": "ok", "findings": []},
+    }
+
+    monkeypatch.setattr(
+        noema,
+        "run_noema_review",
+        lambda repo, number, head: {"outcome": "skip", "reason": "PR is draft; Noema review skipped."},
+    )
+    assert noema.main(argv) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "outcome=skip"
+    assert "PR is draft" in captured.err
+    assert json.loads(state_file.read_text(encoding="utf-8")) == {
+        "outcome": "skip",
+        "reason": "PR is draft; Noema review skipped.",
+    }
+
+
+def test_main_phase_submit_reads_state_file_and_delegates(monkeypatch, tmp_path):
+    """``--phase submit`` reads the review phase's file and submits that verdict."""
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps({"outcome": "submit", "actor": "noema", "verdict": {"decision": "approve"}}),
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        noema,
+        "submit_noema_review",
+        lambda repo, number, head, actor, verdict: calls.append((repo, number, head, actor, verdict)) or 0,
+    )
+    assert (
+        noema.main(
+            [
+                "--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40,
+                "--phase", "submit", "--state-file", str(state_file),
+            ]
+        )
+        == 0
+    )
+    assert calls == [("owner/repo", 9, "a" * 40, "noema", {"decision": "approve"})]
+
+
+def test_main_phase_submit_skips_cleanly_without_a_verdict_to_submit(monkeypatch, tmp_path, capsys):
+    """A review phase that skipped (or a malformed state file) must not submit anything."""
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps({"outcome": "skip", "reason": "PR is draft; Noema review skipped."}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        noema,
+        "submit_noema_review",
+        lambda *args, **kwargs: pytest.fail("submit_noema_review must not run for a skipped review phase"),
+    )
+    argv = [
+        "--repo", "owner/repo", "--pr-number", "9", "--expected-head", "a" * 40,
+        "--phase", "submit", "--state-file", str(state_file),
+    ]
+    assert noema.main(argv) == 0
+    assert "PR is draft" in capsys.readouterr().out
+
+    # A state file with no "outcome"/"reason" at all must still fail closed
+    # with a clean default message, never a KeyError.
+    state_file.write_text(json.dumps({}), encoding="utf-8")
+    assert noema.main(argv) == 0
+    assert "did not produce a verdict to submit" in capsys.readouterr().out
+
+
+def test_two_phase_split_survives_a_credential_that_expires_during_the_llm_call(
+    monkeypatch, tmp_path
+):
+    """RED->GREEN proof of the fix for the "Bad credentials (HTTP 401)" incident.
+
+    Before this split, ``inspect_and_review()`` ran ``fetch_pr`` /
+    ``call_llm`` / ``fetch_pr`` / ``submit_review`` inside one process
+    against one GH_TOKEN value fixed by the environment at process start (the
+    `gh` CLI ``run()`` shells out to reads its credential from the process
+    environment at call time, not once at import time -- the workflow's
+    ``GH_TOKEN`` step env is what sets that environment). If that credential
+    is revoked/expired while the deliberately unbounded ``call_llm()`` is in
+    flight -- exactly this org's own no-fixed-timeout policy allows -- every
+    `gh` call made *after* ``call_llm()`` returns fails, including the one
+    that actually posts the review (``ContextualWisdomLab/contextual-orchestrator``
+    PR #992: the LLM call succeeded, then ``gh: Bad credentials (HTTP 401)``).
+
+    This test reproduces that timeline with a `gh`-shaped fake gated on the
+    live ``GH_TOKEN`` environment value, then proves the fix: running
+    ``run_noema_review`` and ``submit_noema_review`` as two separate
+    ``main()`` invocations -- exactly how ``noema-review.yml`` now drives
+    them, with a credential re-mint/re-exchange step in between -- lets the
+    submit phase succeed once a fresh credential is in place, even though
+    the pre-review credential died mid-call.
+    """
+    head = "a" * 40
+    pr = make_pr(headRefOid=head)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
+
+    verdict = {"decision": "approve", "summary": "ok", "findings": []}
+
+    def fake_call_llm(*args, **kwargs):
+        # The deliberately unbounded call: simulate the workflow-minted
+        # credential expiring while this is "in flight", mirroring PR
+        # #992's timeline (the LLM call itself succeeds; the pre-call token
+        # is dead by the time GitHub calls resume).
+        os.environ["GH_TOKEN"] = "expired-pre-review-token"
+        return verdict
+
+    monkeypatch.setattr(noema, "call_llm", fake_call_llm)
+
+    def gated_submit_review(repo, number, pr_arg, actor, verdict_arg):
+        # submit_review() ultimately shells out to `gh api ...` via run();
+        # `gh` reads its credential from the process environment at call
+        # time. Model that directly instead of re-deriving run()'s
+        # subprocess plumbing.
+        if os.environ.get("GH_TOKEN") != "fresh-post-review-token":
+            raise RuntimeError("Command failed (1): gh\nHTTP 401: Bad credentials")
+
+    monkeypatch.setattr(noema, "submit_review", gated_submit_review)
+
+    state_file = tmp_path / "noema-review-state.json"
+    argv_common = ["--repo", "owner/repo", "--pr-number", "7", "--expected-head", head]
+
+    # Phase 1 ("Run Noema LLM review"): runs against whatever credential the
+    # workflow minted before the unbounded LLM call; the fake call_llm above
+    # expires it before this phase returns.
+    monkeypatch.setenv("GH_TOKEN", "fresh-pre-review-token")
+    assert noema.main([*argv_common, "--phase", "review", "--state-file", str(state_file)]) == 0
+    assert json.loads(state_file.read_text(encoding="utf-8"))["outcome"] == "submit"
+
+    # RED: without a credential refresh, the submit phase is left holding
+    # exactly the token call_llm's fake just expired -- reproducing the
+    # original bug's failure mode against the refactored submit phase
+    # proves the gate genuinely depends on a fresh token, not merely on the
+    # phase split existing.
+    with pytest.raises(RuntimeError, match="Bad credentials"):
+        noema.main([*argv_common, "--phase", "submit", "--state-file", str(state_file)])
+
+    # GREEN: noema-review.yml re-mints (or re-exchanges) the credential in a
+    # step between "Run Noema LLM review" and "Submit Noema review verdict".
+    # Simulate that refresh landing in the process environment and prove
+    # the submit phase now succeeds.
+    monkeypatch.setenv("GH_TOKEN", "fresh-post-review-token")
+    assert noema.main([*argv_common, "--phase", "submit", "--state-file", str(state_file)]) == 0
+
+    # Confirms the fix is the *workflow's* use of the two-phase split, not
+    # merely the existence of run_noema_review/submit_noema_review as
+    # functions: the CLI's default single-shot --phase full entry point
+    # (inspect_and_review, unchanged for backward compatibility) still has
+    # no credential-refresh boundary of its own, so it reproduces the exact
+    # original failure under the same fakes.
+    monkeypatch.setenv("GH_TOKEN", "fresh-pre-review-token")
+    with pytest.raises(RuntimeError, match="Bad credentials"):
+        noema.inspect_and_review("owner/repo", 7, head)

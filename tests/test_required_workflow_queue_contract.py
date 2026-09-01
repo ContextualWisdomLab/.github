@@ -770,7 +770,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(
     noema_script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
+            "Run Noema LLM review",
         ).split("        run: |\n", 1)[1]
     )
     noema_env = {
@@ -862,6 +862,108 @@ def test_noema_review_mints_a_least_privilege_github_app_token() -> None:
         "permission-vulnerability-alerts: read",
     ):
         assert permission in workflow
+
+
+def test_noema_review_refreshes_its_credential_before_submitting_the_verdict() -> None:
+    """The GitHub App installation token minted before the unbounded LLM call
+    must never be reused to submit the verdict after that call returns.
+
+    GitHub App installation tokens are valid for a fixed ~1 hour and are
+    never refreshed in place once minted (standard GitHub Apps behavior).
+    ``call_llm`` in ``scripts/ci/noema_review_gate.py`` deliberately has no
+    fixed wall-clock timeout -- reviews may legitimately run for well over
+    an hour -- so a token minted before that call started cannot be assumed
+    valid by the time the workflow is ready to post the review. Reusing it
+    anyway previously produced an intermittent "Bad credentials (HTTP 401)"
+    once a review ran long enough; see
+    ``docs/product-technical-gap-baseline.md``. This pins the structural fix:
+    the workflow re-mints (or re-exchanges) the credential in a dedicated
+    step between "Run Noema LLM review" and "Submit Noema review verdict",
+    gated so it only runs when there is a verdict to submit.
+    """
+    workflow = workflow_text("noema-review.yml")
+
+    review_index = workflow.index("      - name: Run Noema LLM review\n")
+    remint_index = workflow.index(
+        "      - name: Re-mint repository-scoped Noema GitHub App token before verdict submission\n"
+    )
+    reexchange_index = workflow.index(
+        "      - name: Re-exchange Noema app token through OIDC before verdict submission\n"
+    )
+    submit_index = workflow.index("      - name: Submit Noema review verdict\n")
+
+    # Ordering: review runs first, both credential-refresh steps come next
+    # (in either order relative to each other -- only one runs per
+    # credential source), and only then does submission run.
+    assert review_index < remint_index < submit_index
+    assert review_index < reexchange_index < submit_index
+
+    remint_step = workflow_step(
+        workflow, "Re-mint repository-scoped Noema GitHub App token before verdict submission"
+    )
+    reexchange_step = workflow_step(
+        workflow, "Re-exchange Noema app token through OIDC before verdict submission"
+    )
+    submit_step = workflow_step(workflow, "Submit Noema review verdict")
+
+    # Both refresh steps are gated on the review phase actually having
+    # produced a verdict, and on the credential source that minted the
+    # pre-review token in the first place -- a skip must not waste a mint,
+    # and neither refresh path steps on the other's credential source.
+    assert (
+        "steps.noema_credential.outputs.source == 'github-app'\n          "
+        "&& steps.noema_review.outputs.outcome == 'submit'" in remint_step
+    )
+    assert (
+        "steps.noema_credential.outputs.source == 'oidc'\n          "
+        "&& steps.noema_review.outputs.outcome == 'submit'" in reexchange_step
+    )
+
+    # The re-mint step mints a genuinely fresh token through the same
+    # trusted action and inputs as the original mint (never a different,
+    # unpinned, or unreviewed action) -- not a placeholder.
+    assert workflow.count(
+        "uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0"
+    ) == 2
+    assert "id: noema_github_app_token_post_review" in remint_step
+    assert "client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}" in remint_step
+    assert "private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}" in remint_step
+    assert "permission-pull-requests: write" in remint_step
+
+    # The re-exchange step performs the same OIDC exchange as the original,
+    # under a distinct step id so it cannot be confused with the pre-review
+    # exchange's output.
+    assert "id: noema_oidc_token_post_review" in reexchange_step
+    assert 'curl -fsS \\\n              -X POST \\' in reexchange_step
+    assert "echo \"token=$app_token\" >>\"$GITHUB_OUTPUT\"" in reexchange_step
+
+    # The submission step's credential must come from the POST-review
+    # refresh outputs first (falling back through the same PAT/App/OIDC
+    # priority order as the original mint), never from the original
+    # pre-review mint/exchange step outputs directly.
+    assert (
+        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || "
+        "steps.noema_github_app_token_post_review.outputs.token || "
+        "steps.noema_oidc_token_post_review.outputs.token }}"
+    ) in submit_step
+    assert "steps.noema_github_app_token.outputs.token" not in submit_step
+    assert "steps.noema_oidc_token.outputs.token" not in submit_step
+    assert "if: env.PR_NUMBER != '' && steps.noema_review.outputs.outcome == 'submit'" in submit_step
+    assert "--phase submit" in submit_step
+    assert "--state-file \"$NOEMA_REVIEW_STATE_FILE\"" in submit_step
+
+    # The review step stops short of submitting: it runs --phase review
+    # against the pre-review credential and reports its outcome for the
+    # steps above to gate on, but never itself calls submit_review.
+    review_step = workflow_step(workflow, "Run Noema LLM review")
+    assert "--phase review" in review_step
+    assert "--state-file \"$NOEMA_REVIEW_STATE_FILE\"" in review_step
+    assert '>>"$GITHUB_OUTPUT"' in review_step
+
+    # Both phases share one state-file path, defined once at job scope, so a
+    # step-local typo cannot silently desync the two invocations.
+    assert "NOEMA_REVIEW_STATE_FILE: ${{ runner.temp }}/noema-review-state.json" in workflow
+    assert workflow.count("NOEMA_REVIEW_STATE_FILE") >= 3
 
 
 def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:

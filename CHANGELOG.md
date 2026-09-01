@@ -5,6 +5,23 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `noema-review.yml` reusing the GitHub App installation token minted *before* the
+  deliberately unbounded Noema LLM review call to submit the verdict *after* that call
+  returns. Installation tokens are valid for a fixed ~1 hour and are never renewed in
+  place; because the review LLM call has no fixed wall-clock timeout by design (reviews
+  may legitimately run past an hour), a review that took long enough could leave
+  `submit_review()` holding an expired token, producing an intermittent
+  `gh: Bad credentials (HTTP 401)` on an otherwise-successful review (observed on
+  `ContextualWisdomLab/contextual-orchestrator#992`, a 56m45s run). Split the workflow's
+  single "Run Noema LLM review and submit verdict" step into "Run Noema LLM review"
+  (`scripts/ci/noema_review_gate.py --phase review`, writes its verdict to a state file)
+  and "Submit Noema review verdict" (`--phase submit`, reads it back), with a credential
+  re-mint/re-exchange step in between (mirroring the existing `actions/create-github-app-token`
+  and OIDC-exchange steps) so submission always runs against a credential minted after the
+  LLM call returned. `noema_review_gate.py` gained `run_noema_review()`/`submit_noema_review()`
+  (the two phases) and a `--phase {full,review,submit}`/`--state-file` CLI split;
+  `inspect_and_review()` keeps its original single-shot behavior and signature by composing
+  the two phases, so every existing caller is unaffected.
 - Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
   `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
   `noema_review_handoff.py`'s `noema_review_state()` can never recognize such a review as a

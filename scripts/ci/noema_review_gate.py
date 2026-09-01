@@ -1341,22 +1341,36 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
-    """Inspect PR state and submit Noema's independent LLM review.
+def run_noema_review(repo: str, number: int, expected_head: str) -> dict[str, Any]:
+    """Fetch PR context and call the LLM, performing no GitHub write of its own.
 
-    ``expected_head`` is normalized defensively before the stale-head
-    comparisons below, and before the one ``call_llm`` performs on its own
-    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and
-    workflow require canonical lowercase SHA input so equivalent casing
-    cannot split the workflow concurrency group.
+    ``expected_head`` must already be normalized (lowercase) -- see
+    ``inspect_and_review`` and ``call_llm`` for the same convention. Returns
+    a JSON-serializable phase result:
+
+    - ``{"outcome": "skip", "reason": "..."}`` when review work correctly
+      stops before a verdict exists: the PR is closed or its trigger head is
+      stale, the PR is a draft, the current head already has a Noema
+      review, or ``call_llm``'s own repair-retry path found the head moved
+      mid-review.
+    - ``{"outcome": "submit", "actor": "...", "verdict": {...}}`` once a
+      verdict is ready for ``submit_noema_review``.
+
+    This function makes no GitHub API call after ``call_llm`` returns -- see
+    ``submit_noema_review``'s docstring for why that boundary matters.
+    ``call_llm`` itself has no fixed wall-clock timeout (a deliberate, tested
+    org policy: reviews may legitimately run for well over an hour), so every
+    GitHub API call here happens on whatever credential was live when the
+    caller started, before that open-ended wait.
     """
-    expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
     try:
         require_expected_head(pr, expected_head)
     except RuntimeError:
-        print("Pull request is closed or its trigger head is stale; Noema review skipped before model work.")
-        return 0
+        return {
+            "outcome": "skip",
+            "reason": "Pull request is closed or its trigger head is stale; Noema review skipped before model work.",
+        }
     actor = current_actor()
     if not actor:
         raise RuntimeError("Noema reviewer identity could not be verified")
@@ -1366,11 +1380,9 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
             "Noema requires an independent reviewer credential."
         )
     if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
-        return 0
+        return {"outcome": "skip", "reason": "PR is draft; Noema review skipped."}
     if existing_noema_review(pr, actor):
-        print("Current head already has a Noema review; nothing to do.")
-        return 0
+        return {"outcome": "skip", "reason": "Current head already has a Noema review; nothing to do."}
     diff, truncated = fetch_diff(repo, number)
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
@@ -1378,8 +1390,34 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     try:
         verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     except StaleHeadDuringRepairRetryError:
-        print("Pull request head changed during review; Noema review skipped before repair retry.")
-        return 0
+        return {
+            "outcome": "skip",
+            "reason": "Pull request head changed during review; Noema review skipped before repair retry.",
+        }
+    return {"outcome": "submit", "actor": actor, "verdict": verdict}
+
+
+def submit_noema_review(
+    repo: str, number: int, expected_head: str, actor: str, verdict: dict[str, Any]
+) -> int:
+    """Re-validate the pull request head and submit a verdict from ``run_noema_review``.
+
+    Must run against a GitHub credential minted, or re-minted, *after*
+    ``run_noema_review``'s ``call_llm`` call returns. The GitHub App
+    installation tokens ``noema-review.yml`` mints are valid for a fixed
+    lifetime (about one hour, standard GitHub Apps behavior) and are never
+    renewed in place once minted. Because ``call_llm`` deliberately has no
+    fixed wall-clock timeout and can legitimately run for well over an hour,
+    a token minted before that call started is not safe to reuse for this
+    function's writes: reusing it here previously produced an intermittent
+    "Bad credentials (HTTP 401)" on ``submit_review`` once a review ran long
+    enough for the pre-call token to expire before this function's own
+    ``fetch_pr``/``submit_review`` calls ran -- see
+    ``docs/product-technical-gap-baseline.md`` for the incident this
+    review/submit split fixes. ``noema-review.yml`` re-mints (or
+    re-exchanges) the credential in a step between its ``--phase review``
+    and ``--phase submit`` invocations for exactly this reason.
+    """
     current_pr = fetch_pr(repo, number)
     try:
         require_expected_head(current_pr, expected_head)
@@ -1390,12 +1428,59 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     return 0
 
 
+def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
+    """Inspect PR state and submit Noema's independent LLM review.
+
+    ``expected_head`` is normalized defensively before the stale-head
+    comparisons below, and before the one ``call_llm`` performs on its own
+    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and
+    workflow require canonical lowercase SHA input so equivalent casing
+    cannot split the workflow concurrency group.
+
+    Runs ``run_noema_review`` and ``submit_noema_review`` back to back in one
+    process against a single credential -- the CLI's default, single-shot
+    ``--phase full`` mode, and what every existing caller of this function
+    gets. ``noema-review.yml`` itself instead drives the two phases as two
+    separate workflow steps (``--phase review`` then ``--phase submit``)
+    with a credential refresh between them, so the long LLM wait inside
+    ``run_noema_review`` cannot leave ``submit_noema_review`` holding an
+    expired token; see those two functions' docstrings for why that split
+    exists.
+    """
+    expected_head = expected_head.strip().lower()
+    phase_result = run_noema_review(repo, number, expected_head)
+    if phase_result["outcome"] == "skip":
+        print(phase_result["reason"])
+        return 0
+    return submit_noema_review(
+        repo, number, expected_head, phase_result["actor"], phase_result["verdict"]
+    )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse Noema review gate command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
     parser.add_argument("--expected-head", required=True)
+    parser.add_argument(
+        "--phase",
+        choices=("full", "review", "submit"),
+        default="full",
+        help=(
+            "'full' (default) runs review and submission in one process "
+            "against a single credential, matching this command's original "
+            "behavior. 'review' stops after the deliberately unbounded LLM "
+            "call and writes its result to --state-file. 'submit' reads "
+            "that file and completes the review -- run it against a "
+            "credential minted or refreshed after the 'review' phase "
+            "returned, not the one 'review' started with."
+        ),
+    )
+    parser.add_argument(
+        "--state-file",
+        help="Path used to hand a --phase review result to a later --phase submit invocation.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1407,6 +1492,29 @@ def main(argv: list[str]) -> int:
     if not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
         raise SystemExit(
             "--expected-head must be a canonical lowercase 40-character Git SHA"
+        )
+    if args.phase in ("review", "submit") and not args.state_file:
+        raise SystemExit(f"--state-file is required for --phase {args.phase}")
+    if args.phase == "review":
+        phase_result = run_noema_review(args.repo, args.pr_number, args.expected_head)
+        with open(args.state_file, "w", encoding="utf-8") as handle:
+            json.dump(phase_result, handle)
+        if phase_result["outcome"] == "skip":
+            print(phase_result["reason"], file=sys.stderr)
+        print(f"outcome={phase_result['outcome']}")
+        return 0
+    if args.phase == "submit":
+        with open(args.state_file, encoding="utf-8") as handle:
+            phase_result = json.load(handle)
+        if phase_result.get("outcome") != "submit":
+            print(phase_result.get("reason") or "Noema review phase did not produce a verdict to submit.")
+            return 0
+        return submit_noema_review(
+            args.repo,
+            args.pr_number,
+            args.expected_head,
+            phase_result["actor"],
+            phase_result["verdict"],
         )
     return inspect_and_review(args.repo, args.pr_number, args.expected_head)
 

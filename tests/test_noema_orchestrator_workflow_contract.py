@@ -339,7 +339,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     noema_script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
+            "Run Noema LLM review",
         ).split("        run: |\n", 1)[1]
     )
     noema_env = {

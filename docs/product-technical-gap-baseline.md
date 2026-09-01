@@ -2509,6 +2509,123 @@ under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/
 writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
 that PR for its own evidence.
 
+## 2026-09-01 noema-review-gate: a review that succeeds at the LLM layer can still fail the
+required check on a stale credential -- root cause and fix
+
+**Live incident**: triaging `ContextualWisdomLab/contextual-orchestrator`'s open PRs found the
+required `noema-review` check failing with four different error signatures within a few hours,
+all against the same job: `#911` ("Noema reviewed line 1 is not an exact changed-side line", ~24
+min), `#971` (`urllib.error.HTTPError: HTTP Error 502: Bad Gateway` from the local review sidecar,
+~28 min), `#992` (`gh: Bad credentials (HTTP 401)` on a `gh` call immediately *after* the LLM call
+had already returned a verdict, 56m45s), and `#983` (`TimeoutError: timed out` at the raw socket
+level inside `http.client._read_status`, ~5 min).
+
+**Root cause, confirmed**: `.github/workflows/noema-review.yml`'s "Mint repository-scoped Noema
+GitHub App token" step (`actions/create-github-app-token@bcd2ba4…` v3.2.0) mints a GitHub App
+installation token once, several steps before the LLM call -- standard, well-documented GitHub Apps
+behavior is that such tokens are valid for a fixed ~1 hour and are never renewed in place. The single
+"Run Noema LLM review and submit verdict" step then set `GH_TOKEN` from that one minted token for its
+entire duration, and `scripts/ci/noema_review_gate.py`'s `call_llm()` makes a deliberately UNBOUNDED
+HTTP call to the review LLM sidecar (this org's explicit, tested policy against fixed model-inference
+timeouts -- see `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and
+`docs/adr/0005-sidecar-preflight-token-budget.md`, and PR #1546 "reconcile unbounded exact-head
+review agents"; not touched by this fix). Every `gh`/GitHub API call `noema_review_gate.py` makes
+*after* `call_llm()` returns -- the pre-publication `fetch_pr` re-check and, decisively,
+`submit_review()`'s own `gh api ... pulls/{number}/reviews` POST -- reused that same
+pre-LLM-call token via the process environment (`gh` reads `GH_TOKEN` from `os.environ`, which
+`subprocess.run()` inherits unless overridden; `noema_review_gate.py` never re-reads or refreshes
+it). Total elapsed time from the token's mint step to `submit_review()` includes every step in
+between (credential selection, live-head validation, target-visibility lookup with its own
+retry/backoff, sidecar provisioning) plus the LLM step's own wall-clock time, so a step measuring
+"only" 56m45s can still land past the token's ~60-minute lifetime once the earlier steps' time is
+counted -- exactly what PR #992 shows: the LLM call succeeded, then the very next GitHub write hit
+`Bad credentials (401)`.
+
+**The other two failures are not the same bug.** `#971`'s 502 and `#983`'s 5-minute-total socket
+timeout both completed (or failed) well inside the token's ~60-minute lifetime and are local
+sidecar/network-level issues, not credential expiry; `#911`'s "not an exact changed-side line" is a
+review-quality/prompt-validation failure in `validate_substantive_verdict`, also unrelated to
+credentials. None of the three were touched by this fix -- forcing them into the same root cause
+would have been exactly the "a flake is not a root cause" mistake this snapshot format exists to
+avoid recording.
+
+**Fix**: split the workflow's single "Run Noema LLM review and submit verdict" step into two steps
+around the unbounded LLM call, with a credential refresh in between -- following this repo's existing
+`actions/create-github-app-token` and OIDC-exchange patterns (`opencode-review.yml`/`strix.yml`/
+`pr-review-merge-scheduler.yml` use the same App-token-or-OIDC-exchange shape for their own
+credentials) rather than inventing a new one:
+
+1. **"Run Noema LLM review"** (`id: noema_review`) runs against the original pre-LLM-call
+   credential and invokes `python3 -m scripts.ci.noema_review_gate --phase review --state-file
+   "$NOEMA_REVIEW_STATE_FILE"`. This performs every GitHub read up to and including `call_llm()`,
+   writes its result (`{"outcome": "skip", "reason": ...}` or `{"outcome": "submit", "actor": ...,
+   "verdict": {...}}`) to a job-scoped state file, and reports `outcome=<value>` via
+   `$GITHUB_OUTPUT` -- but makes no GitHub write of its own after `call_llm()` returns.
+2. **"Re-mint repository-scoped Noema GitHub App token before verdict submission"** and
+   **"Re-exchange Noema app token through OIDC before verdict submission"** mirror the original
+   pre-LLM mint/exchange steps exactly (same pinned action SHA, same inputs), each gated on both
+   the original credential source (`github-app`/`oidc`) and `steps.noema_review.outputs.outcome ==
+   'submit'`, so a skipped review never wastes a mint.
+3. **"Submit Noema review verdict"** runs `--phase submit --state-file "$NOEMA_REVIEW_STATE_FILE"`
+   against `GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token_post_review.outputs.token
+   || steps.noema_oidc_token_post_review.outputs.token }}` -- the *post-review* refresh outputs,
+   never the original pre-LLM-call mint/exchange outputs. It re-validates the live PR head and
+   calls `submit_review()`.
+
+`scripts/ci/noema_review_gate.py` gained `run_noema_review()` (phases 1-8 of the former
+`inspect_and_review`: fetch/validate/`call_llm`, no post-call GitHub write) and
+`submit_noema_review()` (the former post-call re-check plus `submit_review()`), plus a
+`--phase {full,review,submit}`/`--state-file` CLI split in `parse_args()`/`main()`.
+`inspect_and_review()` itself is unchanged in signature and observable behavior -- it now simply
+composes `run_noema_review()` then `submit_noema_review()` in one process (the CLI's default
+`--phase full`, and what every pre-existing caller/test still gets) -- so no existing caller or
+contract test needed to change beyond the renamed workflow step. The PAT fallback
+(`secrets.NOEMA_REVIEW_TOKEN`) needs no re-mint step (a personal access token is not a ~1-hour
+GitHub App installation token) and is unaffected.
+
+**Regression tests** (`tests/test_noema_review_gate.py`): `test_two_phase_split_survives_a_credential_that_expires_during_the_llm_call`
+is the RED→GREEN proof -- a `gh`-shaped fake gated on the live `GH_TOKEN` environment value
+reproduces PR #992's exact timeline (the fake `call_llm` "expires" the pre-review token while it
+runs, mirroring the deliberately unbounded real call), confirms `--phase submit` against that
+now-stale token fails with the same `Bad credentials` message (RED), confirms it succeeds once a
+fresh token lands in the environment between the two `main()` invocations exactly as the workflow's
+new re-mint step provides (GREEN), and confirms the CLI's original single-shot `inspect_and_review()`
+entry point -- which has no credential-refresh boundary of its own -- still reproduces the original
+failure under the same fakes, proving the fix is the workflow's *use* of the two-phase split, not
+merely the existence of the two new functions. `test_main_phase_review_writes_state_file_and_reports_outcome`,
+`test_main_phase_submit_reads_state_file_and_delegates`,
+`test_main_phase_submit_skips_cleanly_without_a_verdict_to_submit`,
+`test_main_phase_review_and_submit_require_a_state_file`, and
+`test_parse_args_supports_the_review_submit_phase_split` cover the new CLI plumbing directly
+(state-file round-trip, both outcomes, the missing-`--state-file` guard, and parse defaults).
+`tests/test_required_workflow_queue_contract.py::test_noema_review_refreshes_its_credential_before_submitting_the_verdict`
+pins the workflow-level structure: step ordering (review, then both refresh steps, then submit),
+both refresh steps' `steps.noema_review.outputs.outcome == 'submit'` gate, the re-mint step's use of
+the identical pinned `actions/create-github-app-token` SHA (`workflow.count(...) == 2`, so the
+second mint cannot silently drift to a different or unpinned action), and that the submit step's
+`GH_TOKEN` references only the post-review outputs, never the pre-review ones.
+`tests/test_required_workflow_queue_contract.py::test_strix_gateway_default_and_noema_sidecar_fail_closed`
+and `tests/test_noema_orchestrator_workflow_contract.py::test_strix_gateway_default_and_noema_sidecar_fail_closed`
+(same-named tests in two files) were updated to extract the renamed "Run Noema LLM review" step
+instead of the retired "Run Noema LLM review and submit verdict" step; their own assertions (sidecar
+must be provisioned before Noema LLM review, returncode 1) are otherwise unchanged since that failure
+path exits before reaching the review/submit split.
+
+Validation: `coverage run -m pytest tests -q` -- 2357 passed, 1 skipped, 21 subtests passed.
+`coverage report --show-missing` -- repo-wide 100%, `noema_review_gate.py` at 684 statements / 324
+branches, 100%. `interrogate` -- 100.0% (minimum 100.0%). `python3 -c "import yaml;
+yaml.safe_load(open('.github/workflows/noema-review.yml'))"` parses clean; `bash -n` against every
+step's extracted `run:` block (via the same PyYAML-based check the workflow contract tests use)
+passes for all three touched/added steps. `ruff check` on every touched Python file -- all checks
+passed.
+
+**Owner**: this repo (`ContextualWisdomLab/.github`), `.github/workflows/noema-review.yml` and
+`scripts/ci/noema_review_gate.py`. Found and fixed autonomously in this session while triaging
+`contextual-orchestrator`'s open PRs for the required-check failures listed above.
+**Status**: fixed on branch `fix/noema-review-token-expiry-20260901`, pending PR and required
+checks -- not yet merged, so not itself part of the merge-authorization evidence this snapshot
+already disclaims.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
