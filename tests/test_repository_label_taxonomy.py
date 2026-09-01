@@ -135,6 +135,8 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
         {"repository": "kaefa", "issue": 81, "type": "documentation"},
         {"repository": "kaefa", "issue": 82, "type": "documentation"},
+        {"repository": "aFIPC", "issue": 261, "type": "documentation"},
+        {"repository": "nonnest2", "issue": 115, "type": "documentation"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
 
