@@ -21,8 +21,13 @@ stage changes, commit, push, install dependencies, mutate branches, or touch
 production state. Blocking findings must be source-backed, severity-labeled,
 impactful, remediable, and include suggested verification.
 
-The OpenCode review job does not widen its own `pull_request_target` job token
-to repository-write permission. The scheduler's `GH_TOKEN` merge/read fallback
+The OpenCode `pull_request_target` bootstrap does not widen its own token to
+repository-write permission. After a formal receipt, the privileged
+`repository_dispatch` job grants `actions: write` only so its `github.token`
+can rerun a native failed required job. A sibling wake instead requires
+`PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`; it fails closed without
+either and never substitutes the review-only OpenCode app token or the central
+repository's workflow token. The scheduler's `GH_TOKEN` merge/read fallback
 order is `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, the exchanged
 OpenCode app token, then the receiving workflow's `github.token`. For
 repository-dispatch calls that target another repository, the

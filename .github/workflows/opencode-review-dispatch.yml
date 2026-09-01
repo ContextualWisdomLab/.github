@@ -2323,7 +2323,7 @@ jobs:
     # scheduler follow-up, or bounded failure reason.
     timeout-minutes: 305
     permissions:
-      actions: read
+      actions: write
       checks: read
       id-token: write
       contents: read
@@ -7590,12 +7590,17 @@ jobs:
           && needs.validate-pr-metadata.outputs.head_sha != ''
           && github.event.client_payload.required_run_id != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            echo "::error::Actions-capable wake credential is unavailable. Native runs use github.token; sibling runs require PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN."
+            exit 1
+          fi
           [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
             echo "::error::Required OpenCode run id is missing or non-canonical."
             exit 1
