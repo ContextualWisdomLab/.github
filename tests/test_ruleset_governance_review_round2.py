@@ -82,11 +82,14 @@ def test_history_predecessor_still_rejects_wrong_ruleset_provenance(monkeypatch)
         raise AssertionError("wrong ruleset provenance was accepted")
 
 
-def test_owner_plane_is_serial_but_disabled_schedule_still_validates() -> None:
-    """Mutation critical sections are non-cancellable and offline scheduled validation always runs."""
+def test_owner_plane_is_serial_and_disabled_schedule_does_not_consume_runner() -> None:
+    """Mutation is non-cancellable while disabled hourly validation skips shared capacity."""
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
     validate_block = text.split("jobs:\n  validate:\n", 1)[1].split("\n  apply:\n", 1)[0]
-    assert "vars.CWL_RULESET_RECONCILE_ENABLED" not in validate_block
+    assert "github.event_name != 'schedule'" in validate_block
+    assert "vars.CWL_RULESET_RECONCILE_ENABLED == 'true'" in validate_block
+    assert "runs-on: ubuntu-slim" in validate_block
     apply_block = text.split("\n  apply:\n", 1)[1]
     assert "vars.CWL_RULESET_RECONCILE_ENABLED == 'true'" in apply_block
+    assert "runs-on: ubuntu-24.04" in apply_block
