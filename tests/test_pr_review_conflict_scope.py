@@ -338,5 +338,10 @@ def test_workflow_snapshots_after_merge_and_verifies_before_staging() -> None:
     conflict_add = conflict.index("# Fail closed: never push unresolved conflict markers.")
 
     assert merge < snapshot < model < verify < conflict_add
+    assert (
+        "Conflict resolution cannot delete or rename protected security-contract path"
+        in conflict[:conflict_add]
+    )
+    assert 'git diff HEAD --name-status -- "$protected_path"' in conflict[:conflict_add]
     assert 'git diff --name-only -z --diff-filter=U >"$conflicted_paths_file"' in conflict
     assert '--allowed-paths "$conflicted_paths_file"' in conflict

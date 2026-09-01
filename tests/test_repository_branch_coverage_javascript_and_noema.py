@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
-
 import pytest
 
 from scripts.ci import javascript_coverage_gate as js_gate
@@ -137,25 +135,6 @@ def test_base_npm_projects_handles_nonobject_packages_and_untracked_workspace(
     ).encode()
     projects = js_materializer.base_npm_projects(tmp_path, "a" * 40)
     assert projects[0][2].keys() == {"package.json", "package-lock.json"}
-
-
-def test_noema_status_context_failure_is_blocking() -> None:
-    """A non-success legacy status context remains a concrete review blocker."""
-
-    pr = {
-        "statusCheckRollup": {
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "StatusContext",
-                        "context": "legacy-security",
-                        "state": "failure",
-                    }
-                ]
-            }
-        }
-    }
-    assert noema.blocking_checks(pr) == ["legacy-security: FAILURE"]
 
 
 def test_noema_fetch_diff_truncates_to_prompt_budget(

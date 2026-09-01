@@ -1,0 +1,32 @@
+name: metering-billing-platform Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 49 avoids minute-zero pressure and the existing product callers.
+    - cron: "49 * * * *"
+
+concurrency:
+  group: metering-billing-platform-hourly-review-repair
+  # Preserve bounded RCA when a later hourly heartbeat arrives.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/metering-billing-platform
+      base_branch: develop
+      max_prs: "50"
+      max_dispatches: "1"
+      # Central OpenCode/NVIDIA NIM review and Foundation CI (PostgreSQL 18
+      # integration suite) can approach one hour on this repository.
+      retry_hours: "1"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}

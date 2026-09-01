@@ -155,6 +155,34 @@ token and inference endpoint supplied per fallback model
 provider quota outage degrades to a slower scan instead of skipping evidence.
 The pinned ban on GPT-4.1-or-weaker Strix evidence stays in force.
 
+2026-08-22 KST GitHub Models retirement: GitHub Models entered a platform-wide
+"scheduled retirement brownout" returning HTTP 410 for every request
+(confirmed directly against `models.github.ai`), so the
+`github_models/openai/o3 github_models/openai/gpt-5-chat` universal fallback
+wired on 2026-07-13 across all four provider modes (`github_models`,
+`openai_direct`, `openrouter`, `nvidia_nim`) is now dead on every path, not
+just an outage of one model. Observed impact on LineageWeave PR #392: the
+NVIDIA NIM primary and its NVIDIA fallback both failed, cascaded through the
+dead GitHub Models fallback, and the run failed the required check entirely
+(`STRIX_FALLBACK_MODELS` exhausted) instead of degrading. Separately, the
+`nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5` fallback that did run
+before the GitHub Models cascade produced a fabricated CRITICAL finding
+(a hardcoded-secret report against a `frontend/src/config.ts` line that does
+not exist in that form on the target branch) — Strix's own in-run quality
+warning already flags this model as "not a recommended frontier model...
+weaker models may miss vulnerabilities or produce lower-quality findings",
+and this run is a concrete instance of that risk materializing as a false
+required-check failure, not a missed finding. Fix: `STRIX_FALLBACK_MODELS`
+now falls back to `openai-direct/gpt-5.6-luna` (Strix's own top-recommended
+model, already wired via `STRIX_OPENAI_API_KEY`/`OPENAI_API_KEY`) instead of
+the dead GitHub Models pair, on all four provider-mode branches. The
+`nvidia_nim` branch keeps its NVIDIA-hosted fallback as an interim retry
+before this openai-direct fallback; that retains the existing free/low-cost
+NVIDIA-first policy and is a separate cost/quality tradeoff this fix does not
+revisit. GitHub Models remains a selectable `github_models` primary mode for
+now (unchanged scope) but is no longer relied on as a silent universal
+fallback.
+
 ## Live Repository Inventory
 
 Live generated: 2026-06-26 KST via GitHub REST/GraphQL APIs. PR #28 post-merge refresh: 2026-06-23 16:05 KST. PR #37 post-merge refresh: 2026-06-23 21:50 KST. clearfolio PR #13 post-merge refresh: 2026-06-24 04:48 KST. Non-actionable Findings refresh: 2026-06-25 KST. PR #58, #65, #66, #68, #71, #79, and #80 post-merge refreshes: 2026-06-25 to 2026-06-26 KST. The 2026-07-02 18:15 KST refresh found 17 public non-fork repositories, adding `kaefa` and `waf-ids-ai-soc` to the prior public non-fork inventory. The public fork inventory still contains 6 repositories. `VibeSec` was not in that target set, and `appguardrail` was.

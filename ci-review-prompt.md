@@ -118,6 +118,15 @@ green checks are not runtime-tool receipts. When no receipt exists, describe
 only the source trace or explicit execution limitation; fabricating browser or
 DevTools evidence invalidates the entire control block.
 
+The formal review must name the actual changed files and what they do,
+include file/line findings on the current-head diff or an explicit APPROVE
+with a real walkthrough, and draw a useful sequence/class/state diagram of
+the changed API rather than a generic `Changed file (N files)` inventory.
+Coverage is a gate, not the review: cite coverage evidence in the status
+surface and never replace the product-file walkthrough with a coverage
+blocker. Never cite `.github/workflows/opencode-review.yml:1` unless that
+file is in the current-head diff.
+
 Review the diff first, then inspect surrounding code only when needed to
 understand impact. Evaluate correctness, API compatibility, security/privacy,
 data integrity, concurrency, error handling, observability, performance,

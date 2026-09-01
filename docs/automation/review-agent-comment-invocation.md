@@ -1,6 +1,6 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-19
+Updated: 2026-08-22
 
 ## Purpose
 
@@ -47,7 +47,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 - `contents: write` is intentionally retained only on jobs that call GitHub's create-repository-dispatch endpoint. GitHub documents that endpoint as requiring Contents repository permission at write level. Removing it would disable the bounded central dispatch path; broad workflow-default write access is not granted.
 - The organization sweep uses the established cross-repository credential chain for reading target comments, while the central repository's own short-lived job token dispatches the central workflows.
 - OpenCode dispatch is restricted to the exact `OPENCODE_REPOSITORY_DISPATCH_TARGETS` allowlist.
-- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are bound into the OpenCode invocation claim and hardcoded in the wrapper. GitHub's create-repository-dispatch endpoint allows at most 10 top-level `client_payload` properties (HTTP 422 otherwise), so those review-only constants are not copied onto the first-hop mention payload. The wrapper's merge-scheduler forward keeps the three flags that override scheduler defaults, together with repository, PR, head/base SHA, base branch, invocation key, and source comment identity.
+- An invocation cannot merge: `enable_auto_merge=false`, `update_branches=false`, and `merge_mode=disabled` are bound into the OpenCode invocation claim and hardcoded in the wrapper. GitHub's create-repository-dispatch endpoint allows at most 10 top-level `client_payload` properties (HTTP 422 otherwise), so those review-only constants are not copied onto the first-hop mention payload. The wrapper's merge-scheduler forward keeps those three flags and explicitly sends `trigger_reviews=true`, together with repository, PR, head/base SHA, base branch, and the invocation key. The source comment remains bound and auditable in the verified invocation claim and durable ledger; it is not repeated to the scheduler, which does not consume it.
 - Every dispatch is bound to live PR number, current head SHA, base branch, source comment, requested agent, and requesting actor metadata fetched or validated immediately before dispatch.
 - Router jobs use the fixed `ubuntu-24.04` runner and an immutable `actions/checkout` v7.0.1 commit pin; checkout credentials are not persisted.
 - A branch-selectable `workflow_dispatch` trigger is intentionally absent. This prevents a repository writer from choosing an unreviewed branch version of the central router while the job holds dispatch permissions.
