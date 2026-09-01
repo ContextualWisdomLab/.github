@@ -182,6 +182,7 @@ OPENCODE_WORKFLOW_NAMES = {
     "OpenCode Review Dispatch",
 }
 OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
+REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW = "__unknown_github_actions_workflow__"
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
@@ -977,20 +978,59 @@ def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return reviews
 
 
+def fetch_workflow_names_by_check_suite_rest(
+    repo: str, head_sha: str
+) -> dict[int, str]:
+    """Return exact-head GitHub Actions workflow names keyed by check-suite ID.
+
+    REST check-run payloads omit workflow identity. The Actions run list
+    preserves the shared check-suite ID, allowing the REST fallback to
+    retain the same workflow-level policy boundary as the GraphQL path.
+    When the integration cannot read Actions, callers receive an empty
+    map and GitHub Actions checks are marked with a fail-closed sentinel.
+    """
+    workflow_names: dict[int, str] = {}
+    page = 1
+    while True:
+        try:
+            payload = gh_api_json(
+                f"repos/{repo}/actions/runs?head_sha={quote(head_sha, safe='')}"
+                f"&per_page=100&page={page}"
+            )
+        except RuntimeError as exc:
+            if github_resource_inaccessible(exc):
+                return {}
+            raise
+        workflow_runs = payload.get("workflow_runs") or []
+        for workflow_run in workflow_runs:
+            suite_id = workflow_run.get("check_suite_id")
+            workflow_name = str(workflow_run.get("name") or "").strip()
+            if suite_id is not None and workflow_name:
+                workflow_names[int(suite_id)] = workflow_name
+        if len(workflow_runs) < 100:
+            break
+        page += 1
+    return workflow_names
+
+
 def rest_check_node(
-    check: dict[str, Any], suite_created_at_by_id: dict[int, str] | None = None
+    check: dict[str, Any],
+    suite_created_at_by_id: dict[int, str] | None = None,
+    workflow_name_by_suite_id: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """Convert a REST check-run payload into the GraphQL status rollup shape.
 
-    ``suite_created_at_by_id`` maps each check suite's REST ``id`` to its
-    ``created_at`` timestamp -- the REST check-run payload itself only
-    carries the check suite's bare ``id`` (see ``rest_pr_node``), so that
-    lookup is how this function attaches the same ``checkSuite.createdAt``
-    signal the GraphQL fragment fetches directly, keeping
-    ``check_run_recency_key`` behaviorally consistent across both paths.
+    ``suite_created_at_by_id`` and ``workflow_name_by_suite_id`` attach
+    the check-suite recency and workflow identity that GraphQL exposes
+    directly. Unknown GitHub Actions workflow identity is represented by
+    a fail-closed sentinel so it cannot be mistaken for a source failure.
     """
     suite_id = (check.get("check_suite") or {}).get("id")
     suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
+    workflow_name = (workflow_name_by_suite_id or {}).get(suite_id)
+    if not workflow_name and (check.get("app") or {}).get("slug") == "github-actions":
+        workflow_name = REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW
+    workflow = {"name": workflow_name} if workflow_name else {}
     return {
         "__typename": "CheckRun",
         "name": check.get("name"),
@@ -998,7 +1038,10 @@ def rest_check_node(
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"createdAt": suite_created_at, "workflowRun": {"workflow": {}}},
+        "checkSuite": {
+            "createdAt": suite_created_at,
+            "workflowRun": {"workflow": workflow},
+        },
     }
 
 
@@ -1032,12 +1075,21 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head_repo = head.get("repo") or {}
     reviews = fetch_all_pr_reviews_rest(repo, number)
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    check_runs = checks.get("check_runs") or []
     check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
     suite_created_at_by_id = {
         suite["id"]: suite.get("created_at")
         for suite in (check_suites.get("check_suites") or [])
         if suite.get("id") is not None
     }
+    workflow_name_by_suite_id = (
+        fetch_workflow_names_by_check_suite_rest(repo, str(head.get("sha") or ""))
+        if any(
+            (check.get("app") or {}).get("slug") == "github-actions"
+            for check in check_runs
+        )
+        else {}
+    )
     combined_status = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/status")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
@@ -1066,8 +1118,12 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check, suite_created_at_by_id)
-                    for check in (checks.get("check_runs") or [])
+                    rest_check_node(
+                        check,
+                        suite_created_at_by_id,
+                        workflow_name_by_suite_id,
+                    )
+                    for check in check_runs
                 ]
                 + [
                     rest_status_node(status)

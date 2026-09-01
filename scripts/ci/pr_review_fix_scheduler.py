@@ -22,6 +22,7 @@ try:
         has_current_head_changes_requested,
         is_opencode_review,
         latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -36,6 +37,7 @@ except ModuleNotFoundError:
         has_current_head_changes_requested,
         is_opencode_review,
         latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -84,7 +86,12 @@ RCA_IGNORED_CHECK_NAMES = frozenset(
     }
 )
 RCA_IGNORED_WORKFLOW_NAMES = frozenset(
-    {"OpenCode Review", "Required OpenCode Review", "OpenCode PR Review"}
+    {
+        "OpenCode Review",
+        "Required OpenCode Review",
+        "OpenCode PR Review",
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
+    }
 )
 FAILED_CHECK_CONCLUSIONS = frozenset(
     {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
