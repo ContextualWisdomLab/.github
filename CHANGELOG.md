@@ -58,11 +58,18 @@ Semantic Versioning where the repository publishes a release.
   the fallback route budget coincidentally equaled the per-domain cap, so
   a single dominant outage domain could exhaust the entire fallback stage
   before a genuinely independent domain's row was ever considered (Devin
-  Review finding). A new `_fallback_domain_aware_account_cap()` helper
-  shrinks the cap to `fallback_limit // domain_count` (floor, minimum 1)
-  whenever more than one domain is competing for that stage's rows, so
-  every domain gets at least one turn; the common single-domain case is
-  unchanged.
+  Review finding). `build_zdr_prioritized_catalog` gains an opt-in
+  `guarantee_domain_coverage` flag (only the priced-fallback call site
+  sets it) that admits in two passes instead of one: the first pass
+  admits at most one row per outage domain, guaranteeing representation;
+  the second fills any remaining budget from whichever domain's
+  next-highest-priority row comes first, still bounded by `account_cap`.
+  A first revision shrank the cap to `fallback_limit // domain_count`
+  instead, which fixed representation but wasted capacity whenever the
+  split was uneven (a second Devin Review finding, "fallback quota wastes
+  probe slots" -- `limit=4` across 3 domains admitted only 3 routes under
+  a floor of 1); the two-pass approach guarantees both properties at
+  once. The common single-domain case is unchanged.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer
