@@ -185,6 +185,37 @@ jobs:
           overwrite: false
           include-hidden-files: false
 
+      - name: Prepare durable draft review-only request marker
+        if: steps.ledger.outputs.claim == 'true'
+        id: draft_marker
+        run: |
+          set -euo pipefail
+          # Names this exactly like scripts/ci/pr_review_merge_scheduler.py's
+          # draft_review_request_artifact_name(repo, pr_number, head_sha) so a
+          # later scheduler pass with no repository_dispatch client_payload of
+          # its own (the Strix-completion workflow_run that follows an initial
+          # security_dispatch) can still recognize this exact explicit request
+          # is in flight and continue it -- see active_draft_review_request().
+          marker_dir="${RUNNER_TEMP}/cwl-draft-review-request"
+          mkdir -p "$marker_dir"
+          marker_name="cwl-draft-review-request-${TARGET_REPOSITORY//\//-}-${PR_NUMBER}-${PR_HEAD_SHA}"
+          printf '{"target_repository":"%s","pr_number":%s,"pr_head_sha":"%s","requested_by":"%s"}\n' \
+            "$TARGET_REPOSITORY" "$PR_NUMBER" "$PR_HEAD_SHA" "$REQUESTED_BY" \
+            >"$marker_dir/marker.json"
+          printf 'marker_name=%s\n' "$marker_name" >>"$GITHUB_OUTPUT"
+
+      - name: Claim durable draft review-only request marker
+        if: steps.ledger.outputs.claim == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.draft_marker.outputs.marker_name }}
+          path: ${{ runner.temp }}/cwl-draft-review-request/marker.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+          include-hidden-files: false
+
       - name: Forward once to the authoritative review-only scheduler
         if: steps.ledger.outputs.claim == 'true'
         run: |

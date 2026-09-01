@@ -1676,7 +1676,7 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
-			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+			fuzz/fuzz_opencode_review_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
 				include_opencode_normalizer=1
 				;;
 			esac
@@ -2651,20 +2651,6 @@ run_strix_once() {
 	if ! resolved_target_path="$(resolve_current_target_path "$TARGET_PATH")"; then
 		return 1
 	fi
-	# contextual-orchestrator's gateway deliberately rejects any request that
-	# combines stream_options.include_usage=true with tools (a correctness
-	# guarantee against silently-incomplete usage accounting; out of scope to
-	# change here). Strix's agent loop always streams and always sends tools,
-	# so every call through that gateway hits the rejection immediately.
-	# Strix itself ships an opt-in for exactly this: LLM_DISABLE_STREAMING=true
-	# makes each turn a single non-streaming get_response (stream:false on the
-	# wire, so stream_options is never sent) replayed as one terminal stream
-	# event; nothing else about the run loop changes. Scope it narrowly to the
-	# contextual-orchestrator loopback so other providers keep real streaming.
-	local strix_disable_streaming="false"
-	if is_contextual_orchestrator_api_base "$llm_api_base_value"; then
-		strix_disable_streaming="true"
-	fi
 	local start_epoch
 	start_epoch="$(date +%s)"
 	local child_llm_api_key=""
@@ -2696,7 +2682,6 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
-	STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming" \
 python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
 import hashlib
 import hmac
@@ -2751,12 +2736,6 @@ child_env["LLM_MODEL"] = os.environ["STRIX_CHILD_MODEL"]
 if os.environ.get("STRIX_CHILD_LLM_API_KEY"):
     child_env["LLM_API_KEY"] = os.environ["STRIX_CHILD_LLM_API_KEY"]
 child_env["STRIX_REPORTS_DIR"] = os.environ["STRIX_CHILD_REPORTS_DIR"]
-if os.environ.get("STRIX_CHILD_DISABLE_STREAMING", "").strip().lower() == "true":
-    # See the comment above strix_disable_streaming's assignment in bash:
-    # this routes only the contextual-orchestrator gateway through Strix's
-    # own non-streaming fallback so stream_options is never sent alongside
-    # tools, without touching how Strix talks to any other provider.
-    child_env["LLM_DISABLE_STREAMING"] = "true"
 for key, value in os.environ.items():
     if key.startswith("FAKE_STRIX_") and value:
         child_env[key] = value
@@ -2977,10 +2956,34 @@ is_llm_api_connection_error() {
 		return 0
 	fi
 
-	if grep -Eiq 'litellm(\.exceptions)?\.InternalServerError' "$STRIX_LOG" &&
-		grep -Eiq 'OpenAIException' "$STRIX_LOG" &&
-		grep -Eiq 'Connection error' "$STRIX_LOG" &&
-		grep -Eiq '(openai|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
+	local internal_server_error_blocks
+	internal_server_error_blocks=$(awk '
+		{
+			if (remaining > 0) {
+				block = block " " $0
+				remaining--
+				if (remaining == 0) print block
+			} else if ($0 ~ /litellm(\.exceptions)?\.InternalServerError/) {
+				# Strix prints provider context immediately before some generic
+				# LiteLLM internal-server errors. Keep that context bounded too.
+				block = previous_two " " previous_one " " $0
+				remaining = 5
+			}
+			previous_two = previous_one
+			previous_one = $0
+		}
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG")
+
+	# Match against the already-fully-captured awk output rather than a live
+	# pipe: piping straight into `grep -q` lets grep close its end of the
+	# pipe as soon as it finds a match while awk may still be writing later
+	# blocks from a large log. Under `set -o pipefail` the SIGPIPE that awk
+	# then receives can make the pipeline report failure even though a real
+	# match was found earlier in the stream, silently suppressing a retry
+	# that should have fired. Command substitution has no live reader to
+	# close early, so awk always runs to completion.
+	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' <<<"$internal_server_error_blocks"; then
 		return 0
 	fi
 
@@ -2997,12 +3000,18 @@ is_llm_service_unavailable_error() {
 	# OpenRouter's dynamic free route can wrap one upstream 502 over several
 	# terminal lines. Join only the bounded LiteLLM error block so unrelated
 	# target-app output elsewhere in the log cannot assemble a retry signature.
-	if awk '
+	# Capture awk's output first (see is_llm_api_connection_error above for
+	# why) so a large log with many matching blocks cannot make `grep -q`'s
+	# early pipe close SIGPIPE the still-writing awk producer under
+	# `set -o pipefail`, which would otherwise report failure despite a real
+	# match.
+	local openrouter_error_blocks
+	openrouter_error_blocks=$(awk '
 		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
 		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
 		END { if (remaining > 0) print block }
-	' "$STRIX_LOG" |
-		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
+	' "$STRIX_LOG")
+	if grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$openrouter_error_blocks"; then
 		return 0
 	fi
 

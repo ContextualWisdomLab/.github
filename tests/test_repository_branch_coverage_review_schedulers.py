@@ -24,6 +24,7 @@ def test_noema_public_dns_result_reaches_valid_model_response(
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://review.example.invalid/v1/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
     monkeypatch.setattr(
         noema.socket,
         "getaddrinfo",
@@ -62,11 +63,11 @@ def test_noema_public_dns_result_reaches_valid_model_response(
         """Open one deterministic provider response."""
 
         def open(self, _request: Any, timeout: int) -> Response:
-            assert timeout == 120
+            assert timeout == noema.NOEMA_LLM_TIMEOUT_SECONDS
             return Response()
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
-    verdict = noema.call_llm("owner/repo", 1, {"headRefOid": "a" * 40}, "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, {"headRefOid": "a" * 40}, "diff", False, "a" * 40)
     assert verdict["decision"] == "approve"
 
 
@@ -78,7 +79,10 @@ def test_noema_handoff_returns_current_terminal_state() -> None:
         {
             "commit_id": head,
             "user": {"login": handoff.NOEMA_REVIEW_AUTHOR},
-            "body": handoff.NOEMA_REVIEW_MARKER,
+            "body": (
+                f"- Head SHA: `{head}`\n"
+                f"<!-- noema-review-gate head_sha={head} decision=approve -->"
+            ),
             "state": "approved",
         }
     ]
