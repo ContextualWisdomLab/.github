@@ -5,3 +5,5 @@ manual-kick=20260901T2230+0900
 bootstrap_run=33513329313
 exact-helper-kick=20260901T2232+0900
 stale-contract-repair=20260901T2245+0900
+
+shell-contract-reconciled-v2=20260901T135954Z
