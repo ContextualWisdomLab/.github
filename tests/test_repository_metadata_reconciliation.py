@@ -66,3 +66,13 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert rankweave["pages"] is True
     assert "information-retrieval" in rankweave["topics"]
     assert "trec" in rankweave["topics"]
+
+
+def test_deepwiki_intent_is_an_executable_default_branch_gate() -> None:
+    """A declared DeepWiki badge must be verified instead of remaining an inert flag."""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "_deepwiki_badge_exists" in source
+    assert "https://deepwiki.com/badge.svg" in source
+    assert "https://deepwiki.com/{ORGANIZATION}/{repository}" in source
+    assert "DeepWiki badge requested for {repository}" in source
