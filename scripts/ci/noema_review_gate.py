@@ -7,6 +7,7 @@ import argparse
 import ast
 import base64
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -28,6 +29,29 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent",
 }
 GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
+# Wraps the start of the fixed-format footer submit_review() writes below the
+# LLM-generated summary/findings text. This lets noema_review_handoff.py
+# locate the footer by *position* (the trusted, machine-emitted span between
+# this marker and the closing "<!-- noema-review-gate head_sha=... -->"
+# comment) instead of by scanning for a content pattern that the LLM's own
+# unsanitized output could coincidentally reproduce. Keep this literal in
+# exact sync with NOEMA_REVIEW_FOOTER_MARKER in noema_review_handoff.py.
+NOEMA_REVIEW_FOOTER_MARKER = "<!-- noema-review-gate-footer -->"
+# Must stay byte-for-byte identical to NOEMA_REVIEW_MARKER in
+# noema_review_handoff.py. Used only to isolate the closing marker's
+# position, not as a content-pattern check — see
+# _noema_review_footer_and_marker_tail().
+NOEMA_REVIEW_CLOSING_MARKER_PREFIX = "<!-- noema-review-gate "
+# Must stay byte-for-byte identical to NOEMA_MARKER_HEAD_RE in
+# noema_review_handoff.py, so existing_noema_review() applies the exact same
+# exact-head structural validation noema_review_state() requires before a
+# review can suppress republication.
+NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
+    r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->"
+)
+# Must stay byte-for-byte identical to NOEMA_BODY_HEAD_RE in
+# noema_review_handoff.py.
+NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -107,6 +131,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       isDraft
       state
       headRefOid
+      baseRefOid
       reviewDecision
       reviewThreads(first: 100) {
         nodes {
@@ -192,21 +217,58 @@ def review_commit(review: dict[str, Any]) -> str:
     return ((review.get("commit") or {}).get("oid") or "").strip()
 
 
+def _noema_review_footer_and_marker_tail(body: str) -> tuple[str, str]:
+    """Return the trusted footer span and marker tail of a Noema review body.
+
+    Mirrors ``noema_review_handoff.py``'s ``_isolate_trusted_footer()`` and
+    ``_isolate_trusted_marker_tail()`` exactly: both spans are located by
+    *position*, strictly between the machine-emitted
+    ``NOEMA_REVIEW_FOOTER_MARKER`` and (for the footer span) the closing
+    ``<!-- noema-review-gate head_sha=... decision=... -->`` comment, never by
+    scanning for a content pattern the LLM's own unsanitized summary/findings
+    text could coincidentally reproduce. Returns ``("", "")`` when the footer
+    marker is absent, so the caller's exact-one-match check fails closed.
+    """
+    marker_tail_parts = body.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    marker_tail = marker_tail_parts[1] if len(marker_tail_parts) == 2 else ""
+
+    before_closing_marker = body.rsplit(NOEMA_REVIEW_CLOSING_MARKER_PREFIX, 1)[0]
+    footer_parts = before_closing_marker.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    footer_text = footer_parts[1] if len(footer_parts) == 2 else ""
+    return footer_text, marker_tail
+
+
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
-    """Return whether Noema already reviewed the current head."""
+    """Return whether Noema already posted a trusted verdict for the current head.
+
+    Applies the exact same exact-head structural validation
+    ``noema_review_handoff.py``'s ``noema_review_state()`` requires before
+    accepting a review as a valid current-head verdict — not just marker
+    presence. A review whose markers are both present but whose body-side
+    bullet or closing-marker SHA is missing, malformed, or duplicated (for
+    example a hand-edited or corrupted review, or one predating the footer
+    marker) is a review ``noema_review_state()`` can never recognize as a
+    valid current-head verdict; treating it as "already reviewed" here would
+    let it silently suppress every future publish attempt for an otherwise
+    unchanged head, stalling the PR forever.
+    """
     head_sha = str(pr.get("headRefOid") or "")
-    marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if review_commit(review) != head_sha:
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if (
-            actor
-            and review_author(review) == actor
-            and marker in str(review.get("body") or "")
-        ):
-            return True
+        if not actor or review_author(review) != actor:
+            continue
+        body = str(review.get("body") or "")
+        footer_text, marker_tail = _noema_review_footer_and_marker_tail(body)
+        marker_heads = NOEMA_REVIEW_CLOSING_MARKER_RE.findall(marker_tail)
+        body_heads = NOEMA_REVIEW_BODY_HEAD_RE.findall(footer_text)
+        if len(marker_heads) != 1 or len(body_heads) != 1:
+            continue
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
+            continue
+        return True
     return False
 
 
@@ -394,8 +456,14 @@ def truncate_text(text: str, limit: int) -> str:
     return f"{text[:limit]}\n[truncated {omitted} characters]"
 
 
-def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
-    """Fetch changed file paths for the pull request."""
+def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
+    """Fetch changed paths and statuses without corrupting whitespace in paths.
+
+    The Files API is projected to one JSON-encoded two-element array per file.
+    JSON escaping preserves tabs, newlines, and edge spaces inside ``filename``
+    while keeping pagination output line-delimited and parseable. Malformed
+    records fail closed instead of being reinterpreted as another path/status.
+    """
     output = run(
         [
             "gh",
@@ -403,16 +471,34 @@ def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
             f"repos/{repo}/pulls/{number}/files",
             "--paginate",
             "--jq",
-            ".[].filename",
+            r'.[] | [.filename, .status] | @json',
         ]
     )
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    files: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("GitHub changed-file response was malformed") from exc
+        if (
+            not isinstance(record, list)
+            or len(record) != 2
+            or type(record[0]) is not str
+            or not record[0]
+            or type(record[1]) is not str
+            or not record[1]
+        ):
+            raise RuntimeError("GitHub changed-file response was malformed")
+        files.append((record[0], record[1]))
+    return files
 
 
-def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
-    """Fetch a changed file's current-head text content through the GitHub API."""
+def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
+    """Fetch one repository text file at an exact Git ref through GitHub."""
     encoded_path = urllib.parse.quote(path, safe="/")
-    encoded_ref = urllib.parse.quote(head_sha, safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
         [
             "gh",
@@ -428,17 +514,102 @@ def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
     return base64.b64decode(compact).decode("utf-8", errors="replace")
 
 
-def changed_file_context(repo: str, number: int, head_sha: str) -> str:
-    """Build bounded changed-file context for cross-file review reasoning."""
+def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
+    """Return the immutable merge-base SHA for the current base/head pair."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+        raise RuntimeError("PR base SHA was unavailable or malformed")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
+        raise RuntimeError("PR head SHA was unavailable or malformed")
+    merge_base = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/compare/{base_sha}...{head_sha}",
+            "--jq",
+            ".merge_base_commit.sha // empty",
+        ]
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", merge_base):
+        raise RuntimeError("GitHub compare response did not contain a valid merge-base SHA")
+    return merge_base.lower()
+
+
+def removed_file_context_section(
+    repo: str,
+    path: str,
+    merge_base_sha: str,
+    merge_base_error: str = "",
+) -> str:
+    """Build review context for a file deleted relative to the merge base.
+
+    A deleted path does not exist at the PR head. Its relevant pre-deletion
+    evidence is therefore the immutable merge base shared by the current base
+    and reviewed head, not the moving tip of the base branch. When merge-base
+    discovery or content retrieval is unavailable, the context records that
+    bounded evidence failure explicitly rather than inventing head content.
+    """
+    if merge_base_error:
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Merge-base lookup unavailable: {merge_base_error}"
+        )
+    if not merge_base_sha:
+        return (
+            f"### {path}\n[File removed in this PR — no head-side content applicable; "
+            "merge-base SHA unavailable for pre-deletion content.]"
+        )
+    try:
+        content = fetch_file_content_at_ref(repo, path, merge_base_sha)
+    except RuntimeError as exc:
+        reason = scrub_sensitive_data(str(exc)) or "unknown error"
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Unavailable from merge-base content API: {reason}"
+        )
+    if not content:
+        return (
+            f"### {path}\n[File removed in this PR — no UTF-8 text content "
+            "available from merge-base content API.]"
+        )
+    return (
+        f"### {path}\n[File removed in this PR. Pre-deletion content at merge base "
+        f"`{merge_base_sha}`:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+    )
+
+
+def changed_file_context(
+    repo: str,
+    number: int,
+    head_sha: str,
+    base_sha: str = "",
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded changed-file context from one status-preserving snapshot."""
     if not head_sha:
         return "Changed file context unavailable: missing PR head SHA."
-    paths = fetch_changed_file_paths(repo, number)
-    if not paths:
+    files = list(changed_files) if changed_files is not None else fetch_changed_files(repo, number)
+    if not files:
         return "Changed file context unavailable: PR reported no changed files."
-    sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+
+    merge_base_sha = ""
+    merge_base_error = ""
+    if any(status == "removed" for _path, status in files[:MAX_CONTEXT_FILES]):
         try:
-            content = fetch_head_file_content(repo, path, head_sha)
+            merge_base_sha = fetch_merge_base_sha(repo, base_sha, head_sha)
+        except RuntimeError as exc:
+            merge_base_error = scrub_sensitive_data(str(exc)) or "unknown error"
+
+    sections: list[str] = []
+    for path, status in files[:MAX_CONTEXT_FILES]:
+        if status == "removed":
+            sections.append(
+                removed_file_context_section(
+                    repo, path, merge_base_sha, merge_base_error
+                )
+            )
+            continue
+        try:
+            content = fetch_file_content_at_ref(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
             sections.append(f"### {path}\nUnavailable from head content API: {reason}")
@@ -447,8 +618,8 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
             sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
-    if len(paths) > MAX_CONTEXT_FILES:
-        sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
+    if len(files) > MAX_CONTEXT_FILES:
+        sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
 
 
@@ -474,28 +645,24 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def load_codegraph_context() -> str:
-    """Load optional precomputed CodeGraph context for structural review evidence."""
-    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
-    except OSError as exc:
-        return f"CodeGraph context unavailable: {exc}"
-
-
-def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
-    """Build bounded non-diff context for the Noema reviewer."""
+def build_review_context(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded non-diff context from review threads and changed files."""
     sections: list[str] = []
-    codegraph = load_codegraph_context()
-    if codegraph:
-        sections.append("## CodeGraph context\n" + codegraph)
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
-    files = changed_file_context(repo, number, str(pr.get("headRefOid") or ""))
+    files = changed_file_context(
+        repo,
+        number,
+        str(pr.get("headRefOid") or ""),
+        str(pr.get("baseRefOid") or ""),
+        changed_files,
+    )
     if files:
         sections.append("## Changed file context\n" + files)
     return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
@@ -922,6 +1089,7 @@ def call_llm(
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
+    is_retry: bool = False,
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
 
@@ -935,6 +1103,13 @@ def call_llm(
     discard anyway once this function returns. See ``fetch_pr`` for the live
     lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
     condition is reported distinctly to the caller.
+
+    ``is_retry`` tracks retry state independently of ``repair_error``'s text:
+    several transport exceptions (a bare ``OSError``/``TimeoutError`` or
+    ``http.client.HTTPException`` raised with no message) stringify to an
+    empty string, so gating on ``repair_error``'s truthiness alone would let
+    an empty-message failure retry unboundedly instead of failing closed
+    after one attempt.
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
@@ -958,7 +1133,7 @@ def call_llm(
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
+                "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
                 json.dumps(
                     {
@@ -994,10 +1169,11 @@ def call_llm(
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
-                        f"Your prior verdict was rejected by the trusted validator: {repair_error}",
+                        "Your prior verdict was rejected by the trusted validator: "
+                        f"{repair_error or 'no diagnostic message was available'}",
                         "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
                     ]
-                    if repair_error
+                    if is_retry
                     else []
                 ),
                 f"Repository: {repo}",
@@ -1030,9 +1206,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request) as response:  # nosec B310
-        raw_bytes = response.read()
     try:
+        with opener.open(request) as response:  # nosec B310
+            raw_bytes = response.read()
         raw = decode_llm_response_body(raw_bytes)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
@@ -1060,9 +1236,11 @@ def call_llm(
         if decision == "request_changes" and not findings:
             raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except RuntimeError as exc:
-        if repair_error:
-            raise
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        if is_retry:
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(str(exc)) from exc
         if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."
@@ -1077,6 +1255,7 @@ def call_llm(
             review_context,
             changed_paths,
             str(exc),
+            is_retry=True,
         )
     return verdict
 
@@ -1141,6 +1320,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "### Findings",
             *(findings or ["- No blocking findings."]),
             "",
+            NOEMA_REVIEW_FOOTER_MARKER,
             f"- Result: {event}",
             f"- Head SHA: `{head_sha}`",
             f"- Reviewer credential: `{source}`",
@@ -1192,8 +1372,9 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    changed_paths = fetch_changed_file_paths(repo, number)
-    review_context = build_review_context(repo, number, pr)
+    changed_files = fetch_changed_files(repo, number)
+    changed_paths = tuple(path for path, _status in changed_files)
+    review_context = build_review_context(repo, number, pr, changed_files)
     try:
         verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     except StaleHeadDuringRepairRetryError:

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import http.client
 import json
 import os
 import shlex
@@ -682,25 +683,82 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_existing_noema_review_matches_actor_and_head():
-    noema_marker = "<!-- noema-review-gate head_sha=head -->"
+    head = "a" * 40
+    noema_marker = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     assert noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="human", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="human", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body="review without gate marker")]}),
+        make_pr(
+            headRefOid=head,
+            reviews={"nodes": [review(commit=head, login="noema", body="review without gate marker")]},
+        ),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="", body=noema_marker)]}),
         "",
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+
+
+def test_existing_noema_review_rejects_well_formed_body_bound_to_a_different_head():
+    """A well-formed footer/marker pair naming a stale SHA must not match.
+
+    The review's own commit oid can match the current head even when its
+    authored body text still carries the previous head's SHA bindings (a
+    corrupted or hand-edited review) — this is distinct from the missing/
+    malformed case and exercises the SHA-equality check on its own.
+    """
+    head = "a" * 40
+    stale = "b" * 40
+    stale_bound_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{stale}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={stale} decision=approve -->",
+        ]
+    )
+    assert not noema.existing_noema_review(
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=stale_bound_body)]}),
+        "noema",
+    )
+
+
+def test_existing_noema_review_rejects_legacy_body_without_footer_marker():
+    """A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a rerun.
+
+    noema_review_handoff.py's noema_review_state() can never recognize such a
+    review as a valid current-head verdict (its trusted-span helpers return
+    empty without the footer marker), so treating it as "already reviewed"
+    here would stall an unchanged PR forever: the gate skips republishing,
+    and the handoff never accepts what was already posted.
+    """
+    legacy_marker = "<!-- noema-review-gate head_sha=head -->"
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="noema", body=legacy_marker)]}),
+        "noema",
+    )
 
 
 def test_require_expected_head_rejects_invalid_closed_and_stale_targets():
@@ -1249,8 +1307,8 @@ def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatc
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
 
     def fake_call_llm(*args, **kwargs):
         raise noema.StaleHeadDuringRepairRetryError(
@@ -1338,6 +1396,321 @@ def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch)
     assert "prior verdict was rejected" in json.loads(open_calls[1].data)["messages"][1]["content"]
 
 
+def test_call_llm_repairs_once_after_a_transport_error_then_succeeds(monkeypatch):
+    """A transport-level failure (e.g. a genuine HTTP 502 from the gateway)
+    must not crash the job with an unhandled traceback.
+
+    Live incident (ContextualWisdomLab/naruon#1486): ``opener.open(request)``
+    sat outside the surrounding try/except, which only guarded the
+    JSON-decode/validation step after a successful response. Any transport
+    exception (HTTPError, URLError) from the request itself propagated as an
+    unhandled traceback instead of getting the same one-time repair-retry the
+    malformed-verdict path already has. Widening the try to also cover the
+    request itself, and catching ``urllib.error.URLError`` alongside
+    ``RuntimeError``, integrates it with that existing boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_transport_error(monkeypatch):
+    """Two consecutive transport errors must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="Bad Gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_truncated_response_then_succeeds(monkeypatch):
+    """A truncated response body must not crash the job either.
+
+    ``response.read()`` can raise ``http.client.IncompleteRead`` when the
+    server closes the connection before delivering the full
+    ``Content-Length`` body. That exception is neither a ``RuntimeError``
+    nor a ``urllib.error.URLError`` -- it is a plain ``http.client
+    .HTTPException`` -- so it slipped through the transport-error boundary
+    added for the HTTPError/URLError case and still crashed the required
+    check with an unhandled traceback."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            return TruncatedResponse()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_truncated_response(monkeypatch):
+    """Two consecutive truncated reads must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return TruncatedResponse()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="IncompleteRead"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds(monkeypatch):
+    """A raw socket-level failure during the request/connect phase -- not
+    wrapped as a ``urllib.error.URLError`` -- must not crash the job either.
+
+    ``opener.open(request)`` can raise a bare ``OSError`` subtype (e.g. a
+    ``TimeoutError``/``socket.timeout``, or a connection reset) directly from
+    the underlying ``http.client`` connection when the failure happens before
+    urllib gets a chance to wrap it as ``URLError``. This exercises the
+    ``OSError`` branch of the transport-failure boundary on a distinct
+    exception path from the ``http.client.HTTPException`` branch
+    (``IncompleteRead``, above) and the ``urllib.error.URLError`` branch
+    (``HTTPError``, further above)."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise TimeoutError("timed out waiting for the gateway")
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_socket_timeout(monkeypatch):
+    """Two consecutive raw socket timeouts must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise TimeoutError("timed out waiting for the gateway")
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="timed out waiting for the gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds(monkeypatch):
+    """A transport exception whose ``str()`` is empty (a bare ``OSError()``/
+    ``TimeoutError()``, or an ``http.client.HTTPException`` raised with no
+    message -- all of these stringify to ``''`` in practice) must still get
+    exactly one repair retry, the same as any other transport failure.
+
+    Devin Review on #1566: gating the retry-vs-fail-closed decision on
+    ``repair_error``'s truthiness conflated "is this the second attempt"
+    with "does the caught exception have display text" -- an empty-message
+    failure on the first attempt would keep ``repair_error`` falsy on the
+    recursive call too, so the retry state was lost. ``is_retry`` now tracks
+    that state explicitly and independently of the exception's text."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise OSError()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error(monkeypatch):
+    """Two consecutive empty-message transport failures must still fail
+    closed after exactly one repair retry, never retry unboundedly.
+
+    Bounds the fixture at 6 open() calls so a regression that reintroduces
+    unbounded recursion fails this test fast with a clear AssertionError
+    instead of recursing until CPython's own recursion limit."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        if len(open_calls) > 5:
+            raise AssertionError("call_llm retried more than once on an empty-message transport error")
+        raise OSError()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
 @pytest.mark.parametrize("choices", [{"a": 1}, 5])
 def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choices):
     """A malformed (non-list) choices field surfaces through call_llm's
@@ -1378,15 +1751,15 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
         noema.current_actor()
 
 
-def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
+def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
-    original_fetch_paths = noema.fetch_changed_file_paths
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: [])
+    original_fetch_changed_files = noema.fetch_changed_files
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", original_fetch_paths)
+    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_changed_files)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
     calls = []
@@ -1395,7 +1768,10 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
-            return "src/a.py\nREADME.md\nempty.txt\n"
+            return "\n".join(
+                json.dumps([path, "modified"])
+                for path in ("src/a.py", "README.md", "empty.txt")
+            ) + "\n"
         if "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
@@ -1405,9 +1781,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
-    codegraph_path = tmp_path / "codegraph.md"
-    codegraph_path.write_text("call graph: src/a.py -> tests", encoding="utf-8")
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(codegraph_path))
     pr = make_pr(
         headRefOid="head sha",
         reviewThreads={
@@ -1431,8 +1804,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
 
     context = noema.build_review_context("owner/repo", 7, pr)
 
-    assert "## CodeGraph context" in context
-    assert "call graph: src/a.py -> tests" in context
     assert "Thread open at src/a.py:3" in context
     assert "reviewer: check call site" in context
     assert "### src/a.py" in context
@@ -1442,16 +1813,14 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     assert any("/files" in call[2] for call in calls)
 
 
-def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch, tmp_path):
-    monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
-    assert noema.load_codegraph_context() == ""
-
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(tmp_path / "missing.md"))
-    assert "CodeGraph context unavailable" in noema.load_codegraph_context()
-
+def test_review_context_reports_omitted_files(monkeypatch, tmp_path):
     paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
-    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, head_sha: "x")
+    monkeypatch.setattr(
+        noema,
+        "fetch_changed_files",
+        lambda repo, number: [(path, "modified") for path in paths],
+    )
+    monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
 
     context = noema.changed_file_context("owner/repo", 7, "head")
 
@@ -1691,17 +2060,34 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
 
+    valid_review_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     cases = [
         (make_pr(headRefOid=head, isDraft=True), "noema"),
-        (make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+        (
+            make_pr(
+                headRefOid=head,
+                reviews={"nodes": [review(commit=head, login="noema", body=valid_review_body)]},
+            ),
+            "noema",
+        ),
     ]
     for pr, actor in cases:
         calls.clear()
@@ -1709,6 +2095,43 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7, head) == 0
         assert calls == []
+
+    # A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a
+    # rerun: noema_review_handoff.py's noema_review_state() can never accept
+    # it as a valid current-head verdict, so the gate must republish rather
+    # than silently stall the PR on an unchanged head.
+    legacy_pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]},
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls
+
+    # A review with both markers present but a missing/malformed body-side or
+    # closing-marker SHA binding (Devin Review, PR #1500) must also not
+    # suppress a rerun: noema_review_handoff.py's noema_review_state() can
+    # never recognize such a review as a valid current-head verdict either,
+    # so treating it as "already reviewed" here would stall the PR forever.
+    malformed_pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                review(
+                    commit=head,
+                    login="noema",
+                    body=noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->",
+                )
+            ]
+        },
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=malformed_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "")
@@ -1732,8 +2155,8 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
@@ -1771,8 +2194,8 @@ def test_head_movement_stops_before_review_publication(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
         noema,
         "call_llm",
@@ -1794,8 +2217,8 @@ def test_closed_during_model_stops_before_review_publication(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
     monkeypatch.setattr(
         noema,
@@ -1813,8 +2236,8 @@ def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
     calls = []
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
@@ -1830,8 +2253,8 @@ def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
         noema,
         "call_llm",
@@ -1852,8 +2275,8 @@ def test_inspect_and_review_rechecks_head_before_publication(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(responses))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
-    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
-    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: submitted.append(args))
 
