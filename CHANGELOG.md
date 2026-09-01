@@ -35,7 +35,7 @@ Semantic Versioning where the repository publishes a release.
   `#1443`): the `Resolve current-head formal OpenCode verdict` step decided
   closed/draft purely from the triggering event's own stored payload
   (`github.event.action`/`github.event.pull_request.draft`). A manual
-  re-run of an old workflow run (e.g. a stale `converted_to_draft` run) 
+  re-run of an old workflow run (e.g. a stale `converted_to_draft` run)
   replays that event's payload verbatim, so a since-ready, unreviewed PR at
   the same head SHA could pass this required check on a stale "still draft"
   reading — a real required-review bypass, not merely a false alarm. The
