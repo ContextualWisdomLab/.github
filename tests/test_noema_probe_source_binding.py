@@ -64,6 +64,21 @@ def _verdict(first_evidence: dict, second_evidence: dict) -> dict:
     }
 
 
+def _valid_verdict() -> dict:
+    """Return one fully source-bound verdict for coordinate-shape regressions."""
+    first = {
+        "alias_origin": _source_ref(1),
+        "mutation_attempt": _source_ref(1),
+        "post_validation_observation": _source_ref(1),
+    }
+    second = {
+        "incoming_identity": _source_ref(10),
+        "retained_identity": _source_ref(10),
+        "mismatch_guard": _source_ref(10),
+    }
+    return _verdict(first, second)
+
+
 def test_generic_boilerplate_witnesses_do_not_authorize_probe_classes() -> None:
     """Correct field names plus arbitrary prose must not count as source-backed classes."""
     verdict = _verdict(
@@ -84,30 +99,44 @@ def test_generic_boilerplate_witnesses_do_not_authorize_probe_classes() -> None:
 
 def test_exact_changed_source_refs_can_back_distinct_probe_classes() -> None:
     """Every class witness must resolve to the exact changed-side source line it claims."""
-    first = {
-        "alias_origin": _source_ref(1),
-        "mutation_attempt": _source_ref(1),
-        "post_validation_observation": _source_ref(1),
-    }
-    second = {
-        "incoming_identity": _source_ref(10),
-        "retained_identity": _source_ref(10),
-        "mismatch_guard": _source_ref(10),
-    }
-    gate.validate_substantive_verdict(_verdict(first, second), DIFF, ["tool.py"])
+    gate.validate_substantive_verdict(_valid_verdict(), DIFF, ["tool.py"])
 
 
 def test_probe_class_witness_cannot_point_at_an_unrelated_changed_line() -> None:
     """A class cannot borrow another probe's line merely because that line also changed."""
-    first = {
-        "alias_origin": _source_ref(10),
-        "mutation_attempt": _source_ref(10),
-        "post_validation_observation": _source_ref(10),
-    }
-    second = {
-        "incoming_identity": _source_ref(10),
-        "retained_identity": _source_ref(10),
-        "mismatch_guard": _source_ref(10),
+    verdict = _valid_verdict()
+    wrong_ref = _source_ref(10)
+    verdict["adversarial_validation"]["probes"][0]["class_evidence"] = {
+        "alias_origin": dict(wrong_ref),
+        "mutation_attempt": dict(wrong_ref),
+        "post_validation_observation": dict(wrong_ref),
     }
     with pytest.raises(RuntimeError, match="probe location"):
-        gate.validate_substantive_verdict(_verdict(first, second), DIFF, ["tool.py"])
+        gate.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+@pytest.mark.parametrize("bad_line", [True, False])
+def test_reviewed_line_rejects_boolean_coordinate(bad_line: bool) -> None:
+    """JSON booleans must never compare equal to integer diff coordinates."""
+    verdict = _valid_verdict()
+    verdict["reviewed_lines"][0]["line"] = bad_line
+    with pytest.raises(RuntimeError, match="canonical positive integer line"):
+        gate.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+@pytest.mark.parametrize("bad_line", [True, False])
+def test_probe_location_rejects_boolean_coordinate(bad_line: bool) -> None:
+    """Probe locations must carry canonical integer line numbers before membership checks."""
+    verdict = _valid_verdict()
+    verdict["adversarial_validation"]["probes"][0]["line"] = bad_line
+    with pytest.raises(RuntimeError, match="canonical positive integer line"):
+        gate.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
+
+
+@pytest.mark.parametrize("bad_line", [True, False])
+def test_class_evidence_rejects_boolean_coordinate(bad_line: bool) -> None:
+    """Class-evidence references cannot exploit bool/int equality in dictionary comparison."""
+    verdict = _valid_verdict()
+    verdict["adversarial_validation"]["probes"][0]["class_evidence"]["alias_origin"]["line"] = bad_line
+    with pytest.raises(RuntimeError, match="canonical positive integer line"):
+        gate.validate_substantive_verdict(verdict, DIFF, ["tool.py"])
