@@ -184,12 +184,12 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         parameters = review_rules[0].get("parameters")
         parameters = parameters if isinstance(parameters, dict) else {}
         approving_reviews = parameters.get("required_approving_review_count")
-        if approving_reviews != 2:
-            errors.append("exactly two approving reviews are not required")
+        if approving_reviews != 0:
+            errors.append("central solo-maintainer ruleset must not require approving reviews")
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not True:
-            errors.append("last-push approval protection is disabled")
+        if parameters.get("require_last_push_approval") is not False:
+            errors.append("central solo-maintainer ruleset must not require last-push approval")
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("review-thread resolution protection is disabled")
         allowed_methods = set(parameters.get("allowed_merge_methods") or [])
@@ -293,12 +293,12 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
     else:
         raw_parameters = review_rules[0].get("parameters")
         parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
-        if parameters.get("required_approving_review_count") != 2:
-            errors.append("repository ruleset does not require exactly two approving reviews")
+        if parameters.get("required_approving_review_count") != 0:
+            errors.append("repository solo-maintainer ruleset must not require approving reviews")
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("repository ruleset stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not True:
-            errors.append("repository ruleset last-push approval protection is disabled")
+        if parameters.get("require_last_push_approval") is not False:
+            errors.append("repository solo-maintainer ruleset must not require last-push approval")
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("repository ruleset review-thread resolution protection is disabled")
         allowed_methods = set(parameters.get("allowed_merge_methods") or [])
