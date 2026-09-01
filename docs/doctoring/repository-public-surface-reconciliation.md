@@ -42,7 +42,7 @@ The fleet loop is deliberately non-blocking. Every repository or label assignmen
 
 - Pull-request validation has `contents: read` only. It cannot mutate repository settings or labels.
 - Apply runs only when the scheduled workflow is executing from trusted `refs/heads/main` after validation.
-- The apply step uses the established maintainer credential rather than widening the ordinary workflow token.
+- The apply step uses the established maintainer credential rather than widening the ordinary workflow token. PR #1625 owns the reviewed migration to the dedicated `CWL_REPOSITORY_METADATA_TOKEN`; until that reaches protected main, no documentation may claim the dedicated credential is live.
 - Repository README changes remain leaf-owned. The central reconciler verifies exact DeepWiki linkage but never fabricates or silently edits customer-facing README copy.
 - Pages has two reviewed deployment modes. Legacy mode requires a regular `docs/index.md` file on the live default branch. Explicit `pages_mode: workflow` requires a regular `.github/workflows/pages.yml` file **and** an already-configured live Pages site whose `build_type` is `workflow`.
 - Workflow mode is preserve-only: the reconciler does not create or convert the Pages configuration. Missing Pages, a legacy live configuration, a directory at the required workflow path, or a missing workflow file fails before description/topic/Page writes for that repository.
@@ -90,4 +90,4 @@ GitHub's current REST Pages contract supports `build_type` values `legacy` and `
 
 ## Known integration boundary
 
-Until this 22-repository desired-state extension reaches protected `.github/main`, its additional settings reconciliation cannot run from the trusted control plane. Leaf PRs whose badge or Pages source is still branch-only remain repository-local precondition blockers. These are integration states, not reasons to idle the fleet: continue eligible siblings, labels, and independent public-surface work while blocked leaves fail closed.
+The 22-repository desired-state extension is now protected on `.github/main@611feef038ad52d7ee1214d03ea3527289ebf711`; this label-taxonomy lane is the remaining central source delta in the metadata stack. Live settings convergence still requires repository-local badge/Pages prerequisites, trusted protected-main apply, and postcondition re-reads. The dedicated settings-credential migration remains owned by #1625 and is not claimed live before that PR lands. These integration states are not reasons to idle the fleet: blocked leaves fail closed while eligible siblings, labels, and independent public-surface work continue.
