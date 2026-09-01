@@ -14,6 +14,7 @@ from typing import Any
 
 try:
     from pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
         context_nodes,
@@ -27,6 +28,7 @@ try:
     )
 except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
         context_nodes,
@@ -78,6 +80,7 @@ RCA_IGNORED_CHECK_NAMES = frozenset(
         "metadata-only gate evaluation",
         "opencode-review",
         "PR governance metadata controller",
+        "scan-pr-queue",
     }
 )
 FAILED_CHECK_CONCLUSIONS = frozenset(
@@ -406,19 +409,18 @@ def inspect_pr(
         repair_mode = "review"
         resolve_conflict = False
 
-    draft_rca, draft_rca_reasons = needs_rca_repair(pr)
-    if pr.get("isDraft") and not draft_rca:
+    needs_rca, rca_reasons = needs_rca_repair(pr)
+    if pr.get("isDraft") and not needs_rca:
         return "skip", ("draft PR",)
 
-    if not needs_fix and not conflicted:
-        needs_rca, rca_reasons = draft_rca, draft_rca_reasons
-        if needs_rca:
-            repair_mode = "rca"
-            reasons = rca_reasons
-        else:
-            return "skip", (
-                "no current-head autofixable review, failed-check RCA, or approved merge conflict",
-            )
+    if not conflicted and needs_rca:
+        needs_fix = True
+        repair_mode = "rca"
+        reasons = rca_reasons
+    elif not needs_fix and not conflicted:
+        return "skip", (
+            "no current-head autofixable review, failed-check RCA, or approved merge conflict",
+        )
 
     if comments is None:
         comments = issue_comments(repo, number)
@@ -450,6 +452,9 @@ def process_queue(args: argparse.Namespace) -> int:
         if args.pr_number
         else fetch_open_prs(args.repo, args.max_prs)
     )
+    for pr in prs:
+        complete_paginated_pr_contexts(args.repo, pr)
+
     dispatched = 0
     inspected = 0
     decisions: list[dict[str, Any]] = []
