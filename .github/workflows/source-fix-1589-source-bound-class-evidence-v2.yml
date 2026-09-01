@@ -41,6 +41,11 @@ jobs:
               'git merge-base --is-ancestor cdfcf4001033bcf521cc67dcfda0bab047e7ef36 HEAD\n',
               1,
           )
+          script = script.replace(
+              'if count != 8:\n    raise SystemExit(f"expected to migrate 8 class-evidence fixtures, migrated {count}")',
+              'if count != 9:\n    raise SystemExit(f"expected to migrate 9 class-evidence fixtures, migrated {count}")',
+              1,
+          )
           Path("/tmp/apply-source-bound.sh").write_text(script, encoding="utf-8")
           PY
           cd ..
