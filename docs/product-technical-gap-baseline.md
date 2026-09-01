@@ -3648,6 +3648,30 @@ interrogate 100%.
 
 전체 스위트 2215 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%.
 
+## 2026-09-01 실시간 관측: contextual-orchestrator#986의 noema-review가 main의 옛
+`extract_json_object`에서 uncaught JSONDecodeError로 크래시 — `.github#1438` 병합의
+긴급성을 실물로 재확인
+
+`contextual-orchestrator#986`(내 자신이 연 PR)의 required `noema-review` 체크가 실패해 job
+로그를 직접 추적했다. Python traceback: `extract_json_object`의 `json.loads(stripped)`가
+`json.decoder.JSONDecodeError`를 그대로 던지고, 이를 감싸는 예외 처리가 전혀 없어 리뷰 job
+전체가 크래시했다 — 이번 실행에서 선택된 free-tier 모델(`meta/llama-3.2-11b-vision-instruct`)이
+malformed JSON을 반환한 것이 트리거. `workflow_sha: 7b1a028e70...`(`.github`의 현재 main
+tip)에서 가져온 옛 `noema_review_gate.py`를 사용했음을 job 로그의 `workflow_ref`/`TRUSTED_SOURCE_REF`로
+직접 확인 — 이는 sibling repo(naruon, contextual-orchestrator 등)가 신뢰 가능한 소스로 CI
+시점에 tarball로 가져오는 버전이며, 이번 세션이 `.github#1438`에서 이미 고친 그 정확한 결함
+("malformed LLM JSON crashed the required check instead of failing closed", 2026-08-31 항목)이
+아직 main에 병합되지 않아 sibling repo 쪽에 그대로 살아있음을 실물로 재확인한 것이다.
+
+이 실패는 `contextual-orchestrator#986` 자신의 diff와 무관함(그 diff는
+`contextual_orchestrator/orchestrator.py`와 테스트 파일만 건드림) — 결함 코드 자체가 이
+저장소에 존재하지 않고 외부(`.github` main)에서 가져오므로 이 PR에 "포팅"할 대상이 없다.
+실패한 job에 대해 1회 재실행을 트리거(due diligence — 이번엔 다른 free-tier 모델이 선택되면
+우연히 통과할 수도 있으나, 근본 결함은 `.github#1438`이 main에 병합될 때까지 남아있음)하고,
+PR에 근본원인·재실행·대기 상태를 명시한 코멘트를 남겼다. `.github#1438`의 병합은 이제
+자기 자신의 개선 사항일 뿐 아니라, 조직 내 다른 저장소들의 noema-review가 이 정확한 크래시로
+반복 실패하는 것을 막는 실제 운영상 긴급성을 갖는다 — 계속 최우선으로 병합을 향해 추진한다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
