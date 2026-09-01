@@ -82,6 +82,7 @@ def test_apply_continues_independent_repositories_before_reporting_failures() ->
     """One not-yet-ready repository must not prevent safe siblings from reconciling."""
 
     source = SCRIPT.read_text(encoding="utf-8")
+    assert "import sys" in source
     assert "failures: list[str] = []" in source
     assert "failures.append" in source
     assert "metadata reconciliation failed:" in source
