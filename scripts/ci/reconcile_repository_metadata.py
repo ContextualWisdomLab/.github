@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 
 ORGANIZATION = "ContextualWisdomLab"
@@ -184,6 +186,26 @@ def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -
     )
 
 
+def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
+    """Require a built Pages site whose published HTTPS URL is actually reachable."""
+
+    if current.get("status") != "built":
+        raise RuntimeError(f"GitHub Pages is not built for {repository}")
+    html_url = current.get("html_url")
+    if type(html_url) is not str or not html_url.startswith("https://"):
+        raise RuntimeError(f"GitHub Pages URL is invalid for {repository}")
+    request = Request(
+        html_url,
+        headers={"User-Agent": "ContextualWisdomLab-repository-metadata-reconcile"},
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            if not response.read(1):
+                raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
+
+
 def _docs_index_exists(repository: str, default_branch: str) -> bool:
     """Return whether the reviewed default branch contains docs/index.md."""
 
@@ -341,10 +363,10 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     if desired["pages"]:
         if not pages_exists:
             raise RuntimeError(f"GitHub Pages was not published for {repository}")
-        if not _pages_configuration_matches(
-            _pages_configuration(repository), default_branch
-        ):
+        current_pages = _pages_configuration(repository)
+        if not _pages_configuration_matches(current_pages, default_branch):
             raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
+        _pages_publication_ready(repository, current_pages)
     elif pages_exists:
         raise RuntimeError(f"GitHub Pages remained published for {repository}")
 
