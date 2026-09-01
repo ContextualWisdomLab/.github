@@ -137,24 +137,24 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
             return self.call_func(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    verdict = noema.call_llm("owner/repo", 1, pr, "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "http://127.0.0.1:18080/v1/chat/completions"
     assert seen["model"] == "orchestrator/free"
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:9/evil")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://[::1]:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
 
 def test_reject_private_llm_url_scheme_hostname_and_public_dns(monkeypatch):
