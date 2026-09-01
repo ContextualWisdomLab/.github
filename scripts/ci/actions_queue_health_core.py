@@ -1,0 +1,817 @@
+#!/usr/bin/env python3
+"""Produce a read-only, exact-head GitHub Actions queue-health report.
+
+The collector intentionally treats queued, cancelled, skipped, missing, and
+unlinked evidence as incomplete.  It never cancels runs, changes branches, or
+turns an unavailable runner into a successful check.
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import html
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+from typing import Any, Callable, Sequence, TextIO
+
+
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+QUEUE_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED"}
+TERMINAL_STATES = {"COMPLETED"}
+DEFAULT_QUEUE_AGE_SLO_SECONDS = 900
+SCHEMA_VERSION = "actions.queue_health.v1"
+MAX_API_PAGE_SIZE = 100
+WORKFLOW_RUN_PAGE_SIZE = 50
+MAX_API_PAGES = 20
+ACTIVE_RUN_MAX_API_PAGES = 1
+GITHUB_API_TIMEOUT_SECONDS = 30
+PULL_REQUEST_RETRY_DELAY_SECONDS = 1
+PAGINATED_PAGES_KEY = "_queue_health_pages"
+Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+class QueueHealthError(ValueError):
+    """Raised when a queue-health input or trusted read is invalid."""
+
+
+class IncompletePullRequestIdentity(QueueHealthError):
+    """Raised when a pull-request read omits exact head or base identity."""
+
+
+def parse_timestamp(value: str) -> datetime:
+    """Parse an explicit UTC timestamp and reject ambiguous local time."""
+    if not isinstance(value, str) or not value.strip():
+        raise QueueHealthError("timestamp must be a non-empty string")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise QueueHealthError(f"invalid timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise QueueHealthError("timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _repository_name(value: Any) -> str:
+    """Validate and return one owner/repository identifier."""
+    if not isinstance(value, str) or not REPOSITORY_PATTERN.fullmatch(value):
+        raise QueueHealthError(f"invalid repository identifier: {value!r}")
+    if any(segment in {".", ".."} for segment in value.split("/")):
+        raise QueueHealthError(f"invalid repository identifier: {value!r}")
+    return value
+
+
+def load_allowlist(path: Path) -> list[str]:
+    """Load a unique, sorted repository allowlist from a JSON array/object."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise QueueHealthError(f"unable to load repository allowlist: {exc}") from exc
+    values = payload.get("repositories") if isinstance(payload, dict) else payload
+    if not isinstance(values, list) or not values:
+        raise QueueHealthError("repository allowlist must be a non-empty JSON array")
+    repositories = sorted({_repository_name(value) for value in values})
+    if len(repositories) != len(values):
+        raise QueueHealthError("repository allowlist contains duplicates")
+    return repositories
+
+
+def _list_payload(
+    payload: Any,
+    key: str,
+    *,
+    max_items: int = MAX_API_PAGE_SIZE * MAX_API_PAGES,
+) -> list[dict[str, Any]]:
+    """Extract one bounded GitHub list response without accepting under-collection."""
+    declared_total_counts: list[Any] = []
+    if isinstance(payload, dict) and PAGINATED_PAGES_KEY in payload:
+        pages = payload[PAGINATED_PAGES_KEY]
+        if not isinstance(pages, list) or not pages or len(pages) > MAX_API_PAGES:
+            raise QueueHealthError(f"GitHub response field {key!r} exceeds the bounded page count")
+        page_values = []
+        for page in pages:
+            if isinstance(page, list):
+                page_values.extend(page)
+            elif isinstance(page, dict):
+                page_items = page.get(key)
+                if not isinstance(page_items, list):
+                    raise QueueHealthError(f"GitHub response field {key!r} page must contain an array")
+                page_values.extend(page_items)
+                if "total_count" in page:
+                    declared_total_counts.append(page["total_count"])
+            else:
+                raise QueueHealthError(f"GitHub response field {key!r} page must be an array or object")
+        values = page_values
+    else:
+        values = payload if isinstance(payload, list) else payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(payload, dict) and "total_count" in payload:
+            declared_total_counts.append(payload["total_count"])
+    if not isinstance(values, list) or not all(isinstance(value, dict) for value in values):
+        raise QueueHealthError(f"GitHub response field {key!r} must be an array of objects")
+    if declared_total_counts:
+        if any(isinstance(total_count, bool) or not isinstance(total_count, int) for total_count in declared_total_counts):
+            raise QueueHealthError(f"GitHub response field {key!r} has invalid total counts")
+        total_count = max(declared_total_counts)
+        if total_count < len(values) or total_count > max_items:
+            raise QueueHealthError(f"GitHub response field {key!r} exceeds the bounded page size")
+        if PAGINATED_PAGES_KEY in payload and total_count != len(values):
+            raise QueueHealthError(f"GitHub response field {key!r} is incompletely paginated")
+    return values
+
+
+def github_json(
+    path: str,
+    *,
+    paginate: bool = False,
+    max_pages: int = MAX_API_PAGES,
+    runner: Runner = subprocess.run,
+) -> Any:
+    """Read one GitHub REST endpoint through ``gh`` without shell evaluation."""
+    if not path.startswith("repos/"):
+        raise QueueHealthError(f"GitHub endpoint is outside repository scope: {path}")
+    pages: list[Any] = []
+    page_size_match = re.search(r"(?:[?&])per_page=(\d+)(?:&|$)", path)
+    page_size = int(page_size_match.group(1)) if page_size_match else MAX_API_PAGE_SIZE
+    page_numbers = range(1, max_pages + 1) if paginate else range(1, 2)
+    for page_number in page_numbers:
+        page_path = path
+        if paginate and page_number > 1:
+            page_path = f"{path}{'&' if '?' in path else '?'}page={page_number}"
+        try:
+            result = runner(
+                ["gh", "api", page_path],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=GITHUB_API_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise QueueHealthError(
+                f"GitHub API read timed out after {GITHUB_API_TIMEOUT_SECONDS} seconds for {page_path}"
+            ) from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "GitHub API read failed").strip()
+            raise QueueHealthError(f"GitHub API read failed for {page_path}: {detail[:400]}")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise QueueHealthError(f"GitHub API returned invalid JSON for {page_path}") from exc
+        if not paginate:
+            return payload
+        pages.append(payload)
+        values = payload if isinstance(payload, list) else None
+        total_count = payload.get("total_count") if isinstance(payload, dict) else None
+        if isinstance(payload, dict):
+            values = next((value for value in payload.values() if isinstance(value, list)), None)
+        if not isinstance(values, list):
+            raise QueueHealthError(f"GitHub API page has no bounded array for {page_path}")
+        collected = sum(
+            len(page) if isinstance(page, list) else len(next((value for value in page.values() if isinstance(value, list)), []))
+            for page in pages
+        )
+        if (type(total_count) is int and total_count <= collected) or len(values) < page_size:
+            return {PAGINATED_PAGES_KEY: pages}
+    raise QueueHealthError(
+        f"GitHub API pagination exceeds {max_pages} pages for {path}"
+    )
+
+
+def _normalise_pull_request(
+    pull_request: dict[str, Any], *, allow_normalized: bool = False
+) -> dict[str, Any]:
+    """Keep only exact-head identity fields needed for queue classification.
+
+    Empty or missing ``head_sha``, ``base_ref``, ``base_repository``, or
+    ``updated_at`` values are treated as an incomplete identity — the same
+    as a missing ``head``/``base`` object — so a transient, partially
+    populated GitHub API response triggers the caller's bounded retry
+    instead of being silently accepted and later misclassifying an active
+    run as obsolete.
+    """
+    if not isinstance(pull_request, dict):
+        raise QueueHealthError("pull request entry must be an object")
+    number = pull_request.get("number")
+    if allow_normalized and "head" not in pull_request and "base" not in pull_request:
+        if not all(
+            isinstance(pull_request.get(field), str) and pull_request.get(field)
+            for field in ("base_ref", "base_repository", "head_sha", "updated_at")
+        ):
+            raise IncompletePullRequestIdentity(
+                "normalized pull request identity fields must be non-empty strings"
+            )
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise QueueHealthError("pull request number must be a positive integer")
+        return {
+            "number": number,
+            "state": pull_request.get("state", "open"),
+            "base_ref": pull_request["base_ref"],
+            "base_repository": pull_request["base_repository"],
+            "head_sha": pull_request["head_sha"],
+            "updated_at": pull_request["updated_at"],
+        }
+    head = pull_request.get("head")
+    base = pull_request.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        raise IncompletePullRequestIdentity("pull request head and base must be objects")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        raise QueueHealthError("pull request number must be a positive integer")
+    head_sha = head.get("sha", "")
+    base_ref = base.get("ref", "")
+    base_repository = (
+        (base.get("repo") or {}).get("full_name", "") if isinstance(base.get("repo"), dict) else ""
+    )
+    updated_at = pull_request.get("updated_at", "")
+    if not all(
+        isinstance(value, str) and value for value in (head_sha, base_ref, base_repository, updated_at)
+    ):
+        raise IncompletePullRequestIdentity(
+            "pull request head, base, and updated_at identity fields must be non-empty"
+        )
+    return {
+        "number": number,
+        "state": pull_request.get("state", "open"),
+        "base_ref": base_ref,
+        "base_repository": base_repository,
+        "head_sha": head_sha,
+        "updated_at": updated_at,
+    }
+
+
+def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Keep job state and runner assignment evidence without log contents.
+
+    Preserves the job's own ``created_at`` (when GitHub scheduled that
+    specific job) separately from the parent run's ``created_at``, so a
+    job that only became eligible after an earlier stage in the same
+    in-progress run finished is not measured against the whole run's age.
+    """
+    if not isinstance(job, dict):
+        raise QueueHealthError("workflow job entry must be an object")
+    job_id = job.get("id")
+    if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0:
+        raise QueueHealthError("job id must be a positive integer")
+    runner_id = job.get("runner_id")
+    if isinstance(runner_id, bool) or not isinstance(runner_id, int):
+        runner_id = 0
+    return {
+        "id": job_id,
+        "name": str(job.get("name") or "unnamed job"),
+        "status": str(job.get("status") or "").upper(),
+        "conclusion": str(job.get("conclusion") or "").upper(),
+        "runner_id": runner_id,
+        "runner_name": str(job.get("runner_name") or ""),
+        "created_at": str(job.get("created_at") or ""),
+        "steps_count": len(job.get("steps") or []) if isinstance(job.get("steps"), list) else 0,
+    }
+
+
+def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep run identity and job state required for deterministic reporting.
+
+    Accepts a pull-request link either in GitHub's raw shape
+    (``{"number": ..., "head": {"sha": ...}}``) or in the flattened shape
+    this function itself emits (``{"number": ..., "head_sha": ...}``), so
+    re-normalising an already-normalised run loaded back from a collected
+    snapshot (as ``build_report`` does) does not silently zero out the
+    linked head SHA that exact-head identity resolution depends on.
+    """
+    if not isinstance(run, dict):
+        raise QueueHealthError("workflow run entry must be an object")
+    if not isinstance(jobs, list) or not all(isinstance(job, dict) for job in jobs):
+        raise QueueHealthError("workflow run jobs must be an array of objects")
+    run_id = run.get("id")
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        raise QueueHealthError("workflow run id must be a positive integer")
+    pull_requests = run.get("pull_requests", [])
+    if pull_requests is None:
+        pull_requests = []
+    if not isinstance(pull_requests, list) or not all(isinstance(item, dict) for item in pull_requests):
+        raise QueueHealthError("workflow run pull_requests must be an array of objects")
+    links = []
+    for item in pull_requests:
+        number = item.get("number")
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise QueueHealthError("workflow run pull request number must be positive")
+        if "head" not in item and isinstance(item.get("head_sha"), str):
+            links.append({"number": number, "head_sha": item["head_sha"]})
+            continue
+        head = item.get("head", {})
+        if head is None:
+            head = {}
+        if not isinstance(head, dict):
+            raise QueueHealthError("workflow run pull request head must be an object")
+        links.append({"number": number, "head_sha": str(head.get("sha") or "")})
+    return {
+        "repository": repository,
+        "id": run_id,
+        "workflow_name": str(run.get("name") or run.get("workflow_name") or "unnamed workflow"),
+        "event": str(run.get("event") or "unknown"),
+        "status": str(run.get("status") or "").upper(),
+        "conclusion": str(run.get("conclusion") or "").upper(),
+        "head_sha": str(run.get("head_sha") or ""),
+        "created_at": str(run.get("created_at") or ""),
+        "updated_at": str(run.get("updated_at") or ""),
+        "run_attempt": run.get("run_attempt", 1),
+        "concurrency_group": str(run.get("concurrency_group") or "unavailable_from_actions_api"),
+        "pull_requests": sorted(links, key=lambda item: item["number"]),
+        "jobs": sorted((_normalise_job(job) for job in jobs), key=lambda item: item["id"]),
+    }
+
+
+def collect_snapshot(
+    repositories: Sequence[str],
+    *,
+    runner: Runner = subprocess.run,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Collect bounded queued/in-progress run and job data using read-only API calls."""
+    validated = sorted({_repository_name(repository) for repository in repositories})
+    if len(validated) != len(repositories):
+        raise QueueHealthError("collection repository list contains duplicates")
+    collected_repositories: list[dict[str, Any]] = []
+    collection_errors: list[dict[str, str]] = []
+    for repository in validated:
+        try:
+            metadata = github_json(f"repos/{repository}", runner=runner)
+            if not isinstance(metadata, dict):
+                raise QueueHealthError(f"repository metadata for {repository} is not an object")
+            pulls_endpoint = f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
+            pull_requests = _list_payload(
+                github_json(pulls_endpoint, paginate=True, runner=runner),
+                "pulls",
+                max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+            )
+            normalized_pull_requests = sorted(
+                (_normalise_pull_request(item) for item in pull_requests),
+                key=lambda item: item["number"],
+            )
+        except IncompletePullRequestIdentity:
+            time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
+            try:
+                retry_pull_requests = _list_payload(
+                    github_json(pulls_endpoint, paginate=True, runner=runner),
+                    "pulls",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                )
+                normalized_pull_requests = sorted(
+                    (_normalise_pull_request(item) for item in retry_pull_requests),
+                    key=lambda item: item["number"],
+                )
+            except QueueHealthError as retry_exc:
+                collection_errors.append(
+                    {
+                        "repository": repository,
+                        "error": f"pull-request identity validation failed: {retry_exc}",
+                    }
+                )
+                continue
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
+        pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
+        runs_by_id: dict[int, dict[str, Any]] = {}
+        try:
+            active_statuses = ("in_progress", "pending", "queued", "requested", "waiting")
+            snapshots: list[dict[int, dict[str, Any]]] = []
+            for status_order in (active_statuses, tuple(reversed(active_statuses))):
+                snapshot: dict[int, dict[str, Any]] = {}
+                for status in status_order:
+                    runs = _list_payload(
+                        github_json(
+                            f"repos/{repository}/actions/runs?status={status}"
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                            paginate=True,
+                            max_pages=ACTIVE_RUN_MAX_API_PAGES,
+                            runner=runner,
+                        ),
+                        "workflow_runs",
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * ACTIVE_RUN_MAX_API_PAGES,
+                    )
+                    for run in runs:
+                        run_id = run.get("id")
+                        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                            raise QueueHealthError("workflow run id must be a positive integer")
+                        snapshot[run_id] = run
+                snapshots.append(snapshot)
+            first_snapshot, second_snapshot = snapshots
+            first_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in first_snapshot.items()
+            }
+            second_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in second_snapshot.items()
+            }
+            if first_states != second_states:
+                raise QueueHealthError("active workflow run snapshot changed during collection")
+            for run_id, run in second_snapshot.items():
+                run_id = run.get("id")
+                candidate = _normalise_run(repository, run, [])
+                identity, _ = _run_identity(candidate, pull_requests_by_number)
+                if identity != "current_head" or candidate["status"] not in {
+                    "IN_PROGRESS",
+                    "WAITING",
+                }:
+                    runs_by_id[run_id] = candidate
+                    continue
+                jobs_payload = github_json(
+                    f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
+                    paginate=True,
+                    runner=runner,
+                )
+                jobs = _list_payload(
+                    jobs_payload,
+                    "jobs",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                )
+                runs_by_id[run_id] = _normalise_run(repository, run, jobs)
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
+        collected_repositories.append(
+            {
+                "full_name": repository,
+                "default_branch": str(metadata.get("default_branch") or ""),
+                "pull_requests": normalized_pull_requests,
+                "runs": sorted(runs_by_id.values(), key=lambda item: item["id"]),
+            }
+        )
+    timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    parse_timestamp(timestamp)
+    return {
+        "generated_at": timestamp,
+        "repositories": collected_repositories,
+        "collection_errors": collection_errors,
+    }
+
+
+def load_snapshot(path: Path) -> dict[str, Any]:
+    """Load a JSON snapshot for offline, deterministic report generation."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise QueueHealthError(f"unable to load queue-health snapshot: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise QueueHealthError("queue-health snapshot root must be an object")
+    return payload
+
+
+def _run_identity(run: dict[str, Any], pull_requests: dict[int, dict[str, Any]]) -> tuple[str, int | None]:
+    """Resolve one run to current-head, obsolete, or unlinked identity.
+
+    Compares the open pull request's head SHA against the *linked*
+    pull-request head SHA carried on the run (``run["pull_requests"][*]
+    ["head_sha"]``), never against the run-level ``head_sha``. For
+    ``pull_request_target``-triggered runs, GitHub reports the run-level
+    ``head_sha`` as the base-branch commit that was checked out, not the
+    pull request's head commit; only the linked pull-request entry carries
+    the real head SHA that was reviewed. Using the run-level value there
+    would misclassify a genuinely current, active required-workflow run as
+    ``obsolete`` and skip fetching its job evidence.
+    """
+    links = run.get("pull_requests") or []
+    for link in links:
+        number = link.get("number")
+        pull_request = pull_requests.get(number)
+        if pull_request and pull_request.get("head_sha") == link.get("head_sha"):
+            return "current_head", number
+    if links:
+        return "obsolete", links[0].get("number")
+    return "unlinked", None
+
+
+def _job_state(job: dict[str, Any]) -> tuple[str, bool, bool]:
+    """Return normalized execution state, pending flag, and runner assignment.
+
+    GitHub's ``waiting`` job status (a job paused on an environment or
+    deployment approval) is incomplete pending evidence just like
+    ``queued``/``in_progress`` — it must remain visible with its own
+    blocker and action rather than silently dropping out of the pending
+    count as unclassified ``unknown`` evidence.
+    """
+    status = str(job.get("status") or "").upper()
+    conclusion = str(job.get("conclusion") or "").upper()
+    assigned = bool(job.get("runner_name")) or (isinstance(job.get("runner_id"), int) and job.get("runner_id", 0) > 0)
+    if status == "WAITING":
+        return "waiting_approval", True, assigned
+    if status in QUEUE_STATES:
+        return ("queued_assigned" if assigned else "queued_unassigned"), True, assigned
+    if status in TERMINAL_STATES or conclusion:
+        return "terminal", False, assigned
+    return "unknown", False, assigned
+
+
+def _format_age(created_at: str, now: datetime) -> int:
+    """Return non-negative queue age seconds from an explicit timestamp."""
+    created = parse_timestamp(created_at)
+    return max(0, int((now - created).total_seconds()))
+
+
+def build_report(
+    snapshot: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    queue_age_slo_seconds: int = DEFAULT_QUEUE_AGE_SLO_SECONDS,
+) -> dict[str, Any]:
+    """Classify every observed job without treating incomplete evidence as success."""
+    if queue_age_slo_seconds < 0:
+        raise QueueHealthError("queue age SLO must not be negative")
+    generated_at = parse_timestamp(snapshot.get("generated_at"))
+    if now is not None and (not isinstance(now, datetime) or now.tzinfo is None):
+        raise QueueHealthError("evaluation time must include a timezone")
+    report_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    repositories = snapshot.get("repositories")
+    if not isinstance(repositories, list):
+        raise QueueHealthError("queue-health snapshot repositories must be an array")
+    raw_collection_errors = snapshot.get("collection_errors", [])
+    if raw_collection_errors is None:
+        raw_collection_errors = []
+    if not isinstance(raw_collection_errors, list):
+        raise QueueHealthError("queue-health collection_errors must be an array")
+    collection_errors: list[dict[str, str]] = []
+    for item in raw_collection_errors:
+        if not isinstance(item, dict):
+            raise QueueHealthError("queue-health collection error must be an object")
+        repository_name = _repository_name(item.get("repository"))
+        error = item.get("error")
+        if not isinstance(error, str) or not error:
+            raise QueueHealthError("queue-health collection error must contain text")
+        collection_errors.append({"repository": repository_name, "error": error})
+
+    rows: list[dict[str, Any]] = []
+    seen_repositories: set[str] = set()
+    for repository in repositories:
+        if not isinstance(repository, dict):
+            raise QueueHealthError("queue-health repository entry must be an object")
+        full_name = _repository_name(repository.get("full_name"))
+        if full_name in seen_repositories:
+            raise QueueHealthError(f"duplicate repository entry {full_name}")
+        seen_repositories.add(full_name)
+        pull_request_entries = repository.get("pull_requests", [])
+        if pull_request_entries is None:
+            pull_request_entries = []
+        if not isinstance(pull_request_entries, list):
+            raise QueueHealthError(f"pull requests for {full_name} must be an array")
+        pull_requests: dict[int, dict[str, Any]] = {}
+        for pull_request in pull_request_entries:
+            normalized = _normalise_pull_request(pull_request, allow_normalized=True)
+            if normalized["number"] in pull_requests:
+                raise QueueHealthError(f"duplicate pull request {normalized['number']} for {full_name}")
+            pull_requests[normalized["number"]] = normalized
+        runs = repository.get("runs", [])
+        if runs is None:
+            runs = []
+        if not isinstance(runs, list):
+            raise QueueHealthError(f"runs for {full_name} must be an array")
+        run_ids: set[int] = set()
+        for raw_run in runs:
+            if not isinstance(raw_run, dict):
+                raise QueueHealthError("workflow run entry must be an object")
+            raw_jobs = raw_run.get("jobs", [])
+            if raw_jobs is None:
+                raw_jobs = []
+            if not isinstance(raw_jobs, list):
+                raise QueueHealthError("workflow run jobs must be an array")
+            run = _normalise_run(full_name, raw_run, raw_jobs)
+            if run["id"] in run_ids:
+                raise QueueHealthError(f"duplicate workflow run {run['id']} for {full_name}")
+            run_ids.add(run["id"])
+            identity, pull_request_number = _run_identity(run, pull_requests)
+            jobs = run["jobs"]
+            for job in jobs or [{"id": run["id"], "name": "run", "status": run.get("status")}]:
+                state, pending, assigned = _job_state(job)
+                # Prefer the job's own created_at: for a job with `needs:`
+                # dependencies inside an already in-progress run, GitHub
+                # sets it when the job became eligible, which can be long
+                # after the run itself started. Falling back to the run's
+                # created_at only applies to the synthetic run-level job
+                # used when no job evidence was fetched.
+                age_created_at = job.get("created_at") or run.get("created_at")
+                age_seconds = _format_age(age_created_at, report_now)
+                slo_breached = pending and age_seconds > queue_age_slo_seconds
+                if identity == "obsolete":
+                    blocker = "obsolete_run_requires_identity_confirmed_cleanup"
+                    action = "owner_cleanup_after_exact_identity_confirmation"
+                elif identity == "unlinked":
+                    blocker = "run_not_linked_to_pull_request"
+                    action = "reconcile_run_identity_before_cleanup"
+                elif state == "waiting_approval":
+                    blocker = "environment_or_deployment_approval_required"
+                    action = "reviewer_or_owner_approve_pending_environment_deployment"
+                elif pending and not assigned and slo_breached:
+                    blocker = "external_runner_assignment_or_capacity"
+                    action = "owner_check_runner_billing_policy_and_concurrency"
+                elif pending:
+                    blocker = "current_head_required_evidence_incomplete"
+                    action = "wait_for_runner_or_escalate_after_slo"
+                else:
+                    blocker = None
+                    action = "none"
+                rows.append(
+                    {
+                        "repository": full_name,
+                        "workflow_name": run.get("workflow_name", "unnamed workflow"),
+                        "run_id": run.get("id"),
+                        "run_attempt": run.get("run_attempt", 1),
+                        "job_id": job.get("id"),
+                        "job_name": job.get("name", "unnamed job"),
+                        "event": run.get("event", "unknown"),
+                        "head_sha": run.get("head_sha", ""),
+                        "pull_request_number": pull_request_number,
+                        "identity_state": identity,
+                        "status": job.get("status", ""),
+                        "conclusion": job.get("conclusion", ""),
+                        "execution_state": state,
+                        "is_pending": pending,
+                        "runner_assigned": assigned,
+                        "created_at": run.get("created_at", ""),
+                        "updated_at": run.get("updated_at", ""),
+                        "queue_age_seconds": age_seconds,
+                        "slo_breached": slo_breached,
+                        "concurrency_group": run.get("concurrency_group", "unavailable_from_actions_api"),
+                        "obsolete": identity == "obsolete",
+                        "blocker": blocker,
+                        "recommended_action": action,
+                    }
+                )
+
+    rows.sort(key=lambda row: (row["repository"], row["run_id"], row["job_id"]))
+    pending = [row for row in rows if row["is_pending"]]
+    current_pending = [row for row in pending if row["identity_state"] == "current_head"]
+    lane_run_ids: dict[tuple[str, int, str], set[int]] = {}
+    for row in current_pending:
+        lane = (
+            row["repository"],
+            row["pull_request_number"],
+            row["workflow_name"],
+        )
+        lane_run_ids.setdefault(lane, set()).add(row["run_id"])
+    duplicate_lanes = [
+        {
+            "repository": key[0],
+            "pull_request_number": key[1],
+            "workflow_name": key[2],
+            "count": len(run_ids),
+        }
+        for key, run_ids in sorted(lane_run_ids.items())
+        if len(run_ids) > 1
+    ]
+    external_actions = sorted(
+        {
+            "Inspect GitHub-hosted runner assignment, Actions billing/usage, runner-group policy, environment approval, and concurrency saturation; queued evidence remains incomplete."
+            for row in rows
+            if row["blocker"] == "external_runner_assignment_or_capacity"
+        }
+    )
+    summary = {
+        "observed_job_count": len(rows),
+        "pending_job_count": len(pending),
+        "current_head_pending_count": len(current_pending),
+        "unassigned_slo_breached_count": sum(
+            row["identity_state"] == "current_head"
+            and row["execution_state"] == "queued_unassigned"
+            and row["slo_breached"]
+            for row in rows
+        ),
+        "obsolete_job_count": sum(row["obsolete"] for row in rows),
+        "unlinked_job_count": sum(row["identity_state"] == "unlinked" for row in rows),
+        "duplicate_pending_lane_count": len(duplicate_lanes),
+        "terminal_job_count": sum(row["execution_state"] == "terminal" for row in rows),
+        "collection_error_count": len(collection_errors),
+        "external_actions": external_actions,
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "evaluated_at": report_now.isoformat().replace("+00:00", "Z"),
+        "queue_age_slo_seconds": queue_age_slo_seconds,
+        "repositories": sorted(_repository_name(repository["full_name"]) for repository in repositories),
+        "collection_errors": collection_errors,
+        "summary": summary,
+        "duplicate_pending_lanes": duplicate_lanes,
+        "runs": rows,
+        "limitations": [
+            "The Actions REST API does not expose the evaluated concurrency group for every run; unavailable values are reported explicitly.",
+            "This read-only slice never cancels runs or changes branch/check state.",
+        ],
+    }
+
+
+def render_html(report: dict[str, Any]) -> str:
+    """Render a keyboard-readable HTML report with escaped untrusted fields."""
+    summary = report["summary"]
+    rows = report["runs"]
+    table_rows = []
+    for row in rows:
+        table_rows.append(
+            "<tr>"
+            + f'<th scope="row">{html.escape(str(row["repository"]))}</th>'
+            + "".join(
+                f"<td>{html.escape(str(row[field]))}</td>"
+                for field in (
+                    "workflow_name",
+                    "run_id",
+                    "job_name",
+                    "identity_state",
+                    "execution_state",
+                    "head_sha",
+                    "queue_age_seconds",
+                    "blocker",
+                )
+            )
+            + "</tr>"
+        )
+    body = "".join(table_rows) or '<tr><th scope="row" colspan="9">No queued or in-progress jobs observed.</th></tr>'
+    collection_error_section = ""
+    if report.get("collection_errors"):
+        collection_error_section = (
+            "<section aria-labelledby=\"collection-errors\"><h2 id=\"collection-errors\">"
+            "Incomplete collection evidence</h2><ul>"
+            + "".join(
+                "<li>"
+                + html.escape(str(item["repository"]))
+                + ": "
+                + html.escape(str(item["error"]))
+                + "</li>"
+                for item in report["collection_errors"]
+            )
+            + "</ul></section>"
+        )
+    return (
+        "<!doctype html>\n"
+        '<html lang="en"><head><meta charset="utf-8">'
+        "<title>GitHub Actions queue health</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:2rem}"
+        "table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:.4rem;text-align:left}"
+        "th{background:#eee}</style></head><body>"
+        '<main aria-live="polite">'
+        "<h1>GitHub Actions queue health</h1>"
+        + collection_error_section
+        + f"<p>Evaluated at <time>{html.escape(report['evaluated_at'])}</time>; queue-age SLO: {report['queue_age_slo_seconds']} seconds.</p>"
+        f"<p>Observed jobs: {summary['observed_job_count']}; current-head pending: {summary['current_head_pending_count']}; SLO breaches: {summary['unassigned_slo_breached_count']}.</p>"
+        '<table><caption>Run and job evidence; queued evidence is not a passing check.</caption>'
+        "<thead><tr>"
+        + "".join(f"<th scope=\"col\">{field.replace('_', ' ').title()}</th>" for field in (
+            "repository", "workflow_name", "run_id", "job_name", "identity_state", "execution_state", "head_sha", "queue_age_seconds", "blocker"
+        ))
+        + f"</tr></thead><tbody>{body}</tbody></table></main></body></html>\n"
+    )
+
+
+def write_reports(report: dict[str, Any], json_path: Path, html_path: Path) -> None:
+    """Write deterministic JSON and accessible HTML reports."""
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    html_path.write_text(render_html(report), encoding="utf-8")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse live-collection or offline-report CLI arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--snapshot", type=Path)
+    source.add_argument("--allowlist", type=Path)
+    parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--output-html", type=Path, required=True)
+    parser.add_argument("--queue-age-slo-seconds", type=int, default=DEFAULT_QUEUE_AGE_SLO_SECONDS)
+    parser.add_argument("--now", help="Explicit timezone-aware evaluation time for deterministic reports")
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None, *, stderr: TextIO = sys.stderr) -> int:
+    """Collect or load a snapshot, write reports, and return a stable CLI status."""
+    args = parse_args(argv)
+    try:
+        snapshot = load_snapshot(args.snapshot) if args.snapshot else collect_snapshot(load_allowlist(args.allowlist))
+        now = parse_timestamp(args.now) if args.now else datetime.now(timezone.utc)
+        report = build_report(
+            snapshot,
+            now=now,
+            queue_age_slo_seconds=args.queue_age_slo_seconds,
+        )
+        write_reports(report, args.output_json, args.output_html)
+    except (OSError, QueueHealthError, ValueError) as exc:
+        print(f"ERROR: queue-health report failed: {exc}", file=stderr)
+        return 2
+    breaches = report["summary"]["unassigned_slo_breached_count"]
+    if breaches:
+        print(f"::warning::Actions queue-health found {breaches} unassigned current-head SLO breach(es).")
+    print(
+        "QUEUE_HEALTH_RESULT="
+        f"observed={report['summary']['observed_job_count']} "
+        f"pending={report['summary']['pending_job_count']} "
+        f"slo_breaches={breaches}"
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through the CLI tests.
+    raise SystemExit(main())
