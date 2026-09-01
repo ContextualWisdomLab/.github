@@ -80,6 +80,35 @@ def test_naming_blocker_paragraph_requires_source_backed_causal_surface(
     assert "Do not infer a defect from a name's word count" in naming_review
 
 
+@pytest.mark.parametrize("prompt_path", PROMPTS, ids=lambda path: path.name)
+def test_review_prompts_attack_observed_false_negative_classes(
+    prompt_path: Path,
+) -> None:
+    """Durable reviewer prompts must probe defect classes demonstrated by peer review."""
+    prompt = prompt_path.read_text(encoding="utf-8")
+    false_negative_policy = paragraph_starting(
+        prompt,
+        "Review-quality false-negative probes must actively attack",
+    )
+
+    for required_probe in (
+        "mutable alias or post-validation mutation",
+        "changing getter/Proxy or other TOCTOU behavior",
+        "execution/tenant/request identity confusion",
+        "stale head/event evidence",
+        "substring-only, existence-only, or vacuous test oracles",
+        "cross-file or cross-document contract contradiction",
+        "internal/external authority boundary overreach",
+        "security/reliability state-machine race",
+        "missing causal dependency context",
+    ):
+        assert required_probe in false_negative_policy
+
+    assert "exact changed source line and causal path" in false_negative_policy
+    assert "disconfirming probe" in false_negative_policy
+    assert "confirmed defect, falsified/false positive, or NEEDS_INFO" in false_negative_policy
+
+
 def test_ci_review_keeps_existing_adversarial_verdict_thresholds() -> None:
     """False-positive hardening must not weaken the existing probe-count gate."""
     prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
