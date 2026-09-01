@@ -214,6 +214,10 @@ def _write_reviews_gh(
     *,
     pr_state: str = "open",
     pr_draft: bool = False,
+    base_ref: str = "main",
+    base_sha: str = "b" * 40,
+    head_ref: str = "feature",
+    head_sha: str = HEAD,
 ) -> Path:
     """Install a fake ``gh`` on PATH serving a live PR object, then Reviews API page.
 
@@ -221,12 +225,23 @@ def _write_reviews_gh(
     (``pulls/<number>``, no ``--paginate``) before the paginated Reviews API
     call, so this fixture dispatches on the presence of ``--paginate`` in the
     arguments rather than assuming only one ``gh api`` shape is ever called.
+    The live PR object also carries ``base``/``head`` refs/shas, mirroring
+    what the production step now exposes as step outputs for the dispatch
+    step's payload.
     """
     fake_gh = bin_dir / "gh"
     pr_fixture = bin_dir / "pr.json"
     reviews_fixture = bin_dir / "reviews.json"
     pr_fixture.write_text(
-        json.dumps({"state": pr_state, "draft": pr_draft}), encoding="utf-8"
+        json.dumps(
+            {
+                "state": pr_state,
+                "draft": pr_draft,
+                "base": {"ref": base_ref, "sha": base_sha},
+                "head": {"ref": head_ref, "sha": head_sha},
+            }
+        ),
+        encoding="utf-8",
     )
     reviews_fixture.write_text(json.dumps(reviews), encoding="utf-8")
     fake_gh.write_text(
@@ -254,7 +269,15 @@ def _write_closed_or_draft_gh(bin_dir: Path, *, pr_state: str, pr_draft: bool) -
     fake_gh = bin_dir / "gh"
     pr_fixture = bin_dir / "pr.json"
     pr_fixture.write_text(
-        json.dumps({"state": pr_state, "draft": pr_draft}), encoding="utf-8"
+        json.dumps(
+            {
+                "state": pr_state,
+                "draft": pr_draft,
+                "base": {"ref": "main", "sha": "b" * 40},
+                "head": {"ref": "feature", "sha": HEAD},
+            }
+        ),
+        encoding="utf-8",
     )
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
@@ -280,6 +303,10 @@ def _run_verdict_step(
     pr_state: str = "open",
     pr_draft: bool = False,
     reviews: list[dict[str, object]] | None = None,
+    base_ref: str = "main",
+    base_sha: str = "b" * 40,
+    head_ref: str = "feature",
+    live_head_sha: str = HEAD,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the "Resolve current-head formal OpenCode verdict" step body.
 
@@ -313,7 +340,16 @@ def _run_verdict_step(
     elif gh_fixture == "closed_or_draft":
         _write_closed_or_draft_gh(bin_dir, pr_state=pr_state, pr_draft=pr_draft)
     else:
-        _write_reviews_gh(bin_dir, reviews or [], pr_state=pr_state, pr_draft=pr_draft)
+        _write_reviews_gh(
+            bin_dir,
+            reviews or [],
+            pr_state=pr_state,
+            pr_draft=pr_draft,
+            base_ref=base_ref,
+            base_sha=base_sha,
+            head_ref=head_ref,
+            head_sha=live_head_sha,
+        )
 
     output_file = tmp_path / "github_output"
     output_file.write_text("", encoding="utf-8")
@@ -446,6 +482,65 @@ def test_non_draft_pr_without_a_verdict_leaves_the_gate_empty(tmp_path: Path) ->
         encoding="utf-8"
     )
     assert _run_fail_closed_step("").returncode == 1
+
+
+def test_verdict_step_exposes_live_base_and_head_for_the_dispatch_payload(
+    tmp_path: Path,
+) -> None:
+    """The verdict step's live fetch also feeds the dispatch step's payload.
+
+    A manual re-run of an old workflow run replays github.event.pull_request's
+    stored base/head refs/shas verbatim; if the base branch has since
+    advanced, opencode-review-dispatch.yml's live validate-pr-metadata check
+    hard-rejects that stale base_sha, so a dispatch that the verdict step
+    correctly decided is needed would still fail to actually request a
+    review (Devin review on #1443). base_ref/base_sha/head_ref/head_sha are
+    now emitted as step outputs from the same live gh api response the
+    verdict decision itself uses, deliberately using values distinct from
+    the event-derived HEAD_SHA env var passed in below to prove they come
+    from the live fetch, not from the caller's env.
+    """
+    live_head = "c" * 40
+    result = _run_verdict_step(
+        tmp_path,
+        pr_number="1437",
+        head_sha=HEAD,
+        gh_fixture="reviews",
+        pr_state="open",
+        pr_draft=False,
+        reviews=[],
+        base_ref="release/live",
+        base_sha="d" * 40,
+        head_ref="feature/live",
+        live_head_sha=live_head,
+    )
+    assert result.returncode == 0, result.stderr
+    output = (tmp_path / "github_output").read_text(encoding="utf-8")
+    assert "base_ref=release/live" in output
+    assert f"base_sha={'d' * 40}" in output
+    assert "head_ref=feature/live" in output
+    assert f"head_sha={live_head}" in output
+
+
+def test_dispatch_step_payload_sources_base_and_head_from_the_verdict_step() -> None:
+    """The dispatch step must build its payload from live outputs, not the event.
+
+    ``steps.verdict.outputs.base_ref``/``base_sha``/``head_ref``/``head_sha``
+    replace the former ``github.event.pull_request.base.ref``/``base.sha``/
+    ``head.ref``/``head.sha`` reads in this step's own ``env:`` block.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    dispatch_step = workflow.split(
+        "- name: Request current-head OpenCode review execution", 1
+    )[1].split("- name: Fail closed", 1)[0]
+    assert "steps.verdict.outputs.base_ref" in dispatch_step
+    assert "steps.verdict.outputs.base_sha" in dispatch_step
+    assert "steps.verdict.outputs.head_ref" in dispatch_step
+    assert "steps.verdict.outputs.head_sha" in dispatch_step
+    assert "github.event.pull_request.base.ref" not in dispatch_step
+    assert "github.event.pull_request.base.sha" not in dispatch_step
+    assert "github.event.pull_request.head.ref" not in dispatch_step
+    assert "github.event.pull_request.head.sha" not in dispatch_step
 
 
 def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None:

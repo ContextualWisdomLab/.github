@@ -55,6 +55,21 @@ Semantic Versioning where the repository publishes a release.
   requested. The dispatch step now gates purely on
   `steps.verdict.outputs.verdict == ''`, the one live-computed signal that
   already means "a real dispatch is needed."
+- Fix a third review-flagged gap in the same lineage (Devin review on
+  `#1443`): even with the dispatch step correctly enabled from the live
+  verdict, it still built its `repository_dispatch` payload's
+  `pr_base_ref`/`pr_base_sha`/`pr_head_ref`/`pr_head_sha` fields from
+  `github.event.pull_request.*` — the same stale-payload source the two
+  fixes above removed from the pass/fail decision. On a manual re-run of an
+  old job whose base branch has since advanced (head SHA unchanged),
+  `opencode-review-dispatch.yml`'s live `validate-pr-metadata` check
+  hard-rejects that stale `base_sha`, so the dispatch would fail even though
+  the verdict step correctly decided one was needed — leaving the required
+  check red with no review ever requested. The verdict step now exposes
+  `base_ref`/`base_sha`/`head_ref`/`head_sha` as step outputs from the same
+  live `gh api repos/.../pulls/<number>` response it already uses for
+  closed/draft, and the dispatch step builds its payload from
+  `steps.verdict.outputs.*` instead of the event payload.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

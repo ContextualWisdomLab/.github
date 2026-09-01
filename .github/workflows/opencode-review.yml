@@ -282,6 +282,18 @@ jobs:
           fi
           pr_state="$(printf '%s' "$pr" | jq -r '.state // ""')"
           pr_draft="$(printf '%s' "$pr" | jq -r '.draft // false')"
+          # Exposed for the dispatch step below so its repository_dispatch
+          # payload also comes from this same live fetch, not from
+          # github.event.pull_request.* -- a manual re-run of an old job
+          # would otherwise still build the dispatch payload from that stale
+          # event payload, and opencode-review-dispatch.yml's live
+          # validate-pr-metadata check hard-rejects a stale base_ref/base_sha,
+          # so the dispatch would fail even once this step correctly decides
+          # one is needed (Devin review on #1443).
+          printf 'base_ref=%s\n' "$(printf '%s' "$pr" | jq -r '.base.ref')" >>"$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$(printf '%s' "$pr" | jq -r '.base.sha')" >>"$GITHUB_OUTPUT"
+          printf 'head_ref=%s\n' "$(printf '%s' "$pr" | jq -r '.head.ref')" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$(printf '%s' "$pr" | jq -r '.head.sha')" >>"$GITHUB_OUTPUT"
           if [ "$pr_state" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
@@ -345,10 +357,12 @@ jobs:
           OPENCODE_API_BASE_URL: https://api.opencode.ai
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Sourced from the verdict step's own live gh api fetch, not
+          # github.event.pull_request.* -- see the comment on that step.
+          BASE_BRANCH: ${{ steps.verdict.outputs.base_ref }}
+          BASE_SHA: ${{ steps.verdict.outputs.base_sha }}
+          HEAD_BRANCH: ${{ steps.verdict.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.verdict.outputs.head_sha }}
         run: |
           set -euo pipefail
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
