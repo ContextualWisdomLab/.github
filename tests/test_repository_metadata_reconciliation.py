@@ -85,6 +85,11 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "learning-management-platform": ("learning-management-system", "rust"),
         "learning-content-studio": ("lcms", "content-authoring"),
         "learning-record-store": ("learning-record-store", "xapi"),
+        "bandscope": ("audio-analysis", "rehearsal"),
+        "saju-caldav": ("caldav", "four-pillars"),
+        "governance-risk-compliance": ("governance", "grc"),
+        "metering-billing-platform": ("metering", "billing"),
+        "learning-interoperability-contracts": ("xapi", "json-schema"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
