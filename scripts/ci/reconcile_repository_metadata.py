@@ -93,7 +93,11 @@ def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
     root = _require_exact_dict(payload, field="manifest")
     if set(root) != {"schema_version", "organization", "repositories"}:
         raise ManifestError("manifest has an unexpected key set")
-    if root["schema_version"] != 1 or root["organization"] != ORGANIZATION:
+    if (
+        type(root["schema_version"]) is not int
+        or root["schema_version"] != 1
+        or root["organization"] != ORGANIZATION
+    ):
         raise ManifestError("manifest schema or organization is unsupported")
     repositories = _require_exact_dict(root["repositories"], field="repositories")
     if not repositories:
@@ -148,6 +152,26 @@ def _pages_exists(repository: str) -> bool:
     if "HTTP 404" in combined or "Not Found" in combined:
         return False
     raise RuntimeError(f"GitHub Pages state could not be resolved for {repository}")
+
+
+def _pages_configuration(repository: str) -> dict[str, Any]:
+    """Return the current Pages configuration after existence has been established."""
+
+    payload = json.loads(_gh_api("GET", f"repos/{ORGANIZATION}/{repository}/pages"))
+    return _require_exact_dict(payload, field=f"Pages configuration for {repository}")
+
+
+def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -> bool:
+    """Return whether Pages already serves the desired legacy /docs source."""
+
+    source = current.get("source")
+    if type(source) is not dict:
+        return False
+    return (
+        source.get("branch") == default_branch
+        and source.get("path") == "/docs"
+        and current.get("build_type") in (None, "legacy")
+    )
 
 
 def _docs_index_exists(repository: str, default_branch: str) -> bool:
@@ -224,9 +248,14 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
 
-    if desired["deepwiki"] and not _deepwiki_badge_exists(repository, default_branch):
+    badge_exists = _deepwiki_badge_exists(repository, default_branch)
+    if desired["deepwiki"] and not badge_exists:
         raise RuntimeError(
             f"DeepWiki badge requested for {repository} but the exact badge is not on {default_branch}"
+        )
+    if not desired["deepwiki"] and badge_exists:
+        raise RuntimeError(
+            f"DeepWiki badge is disabled for {repository} but the exact badge is still on {default_branch}"
         )
     if desired["pages"] and not _docs_index_exists(repository, default_branch):
         raise RuntimeError(
@@ -252,12 +281,24 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
-        pages_body = {"source": {"branch": default_branch, "path": "/docs"}}
-        _gh_api(
-            "PUT" if pages_exists else "POST",
-            f"repos/{ORGANIZATION}/{repository}/pages",
-            body=pages_body,
-        )
+        pages_body = {
+            "build_type": "legacy",
+            "source": {"branch": default_branch, "path": "/docs"},
+        }
+        if not pages_exists:
+            _gh_api(
+                "POST",
+                f"repos/{ORGANIZATION}/{repository}/pages",
+                body=pages_body,
+            )
+        elif not _pages_configuration_matches(
+            _pages_configuration(repository), default_branch
+        ):
+            _gh_api(
+                "PUT",
+                f"repos/{ORGANIZATION}/{repository}/pages",
+                body=pages_body,
+            )
     elif pages_exists:
         _gh_api("DELETE", f"repos/{ORGANIZATION}/{repository}/pages")
 
