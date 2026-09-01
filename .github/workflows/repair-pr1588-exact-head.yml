@@ -159,17 +159,19 @@ jobs:
               upload_block = upload_block.replace(collect_old, collect_new, 1)
               workflow = workflow[:upload_start] + upload_block + workflow[next_step:]
 
-          if 'export LLM_TIMEOUT=300' not in workflow:
-              raise SystemExit('current-main positive Strix model-preflight timeout was lost')
-          if 'export LLM_TIMEOUT=0' in workflow:
-              raise SystemExit('stale zero Strix model-preflight timeout remains')
+          if 'export LLM_TIMEOUT=300' in workflow:
+              workflow = workflow.replace('export LLM_TIMEOUT=300', 'export LLM_TIMEOUT=0', 1)
+          if 'export LLM_TIMEOUT=0' not in workflow:
+              raise SystemExit('Strix model inference timeout was not disabled')
+          if 'export LLM_TIMEOUT=300' in workflow:
+              raise SystemExit('stale fixed Strix model inference timeout remains')
           if 'cancel-superseded-pr-runs:' in workflow:
               raise SystemExit('runner-backed Strix cleanup job remains')
           workflow_path.write_text(workflow, encoding='utf-8')
 
           test_path = Path('tests/test_strix_control_plane_supersession.py')
           tests = test_path.read_text(encoding='utf-8')
-          tests = tests.replace('    assert "export LLM_TIMEOUT=0" in workflow\n', '    assert "export LLM_TIMEOUT=300" in workflow\n')
+          tests = tests.replace('    assert "export LLM_TIMEOUT=300" in workflow\n', '    assert "export LLM_TIMEOUT=0" in workflow\n')
           publication_anchor = '    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'
           output_contract = "steps.live_publication.outputs.current == 'true'"
           extra = (
@@ -193,8 +195,8 @@ jobs:
           fresh_recovery = '\tassert_file_contains "$workflow_file" "central queue sweep retires predecessor runs" "strix workflow documents trusted current-head queue recovery"\n'
           if stale_recovery in quick_gate:
               quick_gate = quick_gate.replace(stale_recovery, fresh_recovery, 1)
-          stale_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=0\' "strix disables the model client inference timeout"\n'
-          fresh_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
+          stale_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
+          fresh_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=0\' "strix disables the model client inference timeout"\n'
           if stale_timeout in quick_gate:
               quick_gate = quick_gate.replace(stale_timeout, fresh_timeout, 1)
           for forbidden in (stale_cleanup.rstrip('\n'), stale_recovery.rstrip('\n'), stale_timeout.rstrip('\n')):
