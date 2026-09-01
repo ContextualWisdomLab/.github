@@ -349,13 +349,20 @@ def prepare_autofix_slot(
             "event=repository_dispatch",
             "-f",
             "per_page=100",
+            "--paginate",
+            "--slurp",
         ]
     )
     number = int(pr["number"])
     head = str(pr["headRefOid"]).lower()
     same_head = False
     stale_ids: list[str] = []
-    for workflow_run in payload.get("workflow_runs", []):
+    pages = payload if isinstance(payload, list) else [payload]
+    for workflow_run in (
+        workflow_run
+        for page in pages
+        for workflow_run in page.get("workflow_runs", [])
+    ):
         if str(workflow_run.get("status") or "") not in ACTIVE_RUN_STATUSES:
             continue
         match = AUTOFIX_RUN_NAME_RE.fullmatch(

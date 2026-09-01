@@ -41,10 +41,11 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
     """A long-running exact-head worker survives while its older sibling is cancelled."""
     head = "a" * 40
     stale = "b" * 40
+    requests = []
     monkeypatch.setattr(
         fix,
         "run_json",
-        lambda _args: {
+        lambda args: requests.append(args) or [{
             "workflow_runs": [
                 {
                     "id": 1,
@@ -63,7 +64,7 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
                 },
                 {"id": 4, "status": "in_progress", "display_title": "malformed"},
             ]
-        },
+        }],
     )
     cancelled = []
     monkeypatch.setattr(
@@ -80,6 +81,8 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
         dry_run=False,
     )
     assert cancelled == [(fix.DEFAULT_AUTOFIX_REPOSITORY, ["2"])]
+    assert "--paginate" in requests[0]
+    assert "--slurp" in requests[0]
 
 
 def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys):
