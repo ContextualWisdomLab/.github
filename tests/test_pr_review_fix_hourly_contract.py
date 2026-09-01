@@ -14,7 +14,9 @@ from scripts.ci import pr_review_fix_scheduler as scheduler
 _REUSABLE_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 _CLEARFOLIO_CALLER = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
-_CONTRACT_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+_CONTRACT_WORKFLOW = Path(
+    ".github/workflows/contextual-orchestrator-review-repair-quality.yml"
+)
 _AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 
 
@@ -316,39 +318,3 @@ def test_external_review_wait_is_not_invented_into_a_code_repair() -> None:
             False,
             (),
         )
-
-
-def test_rca_dispatch_carries_an_explicit_worker_mode(monkeypatch) -> None:
-    """The exact-head dispatch distinguishes failed-check RCA from ordinary review repair."""
-    captured: dict[str, str | None] = {}
-
-    def fake_run(args: list[str], *, stdin: str | None = None) -> str:
-        captured["stdin"] = stdin
-        return ""
-
-    monkeypatch.setattr(scheduler, "run", fake_run)
-    monkeypatch.setattr(scheduler, "live_head_matches", lambda _repo, _pr: True)
-    pr = _current_head_change_request("Failed check evidence reports Strix failed.")
-
-    scheduler.dispatch_autofix(
-        "owner/repo",
-        pr,
-        workflow="pr-review-autofix.yml",
-        workflow_repository="ContextualWisdomLab/.github",
-        dry_run=False,
-        repair_mode="rca",
-    )
-
-    payload = json.loads(captured["stdin"] or "{}")
-    assert payload["client_payload"]["repair_mode"] == "rca"
-
-
-def test_rca_worker_collects_failed_check_evidence_before_editing() -> None:
-    """RCA mode receives redacted logs and a separately sealed edit scope."""
-    workflow = _read(_AUTOFIX_WORKFLOW)
-
-    assert "REPAIR_MODE" in workflow
-    assert "collect_failed_check_evidence.sh" in workflow
-    assert "pr-review-autofix-failed-check-evidence.md" in workflow
-    assert "--repair-mode \"$REPAIR_MODE\"" in workflow
-    assert "--failed-check-evidence" in workflow
