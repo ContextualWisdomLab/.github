@@ -248,7 +248,7 @@ def _run_stale_trigger_step(
         "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
         "TARGET_REPOSITORY": "ContextualWisdomLab/example",
         "PR_NUMBER": "7",
-        "EXPECTED_HEAD": expected_head,
+        "EXPECTED_HEAD_SHA": expected_head,
         "GH_TOKEN": "synthetic-token",
     }
     return subprocess.run(  # noqa: S603, S607
