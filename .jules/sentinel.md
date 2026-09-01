@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-01 - Prevent SSRF in urllib by raising HTTPError on redirects
+**Vulnerability:** Subclassing `urllib.request.HTTPRedirectHandler` and returning `None` to disable redirects leaves the handler vulnerable, as `None` simply passes the request back up the fallback chain, potentially resulting in returning a 301/302 response to the caller rather than preventing execution.
+**Learning:** Returning `None` from `redirect_request` relies on default behavior to handle the response, not raising a true failure condition which is expected to halt SSRF bypasses via 301/302.
+**Prevention:** To securely prevent redirects in `urllib` and avoid SSRF vulnerabilities, explicitly raise an `urllib.error.HTTPError` inside `redirect_request` instead of returning `None`.
