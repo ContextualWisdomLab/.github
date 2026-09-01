@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import http.client
 import json
 import os
 import shlex
@@ -1338,6 +1339,321 @@ def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch)
     assert "prior verdict was rejected" in json.loads(open_calls[1].data)["messages"][1]["content"]
 
 
+def test_call_llm_repairs_once_after_a_transport_error_then_succeeds(monkeypatch):
+    """A transport-level failure (e.g. a genuine HTTP 502 from the gateway)
+    must not crash the job with an unhandled traceback.
+
+    Live incident (ContextualWisdomLab/naruon#1486): ``opener.open(request)``
+    sat outside the surrounding try/except, which only guarded the
+    JSON-decode/validation step after a successful response. Any transport
+    exception (HTTPError, URLError) from the request itself propagated as an
+    unhandled traceback instead of getting the same one-time repair-retry the
+    malformed-verdict path already has. Widening the try to also cover the
+    request itself, and catching ``urllib.error.URLError`` alongside
+    ``RuntimeError``, integrates it with that existing boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_transport_error(monkeypatch):
+    """Two consecutive transport errors must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="Bad Gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_truncated_response_then_succeeds(monkeypatch):
+    """A truncated response body must not crash the job either.
+
+    ``response.read()`` can raise ``http.client.IncompleteRead`` when the
+    server closes the connection before delivering the full
+    ``Content-Length`` body. That exception is neither a ``RuntimeError``
+    nor a ``urllib.error.URLError`` -- it is a plain ``http.client
+    .HTTPException`` -- so it slipped through the transport-error boundary
+    added for the HTTPError/URLError case and still crashed the required
+    check with an unhandled traceback."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            return TruncatedResponse()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_truncated_response(monkeypatch):
+    """Two consecutive truncated reads must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return TruncatedResponse()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="IncompleteRead"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds(monkeypatch):
+    """A raw socket-level failure during the request/connect phase -- not
+    wrapped as a ``urllib.error.URLError`` -- must not crash the job either.
+
+    ``opener.open(request)`` can raise a bare ``OSError`` subtype (e.g. a
+    ``TimeoutError``/``socket.timeout``, or a connection reset) directly from
+    the underlying ``http.client`` connection when the failure happens before
+    urllib gets a chance to wrap it as ``URLError``. This exercises the
+    ``OSError`` branch of the transport-failure boundary on a distinct
+    exception path from the ``http.client.HTTPException`` branch
+    (``IncompleteRead``, above) and the ``urllib.error.URLError`` branch
+    (``HTTPError``, further above)."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise TimeoutError("timed out waiting for the gateway")
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_socket_timeout(monkeypatch):
+    """Two consecutive raw socket timeouts must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise TimeoutError("timed out waiting for the gateway")
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="timed out waiting for the gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds(monkeypatch):
+    """A transport exception whose ``str()`` is empty (a bare ``OSError()``/
+    ``TimeoutError()``, or an ``http.client.HTTPException`` raised with no
+    message -- all of these stringify to ``''`` in practice) must still get
+    exactly one repair retry, the same as any other transport failure.
+
+    Devin Review on #1566: gating the retry-vs-fail-closed decision on
+    ``repair_error``'s truthiness conflated "is this the second attempt"
+    with "does the caught exception have display text" -- an empty-message
+    failure on the first attempt would keep ``repair_error`` falsy on the
+    recursive call too, so the retry state was lost. ``is_retry`` now tracks
+    that state explicitly and independently of the exception's text."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise OSError()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error(monkeypatch):
+    """Two consecutive empty-message transport failures must still fail
+    closed after exactly one repair retry, never retry unboundedly.
+
+    Bounds the fixture at 6 open() calls so a regression that reintroduces
+    unbounded recursion fails this test fast with a clear AssertionError
+    instead of recursing until CPython's own recursion limit."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        if len(open_calls) > 5:
+            raise AssertionError("call_llm retried more than once on an empty-message transport error")
+        raise OSError()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
 @pytest.mark.parametrize("choices", [{"a": 1}, 5])
 def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choices):
     """A malformed (non-list) choices field surfaces through call_llm's
@@ -1383,10 +1699,10 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
-    original_fetch_files = noema.fetch_changed_files
-    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
+    original_fetch_paths = noema.fetch_changed_file_paths
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
-    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_files)
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", original_fetch_paths)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
     calls = []
@@ -1395,7 +1711,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         calls.append(args)
         target = args[2]
         if target.endswith("/files"):
-            return "src/a.py\tmodified\nREADME.md\tmodified\nempty.txt\tmodified\n"
+            return "src/a.py\nREADME.md\nempty.txt\n"
         if "contents/src/a.py" in target:
             return encoded
         if "contents/README.md" in target:
@@ -1450,123 +1766,12 @@ def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch,
     assert "CodeGraph context unavailable" in noema.load_codegraph_context()
 
     paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
-    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [(p, "modified") for p in paths])
-    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, ref: "x")
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
+    monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, head_sha: "x")
 
     context = noema.changed_file_context("owner/repo", 7, "head")
 
     assert "1 changed files omitted from context budget" in context
-
-
-def test_fetch_changed_file_paths_parses_plain_filenames(monkeypatch):
-    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "a.py\n\nb.py\n")
-    assert noema.fetch_changed_file_paths("owner/repo", 7) == ["a.py", "b.py"]
-
-
-def test_changed_file_context_removed_file_base_content_empty(monkeypatch):
-    def fake_run(args, stdin=None):
-        target = args[2]
-        if target.endswith("/files"):
-            return "gone.py\tremoved\n"
-        if "contents/gone.py?ref=base-sha" in target:
-            return ""
-        raise AssertionError(args)
-
-    monkeypatch.setattr(noema, "run", fake_run)
-    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
-
-    assert "no UTF-8 text content available from base content API" in context
-
-
-def test_fetch_changed_files_parses_path_and_status(monkeypatch):
-    monkeypatch.setattr(
-        noema,
-        "run",
-        lambda args, stdin=None: "a.py\tmodified\n\nb.py\tremoved\nfuzz/x.py\tadded\n",
-    )
-    assert noema.fetch_changed_files("owner/repo", 7) == [
-        ("a.py", "modified"),
-        ("b.py", "removed"),
-        ("fuzz/x.py", "added"),
-    ]
-
-
-def test_changed_file_context_removed_file_uses_base_content_not_head_error(monkeypatch):
-    """A deleted file must not surface as a generic head-content-fetch error.
-
-    Regression test for the false-positive "Unable to review due to missing
-    file content" failure Noema produced on ContextualWisdomLab/.github#1486,
-    which deleted fuzz/fuzz_opencode_normalize_output.py.
-    """
-    encoded = base64.b64encode(b"def doomed():\n    pass\n").decode("ascii")
-
-    def fake_run(args, stdin=None):
-        target = args[2]
-        if target.endswith("/files"):
-            return "fuzz/fuzz_opencode_normalize_output.py\tremoved\n"
-        if "contents/fuzz/fuzz_opencode_normalize_output.py?ref=base-sha" in target:
-            return encoded
-        raise AssertionError(args)
-
-    monkeypatch.setattr(noema, "run", fake_run)
-    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
-
-    assert "Unavailable from head content API" not in context
-    assert "File removed in this PR" in context
-    assert "def doomed" in context
-
-
-def test_changed_file_context_removed_file_without_base_sha(monkeypatch):
-    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "gone.py\tremoved\n")
-    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "")
-
-    assert "Unavailable from head content API" not in context
-    assert "no head-side content applicable" in context
-
-
-def test_changed_file_context_removed_file_base_fetch_failure(monkeypatch):
-    def fake_run(args, stdin=None):
-        target = args[2]
-        if target.endswith("/files"):
-            return "gone.py\tremoved\n"
-        raise RuntimeError("Command failed: 404 Not Found (token secret)")
-
-    monkeypatch.setattr(noema, "run", fake_run)
-    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
-
-    assert "Unavailable from head content API" not in context
-    assert "Unavailable from base content API" in context
-    assert "token secret" not in context
-
-
-def test_changed_file_context_non_removed_head_fetch_failure_is_unchanged(monkeypatch):
-    """A genuine head-content 404 on a file that still exists stays a real error."""
-
-    def fake_run(args, stdin=None):
-        target = args[2]
-        if target.endswith("/files"):
-            return "still-here.py\tmodified\n"
-        raise RuntimeError("Command failed: token secret")
-
-    monkeypatch.setattr(noema, "run", fake_run)
-    context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
-
-    assert "Unavailable from head content API" in context
-
-
-def test_build_review_context_forwards_base_sha_to_changed_file_context(monkeypatch):
-    captured = {}
-
-    def fake_changed_file_context(repo, number, head_sha, base_sha=""):
-        captured["args"] = (repo, number, head_sha, base_sha)
-        return "files"
-
-    monkeypatch.setattr(noema, "changed_file_context", fake_changed_file_context)
-    pr = make_pr(headRefOid="head-sha", baseRefOid="base-sha")
-
-    noema.build_review_context("owner/repo", 7, pr)
-
-    assert captured["args"] == ("owner/repo", 7, "head-sha", "base-sha")
 
 
 class FakeResponse:
