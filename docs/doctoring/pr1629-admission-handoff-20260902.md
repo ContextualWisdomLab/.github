@@ -1,0 +1,7 @@
+# PR #1629 exact-head admission handoff
+
+The one-shot review-admission repair completed its source mutation and focused regression on the writer branch, then published commit `56cf1db7a26dfe4d9a69687796ff8d31f0457270`. That commit removes the temporary repair workflow, trigger, and driver after changing review startup from serial full-catalog preflight to concurrent per-route readiness probing while preserving catalog-order evidence and route-local budget escalation. It also updates the ADR and product-technical gap baseline.
+
+The source publication used the repository-scoped Actions token only because the workflow-starting `PR_REVIEW_MERGE_TOKEN` and `OPENCODE_APPROVE_TOKEN` secrets were unavailable. A token-authored push is not accepted as successor-head admission evidence because GitHub suppresses normal workflow chaining in that case. This repository-owner trace commit intentionally creates a distinct non-Actions head after re-fetching the exact writer branch so the ordinary protected pull-request workflows and reviewers can evaluate the repaired source without transferring evidence from the bot-authored predecessor.
+
+Do not treat either the one-shot job or predecessor-head checks as merge evidence for this new head. Merge eligibility requires the unchanged current head to satisfy the repository's ordinary current-head checks/reviews and remain free of substantive findings.
