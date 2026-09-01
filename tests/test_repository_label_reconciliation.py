@@ -136,8 +136,8 @@ def test_load_taxonomy_contracts(tmp_path) -> None:
             LABELS.load_taxonomy(path)
 
 
-def test_gh_api_builds_json_and_fails_closed(monkeypatch) -> None:
-    """Label API calls serialize bounded JSON and reject failed requests."""
+def test_gh_api_builds_json_and_handles_idempotent_not_found(monkeypatch) -> None:
+    """Label API calls serialize JSON, allow delete 404s, and fail closed otherwise."""
 
     seen = []
     monkeypatch.setattr(
@@ -147,17 +147,41 @@ def test_gh_api_builds_json_and_fails_closed(monkeypatch) -> None:
     )
     assert (
         LABELS._gh_api(
-            "PATCH", "repos/x/y/issues/1", body={"labels": ["documentation"]}
+            "POST", "repos/x/y/issues/1/labels", body={"labels": ["documentation"]}
         )
         == "ok"
     )
     assert seen[0][1]["input"] == '{"labels":["documentation"]}'
 
+    responses = iter(
+        [
+            completed(code=1, err="HTTP 404"),
+            completed(code=1, out="Not Found"),
+            completed(code=1, err="boom"),
+            completed(code=1, err="boom"),
+        ]
+    )
     monkeypatch.setattr(
         LABELS.subprocess,
         "run",
-        lambda *args, **kwargs: completed(code=1),
+        lambda *args, **kwargs: next(responses),
     )
+    assert (
+        LABELS._gh_api(
+            "DELETE", "repos/x/y/issues/1/labels/bug", allow_not_found=True
+        )
+        == ""
+    )
+    assert (
+        LABELS._gh_api(
+            "DELETE", "repos/x/y/issues/1/labels/bug", allow_not_found=True
+        )
+        == ""
+    )
+    with pytest.raises(RuntimeError, match="GitHub API request failed"):
+        LABELS._gh_api(
+            "DELETE", "repos/x/y/issues/1/labels/bug", allow_not_found=True
+        )
     with pytest.raises(RuntimeError, match="GitHub API request failed"):
         LABELS._gh_api("GET", "repos/x/y/issues/1")
 
@@ -175,33 +199,64 @@ def test_label_names_accepts_github_shapes_and_rejects_malformed() -> None:
         LABELS._label_names({"labels": [{}]})
 
 
-def test_reconcile_preserves_unmanaged_labels_and_noops(monkeypatch) -> None:
-    """Only taxonomy-managed labels are replaced; unrelated workflow labels persist."""
+def test_reconcile_mutates_only_managed_labels_across_concurrent_updates(
+    monkeypatch,
+) -> None:
+    """Concurrent unmanaged labels survive individual managed-label mutations."""
 
     calls = []
+    reads = iter(
+        [
+            {
+                "labels": [
+                    {"name": "status: needs-review"},
+                    {"name": "old type"},
+                ]
+            },
+            {
+                "labels": [
+                    {"name": "status: needs-review"},
+                    {"name": "priority: high"},
+                    {"name": "documentation"},
+                ]
+            },
+        ]
+    )
 
-    def gh_api(method, endpoint, body=None):
-        calls.append((method, body))
+    def gh_api(method, endpoint, body=None, allow_not_found=False):
+        calls.append((method, endpoint, body, allow_not_found))
         if method == "GET":
-            return json.dumps(
-                {"labels": [{"name": "status: needs-review"}, {"name": "bug"}]}
-            )
+            return json.dumps(next(reads))
         return ""
 
     monkeypatch.setattr(LABELS, "_gh_api", gh_api)
     LABELS.reconcile_assignment(
         {"repository": "Repo", "issue": 1, "type": "documentation"},
-        {"bug": "bug", "documentation": "documentation"},
+        {"old": "old type", "documentation": "documentation"},
     )
-    assert calls[-1] == (
-        "PATCH",
-        {"labels": ["status: needs-review", "documentation"]},
+    assert calls[1] == (
+        "POST",
+        "repos/ContextualWisdomLab/Repo/issues/1/labels",
+        {"labels": ["documentation"]},
+        False,
     )
+    assert calls[2] == (
+        "DELETE",
+        "repos/ContextualWisdomLab/Repo/issues/1/labels/old%20type",
+        None,
+        True,
+    )
+    assert calls[3][0] == "GET"
+    assert all(call[0] != "PATCH" for call in calls)
 
-    calls.clear()
 
-    def converged(method, endpoint, body=None):
-        calls.append((method, body))
+def test_reconcile_noops_and_rejects_failed_postcondition(monkeypatch) -> None:
+    """Converged assignments are write-free and failed managed postconditions fail."""
+
+    calls = []
+
+    def converged(method, endpoint, body=None, allow_not_found=False):
+        calls.append((method, endpoint, body, allow_not_found))
         return json.dumps(
             {
                 "labels": [
@@ -216,7 +271,26 @@ def test_reconcile_preserves_unmanaged_labels_and_noops(monkeypatch) -> None:
         {"repository": "Repo", "issue": 1, "type": "documentation"},
         {"bug": "bug", "documentation": "documentation"},
     )
-    assert calls == [("GET", None)]
+    assert [call[0] for call in calls] == ["GET"]
+
+    responses = iter(
+        [
+            json.dumps({"labels": [{"name": "bug"}]}),
+            "",
+            "",
+            json.dumps({"labels": [{"name": "bug"}]}),
+        ]
+    )
+    monkeypatch.setattr(
+        LABELS,
+        "_gh_api",
+        lambda *args, **kwargs: next(responses),
+    )
+    with pytest.raises(RuntimeError, match="managed labels did not converge"):
+        LABELS.reconcile_assignment(
+            {"repository": "Repo", "issue": 1, "type": "documentation"},
+            {"bug": "bug", "documentation": "documentation"},
+        )
 
     monkeypatch.setattr(LABELS, "_gh_api", lambda *args, **kwargs: "[]")
     with pytest.raises(LABELS.TaxonomyError, match="GitHub issue"):
