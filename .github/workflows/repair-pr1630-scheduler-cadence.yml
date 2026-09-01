@@ -1,0 +1,124 @@
+name: Repair PR 1630 scheduler cadence
+
+on:
+  push:
+    branches:
+      - fix/actions-queue-saturation-scheduler-cadence-20260902
+    paths:
+      - .github/workflows/repair-pr1630-scheduler-cadence.yml
+
+permissions: {}
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+          disable-file-monitoring: true
+
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Materialize and verify hourly sweep repair
+        shell: bash
+        env:
+          WRITER_BRANCH: fix/actions-queue-saturation-scheduler-cadence-20260902
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          assert workflow.count('- cron: "*/15 * * * *"') == 1
+          assert workflow.count("github.event.schedule == '*/15 * * * *'") == 1
+          assert workflow.count('$(date -u +%s) / 900') == 2
+          workflow = workflow.replace('Every-15-minutes org-wide sweep cadence', 'Hourly org-wide sweep cadence', 1)
+          workflow = workflow.replace('Runs every 15 minutes so an approval or', 'Runs hourly so an approval or', 1)
+          workflow = workflow.replace('within ~15 minutes instead of sitting idle for up to an hour.', 'within ~1 hour instead of sitting idle indefinitely.', 1)
+          workflow = workflow.replace('- cron: "*/15 * * * *"', '- cron: "0 * * * *"', 1)
+          workflow = workflow.replace("github.event.schedule == '*/15 * * * *'", "github.event.schedule == '0 * * * *'", 1)
+          workflow = workflow.replace('one running and one latest pending */15 sweep', 'one running and one latest pending hourly sweep', 1)
+          workflow = workflow.replace('900s', '3600s')
+          workflow = workflow.replace('$(date -u +%s) / 900', '$(date -u +%s) / 3600')
+          assert '*/15 * * * *' not in workflow
+          assert workflow.count('$(date -u +%s) / 3600') == 2
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          contract_path = Path('tests/test_required_workflow_queue_contract.py')
+          contract = contract_path.read_text(encoding='utf-8')
+          assert contract.count('- cron: "*/15 * * * *"') == 1
+          assert contract.count("github.event.schedule == '*/15 * * * *'") == 1
+          contract = contract.replace('every 15 minutes so an approval', 'hourly so an approval', 1)
+          contract = contract.replace('- cron: "*/15 * * * *"', '- cron: "0 * * * *"', 1)
+          contract = contract.replace("github.event.schedule == '*/15 * * * *'", "github.event.schedule == '0 * * * *'", 1)
+          assert '*/15 * * * *' not in contract
+          contract_path.write_text(contract, encoding='utf-8')
+
+          docs_path = Path('docs/org-required-workflow-rollout.md')
+          docs = docs_path.read_text(encoding='utf-8')
+          assert '*/15 * * * *' in docs
+          docs = docs.replace('*/15 * * * *', '0 * * * *')
+          docs = docs.replace('every 15 minutes', 'hourly')
+          docs = docs.replace('Every 15 minutes', 'Every hour')
+          docs = docs.replace('at most 15 minutes old', 'at most one hour old')
+          docs = docs.replace('within 15 minutes', 'within one hour')
+          docs = docs.replace('15-minute org sweep', 'hourly org sweep')
+          docs = docs.replace('15-minute sweep', 'hourly sweep')
+          docs = docs.replace('15-minute cadence', 'hourly cadence')
+          assert '*/15 * * * *' not in docs
+          docs_path.write_text(docs, encoding='utf-8')
+          PY
+
+          python3 - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_actions_queue_saturation_scheduler_cadence.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+                  print(f'PASS {name}')
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/pr-review-merge-scheduler.yml').read_text(encoding='utf-8')
+          contract = Path('tests/test_required_workflow_queue_contract.py').read_text(encoding='utf-8')
+          assert '- cron: "*/30 * * * *"' in workflow
+          assert '- cron: "0 * * * *"' in workflow
+          assert "github.event.schedule == '0 * * * *'" in workflow
+          assert "pull_request_target:" in workflow
+          assert "pull_request_review:" in workflow
+          assert "workflow_run:" in workflow
+          assert "repository_dispatch:" in workflow
+          assert 'org-queue-sweep:' in workflow
+          assert '- cron: "0 * * * *"' in contract
+          assert "github.event.schedule == '0 * * * *'" in contract
+          assert workflow.count('$(date -u +%s) / 3600') == 2
+          print('PASS required scheduler queue cadence contract')
+          PY
+
+          git diff --check
+          rm .github/workflows/repair-pr1630-scheduler-cadence.yml
+          git add .github/workflows/pr-review-merge-scheduler.yml tests/test_actions_queue_saturation_scheduler_cadence.py tests/test_required_workflow_queue_contract.py docs/org-required-workflow-rollout.md .github/workflows/repair-pr1630-scheduler-cadence.yml
+          git diff --cached --check
+
+          remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix(scheduler): reduce org sweep pressure under saturation"
+          git push origin "HEAD:${WRITER_BRANCH}"
