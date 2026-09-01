@@ -1,2 +1,2 @@
-repair PR1588 live-state admission contract
-retry=parse-safe-verified-20260901T2215+0900
+repair PR1588 current-main live-state admission contract
+retry=current-main-reconcile-20260901T2217+0900
