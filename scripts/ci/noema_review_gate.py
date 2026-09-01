@@ -626,6 +626,11 @@ def call_llm(
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     if deadline is None:
         deadline = time.monotonic() + NOEMA_LLM_TOTAL_BUDGET_SECONDS
+    # deadline is an absolute monotonic timestamp shared across the initial
+    # call and its one possible repair call, by design: response parsing and
+    # validate_substantive_verdict's own processing time between them also
+    # count against it, not just network time, so the shared wall-clock
+    # ceiling holds regardless of where the time goes.
     remaining_budget = deadline - time.monotonic()
     if remaining_budget <= 0:
         raise TimeoutError("Noema LLM review exhausted its total request budget")
