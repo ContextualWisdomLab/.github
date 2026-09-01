@@ -1,0 +1,260 @@
+name: Temporary PR 1541 REST workflow identity repair
+
+on:
+  push:
+    branches:
+      - fix/draft-governance-wait-and-direct-rca
+    paths:
+      - .github/workflows/tmp-pr1541-rest-workflow-identity-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/draft-governance-wait-and-direct-rca
+          fetch-depth: 2
+          persist-credentials: true
+          token: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}
+
+      - name: Verify unchanged test-first parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "80ee9bfa2b7957de3209626a31314ec982d616cc"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Install hash-locked test tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply bounded production repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          merge_path = Path("scripts/ci/pr_review_merge_scheduler.py")
+          merge_text = merge_path.read_text(encoding="utf-8")
+
+          constant_anchor = '''OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
+          RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+          '''
+          constant_replacement = '''OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
+          REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW = "__unknown_github_actions_workflow__"
+          RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
+          '''
+
+          function_anchor = '''def rest_check_node(
+              check: dict[str, Any], suite_created_at_by_id: dict[int, str] | None = None
+          ) -> dict[str, Any]:
+              """Convert a REST check-run payload into the GraphQL status rollup shape.
+
+              ``suite_created_at_by_id`` maps each check suite's REST ``id`` to its
+              ``created_at`` timestamp -- the REST check-run payload itself only
+              carries the check suite's bare ``id`` (see ``rest_pr_node``), so that
+              lookup is how this function attaches the same ``checkSuite.createdAt``
+              signal the GraphQL fragment fetches directly, keeping
+              ``check_run_recency_key`` behaviorally consistent across both paths.
+              """
+              suite_id = (check.get("check_suite") or {}).get("id")
+              suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
+              return {
+                  "__typename": "CheckRun",
+                  "name": check.get("name"),
+                  "status": (check.get("status") or "").upper(),
+                  "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
+                  "startedAt": check.get("started_at"),
+                  "detailsUrl": check.get("details_url"),
+                  "checkSuite": {"createdAt": suite_created_at, "workflowRun": {"workflow": {}}},
+              }
+          '''
+          function_replacement = '''def fetch_workflow_names_by_check_suite_rest(
+              repo: str, head_sha: str
+          ) -> dict[int, str]:
+              """Return exact-head GitHub Actions workflow names keyed by check-suite ID.
+
+              REST check-run payloads omit workflow identity. The Actions run list
+              preserves the shared check-suite ID, allowing the REST fallback to
+              retain the same workflow-level policy boundary as the GraphQL path.
+              When the integration cannot read Actions, callers receive an empty
+              map and GitHub Actions checks are marked with a fail-closed sentinel.
+              """
+              workflow_names: dict[int, str] = {}
+              page = 1
+              while True:
+                  try:
+                      payload = gh_api_json(
+                          f"repos/{repo}/actions/runs?head_sha={quote(head_sha, safe='')}"
+                          f"&per_page=100&page={page}"
+                      )
+                  except RuntimeError as exc:
+                      if github_resource_inaccessible(exc):
+                          return {}
+                      raise
+                  workflow_runs = payload.get("workflow_runs") or []
+                  for workflow_run in workflow_runs:
+                      suite_id = workflow_run.get("check_suite_id")
+                      workflow_name = str(workflow_run.get("name") or "").strip()
+                      if suite_id is not None and workflow_name:
+                          workflow_names[int(suite_id)] = workflow_name
+                  if len(workflow_runs) < 100:
+                      break
+                  page += 1
+              return workflow_names
+
+
+          def rest_check_node(
+              check: dict[str, Any],
+              suite_created_at_by_id: dict[int, str] | None = None,
+              workflow_name_by_suite_id: dict[int, str] | None = None,
+          ) -> dict[str, Any]:
+              """Convert a REST check-run payload into the GraphQL status rollup shape.
+
+              ``suite_created_at_by_id`` and ``workflow_name_by_suite_id`` attach
+              the check-suite recency and workflow identity that GraphQL exposes
+              directly. Unknown GitHub Actions workflow identity is represented by
+              a fail-closed sentinel so it cannot be mistaken for a source failure.
+              """
+              suite_id = (check.get("check_suite") or {}).get("id")
+              suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
+              workflow_name = (workflow_name_by_suite_id or {}).get(suite_id)
+              if not workflow_name and (check.get("app") or {}).get("slug") == "github-actions":
+                  workflow_name = REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW
+              workflow = {"name": workflow_name} if workflow_name else {}
+              return {
+                  "__typename": "CheckRun",
+                  "name": check.get("name"),
+                  "status": (check.get("status") or "").upper(),
+                  "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
+                  "startedAt": check.get("started_at"),
+                  "detailsUrl": check.get("details_url"),
+                  "checkSuite": {
+                      "createdAt": suite_created_at,
+                      "workflowRun": {"workflow": workflow},
+                  },
+              }
+          '''
+
+          checks_anchor = '''    checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+              check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
+              suite_created_at_by_id = {
+                  suite["id"]: suite.get("created_at")
+                  for suite in (check_suites.get("check_suites") or [])
+                  if suite.get("id") is not None
+              }
+          '''
+          checks_replacement = '''    checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+              check_runs = checks.get("check_runs") or []
+              check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
+              suite_created_at_by_id = {
+                  suite["id"]: suite.get("created_at")
+                  for suite in (check_suites.get("check_suites") or [])
+                  if suite.get("id") is not None
+              }
+              workflow_name_by_suite_id = (
+                  fetch_workflow_names_by_check_suite_rest(repo, str(head.get("sha") or ""))
+                  if any(
+                      (check.get("app") or {}).get("slug") == "github-actions"
+                      for check in check_runs
+                  )
+                  else {}
+              )
+          '''
+
+          call_anchor = '''                    rest_check_node(check, suite_created_at_by_id)
+                              for check in (checks.get("check_runs") or [])
+          '''
+          call_replacement = '''                    rest_check_node(
+                                  check,
+                                  suite_created_at_by_id,
+                                  workflow_name_by_suite_id,
+                              )
+                              for check in check_runs
+          '''
+
+          for old, new, label in (
+              (constant_anchor, constant_replacement, "constant"),
+              (function_anchor, function_replacement, "REST converter"),
+              (checks_anchor, checks_replacement, "REST fetch"),
+              (call_anchor, call_replacement, "REST call"),
+          ):
+              if merge_text.count(old) != 1:
+                  raise SystemExit(f"{label} patch anchor is not unique")
+              merge_text = merge_text.replace(old, new)
+          merge_path.write_text(merge_text, encoding="utf-8")
+
+          fix_path = Path("scripts/ci/pr_review_fix_scheduler.py")
+          fix_text = fix_path.read_text(encoding="utf-8")
+          import_anchor = '''        latest_check_run_attempts,
+                  review_matches_current_head,
+          '''
+          import_replacement = '''        latest_check_run_attempts,
+                  REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
+                  review_matches_current_head,
+          '''
+          if fix_text.count(import_anchor) != 2:
+              raise SystemExit("scheduler import patch anchor count changed")
+          fix_text = fix_text.replace(import_anchor, import_replacement)
+          ignored_anchor = '''RCA_IGNORED_WORKFLOW_NAMES = frozenset(
+              {"OpenCode Review", "Required OpenCode Review", "OpenCode PR Review"}
+          )
+          '''
+          ignored_replacement = '''RCA_IGNORED_WORKFLOW_NAMES = frozenset(
+              {
+                  "OpenCode Review",
+                  "Required OpenCode Review",
+                  "OpenCode PR Review",
+                  REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
+              }
+          )
+          '''
+          if fix_text.count(ignored_anchor) != 1:
+              raise SystemExit("ignored-workflow patch anchor is not unique")
+          fix_text = fix_text.replace(ignored_anchor, ignored_replacement)
+          fix_path.write_text(fix_text, encoding="utf-8")
+          PY
+
+      - name: Verify focused GREEN contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_pr_review_fix_scheduler_rest_workflow_identity.py \
+            tests/test_pr_review_fix_scheduler_direct_rca_regressions.py \
+            tests/test_pr_review_fix_scheduler.py \
+            tests/test_pr_review_merge_scheduler.py
+          python -m compileall -q \
+            scripts/ci/pr_review_fix_scheduler.py \
+            scripts/ci/pr_review_merge_scheduler.py
+          git diff --check
+
+      - name: Commit repair and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-pr1541-rest-workflow-identity-repair.yml
+          git config user.name "CWL guarded repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            scripts/ci/pr_review_fix_scheduler.py \
+            scripts/ci/pr_review_merge_scheduler.py \
+            .github/workflows/tmp-pr1541-rest-workflow-identity-repair.yml
+          git commit -m "fix(governance): preserve REST workflow identity"
+          git push origin HEAD:fix/draft-governance-wait-and-direct-rca
