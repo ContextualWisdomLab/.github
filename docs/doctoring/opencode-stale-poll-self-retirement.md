@@ -2,7 +2,7 @@
 
 ## Incident boundary
 
-On 2026-09-02, `ContextualWisdomLab/fast-mlsirm` retained an in-progress `Required OpenCode Review` run for PR #1519 on predecessor head `5453d0df84e4e...` while the live PR head had already advanced to `3a3865f40da12211898c97cbd47e7460381736ae`. The predecessor run had entered the required workflow's Reviews API wait and continued occupying a runner. At the same observation, the repository had a fresh current-head OpenCode run queued and the organization-wide Actions fleet was heavily queued.
+On 2026-09-01 UTC (2026-09-02 Asia/Seoul), `ContextualWisdomLab/fast-mlsirm` retained an in-progress `Required OpenCode Review` run for PR #1519 on predecessor head `5453d0df84e4e...` while the live PR head had already advanced to `3a3865f40da12211898c97cbd47e7460381736ae`. The predecessor run had entered the required workflow's Reviews API wait and continued occupying a runner. At the same observation, the repository had a fresh current-head OpenCode run queued and the organization-wide Actions fleet was heavily queued.
 
 The protected central workflow intentionally keys concurrency by repository, PR number, and exact head SHA. That protects a newer authoritative run from a delayed old-head event, but it also means a new commit cannot cancel the previous head through the concurrency group. A separate `cancel-superseded-opencode-review-runs` job exists for that cleanup, yet it needs its own runner. Under saturation, the cleanup job can therefore wait behind the stale poll it is meant to retire.
 
