@@ -299,7 +299,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "strix workflow uses the sidecar token"
 	assert_file_not_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job must not cap model inference"
 	assert_file_not_contains "$workflow_file" "timeout-minutes: 170" "strix scan step must not cap model inference"
-	assert_file_contains "$workflow_file" 'export LLM_TIMEOUT=0' "strix disables the model client inference timeout"
+	assert_file_contains "$workflow_file" 'export LLM_TIMEOUT=300' "strix keeps the model client inference timeout positive (Strix 1.5.3 passes it to asyncio.wait_for, where 0 cancels immediately) while the compat launcher neutralizes it into an unbounded deadline"
 	assert_file_contains "$workflow_file" 'export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0' "strix disables the memory-compressor inference timeout"
 	assert_file_contains "$workflow_file" 'export STRIX_PROCESS_TIMEOUT_SECONDS=0' "strix disables the scanner process timeout"
 	assert_file_contains "$workflow_file" 'export STRIX_TOTAL_TIMEOUT_SECONDS=0' "strix disables the total scanner timeout"
