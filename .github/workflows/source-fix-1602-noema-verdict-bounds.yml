@@ -1,0 +1,32 @@
+name: One-shot PR 1602 Noema verdict-bound repair
+
+on:
+  push:
+    branches:
+      - fix/noema-truncated-completion-contract-20260901
+    paths:
+      - .github/workflows/source-fix-1602-noema-verdict-bounds.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Run RED-GREEN verdict-bound repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-truncated-completion-contract-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          PYTHONPATH=. python3 scripts/ci/source_fix_1602_noema_verdict_bounds.py
