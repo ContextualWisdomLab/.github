@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Reconcile exact live main, verify, and self-remove
+      - name: Rebase semantic delta onto live protected-main APIs and verify
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
@@ -31,11 +31,389 @@ jobs:
           git fetch origin +main:refs/remotes/origin/main
           main_head="$(git rev-parse refs/remotes/origin/main)"
           branch_head="$(git rev-parse HEAD)"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git merge --no-commit --no-ff -X ours refs/remotes/origin/main
-          git rm "$TEMP_WORKFLOW"
+
+          # For files whose APIs changed on protected main, protected main is the
+          # authority; reapply only this PR's observed-probe semantic delta below.
+          git checkout refs/remotes/origin/main -- \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_removed_file_context.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+
+          anchor = 'DIFF_HUNK_RE = re.compile(r"^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@")\n'
+          constants = '''OBSERVED_REVIEW_PROBE_KINDS = frozenset(
+              {
+                  "mutable_alias",
+                  "time_of_check_time_of_use",
+                  "execution_identity",
+                  "coercion_boundary",
+                  "test_oracle",
+                  "cross_contract",
+                  "authority_boundary",
+                  "dependency_context",
+                  "state_machine_race",
+              }
+          )
+          OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+              "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+              "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+              "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+              "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+              "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+              "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+              "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+              "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+              "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+          }
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit("Noema diff-hunk anchor changed unexpectedly")
+          text = text.replace(anchor, anchor + constants, 1)
+
+          marker = '\ndef validate_substantive_verdict(\n'
+          helper = '''
+          def _validate_observed_probe_class_evidence(
+              probe: dict[str, Any], probe_kind: str, index: int
+          ) -> None:
+              """Require the exact deterministic witness schema for a claimed defect class."""
+              class_evidence = probe.get("class_evidence")
+              required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+              if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+                  expected = ", ".join(required_fields)
+                  raise RuntimeError(
+                      f"Noema adversarial probe {index} class_evidence for {probe_kind} "
+                      f"must contain exactly: {expected}"
+                  )
+              for field in required_fields:
+                  value = class_evidence.get(field)
+                  if not isinstance(value, str) or not value.strip():
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} class_evidence.{field} "
+                          "requires source-traced witness text"
+                      )
+
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("Noema verdict validator anchor changed unexpectedly")
+          text = text.replace(marker, "\n" + helper + "def validate_substantive_verdict(\n", 1)
+
+          old = '''    confirmed: set[tuple[str, int, str]] = set()
+              identities: set[tuple[Any, ...]] = set()
+              for index, probe in enumerate(probes, start=1):
+                  if not isinstance(probe, dict):
+                      raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+                  location = (probe.get("path"), probe.get("line"), probe.get("side"))
+          '''
+          new = '''    confirmed: set[tuple[str, int, str]] = set()
+              identities: set[tuple[Any, ...]] = set()
+              probe_kinds: set[str] = set()
+              for index, probe in enumerate(probes, start=1):
+                  if not isinstance(probe, dict):
+                      raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+                  probe_kind = probe.get("probe_kind")
+                  if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+                      raise RuntimeError(
+                          f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
+                      )
+                  _validate_observed_probe_class_evidence(probe, probe_kind, index)
+                  probe_kinds.add(probe_kind)
+                  location = (probe.get("path"), probe.get("line"), probe.get("side"))
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("Noema probe validation loop changed unexpectedly")
+          text = text.replace(old, new, 1)
+
+          marker = '''    if decision == "approve" and confirmed:
+              raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+          '''
+          insertion = '''    if len(probe_kinds) < required_probes:
+              raise RuntimeError(
+                  f"Noema {decision} requires at least {required_probes} distinct probe_kind values"
+              )
+
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("Noema post-probe validator anchor changed unexpectedly")
+          text = text.replace(marker, insertion + marker, 1)
+
+          probe_shape = '''                                {
+                                              **location_example,
+                                              "hypothesis": "...",
+          '''
+          probe_shape_new = '''                                {
+                                              **location_example,
+                                              "probe_kind": "mutable_alias|time_of_check_time_of_use|execution_identity|coercion_boundary|test_oracle|cross_contract|authority_boundary|dependency_context|state_machine_race",
+                                              "class_evidence": {"exact_fields_for_selected_probe_kind": "source-traced witness text"},
+                                              "hypothesis": "...",
+          '''
+          if text.count(probe_shape) != 1:
+              raise SystemExit("Noema prompt probe shape changed unexpectedly")
+          text = text.replace(probe_shape, probe_shape_new, 1)
+
+          instruction = '                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",\n'
+          extra = instruction + '                "Classify every adversarial probe with one observed defect class and use distinct classes when multiple probes are required: mutable_alias, time_of_check_time_of_use, execution_identity, coercion_boundary, test_oracle, cross_contract, authority_boundary, dependency_context, state_machine_race.",\n                "A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific source-traced witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ".",\n                "Actively attack caller-owned mutable aliases and readonly illusions; changing getters or Proxies between validation and use; execution/tenant/request identity confusion; JavaScript or serialization coercion at enum, key, digest, and identity boundaries; weak substring or vacuous test oracles; contradictions across PRD/ADR/architecture/changelog/contracts; component-vs-host authority overreach; omitted causal dependency context; and cancellation/retry/publication state-machine races.",\n'
+          if text.count(instruction) != 1:
+              raise SystemExit("Noema prompt instruction anchor changed unexpectedly")
+          text = text.replace(instruction, extra, 1)
+
+          old = '''                f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
+                      f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
+          '''
+          new = '''                f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
+                      f"[{probe.get('probe_kind')}] {probe.get('outcome')}: "
+                      f"{str(probe.get('hypothesis') or '').strip()} — "
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("Noema review evidence formatter changed unexpectedly")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+
+          # Align protected-main tests with the status-preserving changed-files API.
+          text = text.replace(
+              'monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])',
+              'monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])',
+          )
+          text = text.replace(
+              'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value: "context")',
+              'monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")',
+          )
+
+          start = text.index('def test_review_context_builders_include_codegraph_threads_and_files')
+          end = text.index('\n\nclass FakeResponse:', start)
+          replacement = '''def test_review_context_builders_include_threads_and_files(monkeypatch):
+              assert noema.truncate_text("abc", 10) == "abc"
+              assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
+              assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
+
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
+              assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
+
+              encoded = base64.b64encode(b"print('hello')\\n").decode("ascii")
+              calls = []
+
+              def fake_run(args, stdin=None):
+                  calls.append(args)
+                  target = args[2]
+                  if target.endswith("/files"):
+                      return '\\n'.join([
+                          json.dumps(["src/a.py", "modified"]),
+                          json.dumps(["README.md", "modified"]),
+                          json.dumps(["empty.txt", "modified"]),
+                      ]) + '\\n'
+                  if "contents/src/a.py" in target:
+                      return encoded
+                  if "contents/README.md" in target:
+                      raise RuntimeError("Command failed: token secret")
+                  if "contents/empty.txt" in target:
+                      return ""
+                  raise AssertionError(args)
+
+              monkeypatch.setattr(noema, "run", fake_run)
+              pr = make_pr(
+                  headRefOid="head sha",
+                  baseRefOid="base sha",
+                  reviewThreads={
+                      "nodes": [
+                          {
+                              "isResolved": False,
+                              "isOutdated": False,
+                              "path": "src/a.py",
+                              "line": 3,
+                              "comments": {"nodes": [{"author": {"login": "reviewer"}, "body": "check call site"}]},
+                          },
+                          {
+                              "isResolved": True,
+                              "isOutdated": False,
+                              "path": "README.md",
+                              "comments": {"nodes": []},
+                          },
+                      ]
+                  },
+              )
+
+              context = noema.build_review_context("owner/repo", 7, pr)
+              assert "CodeGraph context" not in context
+              assert "Thread open at src/a.py:3" in context
+              assert "reviewer: check call site" in context
+              assert "### src/a.py" in context
+              assert "print('hello')" in context
+              assert "Unavailable from head content API" in context
+              assert "No UTF-8 text content available" in context
+              assert any("/files" in call[2] for call in calls)
+
+
+          def test_review_context_reports_omitted_files(monkeypatch):
+              files = [
+                  (f"src/file_{index}.py", "modified")
+                  for index in range(noema.MAX_CONTEXT_FILES + 1)
+              ]
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: files)
+              monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
+
+              context = noema.changed_file_context("owner/repo", 7, "head")
+              assert "1 changed files omitted from context budget" in context
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          # Migrate the pre-existing formal-verdict fixtures to meaningful observed classes.
+          replacements = [
+              (
+                  '"hypothesis": "The assignment was removed.",\n                    "attack_or_counterexample": "Inspect the added hunk line.",\n                    "evidence": "The RIGHT-side assignment remains present.",',
+                  '"probe_kind": "coercion_boundary",\n                    "class_evidence": {"raw_value": "The replacement could be a truthy non-boolean value.", "conversion_path": "Trace the changed assignment without implicit conversion.", "canonicality_guard": "The changed source uses the canonical boolean literal True."},\n                    "hypothesis": "A truthy non-boolean value could masquerade as canonical boolean state.",\n                    "attack_or_counterexample": "Use a string-like truthy value as the coercion counterexample.",\n                    "evidence": "The RIGHT-side assignment uses the boolean literal True without coercion.",',
+              ),
+              (
+                  '"hypothesis": "The value became false.",\n                    "attack_or_counterexample": "Read the replacement literal.",\n                    "evidence": "The literal is True.",',
+                  '"probe_kind": "test_oracle",\n                    "class_evidence": {"assertion_under_test": "A truthiness-only review oracle could accept a string value.", "negative_control": "Use a non-boolean truthy string as a negative control.", "distinguishing_observation": "The changed source is the boolean literal True, distinct by type."},\n                    "hypothesis": "A truthiness-only oracle could accept a non-boolean replacement.",\n                    "attack_or_counterexample": "Compare the boolean literal with a truthy string negative control.",\n                    "evidence": "The replacement is the exact boolean literal True.",',
+              ),
+              (
+                  '"hypothesis": "The value becomes false.",\n                    "attack_or_counterexample": "Trace the literal assigned at the changed line.",\n                    "evidence": "The changed source assigns the boolean literal True.",',
+                  '"probe_kind": "coercion_boundary",\n                    "class_evidence": {"raw_value": "A caller could supply a truthy non-boolean value.", "conversion_path": "Trace whether the changed assignment coerces input.", "canonicality_guard": "The changed line assigns the canonical boolean literal True."},\n                    "hypothesis": "A truthy non-boolean value could cross the canonical boolean boundary.",\n                    "attack_or_counterexample": "Compare the literal with a truthy string counterexample.",\n                    "evidence": "The changed source assigns the exact boolean literal True.",',
+              ),
+              (
+                  '"hypothesis": "The assignment is removed.",\n                    "attack_or_counterexample": "Compare the added side with the deleted side.",\n                    "evidence": "The RIGHT-side hunk contains one replacement assignment.",',
+                  '"probe_kind": "test_oracle",\n                    "class_evidence": {"assertion_under_test": "Presence-only inspection could miss a wrong replacement type.", "negative_control": "Use a present but non-boolean replacement as the negative control.", "distinguishing_observation": "The changed line is both present and the exact boolean literal True."},\n                    "hypothesis": "A presence-only oracle could accept the wrong replacement value.",\n                    "attack_or_counterexample": "Use a present but type-wrong assignment as a negative control.",\n                    "evidence": "The RIGHT-side hunk contains the exact boolean replacement assignment.",',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"Noema formal fixture changed unexpectedly: {old[:60]}")
+              text = text.replace(old, new, 1)
+
+          additions = {
+              '"probe_kind": "cross_contract",\n                    "hypothesis": "The obsolete claim remains documented.",': '"probe_kind": "cross_contract",\n                    "class_evidence": {"first_contract": "The deleted documentation claim.", "second_contract": "The current changed-side contract after deletion.", "contradiction_or_alignment": "The obsolete conflicting claim is removed."},\n                    "hypothesis": "The obsolete claim remains documented.",',
+              '"probe_kind": "authority_boundary",\n                    "hypothesis": "The safety gate is disabled.",': '"probe_kind": "authority_boundary",\n                    "class_evidence": {"component_authority": "The changed config controls this component safety gate.", "external_authority": "No external caller is authorized to silently disable the gate.", "enforcement_boundary": "The effective changed value is evaluated at the component configuration boundary."},\n                    "hypothesis": "The safety gate is disabled.",',
+              '"probe_kind": "cross_contract",\n                    "hypothesis": "The key was renamed instead.",': '"probe_kind": "cross_contract",\n                    "class_evidence": {"first_contract": "The prior config key is safe with value true.", "second_contract": "The changed config retains key safe with value false.", "contradiction_or_alignment": "The key identity aligns while its safety value contradicts the prior contract."},\n                    "hypothesis": "The key was renamed instead.",',
+          }
+          for old, new in additions.items():
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          one_line = {
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "hypothesis": "The value is false.", "attack_or_counterexample": "Read the literal.", "evidence": "The literal is True.", "outcome": "falsified"}': '{"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "coercion_boundary", "class_evidence": {"raw_value": "A truthy non-boolean value", "conversion_path": "No implicit conversion in the changed assignment", "canonicality_guard": "Exact boolean literal True"}, "hypothesis": "A non-boolean value crosses the canonical boundary.", "attack_or_counterexample": "Compare with a truthy string negative control.", "evidence": "The literal is the canonical boolean True.", "outcome": "falsified"}',
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "hypothesis": "The assignment vanished.", "attack_or_counterexample": "Inspect the added line.", "evidence": "One assignment is present.", "outcome": "falsified"}': '{"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "test_oracle", "class_evidence": {"assertion_under_test": "Presence-only assignment check", "negative_control": "Present assignment with wrong value type", "distinguishing_observation": "Exact boolean literal and presence are both checked"}, "hypothesis": "A presence-only oracle accepts a wrong replacement.", "attack_or_counterexample": "Use a present but non-boolean assignment.", "evidence": "The changed assignment has the exact expected boolean value.", "outcome": "falsified"}',
+          }
+          for old, new in one_line.items():
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          cat > tests/test_noema_removed_file_context.py <<'PY'
+          """Regression tests for Noema deleted-file review context."""
+
+          from __future__ import annotations
+
+          import base64
+          import json
+
+          from scripts.ci import noema_review_gate as noema
+
+
+          def test_fetch_changed_files_preserves_path_and_status(monkeypatch):
+              """The paginated Files API adapter must retain each file status."""
+              payload = "\n".join(
+                  json.dumps(row)
+                  for row in [
+                      ["a.py", "modified"],
+                      ["b.py", "removed"],
+                      ["fuzz/x.py", "added"],
+                  ]
+              ) + "\n"
+              monkeypatch.setattr(noema, "run", lambda args, stdin=None: payload)
+              assert noema.fetch_changed_files("owner/repo", 7) == [
+                  ("a.py", "modified"),
+                  ("b.py", "removed"),
+                  ("fuzz/x.py", "added"),
+              ]
+
+
+          def test_removed_file_context_uses_merge_base_content(monkeypatch):
+              """A deleted file is reviewed from immutable merge-base evidence."""
+              encoded = base64.b64encode(b"def doomed():\n    pass\n").decode("ascii")
+              calls: list[str] = []
+
+              def fake_run(args, stdin=None):
+                  target = args[2]
+                  calls.append(target)
+                  if target.endswith("/files"):
+                      return json.dumps(["fuzz/fuzz_opencode_normalize_output.py", "removed"]) + "\n"
+                  if "/compare/base-sha...head-sha" in target:
+                      return "c" * 40
+                  if "contents/fuzz/fuzz_opencode_normalize_output.py?ref=" + "c" * 40 in target:
+                      return encoded
+                  raise AssertionError(args)
+
+              monkeypatch.setattr(noema, "run", fake_run)
+              context = noema.changed_file_context("owner/repo", 1486, "head-sha", "base-sha")
+              assert "Pre-deletion content at merge base" in context
+              assert "def doomed" in context
+              assert not any("ref=head-sha" in target for target in calls)
+
+
+          def test_removed_file_context_fails_closed_without_merge_base_identity(monkeypatch):
+              """Missing base identity is explicit and never falls back to head content."""
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("gone.py", "removed")])
+              monkeypatch.setattr(
+                  noema,
+                  "fetch_file_content_at_ref",
+                  lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected fetch")),
+              )
+              context = noema.changed_file_context("owner/repo", 7, "head-sha", "")
+              assert "merge-base lookup unavailable" in context
+
+
+          def test_removed_file_merge_base_fetch_failure_is_distinct_from_head_failure(monkeypatch):
+              """A merge-base content failure remains typed as pre-deletion evidence failure."""
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("gone.py", "removed")])
+              monkeypatch.setattr(noema, "fetch_merge_base_sha", lambda repo, base, head: "c" * 40)
+
+              def fail_fetch(repo, path, ref):
+                  raise RuntimeError("HTTP 502: token ***")
+
+              monkeypatch.setattr(noema, "fetch_file_content_at_ref", fail_fetch)
+              context = noema.changed_file_context("owner/repo", 7, "head-sha", "base-sha")
+              assert "Unavailable from merge-base content API" in context
+              assert "Unavailable from head content API" not in context
+
+
+          def test_build_review_context_passes_live_base_and_status_snapshot(monkeypatch):
+              """GraphQL base identity and one status snapshot reach context construction."""
+              observed = []
+              monkeypatch.setattr(noema, "review_thread_context", lambda pr: "")
+
+              def fake_context(repo, number, head_sha, base_sha="", changed_files=None):
+                  observed.append((repo, number, head_sha, base_sha, changed_files))
+                  return "files"
+
+              monkeypatch.setattr(noema, "changed_file_context", fake_context)
+              snapshot = [("gone.py", "removed")]
+              result = noema.build_review_context(
+                  "owner/repo",
+                  7,
+                  {"headRefOid": "head-sha", "baseRefOid": "base-sha"},
+                  snapshot,
+              )
+              assert observed == [("owner/repo", 7, "head-sha", "base-sha", snapshot)]
+              assert "## Changed file context\nfiles" in result
+          PY
 
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
           PYTHONPATH=. python3 -m pytest -q \
@@ -43,13 +421,26 @@ jobs:
             tests/test_noema_observed_probe_doctoring.py \
             tests/test_noema_review_gate.py \
             tests/test_noema_removed_file_context.py \
-            tests/test_contextual_orchestrator_review_policy.py \
             tests/test_repository_branch_coverage_javascript_and_noema.py \
             tests/test_repository_branch_coverage_reporting_edges.py \
             tests/test_required_workflow_queue_contract.py
           PYTHONPATH=. python3 -m pytest -q tests
           interrogate --fail-under=100 scripts/ci/noema_review_gate.py
           python3 -m compileall -q scripts/ci tests
+          git diff --check
+
+          git rm "$TEMP_WORKFLOW"
+          git add \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_removed_file_context.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py \
+            .github/workflows/noema-observed-probe-quality-ci.yml \
+            docs/doctoring/noema-observed-defect-probe-taxonomy.md \
+            docs/product-technical-gap-baseline.md \
+            CHANGELOG.md
           git diff --cached --check
           test ! -e "$TEMP_WORKFLOW"
 
