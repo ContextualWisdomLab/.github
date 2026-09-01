@@ -45,6 +45,32 @@ def test_manifest_accepts_explicit_workflow_pages_mode() -> None:
         RECONCILER._validate_repository("Repo", desired(pages=False))
 
 
+def test_workflow_pages_definition_probe_uses_standard_reviewed_path(monkeypatch) -> None:
+    """Workflow-mode source discovery probes only the standard reviewed Pages path."""
+
+    seen = []
+
+    def repository_file_exists(repository, default_branch, path):
+        seen.append((repository, default_branch, path))
+        return True
+
+    monkeypatch.setattr(RECONCILER, "_repository_file_exists", repository_file_exists)
+
+    assert RECONCILER._workflow_pages_definition_exists("Repo", "main")
+    assert seen == [("Repo", "main", ".github/workflows/pages.yml")]
+
+
+def test_workflow_pages_precondition_rejects_missing_reviewed_workflow(monkeypatch) -> None:
+    """Workflow intent fails before mutation when the reviewed Pages workflow is absent."""
+
+    monkeypatch.setattr(
+        RECONCILER, "_workflow_pages_definition_exists", lambda *args: False
+    )
+
+    with pytest.raises(RuntimeError, match=r"\.github/workflows/pages\.yml"):
+        RECONCILER._pages_precondition("Repo", "main", desired())
+
+
 def test_workflow_pages_reconcile_preserves_live_actions_mode(monkeypatch) -> None:
     """A reviewed Actions-backed Pages site is verified rather than rewritten to legacy."""
 
@@ -105,6 +131,27 @@ def test_workflow_pages_reconcile_fails_closed_on_missing_or_wrong_mode(monkeypa
     )
     with pytest.raises(RuntimeError, match="not Actions-backed"):
         RECONCILER.reconcile_repository("Repo", desired())
+
+
+def test_workflow_pages_verification_rejects_missing_reviewed_source(monkeypatch) -> None:
+    """Live verification fails closed if the declared workflow source disappears."""
+
+    monkeypatch.setattr(
+        RECONCILER,
+        "_gh_api",
+        lambda method, endpoint, **kwargs: (
+            json.dumps({"names": ["python"]})
+            if endpoint.endswith("/topics")
+            else json.dumps({"default_branch": "main", "description": "Useful product."})
+        ),
+    )
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(
+        RECONCILER, "_workflow_pages_definition_exists", lambda *args: False
+    )
+
+    with pytest.raises(RuntimeError, match="workflow source did not converge"):
+        RECONCILER.verify_repository("Repo", desired())
 
 
 def test_workflow_pages_verification_requires_live_publication(monkeypatch) -> None:
