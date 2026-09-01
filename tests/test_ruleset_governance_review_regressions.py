@@ -170,6 +170,22 @@ def test_current_main_is_rechecked_around_put_and_after_convergence(monkeypatch)
     assert checks == ["main", "main", "main"]
 
 
+def test_reconcile_forwards_expected_main_sha_to_each_target(monkeypatch) -> None:
+    """The multi-target coordinator preserves the protected-main guard on every mutation."""
+
+    seen: list[tuple[str, bool, str | None]] = []
+
+    def fake_target(item, *, verify_only, expected_main_sha=None):
+        seen.append((item.scope, verify_only, expected_main_sha))
+        return True
+
+    monkeypatch.setattr(module, "_reconcile_target", fake_target)
+    assert module.reconcile(
+        (_target(),), verify_only=False, expected_main_sha="a" * 40
+    ) == 1
+    assert seen == [("repository", False, "a" * 40)]
+
+
 def test_actions_apply_requires_and_forwards_expected_main_sha(tmp_path, monkeypatch) -> None:
     """The privileged Actions CLI path cannot silently omit its protected-main identity."""
 
