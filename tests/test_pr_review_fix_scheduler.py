@@ -1352,6 +1352,13 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     assert fix.inspect_pr("owner/repo", make_pr(headRepository={"nameWithOwner": "fork/repo"}), args)[1] == (
         "external PR head is not writable by repository workflow credentials",
     )
+    assert fix.inspect_pr(
+        "owner/repo", make_pr(mergeStateStatus="DIRTY", isDraft=True), args
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr("owner/repo", make_pr(mergeStateStatus="DIRTY"), args) == (
+        "skip",
+        ("merge conflict is not authorized for repair",),
+    )
 
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))
     assert fix.inspect_pr("owner/repo", make_pr(), args) == (
