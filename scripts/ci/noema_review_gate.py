@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
@@ -34,6 +35,13 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+NOEMA_LLM_MAX_COMPLETION_TOKENS = 4096
+NOEMA_MAX_VERDICT_TEXT_CHARS = 600
+NOEMA_MAX_REVIEWED_LINES = 6
+NOEMA_MAX_ADVERSARIAL_PROBES = 4
+NOEMA_MAX_FINDINGS = 5
+NOEMA_MAX_CLASS_EVIDENCE_FIELDS = 6
+NOEMA_MAX_CLASS_EVIDENCE_CHARS = 400
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -836,25 +844,31 @@ def extract_json_object(text: str) -> dict[str, Any]:
         ) from exc
 
 
-def extract_llm_message_content(raw: str) -> str:
-    """Parse and validate the OpenAI-compatible chat-completion HTTP envelope.
+def _bounded_token_count(value: Any, field: str) -> int | None:
+    """Validate one optional usage count without retaining an unbounded value.
 
-    Fails closed with the same bounded ``RuntimeError`` ``call_llm`` already
-    uses for an unusable verdict, instead of letting a malformed gateway
-    reply crash the review job before it ever reaches the verdict-JSON
-    repair boundary handled by ``extract_json_object``. Covers a non-JSON
-    raw body, a non-object top-level JSON value, a wrong-shaped ``choices``
-    or ``message`` field, and non-string ``content`` — each rejected with an
-    explicit ``isinstance`` check rather than a broad ``except``, so a
-    genuine programming error elsewhere in this module still surfaces as
-    itself. A missing or empty ``choices``/``message``/``content`` is left
-    to fall through to an empty string, matching the original code's
-    leniency for an absent (not malformed) field; ``extract_json_object``
-    already fails closed on empty content.
-
-    None of the raised messages embed any part of the untrusted response
-    body — only JSON-value type names, which cannot carry a credential.
+    Provider usage metadata is safe to retain for diagnosis only while it is a
+    non-negative integer within a deliberately generous operational ceiling.
     """
+
+    if value is None:
+        return None
+    if type(value) is not int or value < 0 or value > 1_048_576_000:
+        raise RuntimeError(
+            f"Noema LLM response usage.{field} was not a bounded non-negative integer"
+        )
+    return value
+
+
+def extract_llm_completion(raw: str) -> LLMCompletion:
+    """Parse one OpenAI-compatible completion and retain bounded metadata.
+
+    Raw model content remains in memory and is never copied into diagnostics.
+    Only the normalized finish reason, bounded model identifier, and token
+    counts are retained beside the content so truncation is distinguishable
+    from arbitrary malformed JSON.
+    """
+
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -863,6 +877,7 @@ def extract_llm_message_content(raw: str) -> str:
         raise RuntimeError(
             f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
         )
+
     choices = data.get("choices")
     if not choices:
         choices = [{}]
@@ -876,6 +891,7 @@ def extract_llm_message_content(raw: str) -> str:
             "Noema LLM response choices[0] was not a JSON object "
             f"(got {type(first_choice).__name__})"
         )
+
     message = first_choice.get("message")
     if not message:
         message = {}
@@ -890,7 +906,59 @@ def extract_llm_message_content(raw: str) -> str:
         raise RuntimeError(
             f"Noema LLM response 'content' was not a string (got {type(content).__name__})"
         )
-    return content.strip()
+
+    finish_reason_value = first_choice.get("finish_reason")
+    if finish_reason_value is None:
+        finish_reason = ""
+    elif not isinstance(finish_reason_value, str):
+        raise RuntimeError("Noema LLM response finish_reason was not a string")
+    else:
+        finish_reason = finish_reason_value.strip().lower()
+        if len(finish_reason) > 64 or not re.fullmatch(r"[a-z0-9_-]*", finish_reason):
+            raise RuntimeError("Noema LLM response finish_reason was malformed")
+
+    model_value = data.get("model")
+    if model_value is None:
+        model = ""
+    elif not isinstance(model_value, str):
+        raise RuntimeError("Noema LLM response model metadata was not a string")
+    else:
+        model = model_value.strip()
+        if len(model) > 256 or any(ord(character) < 32 for character in model):
+            raise RuntimeError("Noema LLM response model metadata was malformed")
+
+    usage_value = data.get("usage")
+    if usage_value is None:
+        usage: dict[str, Any] = {}
+    elif not isinstance(usage_value, dict):
+        raise RuntimeError("Noema LLM response usage metadata was not an object")
+    else:
+        usage = usage_value
+
+    prompt_tokens = _bounded_token_count(
+        usage.get("prompt_tokens", usage.get("input_tokens")), "prompt_tokens"
+    )
+    completion_tokens = _bounded_token_count(
+        usage.get("completion_tokens", usage.get("output_tokens")),
+        "completion_tokens",
+    )
+    return LLMCompletion(
+        content=content.strip(),
+        finish_reason=finish_reason,
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def extract_llm_message_content(raw: str) -> str:
+    """Return content from a validated completion envelope.
+
+    This compatibility wrapper keeps the older direct parser contract while
+    ``call_llm`` consumes the richer completion metadata.
+    """
+
+    return extract_llm_completion(raw).content
 
 
 def decode_llm_response_body(raw_bytes: bytes) -> str:
@@ -1016,7 +1084,183 @@ def reject_private_llm_url(api_url: str) -> None:
 
 
 class StaleHeadDuringRepairRetryError(RuntimeError):
-    """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
+    """Signal that the reviewed head moved before a bounded repair request."""
+
+
+class TruncatedCompletionError(RuntimeError):
+    """Signal a provider-declared output-budget termination.
+
+    The exception contains no model content and therefore remains safe in the
+    public ``pull_request_target`` workflow log.
+    """
+
+
+class InvalidCompletionError(RuntimeError):
+    """Signal an unusable structured-completion envelope or JSON payload.
+
+    This type separates arbitrary malformed output from a provider-declared
+    ``finish_reason=length`` response.
+    """
+
+
+class InvalidVerdictError(RuntimeError):
+    """Signal decoded JSON that fails the bounded Noema verdict contract."""
+
+
+@dataclass(frozen=True)
+class LLMCompletion:
+    """Store validated content and bounded provider completion metadata.
+
+    Model output is retained only in ``content`` for immediate validation; no
+    formatter or diagnostic emits it.
+    """
+
+    content: str
+    finish_reason: str
+    model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+def _bounded_text(value: Any, label: str, limit: int) -> None:
+    """Reject a present rendered field unless it is bounded text."""
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise RuntimeError(f"Noema LLM response {label} must be a string")
+    if len(value) > limit:
+        raise RuntimeError(f"Noema LLM response {label} exceeds {limit} characters")
+
+
+def _required_bounded_text(value: Any, label: str, limit: int) -> str:
+    """Return one non-empty rendered text field after enforcing its bound."""
+    _bounded_text(value, label, limit)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Noema LLM response {label} must be a non-empty string")
+    return value
+
+
+def _positive_line(value: Any, label: str) -> int:
+    """Return one positive rendered line number after rejecting bools/objects."""
+    if type(value) is not int or value <= 0:
+        raise RuntimeError(f"Noema LLM response {label} must be a positive integer")
+    return value
+
+
+def _bounded_list(value: Any, label: str, limit: int) -> list[Any]:
+    """Return an optional list after enforcing type and cardinality bounds."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise RuntimeError(f"Noema LLM response {label} must be a list")
+    if len(value) > limit:
+        raise RuntimeError(f"Noema LLM response {label} exceeds {limit} items")
+    return value
+
+
+def validate_verdict_output_bounds(verdict: dict[str, Any]) -> None:
+    """Enforce typed cardinality and text limits on every rendered verdict field.
+
+    ``comment`` verdicts bypass the stronger substantive-evidence validator, so
+    this boundary must independently ensure that values later interpolated into
+    GitHub Markdown cannot expand arbitrary lists/objects or unbounded strings.
+    """
+
+    _bounded_text(
+        verdict.get("summary"), "summary", NOEMA_MAX_VERDICT_TEXT_CHARS
+    )
+
+    reviewed_lines = _bounded_list(
+        verdict.get("reviewed_lines"), "reviewed_lines", NOEMA_MAX_REVIEWED_LINES
+    )
+    for reviewed in reviewed_lines:
+        if not isinstance(reviewed, dict):
+            raise RuntimeError("Noema LLM response reviewed_lines entries must be objects")
+        _required_bounded_text(
+            reviewed.get("path"),
+            "reviewed_lines.path",
+            NOEMA_MAX_VERDICT_TEXT_CHARS,
+        )
+        _positive_line(reviewed.get("line"), "reviewed_lines.line")
+        _required_bounded_text(
+            reviewed.get("side"),
+            "reviewed_lines.side",
+            NOEMA_MAX_VERDICT_TEXT_CHARS,
+        )
+        _required_bounded_text(
+            reviewed.get("analysis"),
+            "reviewed_lines.analysis",
+            NOEMA_MAX_VERDICT_TEXT_CHARS,
+        )
+
+    validation = verdict.get("adversarial_validation")
+    if validation is not None and not isinstance(validation, dict):
+        raise RuntimeError("Noema LLM response adversarial_validation must be an object")
+    if isinstance(validation, dict):
+        _required_bounded_text(
+            validation.get("residual_risk"),
+            "adversarial_validation.residual_risk",
+            NOEMA_MAX_VERDICT_TEXT_CHARS,
+        )
+        probes = _bounded_list(
+            validation.get("probes"),
+            "adversarial_validation.probes",
+            NOEMA_MAX_ADVERSARIAL_PROBES,
+        )
+        for probe in probes:
+            if not isinstance(probe, dict):
+                raise RuntimeError(
+                    "Noema LLM response adversarial_validation.probes entries must be objects"
+                )
+            for field in (
+                "path",
+                "side",
+                "outcome",
+                "hypothesis",
+                "attack_or_counterexample",
+                "evidence",
+            ):
+                _required_bounded_text(
+                    probe.get(field),
+                    f"adversarial_validation.probes.{field}",
+                    NOEMA_MAX_VERDICT_TEXT_CHARS,
+                )
+            _positive_line(
+                probe.get("line"), "adversarial_validation.probes.line"
+            )
+            class_evidence = probe.get("class_evidence")
+            if class_evidence is None:
+                continue
+            if not isinstance(class_evidence, dict):
+                raise RuntimeError(
+                    "Noema LLM response adversarial probe class_evidence must be an object"
+                )
+            if len(class_evidence) > NOEMA_MAX_CLASS_EVIDENCE_FIELDS:
+                raise RuntimeError(
+                    "Noema LLM response adversarial probe class_evidence "
+                    f"exceeds {NOEMA_MAX_CLASS_EVIDENCE_FIELDS} fields"
+                )
+            for value in class_evidence.values():
+                _bounded_text(
+                    value,
+                    "adversarial_validation.probes.class_evidence",
+                    NOEMA_MAX_CLASS_EVIDENCE_CHARS,
+                )
+
+    findings = _bounded_list(
+        verdict.get("findings"), "findings", NOEMA_MAX_FINDINGS
+    )
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise RuntimeError("Noema LLM response findings entries must be objects")
+        _required_bounded_text(
+            finding.get("file"), "findings.file", NOEMA_MAX_VERDICT_TEXT_CHARS
+        )
+        _bounded_text(
+            finding.get("message"),
+            "findings.message",
+            NOEMA_MAX_VERDICT_TEXT_CHARS,
+        )
 
 
 def call_llm(
@@ -1107,11 +1351,13 @@ def call_llm(
                 ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+                "Keep the JSON compact: summary, reviewed-line analysis, probe hypothesis/attack/evidence, residual risk, and finding messages must each stay within 600 characters; use at most 6 reviewed_lines, 4 probes, and 5 findings.",
                 *(
                     [
                         "Your prior verdict was rejected by the trusted validator: "
                         f"{repair_error or 'no diagnostic message was available'}",
                         "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
+                        "Repair mode: emit the smallest complete JSON verdict that satisfies the schema; prefer one reviewed line, the minimum required probes, and no nonblocking findings.",
                     ]
                     if is_retry
                     else []
@@ -1131,6 +1377,8 @@ def call_llm(
     payload = {
         "model": model,
         "temperature": 0,
+        "max_completion_tokens": NOEMA_LLM_MAX_COMPLETION_TOKENS,
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
             prompt,
@@ -1149,35 +1397,69 @@ def call_llm(
     try:
         with opener.open(request) as response:  # nosec B310
             raw_bytes = response.read()
-        raw = decode_llm_response_body(raw_bytes)
-        content = extract_llm_message_content(raw)
-        verdict = extract_json_object(content)
-        decision = str(verdict.get("decision") or "").strip().lower()
-        if decision not in {"approve", "request_changes", "comment"}:
-            raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
-        summary = verdict.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
-            raise RuntimeError("Noema LLM response did not contain a substantive summary")
-        findings = verdict.get("findings")
-        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-            raise RuntimeError("Noema LLM response findings must be a list of objects")
-        for finding in findings:
-            if (
-                finding.get("severity") not in {"high", "medium", "low"}
-                or not isinstance(finding.get("file"), str)
-                or not finding["file"].strip()
-                or type(finding.get("line")) is not int
-                or finding["line"] <= 0
-                or finding.get("side") not in {"RIGHT", "LEFT"}
-                or not isinstance(finding.get("message"), str)
-                or not finding["message"].strip()
-            ):
-                raise RuntimeError("Noema LLM response contained a malformed finding")
-        if decision == "request_changes" and not findings:
-            raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
-        validate_substantive_verdict(verdict, diff, changed_paths)
+        try:
+            raw = decode_llm_response_body(raw_bytes)
+            completion = extract_llm_completion(raw)
+        except RuntimeError as exc:
+            raise InvalidCompletionError(str(exc)) from exc
+        if completion.finish_reason == "length":
+            raise TruncatedCompletionError(
+                "Noema LLM completion ended with finish_reason=length"
+            )
+        if completion.finish_reason not in {"", "stop"}:
+            raise InvalidCompletionError(
+                "Noema LLM completion ended with an unsupported finish reason"
+            )
+        try:
+            verdict = extract_json_object(completion.content)
+        except RuntimeError as exc:
+            raise InvalidCompletionError(str(exc)) from exc
+        try:
+            decision_value = verdict.get("decision")
+            if not isinstance(decision_value, str):
+                raise RuntimeError("Noema LLM response decision must be a string")
+            decision = decision_value.strip().lower()
+            if decision not in {"approve", "request_changes", "comment"}:
+                raise RuntimeError("Noema LLM returned an unsupported decision")
+            summary = verdict.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                raise RuntimeError("Noema LLM response did not contain a substantive summary")
+            findings = verdict.get("findings")
+            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+                raise RuntimeError("Noema LLM response findings must be a list of objects")
+            for finding in findings:
+                if (
+                    finding.get("severity") not in {"high", "medium", "low"}
+                    or not isinstance(finding.get("file"), str)
+                    or not finding["file"].strip()
+                    or type(finding.get("line")) is not int
+                    or finding["line"] <= 0
+                    or finding.get("side") not in {"RIGHT", "LEFT"}
+                    or not isinstance(finding.get("message"), str)
+                    or not finding["message"].strip()
+                ):
+                    raise RuntimeError("Noema LLM response contained a malformed finding")
+            if decision == "request_changes" and not findings:
+                raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
+            validate_verdict_output_bounds(verdict)
+            validate_substantive_verdict(verdict, diff, changed_paths)
+        except RuntimeError as exc:
+            raise InvalidVerdictError(str(exc)) from exc
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         if is_retry:
+            if isinstance(exc, TruncatedCompletionError):
+                raise RuntimeError(
+                    "Noema LLM response truncated_after_retry: "
+                    "the provider again ended the structured completion at its output limit"
+                ) from exc
+            if isinstance(exc, InvalidCompletionError):
+                raise RuntimeError(
+                    f"Noema LLM response invalid_json_after_retry: {exc}"
+                ) from exc
+            if isinstance(exc, InvalidVerdictError):
+                raise RuntimeError(
+                    f"Noema LLM response invalid_verdict_after_retry: {exc}"
+                ) from exc
             if isinstance(exc, RuntimeError):
                 raise
             raise RuntimeError(str(exc)) from exc
