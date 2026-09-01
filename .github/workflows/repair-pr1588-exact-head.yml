@@ -20,8 +20,6 @@ jobs:
         with:
           python-version: '3.13'
       - name: Patch exact-head Strix admission contract
-        env:
-          EXPECTED_BRANCH: fix/strix-control-plane-supersession-20260901
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -32,7 +30,29 @@ jobs:
           text = text.replace('export LLM_TIMEOUT=0', 'export LLM_TIMEOUT=300')
 
           def validation_step(name: str) -> str:
-              return f'''      - name: {name}\n        if: github.event_name == 'pull_request_target'\n        env:\n          GH_TOKEN: ${{{{ github.token }}}}\n          TARGET_REPOSITORY: ${{{{ github.event.pull_request.base.repo.full_name || github.repository }}}}\n          PR_NUMBER: ${{{{ github.event.pull_request.number }}}}\n          EXPECTED_HEAD_SHA: ${{{{ github.event.pull_request.head.sha }}}}\n        run: |\n          set -euo pipefail\n          live_pr="$(gh api "repos/${{TARGET_REPOSITORY}}/pulls/${{PR_NUMBER}}")"\n          live_state="$(printf '%s' "$live_pr" | jq -r '.state // empty')"\n          live_head_sha="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"\n          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then\n            echo "::error::Could not validate live pull request identity."\n            exit 1\n          fi\n          if [ "$live_state" != "open" ] || [ "${{live_head_sha,,}}" != "${{EXPECTED_HEAD_SHA,,}}" ]; then\n            echo "::error::Strix event no longer matches the live open pull request head."\n            exit 1\n          fi\n\n'''
+              template = '''      - name: @@NAME@@
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: @@D@@{{ github.token }}
+          TARGET_REPOSITORY: @@D@@{{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: @@D@@{{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: @@D@@{{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/@@D@@{TARGET_REPOSITORY}/pulls/@@D@@{PR_NUMBER}")"
+          live_state="$(printf '%s' "$live_pr" | jq -r '.state // empty')"
+          live_head_sha="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then
+            echo "::error::Could not validate live pull request identity."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] || [ "@@D@@{live_head_sha,,}" != "@@D@@{EXPECTED_HEAD_SHA,,}" ]; then
+            echo "::error::Strix event no longer matches the live open pull request head."
+            exit 1
+          fi
+
+'''
+              return template.replace('@@NAME@@', name).replace('@@D@@', '$')
 
           early_name = 'Validate live pull request before Strix setup'
           if early_name not in text:
