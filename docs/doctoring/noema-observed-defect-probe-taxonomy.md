@@ -26,17 +26,18 @@ For material source or test changes, the existing two-probe minimum now also req
 
 The initial corpus was grounded in independently observed findings on `ContextualWisdomLab/noema#528`: mutable checkpoint aliases, changing-getter/Proxy TOCTOU, cross-execution lifecycle identity, a substring test oracle that matched `released` inside `unreleased`, and cross-document contract contradictions. These are defect-shape examples, not evidence that Noema itself missed the identical historical review or that the resulting system is equivalent to the external reviewers.
 
-The review prompt instructs the model to attack the closed taxonomy explicitly. The deterministic validator rejects missing or unknown `probe_kind` values and rejects insufficient class diversity. Published review evidence includes each probe class so operators can audit what was actually attacked rather than infer coverage from generic prose.
+The review prompt instructs the model to attack the closed taxonomy explicitly. The deterministic validator rejects non-string, missing, or unknown `probe_kind` values and requires an exact class-specific `class_evidence` witness schema before a label can count toward diversity. For example, mutable-alias evidence must identify the alias origin, mutation attempt, and post-validation observation; TOCTOU evidence must identify the checked value, intervening change, and later use. Published review evidence includes each validated probe class so operators can audit what was actually attacked rather than infer coverage from generic prose. The prompt no longer claims CodeGraph context is supplied: no trusted Noema workflow currently wires that input, so only actual changed-file and review-thread context is advertised.
 
 ## Verification contract
 
 The focused regression suite must prove at least the following:
 
 1. a missing probe class fails closed;
-2. an unknown free-form class fails closed;
-3. two material-change probes using the same class fail the diversity requirement;
-4. two valid observed classes can satisfy the formal verdict contract; and
-5. the prompt retains every supported class name.
+2. unknown, list-valued, or object-valued classes fail closed as review-validation errors rather than crashing;
+3. arbitrary distinct labels without the exact class-specific witness schema fail closed;
+4. two material-change probes using the same validated class fail the diversity requirement;
+5. two valid class-bound observed probes can satisfy the formal verdict contract; and
+6. an exercised `call_llm` request contains every supported class and its witness-field schema while making no unwired CodeGraph claim.
 
 The initial hosted RED run was `33499442683`. The hosted GREEN implementation run was `33500648307`; it passed 118 focused Noema tests, the two exact-base free-pool fixture regressions exposed during full-suite verification, and the complete repository suite (`2278 passed, 1 skipped, 21 subtests passed`). That run proved the implementation before this permanent doctoring/quality-gate follow-up; the pull request's exact current head must regenerate its own required evidence. The one-shot workflow and transform scripts removed themselves before the implementation branch was published.
 

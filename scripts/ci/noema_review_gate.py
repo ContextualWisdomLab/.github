@@ -48,6 +48,17 @@ OBSERVED_REVIEW_PROBE_KINDS = frozenset(
         "state_machine_race",
     }
 )
+OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+    "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+    "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+    "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+    "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+    "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+    "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+    "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+    "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+    "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+}
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -326,6 +337,27 @@ def parse_diff_path(raw: str, prefix: str) -> str:
     return value.removeprefix(prefix)
 
 
+
+def _validate_observed_probe_class_evidence(
+    probe: dict[str, Any], probe_kind: str, index: int
+) -> None:
+    """Require the exact deterministic witness schema for a claimed defect class."""
+    class_evidence = probe.get("class_evidence")
+    required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+    if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+        expected = ", ".join(required_fields)
+        raise RuntimeError(
+            f"Noema adversarial probe {index} class_evidence for {probe_kind} "
+            f"must contain exactly: {expected}"
+        )
+    for field in required_fields:
+        value = class_evidence.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(
+                f"Noema adversarial probe {index} class_evidence.{field} "
+                "requires source-traced witness text"
+            )
+
 def validate_substantive_verdict(
     verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
 ) -> None:
@@ -373,11 +405,12 @@ def validate_substantive_verdict(
         if not isinstance(probe, dict):
             raise RuntimeError(f"Noema adversarial probe {index} must be an object")
         probe_kind = probe.get("probe_kind")
-        if probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+        if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
             raise RuntimeError(
                 f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
             )
-        probe_kinds.add(str(probe_kind))
+        _validate_observed_probe_class_evidence(probe, probe_kind, index)
+        probe_kinds.add(probe_kind)
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
             raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
@@ -500,24 +533,9 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def load_codegraph_context() -> str:
-    """Load optional precomputed CodeGraph context for structural review evidence."""
-    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
-    except OSError as exc:
-        return f"CodeGraph context unavailable: {exc}"
-
-
 def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
     """Build bounded non-diff context for the Noema reviewer."""
     sections: list[str] = []
-    codegraph = load_codegraph_context()
-    if codegraph:
-        sections.append("## CodeGraph context\n" + codegraph)
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
@@ -992,7 +1010,7 @@ def call_llm(
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
+                "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
                 json.dumps(
                     {
@@ -1006,6 +1024,7 @@ def call_llm(
                                 {
                                     **location_example,
                                     "probe_kind": "mutable_alias|time_of_check_time_of_use|execution_identity|coercion_boundary|test_oracle|cross_contract|authority_boundary|dependency_context|state_machine_race",
+                                    "class_evidence": {"exact_fields_for_selected_probe_kind": "source-traced witness text"},
                                     "hypothesis": "...",
                                     "attack_or_counterexample": "...",
                                     "evidence": "observed or source-traced result",
@@ -1027,6 +1046,7 @@ def call_llm(
                 ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Classify every adversarial probe with one observed defect class and use distinct classes when multiple probes are required: mutable_alias, time_of_check_time_of_use, execution_identity, coercion_boundary, test_oracle, cross_contract, authority_boundary, dependency_context, state_machine_race.",
+                "A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific source-traced witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ".",
                 "Actively attack caller-owned mutable aliases and readonly illusions; changing getters or Proxies between validation and use; execution/tenant/request identity confusion; JavaScript or serialization coercion at enum, key, digest, and identity boundaries; weak substring or vacuous test oracles; contradictions across PRD/ADR/architecture/changelog/contracts; component-vs-host authority overreach; omitted causal dependency context; and cancellation/retry/publication state-machine races.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(

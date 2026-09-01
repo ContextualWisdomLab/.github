@@ -11,8 +11,6 @@ on:
       - docs/product-technical-gap-baseline.md
       - CHANGELOG.md
       - .github/workflows/noema-observed-probe-quality-ci.yml
-  workflow_dispatch:
-
 permissions:
   contents: read
 

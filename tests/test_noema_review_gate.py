@@ -1694,7 +1694,7 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
         noema.current_actor()
 
 
-def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
+def test_review_context_builders_include_threads_and_files(monkeypatch):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
@@ -1721,9 +1721,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
-    codegraph_path = tmp_path / "codegraph.md"
-    codegraph_path.write_text("call graph: src/a.py -> tests", encoding="utf-8")
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(codegraph_path))
     pr = make_pr(
         headRefOid="head sha",
         reviewThreads={
@@ -1747,8 +1744,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
 
     context = noema.build_review_context("owner/repo", 7, pr)
 
-    assert "## CodeGraph context" in context
-    assert "call graph: src/a.py -> tests" in context
     assert "Thread open at src/a.py:3" in context
     assert "reviewer: check call site" in context
     assert "### src/a.py" in context
@@ -1758,13 +1753,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     assert any("/files" in call[2] for call in calls)
 
 
-def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch, tmp_path):
-    monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
-    assert noema.load_codegraph_context() == ""
-
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(tmp_path / "missing.md"))
-    assert "CodeGraph context unavailable" in noema.load_codegraph_context()
-
+def test_review_context_reports_omitted_files(monkeypatch):
     paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
     monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
     monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, head_sha: "x")
@@ -2376,20 +2365,22 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
                     "path": "tool.py",
                     "line": 1,
                     "side": "RIGHT",
-                    "probe_kind": "mutable_alias",
-                    "hypothesis": "The assignment was removed.",
-                    "attack_or_counterexample": "Inspect the added hunk line.",
-                    "evidence": "The RIGHT-side assignment remains present.",
+                    "probe_kind": "coercion_boundary",
+                    "class_evidence": {"raw_value": "The replacement could be a truthy non-boolean value.", "conversion_path": "Trace the changed assignment without implicit conversion.", "canonicality_guard": "The changed source uses the canonical boolean literal True."},
+                    "hypothesis": "A truthy non-boolean value could masquerade as canonical boolean state.",
+                    "attack_or_counterexample": "Use a string-like truthy value as the coercion counterexample.",
+                    "evidence": "The RIGHT-side assignment uses the boolean literal True without coercion.",
                     "outcome": "falsified",
                 },
                 {
                     "path": "tool.py",
                     "line": 1,
                     "side": "RIGHT",
-                    "probe_kind": "execution_identity",
-                    "hypothesis": "The value became false.",
-                    "attack_or_counterexample": "Read the replacement literal.",
-                    "evidence": "The literal is True.",
+                    "probe_kind": "test_oracle",
+                    "class_evidence": {"assertion_under_test": "A truthiness-only review oracle could accept a string value.", "negative_control": "Use the non-boolean string true as a negative control.", "distinguishing_observation": "The changed source is the boolean literal True, distinct by type."},
+                    "hypothesis": "A truthiness-only oracle could accept a non-boolean replacement.",
+                    "attack_or_counterexample": "Compare the boolean literal with a truthy string negative control.",
+                    "evidence": "The replacement is the exact boolean literal True.",
                     "outcome": "falsified",
                 },
             ],
@@ -2463,20 +2454,22 @@ def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes()
                     "path": "tool.py",
                     "line": 1,
                     "side": "RIGHT",
-                    "probe_kind": "mutable_alias",
-                    "hypothesis": "The value becomes false.",
-                    "attack_or_counterexample": "Trace the literal assigned at the changed line.",
-                    "evidence": "The changed source assigns the boolean literal True.",
+                    "probe_kind": "coercion_boundary",
+                    "class_evidence": {"raw_value": "A caller could supply a truthy non-boolean value.", "conversion_path": "Trace whether the changed assignment coerces input.", "canonicality_guard": "The changed line assigns the canonical boolean literal True."},
+                    "hypothesis": "A truthy non-boolean value could cross the canonical boolean boundary.",
+                    "attack_or_counterexample": "Compare the literal with a truthy string counterexample.",
+                    "evidence": "The changed source assigns the exact boolean literal True.",
                     "outcome": "falsified",
                 },
                 {
                     "path": "tool.py",
                     "line": 1,
                     "side": "RIGHT",
-                    "probe_kind": "time_of_check_time_of_use",
-                    "hypothesis": "The assignment is removed.",
-                    "attack_or_counterexample": "Compare the added side with the deleted side.",
-                    "evidence": "The RIGHT-side hunk contains one replacement assignment.",
+                    "probe_kind": "test_oracle",
+                    "class_evidence": {"assertion_under_test": "Presence-only inspection could miss a wrong replacement type.", "negative_control": "Use a present but non-boolean replacement as the negative control.", "distinguishing_observation": "The changed line is both present and the exact boolean literal True."},
+                    "hypothesis": "A presence-only oracle could accept the wrong replacement value.",
+                    "attack_or_counterexample": "Use a present but type-wrong assignment as a negative control.",
+                    "evidence": "The RIGHT-side hunk contains the exact boolean replacement assignment.",
                     "outcome": "falsified",
                 },
             ],
@@ -2506,8 +2499,8 @@ def test_substantive_verdict_fail_closed_boundaries():
             "status": "passed",
             "residual_risk": "Callers were not executed.",
             "probes": [
-                {"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "mutable_alias", "hypothesis": "The value is false.", "attack_or_counterexample": "Read the literal.", "evidence": "The literal is True.", "outcome": "falsified"},
-                {"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "execution_identity", "hypothesis": "The assignment vanished.", "attack_or_counterexample": "Inspect the added line.", "evidence": "One assignment is present.", "outcome": "falsified"},
+                {"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "coercion_boundary", "class_evidence": {"raw_value": "A truthy non-boolean value", "conversion_path": "No implicit conversion in the changed assignment", "canonicality_guard": "Exact boolean literal True"}, "hypothesis": "A non-boolean value crosses the canonical boundary.", "attack_or_counterexample": "Compare with a truthy string negative control.", "evidence": "The literal is the canonical boolean True.", "outcome": "falsified"},
+                {"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "test_oracle", "class_evidence": {"assertion_under_test": "Presence-only assignment check", "negative_control": "Present assignment with wrong value type", "distinguishing_observation": "Exact boolean literal and presence are both checked"}, "hypothesis": "A presence-only oracle accepts a wrong replacement.", "attack_or_counterexample": "Use a present but non-boolean assignment.", "evidence": "The changed assignment has the exact expected boolean value.", "outcome": "falsified"},
             ],
         },
     }
@@ -2655,6 +2648,7 @@ def test_substantive_verdict_rejects_non_changed_location_and_accepts_left_delet
                     "line": 3,
                     "side": "LEFT",
                     "probe_kind": "cross_contract",
+                    "class_evidence": {"first_contract": "The deleted documentation claim.", "second_contract": "The current contract after deletion.", "contradiction_or_alignment": "The obsolete conflicting claim is removed."},
                     "hypothesis": "The obsolete claim remains documented.",
                     "attack_or_counterexample": "Inspect the deletion-side hunk.",
                     "evidence": "The only changed line deletes the obsolete claim.",
@@ -2693,6 +2687,7 @@ def test_request_changes_requires_confirmed_probe_at_finding_location():
                     "line": 1,
                     "side": "RIGHT",
                     "probe_kind": "authority_boundary",
+                    "class_evidence": {"component_authority": "The changed config controls this component safety gate.", "external_authority": "No external caller is authorized to silently disable the gate.", "enforcement_boundary": "The effective changed value is evaluated at the component configuration boundary."},
                     "hypothesis": "The safety gate is disabled.",
                     "attack_or_counterexample": "Read the effective changed value.",
                     "evidence": "The RIGHT-side value is false.",
@@ -2703,6 +2698,7 @@ def test_request_changes_requires_confirmed_probe_at_finding_location():
                     "line": 1,
                     "side": "RIGHT",
                     "probe_kind": "cross_contract",
+                    "class_evidence": {"first_contract": "The prior config key is safe with value true.", "second_contract": "The changed config retains key safe with value false.", "contradiction_or_alignment": "The key identity aligns while its safety value contradicts the prior contract."},
                     "hypothesis": "The key was renamed instead.",
                     "attack_or_counterexample": "Compare the key name on both sides.",
                     "evidence": "Both sides retain the key name safe.",
