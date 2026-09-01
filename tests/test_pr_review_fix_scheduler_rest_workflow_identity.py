@@ -168,6 +168,7 @@ def test_fetch_workflow_names_by_check_suite_rest_paginates_past_100(
     calls: list[str] = []
 
     def fake_api(path: str) -> Any:
+        """Return deterministic paginated workflow-run fixtures."""
         calls.append(path)
         if path.endswith("page=1"):
             return {"workflow_runs": page1}
@@ -193,6 +194,7 @@ def test_fetch_workflow_names_by_check_suite_rest_skips_entries_missing_suite_id
     head_sha = "f" * 40
 
     def fake_api(path: str) -> Any:
+        """Return workflow runs that exercise incomplete-identity filtering."""
         return {
             "workflow_runs": [
                 {"check_suite_id": None, "name": "orphaned run"},
@@ -215,6 +217,7 @@ def test_fetch_workflow_names_by_check_suite_rest_propagates_non_access_errors(
     head_sha = "0" * 40
 
     def fake_api(path: str) -> Any:
+        """Simulate a non-access REST failure that must propagate."""
         raise RuntimeError("gh: HTTP 502 (exhausted retries)")
 
     monkeypatch.setattr(merge, "gh_api_json", fake_api)
