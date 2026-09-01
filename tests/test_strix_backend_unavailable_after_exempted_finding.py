@@ -20,6 +20,7 @@ and executes it against synthetic logs shaped like the real PR #392 run.
 
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 import tempfile
@@ -288,6 +289,40 @@ exit 1
         )
         self.assertNotIn("STRIX_TOTAL_TIMEOUT_SECONDS:", workflow)
         self.assertNotIn('remaining_seconds" -lt 600', workflow)
+
+    def test_retry_deadline_reserves_room_for_at_least_one_retry(self) -> None:
+        """The wrapper's own retry deadline must outlive a single process attempt.
+
+        Devin Review (ContextualWisdomLab/.github#1438): raising
+        process_budget_seconds without raising strix_gate_deadline in lockstep
+        made retry_reserve_seconds (process_budget_seconds + backoff) exceed
+        the deadline's own remaining-time budget on the very first check, so
+        the reserve guard rejected every retry unconditionally -- a provider
+        outage that used to recover on attempt 2 would now fail closed on
+        attempt 1 every time. Assert the live numbers, not synthetic ones,
+        keep a retry structurally reachable: the deadline must exceed one
+        process-budget reservation plus its first backoff interval.
+        """
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        process_budget_match = re.search(
+            r'process_budget_seconds="(\d+)"', workflow
+        )
+        deadline_match = re.search(
+            r"strix_gate_deadline=\$\(\( SECONDS \+ (\d+) \)\)", workflow
+        )
+        backoff_match = re.search(
+            r"STRIX_GATE_RETRY_BACKOFF_SECONDS:-(\d+)\}", workflow
+        )
+        assert process_budget_match is not None
+        assert deadline_match is not None
+        assert backoff_match is not None
+        process_budget_seconds = int(process_budget_match.group(1))
+        deadline_seconds = int(deadline_match.group(1))
+        first_backoff_seconds = int(backoff_match.group(1)) * 1
+        self.assertGreater(
+            deadline_seconds, process_budget_seconds + first_backoff_seconds
+        )
 
 
 if __name__ == "__main__":

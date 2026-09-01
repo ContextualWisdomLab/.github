@@ -167,10 +167,12 @@ jobs:
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
-    # legitimately require several hours to scan -- this org's own standing
-    # operating directive requires at least a 3-hour floor for central
-    # Strix/OpenCode/Noema scans, with real observed runs well past that
-    # (docs/product-goal-directive.md). The scanner gets a 310-minute process
+    # legitimately require several hours to scan -- the standing operating
+    # directive already accepts central Strix/OpenCode/Noema scans taking
+    # more than two hours per model (docs/product-goal-directive.md), and the
+    # repo owner separately raised the floor to at least three hours, with
+    # real observed runs well past that (owner comment, ContextualWisdomLab/.github#1438,
+    # 2026-09-01). The scanner gets a 310-minute process
     # budget and a 315-minute total retry budget; the 330-minute step and
     # 360-minute job leave deterministic time to preserve partial reports and
     # publish a concrete failure reason. 360 minutes is also the maximum job
@@ -811,7 +813,7 @@ jobs:
           strix_terminal_log="$strix_run_log"
           strix_rc=0
           strix_gate_attempt=1
-          strix_gate_deadline=$(( SECONDS + 9600 ))
+          strix_gate_deadline=$(( SECONDS + 19200 ))
           # Reserve the scanner process budget, not the gate's total wrapper
           # budget.  The latter includes setup/cleanup overhead already spent
           # by the current attempt and can make every retry impossible.

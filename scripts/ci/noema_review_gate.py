@@ -13,6 +13,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -47,6 +48,17 @@ ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 # the entire required review. 10800s gives the gateway's own internal
 # retry/failover machinery room to land on a working agent instead.
 NOEMA_LLM_REQUEST_TIMEOUT_SECONDS = 10800
+# The noema-review job carries no explicit timeout-minutes, so it is bounded
+# only by the 360-minute (6h) maximum job execution time GitHub-hosted
+# runners allow. call_llm can recurse once for a single validator-rejected
+# repair (see the repair_error branch below); two independent
+# NOEMA_LLM_REQUEST_TIMEOUT_SECONDS calls would total 21600s -- exactly that
+# 6h ceiling, leaving zero room for sidecar provisioning or job cleanup and
+# turning a fast 120s failure into a reliable 6h one (Devin Review,
+# ContextualWisdomLab/.github#1438). This is the shared deadline across the
+# initial call AND its one possible repair call combined: each call's own
+# request timeout is capped to whatever remains of it.
+NOEMA_LLM_TOTAL_BUDGET_SECONDS = 19800
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -607,8 +619,12 @@ def call_llm(
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
+    if deadline is None:
+        deadline = time.monotonic() + NOEMA_LLM_TOTAL_BUDGET_SECONDS
+    request_timeout = max(1, min(NOEMA_LLM_REQUEST_TIMEOUT_SECONDS, deadline - time.monotonic()))
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
@@ -664,7 +680,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=NOEMA_LLM_REQUEST_TIMEOUT_SECONDS) as response:  # nosec B310
+    with opener.open(request, timeout=request_timeout) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
@@ -706,6 +722,7 @@ def call_llm(
             review_context,
             changed_paths,
             str(exc),
+            deadline,
         )
     return verdict
 
