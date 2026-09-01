@@ -7,6 +7,7 @@ import argparse
 import ast
 import base64
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -927,6 +928,7 @@ def call_llm(
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
+    is_retry: bool = False,
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
 
@@ -940,6 +942,13 @@ def call_llm(
     discard anyway once this function returns. See ``fetch_pr`` for the live
     lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
     condition is reported distinctly to the caller.
+
+    ``is_retry`` tracks retry state independently of ``repair_error``'s text:
+    several transport exceptions (a bare ``OSError``/``TimeoutError`` or
+    ``http.client.HTTPException`` raised with no message) stringify to an
+    empty string, so gating on ``repair_error``'s truthiness alone would let
+    an empty-message failure retry unboundedly instead of failing closed
+    after one attempt.
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
@@ -999,10 +1008,11 @@ def call_llm(
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
-                        f"Your prior verdict was rejected by the trusted validator: {repair_error}",
+                        "Your prior verdict was rejected by the trusted validator: "
+                        f"{repair_error or 'no diagnostic message was available'}",
                         "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
                     ]
-                    if repair_error
+                    if is_retry
                     else []
                 ),
                 f"Repository: {repo}",
@@ -1035,9 +1045,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request) as response:  # nosec B310
-        raw_bytes = response.read()
     try:
+        with opener.open(request) as response:  # nosec B310
+            raw_bytes = response.read()
         raw = decode_llm_response_body(raw_bytes)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
@@ -1065,9 +1075,11 @@ def call_llm(
         if decision == "request_changes" and not findings:
             raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except RuntimeError as exc:
-        if repair_error:
-            raise
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        if is_retry:
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(str(exc)) from exc
         if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."
@@ -1082,6 +1094,7 @@ def call_llm(
             review_context,
             changed_paths,
             str(exc),
+            is_retry=True,
         )
     return verdict
 
