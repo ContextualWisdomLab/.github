@@ -5,6 +5,34 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
+  Building on the draft-poll exemption's live PR/head validation, Devin Review found two
+  further defects. (1) The concurrency group was keyed only by repository and PR number, so
+  a delayed run for an *older* head could cancel the *newer*, authoritative head's still-valid
+  run before that older run's own live-head check ever had a chance to reject it (GitHub cancels
+  whichever run is currently active in a group with no notion of "older"/"newer"). Fixed by also
+  scoping the group by exact head SHA, so different heads no longer share a cancellation domain
+  while same-head events (a `converted_to_draft`/`ready_for_review` transition, a `synchronize`
+  retry) still do. (2) A delayed non-closed event ignored a live-closed PR, since `live_pr` only
+  ever extracted `head` and `draft`. Both admission blocks now also validate live `state` and exit
+  before any further API call when it is `"closed"`, failing closed on a missing, null,
+  non-string, or otherwise unrecognized value rather than assuming open. New regressions: a
+  structural contract test for the head-scoped concurrency group; step-body coverage for a stale
+  non-closed event against a live-closed PR (both admission steps), live-closed state taking
+  precedence over a stale live-draft flag, and each invalid `state` shape failing closed. Full
+  suite: 2294 passed, 1 skipped, 21 subtests; `scripts/ci` coverage and docstrings both 100%.
+  A third Devin Review round then found that head-scoping the concurrency group above, while
+  fixing the wrong-direction cancellation, also disabled the legitimate one: a genuine new
+  commit no longer cancels its own PR's now-obsolete previous-head poll, which would otherwise
+  occupy a runner until GitHub's own per-job ceiling. Added a `cancel-superseded-opencode-review-runs`
+  job, scoped to `synchronize` events, mirroring the already-established live-head-validated
+  cleanup pattern in `strix.yml`'s `cancel-superseded-pr-runs` job: it re-verifies the live head
+  immediately before both listing candidates and cancelling each one, so a delayed/stale
+  invocation of this same job cannot itself wrongly cancel a still-authoritative run. New
+  regressions: the embedded run-selection `jq` filter executed against synthetic run payloads
+  (superseded-run selection, current-head/self-run/other-PR/other-workflow exclusion, and
+  `pull_requests[]` metadata matching), plus a structural test for the job's trigger and
+  permissions. Full suite: 2301 passed, 1 skipped, 21 subtests; coverage and docstrings both 100%.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
@@ -901,17 +929,8 @@ Semantic Versioning where the repository publishes a release.
   reject namespace, ambiguous, linked, native-extension, and installed-metadata
   layouts, and make exact roots readable by the unprivileged coverage user.
 
-### Fixed
-
-- Count duplicate Actions queue lanes by distinct workflow runs so matrix or multi-job runs do not appear as false concurrent-run duplicates.
-
 ### Added
 
-- Added a read-only hourly GitHub Actions queue-health report for the central
-  repository, TEPP, naruon, and contextual-orchestrator, with exact pull-request
-  head classification, runner-assignment evidence, bounded queue-age SLO
-  warnings, deterministic JSON, accessible HTML, and no cancellation or merge
-  mutation.
 - Refresh the live product and technical gap baseline against the current
   open-PR queue after ContextualWisdomLab/.github#1252 merged, with SHA-bound
   snapshot rows, a same-session open/close delta, ADR Figma File ID N/A, and
@@ -958,11 +977,6 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
-- Retry one transient incomplete pull-request identity response after a bounded
-  delay, reject path-traversal repository segments, and isolate repository-scoped
-  API or pagination failures into explicit incomplete-evidence report entries so
-  healthy repositories remain observable without turning partial evidence into a
-  passing merge decision.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.
