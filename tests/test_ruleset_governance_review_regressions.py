@@ -267,20 +267,18 @@ def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypa
 
 
 def test_history_collision_restores_immediate_predecessor_before_failing(monkeypatch) -> None:
-    """A hidden pre-PUT administrator edit is restored instead of being silently lost."""
+    """A hidden pre-PUT administrator edit is restored and history-proven before failing."""
 
     desired = _converged()
     external = _live()
     external["conditions"] = {"ref_name": {"include": ["refs/heads/reviewed"], "exclude": []}}
-    monkeypatch.setattr(
-        module,
-        "_gh_api_list",
-        lambda *_args, **_kwargs: [
-            {"version_id": 10},
-            {"version_id": 9},
-            {"version_id": 7},
-        ],
+    histories = iter(
+        [
+            [{"version_id": 10}, {"version_id": 9}, {"version_id": 7}],
+            [{"version_id": 11}, {"version_id": 10}],
+        ]
     )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: next(histories))
     monkeypatch.setattr(
         module,
         "_history_version_state",
@@ -294,7 +292,7 @@ def test_history_collision_restores_immediate_predecessor_before_failing(monkeyp
         return next(replies)
 
     monkeypatch.setattr(module, "_gh_api", fake_api)
-    with pytest.raises(module.RulesetGovernanceError, match="restored preceding administrator state"):
+    with pytest.raises(module.RulesetGovernanceError, match="restored newest displaced administrator state"):
         module._verify_ruleset_history_transition(_target(), 7, desired)
     assert [method for method, _body in calls] == ["GET", "PUT", "GET"]
     assert calls[1][1] == module._editable_projection(external)
@@ -328,11 +326,13 @@ def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
     desired = _converged()
     external = _live()
     external["conditions"] = {"ref_name": {"include": ["refs/heads/external"], "exclude": []}}
-    monkeypatch.setattr(
-        module,
-        "_gh_api_list",
-        lambda *_args, **_kwargs: [{"version_id": 10}, {"version_id": 9}],
+    histories = iter(
+        [
+            [{"version_id": 10}, {"version_id": 9}],
+            [{"version_id": 11}, {"version_id": 10}],
+        ]
     )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: next(histories))
     monkeypatch.setattr(
         module,
         "_history_version_state",
@@ -342,6 +342,50 @@ def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
     monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: next(replies))
     with pytest.raises(module.RulesetGovernanceError, match="rollback did not converge"):
         module._verify_ruleset_history_transition(_target(), 7, desired)
+
+
+def test_history_collision_recovers_admin_write_between_recovery_get_and_put(monkeypatch) -> None:
+    """A second administrator version displaced by rollback becomes the next restore target."""
+
+    desired = _converged()
+    first_admin = _live()
+    first_admin["conditions"] = {"ref_name": {"include": ["refs/heads/first-admin"], "exclude": []}}
+    second_admin = _live()
+    second_admin["conditions"] = {"ref_name": {"include": ["refs/heads/second-admin"], "exclude": []}}
+    histories = iter(
+        [
+            [{"version_id": 10}, {"version_id": 9}, {"version_id": 7}],
+            [{"version_id": 12}, {"version_id": 11}],
+            [{"version_id": 13}, {"version_id": 12}],
+        ]
+    )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: next(histories))
+
+    states = {
+        9: first_admin,
+        10: desired,
+        11: second_admin,
+        12: first_admin,
+        13: second_admin,
+    }
+    monkeypatch.setattr(module, "_history_version_state", lambda _target, version: states[version])
+
+    calls: list[tuple[str, object | None]] = []
+    replies = iter([desired, {}, first_admin, first_admin, {}, second_admin])
+
+    def fake_api(method, endpoint, *, body=None):
+        calls.append((method, body))
+        return next(replies)
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    with pytest.raises(module.RulesetGovernanceError, match="restored newest displaced administrator state"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+
+    put_bodies = [body for method, body in calls if method == "PUT"]
+    assert put_bodies == [
+        module._editable_projection(first_admin),
+        module._editable_projection(second_admin),
+    ]
 
 
 def test_reconcile_forwards_expected_main_sha_to_each_target(monkeypatch) -> None:
@@ -383,11 +427,11 @@ def test_actions_apply_requires_and_forwards_expected_main_sha(tmp_path, monkeyp
     assert seen == [(False, "a" * 40)]
 
 
-def test_owner_plane_workflow_supersedes_stale_runs_and_quotes_main_sha() -> None:
-    """Only the newest trusted-main owner-plane run may reach mutation."""
+def test_owner_plane_workflow_serializes_mutation_and_quotes_main_sha() -> None:
+    """PR validation may supersede itself but owner-plane mutation is non-cancellable."""
 
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "cancel-in-progress: true" in text
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
     assert "EXPECTED_MAIN_SHA: ${{ github.sha }}" in text
     assert '--expected-main-sha "$EXPECTED_MAIN_SHA"' in text
     assert "github.event_name != 'pull_request'" in text
