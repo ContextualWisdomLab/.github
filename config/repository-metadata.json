@@ -49,6 +49,24 @@
       "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "keyverse": {
+      "description": "Keyverse — passwordless identity, federation, provisioning, account unification, and authorization services for ContextualWisdomLab.",
+      "topics": ["identity", "openid-connect", "oauth2", "scim", "keycloak", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "OriginWeave": {
+      "description": "Let agents use the web without losing control. OriginWeave gives AI agents a Chromium-compatible web runtime with isolated sessions, typed actions, resource governance, and verifiable evidence.",
+      "topics": ["browser-automation", "ai-agents", "chromium", "security", "rust", "web", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "accounting-information-platform": {
+      "description": "Accounting Information Platform — statutory accounting, journal posting, period control, reconciliation, and financial reporting authority for ContextualWisdomLab.",
+      "topics": ["accounting", "ledger", "journal", "reconciliation", "financial-reporting", "postgresql", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
