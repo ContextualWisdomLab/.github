@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "purpose": "Observable reviewer regression cases; no proprietary benchmark wording.",
+  "cases": [
+    {
+      "id": "noema-533-readiness-entrypoint",
+      "source": "ContextualWisdomLab/noema#533",
+      "disposition": "false_positive",
+      "probe_kind": "dependency_context",
+      "observation": "A reviewer inferred that /ready was absent from src/index.ts while the public worker entrypoint src/runtime-entrypoint.ts routed /ready to runtimeReadinessResponse and route tests covered GET/HEAD success and failure states.",
+      "expected_behavior": "Inspect the actual public entrypoint and causal routing chain before claiming a missing route."
+    },
+    {
+      "id": "noema-533-evaluator-contract",
+      "source": "ContextualWisdomLab/noema#533",
+      "disposition": "true_positive",
+      "probe_kind": "cross_contract",
+      "observation": "A production caller still consumed evaluator fields after the evaluator contract removed them, producing a nonzero audit path.",
+      "expected_behavior": "Trace caller and callee contracts across files and require a regression proving the removed fields are not read."
+    },
+    {
+      "id": "noema-533-reporter-schema",
+      "source": "ContextualWisdomLab/noema#533",
+      "disposition": "true_positive",
+      "probe_kind": "cross_contract",
+      "observation": "The reporter shape drifted from the stable code/pass/detail contract and required restoration with executable coverage.",
+      "expected_behavior": "Check producer/consumer schemas and stable external report contracts together."
+    },
+    {
+      "id": "appguardrail-1080-dns-toctou",
+      "source": "ContextualWisdomLab/AppGuardrail#1080",
+      "disposition": "true_positive",
+      "probe_kind": "time_of_check_time_of_use",
+      "observation": "DNS-derived authority could change between validation and use, so validation evidence alone did not bind the later network operation.",
+      "expected_behavior": "Attack changing resolution/getter state between check and use and demand a binding invariant."
+    },
+    {
+      "id": "github-1623-authority-split",
+      "source": "ContextualWisdomLab/.github#1623",
+      "disposition": "false_positive",
+      "probe_kind": "authority_boundary",
+      "observation": "Dispatch authority and target-repository authority were intentionally split; collapsing them into one credential would widen privilege rather than repair a defect.",
+      "expected_behavior": "Distinguish component authority from host/target authority before recommending permission widening."
+    },
+    {
+      "id": "bandscope-proxy-state",
+      "source": "ContextualWisdomLab/BandScope observed review corpus",
+      "disposition": "true_positive",
+      "probe_kind": "mutable_alias",
+      "observation": "Proxy or getter-backed state could change after a shallow validation read, escaping a readonly or snapshot assumption.",
+      "expected_behavior": "Mutate caller-owned aliases or change getter results after validation and observe the actual consumed state."
+    },
+    {
+      "id": "bandscope-media-state-race",
+      "source": "ContextualWisdomLab/BandScope observed review corpus",
+      "disposition": "true_positive",
+      "probe_kind": "state_machine_race",
+      "observation": "Cancellation, retry, and publication ordering could produce a state transition that unit happy paths did not cover.",
+      "expected_behavior": "Enumerate event orderings and assert the invariant after cancellation/retry/publication races."
+    }
+  ]
+}
