@@ -67,6 +67,13 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert "information-retrieval" in rankweave["topics"]
     assert "trec" in rankweave["topics"]
 
+    fast_mlsirm = repositories["fast-mlsirm"]
+    assert fast_mlsirm["description"] == "fast-mlsirm — high-performance psychometric modeling, calibration, and evaluation with a Rust numerical core."
+    assert fast_mlsirm["deepwiki"] is True
+    assert fast_mlsirm["pages"] is True
+    assert "psychometrics" in fast_mlsirm["topics"]
+    assert "rust" in fast_mlsirm["topics"]
+
 
 def test_deepwiki_intent_is_an_executable_default_branch_gate() -> None:
     """A declared DeepWiki badge must be verified instead of remaining an inert flag."""
