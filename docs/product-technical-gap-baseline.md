@@ -2931,18 +2931,19 @@ owner `seonghobae`가 `.github#1438`에 직접 남긴 코멘트(진짜 사람 �
    교체하고 `tests/test_noema_review_gate.py` 등 관련 테스트를 갱신. 다만 이 스크립트가 단일 호출·
    무재시도 구조라는 점 자체가 5번 항목("Noema를 CodeRabbit/Devin 수준으로")과 연결되는 구조적
    격차로 보이며, 재시도 로직 추가는 범위를 넘어서 별도 후속으로 남긴다.
-8. **✅ 수정(main에서 물려받은 사전 존재 계약-테스트 드리프트, 이번 diff와 무관하지만 merge 중 발견):**
-   origin/main의 커밋 `a3f9f9b6`("proceed on head-only advance in review dispatch validation",
-   owner 자신이 병합, `.github#1531` 참조)이 `opencode-review-dispatch.yml`의
-   `validate-pr-metadata` 스텝에서 head_sha만 다를 때의 처리를 exact-match 거부에서 warn-and-proceed로
-   의도적으로 바꿨는데, 이 파일의 정확한 blob SHA를 고정하는 두 계약 테스트
-   (`tests/test_pr_review_autofix_nvidia_nim_contract.py::test_independent_review_agent_workflow_matches_reviewed_blob`,
-   `tests/test_opencode_rust_coverage_toolchain_contract.py::test_review_dispatch_blob_sha_stays_paired_with_trusted_workflow`)와
-   `tests/test_opencode_agent_contract.py`의 옛 exact-match 문자열을 찾는 assertion 1건이 갱신되지
-   않아 main 자체가 이 세 테스트에서 레드였다. `REVIEW_DISPATCH_BLOB_SHA`를 새 blob(`3762183e...`)로
-   갱신하고, `test_opencode_agent_contract.py`의 assertion을 새 warn-and-proceed 계약(head_sha
-   exact-match 부재 + 새 경고 로직 존재, base_ref/base_sha/head_ref exact-match는 그대로 유지)에
-   맞게 다시 작성. 전체 스위트 재검증 완료.
+8. **✅ 수정 후 되돌림(main에서 물려받은 사전 존재 계약-테스트 드리프트, 이번 diff와 무관하지만
+   merge 중 발견 — 그리고 다시 merge 중 원인 자체가 사라짐):** origin/main의 커밋 `a3f9f9b6`
+   ("proceed on head-only advance in review dispatch validation", owner 자신이 병합,
+   `.github#1531` 참조)이 `opencode-review-dispatch.yml`의 `validate-pr-metadata` 스텝에서
+   head_sha만 다를 때의 처리를 exact-match 거부에서 warn-and-proceed로 바꿨는데, 이 파일의 정확한
+   blob SHA를 고정하는 두 계약 테스트와 `test_opencode_agent_contract.py`의 옛 exact-match 문자열
+   assertion 1건이 갱신되지 않아 main 자체가 이 세 테스트에서 레드였다 — `REVIEW_DISPATCH_BLOB_SHA`를
+   새 blob으로 갱신하고 assertion을 새 warn-and-proceed 계약에 맞게 다시 작성해 이 diff에 커밋했다.
+   그런데 그 직후 origin/main을 다시 fetch하니 owner가 `a3f9f9b6` 자체를 커밋 `7b1a028e`(#1540,
+   근거 문구 없음)로 **되돌려** 놓은 상태였다 — 즉 head_sha exact-match 거부가 원래대로 복원됐다.
+   이 두 번째 merge로 `opencode-review-dispatch.yml`의 blob이 원래 SHA(`2aa245e7f...`)로 되돌아왔으므로,
+   방금 고친 두 테스트 파일의 변경도 함께 원상 복구(옛 blob SHA·옛 exact-match assertion으로 되돌림)해
+   원인이 사라진 상태와 다시 정합시켰다. 전체 스위트 재검증 완료.
 
 owner 코멘트에 대한 전체 답변은 `.github#1438`에 코멘트로 남겼다(항목별 근거·PR 링크 포함).
 
