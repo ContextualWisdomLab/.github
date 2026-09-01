@@ -328,13 +328,25 @@ def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -
     assert "force-cancel" not in " ".join(calls[0])
 
 
-def test_associated_pr_fetches_only_noncurrent_numbers(monkeypatch) -> None:
-    """Closed-predecessor validation fetches only distinct non-current PRs."""
+def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) -> None:
+    """Predecessor lookup ignores unrelated active runs and fetches each same-head PR once."""
     module = load_module()
     calls: list[int] = []
     monkeypatch.setattr(module, "_fetch_pr", lambda _repo, number: calls.append(number) or live_pr(number=number, state="closed"))
-    runs = [run_record(100, 10), run_record(101, 10, pr_number=2), run_record(102, 10, pr_number=2)]
-    result = module._associated_prs("o/r", runs, 1)
+    runs = [
+        run_record(100, 10),
+        run_record(101, 10, pr_number=2),
+        run_record(102, 10, pr_number=2),
+        run_record(103, 10, pr_number=999, head_sha="b" * 40),
+    ]
+    result = module._associated_prs(
+        "o/r",
+        runs,
+        1,
+        repository="ContextualWisdomLab/.github",
+        branch="feature/current",
+        head_sha="a" * 40,
+    )
     assert list(result) == [2]
     assert calls == [2]
 
