@@ -5,6 +5,7 @@ on:
     paths:
       - scripts/ci/noema_review_gate.py
       - scripts/ci/opencode_review_normalize_output.py
+      - requirements-opencode-review-ci-hashes.txt
       - tests/test_noema_review_gate.py
       - tests/test_noema_observed_defect_probe_taxonomy.py
       - tests/test_noema_probe_source_binding.py
