@@ -154,3 +154,70 @@ def test_rest_fallback_keeps_name_only_strix_when_actions_runs_are_inaccessible(
     assert merge.is_strix_context(context)
     assert merge.strix_evidence_state(pr) == expected_state
     assert fix.current_head_failed_checks(pr) == ()
+
+
+def test_fetch_workflow_names_by_check_suite_rest_paginates_past_100(
+    monkeypatch: Any,
+) -> None:
+    """A first page of exactly 100 runs must fetch a second page and merge both."""
+    head_sha = "e" * 40
+    page1 = [
+        {"check_suite_id": i, "name": f"workflow-{i}"} for i in range(100)
+    ]
+    page2 = [{"check_suite_id": 100, "name": "workflow-100"}]
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        calls.append(path)
+        if path.endswith("page=1"):
+            return {"workflow_runs": page1}
+        if path.endswith("page=2"):
+            return {"workflow_runs": page2}
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+
+    names = merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
+
+    assert names == {i: f"workflow-{i}" for i in range(101)}
+    assert calls == [
+        f"repos/owner/repo/actions/runs?head_sha={head_sha}&per_page=100&page=1",
+        f"repos/owner/repo/actions/runs?head_sha={head_sha}&per_page=100&page=2",
+    ]
+
+
+def test_fetch_workflow_names_by_check_suite_rest_skips_entries_missing_suite_id_or_name(
+    monkeypatch: Any,
+) -> None:
+    """A run with no check-suite id or a blank name must not populate the map."""
+    head_sha = "f" * 40
+
+    def fake_api(path: str) -> Any:
+        return {
+            "workflow_runs": [
+                {"check_suite_id": None, "name": "orphaned run"},
+                {"check_suite_id": 900, "name": ""},
+                {"check_suite_id": 901, "name": "kept run"},
+            ]
+        }
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+
+    names = merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
+
+    assert names == {901: "kept run"}
+
+
+def test_fetch_workflow_names_by_check_suite_rest_propagates_non_access_errors(
+    monkeypatch: Any,
+) -> None:
+    """A page-fetch failure unrelated to integration access must fail closed."""
+    head_sha = "0" * 40
+
+    def fake_api(path: str) -> Any:
+        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha)
