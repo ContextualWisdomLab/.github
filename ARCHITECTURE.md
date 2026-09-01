@@ -97,7 +97,7 @@ only established scheduler credentials, and grants job-scoped
 only established scheduler credentials, and grants job-scoped
 `id-token: write`. The reusable engine stays product-neutral.
 
-## Hourly NVIDIA NIM repair gate
+## Hourly contextual-orchestrator repair gate
 
 ```mermaid
 flowchart TD
@@ -105,7 +105,7 @@ flowchart TD
   Sched["Central reusable scheduler"]
   Bind{"Exact-head, same-repo, writer authority, sealed paths?"}
   Worker["repository_dispatch worker at github.sha"]
-  NIM["NVIDIA NIM repair model"]
+  Gateway["contextual-orchestrator sidecar: orchestrator/free"]
   Recheck{"Post-edit exact-head revalidation?"}
   Push["Push same-repository head"]
   Hold["Leave the tree unchanged"]
@@ -114,15 +114,17 @@ flowchart TD
   Sched --> Bind
   Bind -->|"no"| Hold
   Bind -->|"yes"| Worker
-  Worker --> NIM
-  NIM --> Recheck
+  Worker --> Gateway
+  Gateway --> Recheck
   Recheck -->|"no"| Hold
   Recheck -->|"yes"| Push
 ```
 
 The worker checks out helpers at `${{ github.sha }}` so a later default-branch
-push cannot replace privileged scripts after dispatch (CWE-367). Repair binds
-`NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
+push cannot replace privileged scripts after dispatch (CWE-367). Repair provisions the vendored
+contextual-orchestrator gateway sidecar (ADR-0003), which auto-discovers upstream models from five
+KV-registered provider secrets including `NVIDIA_NIM_API_KEY`; it never binds one provider
+directly, and never uses `COPILOT_GITHUB_TOKEN`.
 
 Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
@@ -158,7 +160,7 @@ sequenceDiagram
   participant MS as Merge scheduler
 
   PR->>RW: pull_request_target on trusted base
-  RW->>OC: bounded evidence + NVIDIA NIM / OpenCode
+  RW->>OC: bounded evidence + contextual-orchestrator/orchestrator/free / OpenCode
   OC->>SV: PoC command in isolated copy
   SV-->>OC: redacted stdout/stderr + command metadata
   OC-->>PR: APPROVE or request changes
@@ -187,9 +189,15 @@ sequenceDiagram
 - Logs and review receipts redact credential shapes (tokens, bearer values,
   known provider prefixes). They do not mask operational PII that the
   control plane must process.
-- LLM and scheduled agents bind `NVIDIA_NIM_API_KEY` (env may be
-  `NVIDIA_API_KEY`). They never use `COPILOT_GITHUB_TOKEN`. Existing
-  review-agent key schemes stay unchanged.
+- Every LLM-bearing review and scheduled-repair workflow routes model traffic
+  through the vendored contextual-orchestrator gateway. OpenCode and Noema remain
+  independent read-only verdict controls with their existing credential mappings,
+  while the write-capable scheduled repair worker uses
+  `contextual-orchestrator/orchestrator/free`; sharing the gateway does not merge
+  their credentials, privileges, or verdict authority. The gateway discovers
+  eligible upstream routes from the credentials actually available to that
+  workflow instead of binding a provider directly. None of these paths uses
+  `COPILOT_GITHUB_TOKEN`.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
 - Downloaded SBOM and distribution bytes are inert. The signing job does
