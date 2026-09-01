@@ -1,0 +1,181 @@
+name: Repository Metadata Reconcile
+
+on:
+  pull_request:
+    paths:
+      - "config/repository-metadata.json"
+      - "config/repository-label-taxonomy.json"
+      - "scripts/ci/reconcile_repository_metadata.py"
+      - "scripts/ci/reconcile_repository_labels.py"
+      - "tests/test_repository_metadata_reconciliation.py"
+      - "tests/test_repository_metadata_convergence.py"
+      - "tests/test_repository_metadata_identity.py"
+      - "tests/test_repository_metadata_live_verification.py"
+      - "tests/test_repository_label_taxonomy.py"
+      - "tests/test_repository_label_reconciliation.py"
+      - "tests/test_repository_label_convergence.py"
+      - "tests/test_repository_label_identity.py"
+      - "tests/test_repository_label_live_verification.py"
+      - ".github/workflows/repository-metadata-reconcile.yml"
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-metadata-reconcile-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Validate desired state
+        run: |
+          set -euo pipefail
+          python scripts/ci/reconcile_repository_metadata.py \
+            --manifest config/repository-metadata.json \
+            --validate-only
+          python scripts/ci/reconcile_repository_labels.py \
+            --taxonomy config/repository-label-taxonomy.json \
+            --validate-only
+      - name: Run metadata contract tests at repository quality gates
+        env:
+          COVERAGE_RCFILE: /dev/null
+        run: |
+          set -euo pipefail
+          python -m coverage run \
+            --branch \
+            --include=scripts/ci/reconcile_repository_metadata.py \
+            -m pytest -q \
+            tests/test_repository_metadata_reconciliation.py \
+            tests/test_repository_metadata_identity.py \
+            tests/test_repository_metadata_live_verification.py
+          python -m coverage report \
+            --fail-under=100 \
+            --show-missing \
+            --include=scripts/ci/reconcile_repository_metadata.py
+          python -m coverage erase
+          python -m coverage run \
+            --branch \
+            --include=scripts/ci/reconcile_repository_labels.py \
+            -m pytest -q \
+            tests/test_repository_label_reconciliation.py \
+            tests/test_repository_label_convergence.py \
+            tests/test_repository_label_identity.py \
+            tests/test_repository_label_live_verification.py
+          python -m coverage report \
+            --fail-under=100 \
+            --show-missing \
+            --include=scripts/ci/reconcile_repository_labels.py
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/reconcile_repository_metadata.py \
+            scripts/ci/reconcile_repository_labels.py
+          python -m pytest -q
+          git diff --check
+
+  apply:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: repository-metadata-maintenance
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out trusted default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Reconcile and verify repository public surfaces
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+        run: |
+          set +e
+          python scripts/ci/reconcile_repository_metadata.py \
+            --manifest config/repository-metadata.json
+          metadata_apply_status=$?
+          python scripts/ci/reconcile_repository_labels.py \
+            --taxonomy config/repository-label-taxonomy.json
+          label_apply_status=$?
+          python scripts/ci/reconcile_repository_labels.py \
+            --taxonomy config/repository-label-taxonomy.json \
+            --verify-only
+          label_verify_status=$?
+
+          metadata_verify_status=1
+          metadata_verify_attempt=1
+          metadata_verify_limit=12
+          while (( metadata_verify_attempt <= metadata_verify_limit )); do
+            metadata_verify_output="$(
+              python scripts/ci/reconcile_repository_metadata.py \
+                --manifest config/repository-metadata.json \
+                --verify-only 2>&1
+            )"
+            metadata_verify_status=$?
+            printf '%s\n' "${metadata_verify_output}"
+            if (( metadata_verify_status == 0 )); then
+              break
+            fi
+
+            metadata_failure_lines="$(
+              printf '%s\n' "${metadata_verify_output}" \
+                | grep '^repository metadata reconciliation failed for ' || true
+            )"
+            if [[ -z "${metadata_failure_lines}" ]] \
+              || printf '%s\n' "${metadata_failure_lines}" \
+                | grep -Evq 'GitHub Pages (was not published|configuration did not converge|is not built|is not reachable)'; then
+              break
+            fi
+            if (( metadata_verify_attempt == metadata_verify_limit )); then
+              break
+            fi
+            sleep 15
+            ((metadata_verify_attempt += 1))
+          done
+
+          set -e
+          if (( metadata_apply_status != 0 \
+                || label_apply_status != 0 \
+                || metadata_verify_status != 0 \
+                || label_verify_status != 0 )); then
+            printf 'metadata_apply=%s label_apply=%s metadata_verify=%s label_verify=%s\n' \
+              "${metadata_apply_status}" \
+              "${label_apply_status}" \
+              "${metadata_verify_status}" \
+              "${label_verify_status}" >&2
+            exit 1
+          fi
