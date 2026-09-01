@@ -806,8 +806,14 @@ jobs:
           # provider failures do not fail the required check on the first
           # attempt. Genuine findings, configuration failures, and unexpected
           # exit codes never retry; the deadline keeps every path inside the
-          # deterministic 200-minute job budget, and all-terminal outcomes
-          # remain fail-closed.
+          # deterministic 330-minute step budget (within the 360-minute job),
+          # and all-terminal outcomes remain fail-closed. The 3-attempt cap
+          # below is a ceiling, not a guarantee: the remaining-time guard only
+          # allows a retry when enough of the deadline is left to reserve
+          # another full process_budget_seconds attempt, so only early
+          # failures actually get to retry -- an attempt that itself
+          # consumes most of its budget before failing has already spent the
+          # time a retry would need.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           : > "$strix_run_log"
           strix_terminal_log="$strix_run_log"

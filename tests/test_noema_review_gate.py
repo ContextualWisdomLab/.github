@@ -800,6 +800,30 @@ def test_call_llm_repair_call_shares_the_total_budget_deadline(monkeypatch):
     assert timeouts[1] == pytest.approx(500, abs=2)
 
 
+def test_call_llm_raises_instead_of_sending_a_request_on_an_expired_budget(monkeypatch):
+    """An exhausted shared deadline must fail fast, never clamp to 1 second.
+
+    Devin Review (ContextualWisdomLab/.github#1438): the prior
+    ``max(1, ...)`` clamp let a repair call whose deadline had already
+    passed still open a (near-instant) network request instead of stopping,
+    wasting the job's already-exhausted reserved cleanup time.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Opener:
+        def open(self, request, timeout):  # pragma: no cover - must never be reached
+            raise AssertionError("call_llm must not send a request on an expired budget")
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    expired_deadline = noema.time.monotonic() - 1
+    with pytest.raises(TimeoutError, match="exhausted its total request budget"):
+        noema.call_llm(
+            "owner/repo", 7, make_pr(), "diff", False, deadline=expired_deadline
+        )
+
+
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():
     diff = """diff --git a/tool.py b/tool.py
 --- a/tool.py

@@ -37,9 +37,11 @@ DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
-# The org's standing operating directive requires at least a 3-hour floor for
-# central Strix/OpenCode/Noema review latency (docs/product-goal-directive.md).
-# Unlike the sidecar's own preflight self-check (ADR-0005, deliberately kept at
+# The standing operating directive already accepts central Strix/OpenCode/Noema
+# review latency exceeding two hours per model (docs/product-goal-directive.md),
+# and the repo owner separately raised the floor to at least three hours
+# (owner comment, ContextualWisdomLab/.github#1438, 2026-09-01). Unlike the
+# sidecar's own preflight self-check (ADR-0005, deliberately kept at
 # 120s with its own bounded same-budget retry), this single call has no retry
 # of its own -- a live reproduction (naruon#1486, job 99690488248, 2026-09-01)
 # shows the gateway's own routing pool degraded (11/12 candidates rejected)
@@ -624,7 +626,10 @@ def call_llm(
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     if deadline is None:
         deadline = time.monotonic() + NOEMA_LLM_TOTAL_BUDGET_SECONDS
-    request_timeout = max(1, min(NOEMA_LLM_REQUEST_TIMEOUT_SECONDS, deadline - time.monotonic()))
+    remaining_budget = deadline - time.monotonic()
+    if remaining_budget <= 0:
+        raise TimeoutError("Noema LLM review exhausted its total request budget")
+    request_timeout = min(NOEMA_LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
