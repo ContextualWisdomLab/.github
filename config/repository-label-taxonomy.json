@@ -8,6 +8,11 @@
   "assignments": [
     {
       "repository": ".github",
+      "issue": 1579,
+      "type": "feature"
+    },
+    {
+      "repository": ".github",
       "issue": 1582,
       "type": "feature"
     },
