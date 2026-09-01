@@ -376,6 +376,7 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
         'gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel"'
     )
     assert "actions: write" in cleanup_job
+    assert "pull-requests: read" in cleanup_job
     assert "actions/checkout" not in cleanup_job
     assert (
         "refs/pull/<n>/head has already advanced before this queued run starts"

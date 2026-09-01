@@ -9,6 +9,9 @@ Semantic Versioning where the repository publishes a release.
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
   parsing failures remain fail-closed.
+- Grant the Strix stale-run cleanup job read-only pull-request access so its
+  job token can revalidate live heads in private repositories when optional
+  scheduler credentials are unavailable.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
