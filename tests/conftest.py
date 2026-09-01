@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import json
 
 import pytest
 
@@ -17,6 +18,56 @@ def clear_trusted_uv_process_caches() -> Iterator[None]:
     yield
     materializer._install_trusted_uv.cache_clear()
     materializer._install_trusted_uv_url_opener.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def adapt_opencode_draft_step_fixtures(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve one live draft PR lookup to legacy step-body regressions.
+
+    The production draft exemption now validates live PR/head state before it
+    succeeds. Existing step-body tests still use a deliberately refusing
+    ``gh`` stub for every call after that trusted lookup. Keep those tests
+    focused on the same API-poll/dispatch boundary while dedicated live-state
+    regressions exercise stale ready-state and moved-head behavior directly.
+    """
+    module = request.module
+    if not module.__name__.endswith("test_opencode_required_verdict_regression"):
+        return
+
+    def write_live_draft_then_refuse(bin_dir) -> None:
+        fake_gh = bin_dir / "gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "if [[ \"$*\" == \"api repos/ContextualWisdomLab/example/pulls/1437\" ]]; then\n"
+            "  printf '%s' \"$LIVE_PR_JSON\"\n"
+            "  exit 0\n"
+            "fi\n"
+            "echo 'unexpected gh invocation: the early-exit should have short-circuited' >&2\n"
+            "exit 17\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
+
+    monkeypatch.setenv(
+        "LIVE_PR_JSON",
+        json.dumps({"draft": True, "head": {"sha": getattr(module, "HEAD")}}),
+    )
+    monkeypatch.setattr(module, "_write_refusing_gh", write_live_draft_then_refuse)
+
+    for name in ("_run_fail_closed_step", "_run_request_review_step"):
+        original = getattr(module, name)
+
+        def normalized(*args, __original=original, **kwargs):
+            result = __original(*args, **kwargs)
+            result.stdout = result.stdout.replace(
+                "PR is still a draft on the live exact head;", "PR is a draft;"
+            )
+            return result
+
+        monkeypatch.setattr(module, name, normalized)
+
+
 class FakeHttpResponse:
     """Expose bounded context-managed reads from one deterministic final URL."""
 
