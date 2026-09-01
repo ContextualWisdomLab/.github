@@ -32,12 +32,18 @@ def pr_head(*, sha: str = "a" * 40, ref: str = "feature/current") -> dict[str, o
     }
 
 
-def live_pr(*, state: str = "open", base_ref: str = "main") -> dict[str, object]:
-    """Return one live PR identity with an explicit base boundary."""
+def live_pr(
+    *,
+    state: str = "open",
+    base_ref: str = "main",
+    base_sha: str = "b" * 40,
+    base_repo: str = "ContextualWisdomLab/.github",
+) -> dict[str, object]:
+    """Return one live PR identity with an explicit exact base boundary."""
     return {
         "state": state,
         "head": pr_head(),
-        "base": {"ref": base_ref, "sha": "b" * 40},
+        "base": {"ref": base_ref, "sha": base_sha, "repo": {"full_name": base_repo}},
     }
 
 
@@ -49,6 +55,9 @@ def run_record(
     top_head_sha: str = "a" * 40,
     top_head_branch: str = "feature/current",
     pr_number: int = 2,
+    base_ref: str = "main",
+    base_sha: str = "b" * 40,
+    base_repo: str = "ContextualWisdomLab/.github",
 ) -> dict[str, object]:
     """Return an Actions run with both workflow and associated-PR identities."""
     return {
@@ -64,9 +73,9 @@ def run_record(
                 "number": pr_number,
                 "head": pr_head(),
                 "base": {
-                    "ref": "main",
-                    "sha": "b" * 40,
-                    "repo": {"full_name": "ContextualWisdomLab/.github"},
+                    "ref": base_ref,
+                    "sha": base_sha,
+                    "repo": {"full_name": base_repo},
                 },
             }
         ],
@@ -103,6 +112,38 @@ def test_distinct_open_pr_association_cannot_authorize_cross_pr_cancellation() -
             active_same_head_runs=[candidate, sibling],
             current_pr_number=2,
             associated_prs={1: other_open_pr},
+        )
+
+
+def test_closed_predecessor_must_share_exact_base_sha_and_repository() -> None:
+    """A closed predecessor on a different base snapshot cannot donate required evidence."""
+    module = load_module()
+    current = live_pr()
+    sibling = run_record(101, pr_number=2)
+
+    candidate_old_base = run_record(100, pr_number=1, base_sha="c" * 40)
+    predecessor_old_base = live_pr(state="closed", base_sha="c" * 40)
+    with pytest.raises(module.CoalescingRefused, match="independent pull request"):
+        module.validate_candidate_against_live_state(
+            candidate_old_base,
+            live_pr=current,
+            active_same_head_runs=[candidate_old_base, sibling],
+            current_pr_number=2,
+            associated_prs={1: predecessor_old_base},
+        )
+
+    candidate_other_repo = run_record(100, pr_number=1, base_repo="ContextualWisdomLab/TEPP")
+    predecessor_other_repo = live_pr(
+        state="closed",
+        base_repo="ContextualWisdomLab/TEPP",
+    )
+    with pytest.raises(module.CoalescingRefused, match="independent pull request"):
+        module.validate_candidate_against_live_state(
+            candidate_other_repo,
+            live_pr=current,
+            active_same_head_runs=[candidate_other_repo, sibling],
+            current_pr_number=2,
+            associated_prs={1: predecessor_other_repo},
         )
 
 
