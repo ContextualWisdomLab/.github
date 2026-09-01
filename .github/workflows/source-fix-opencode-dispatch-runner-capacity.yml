@@ -1,0 +1,116 @@
+name: Source fix OpenCode dispatch runner capacity
+
+on:
+  push:
+    branches:
+      - fix/opencode-dispatch-runner-capacity-20260902
+    paths:
+      - .github/source-fix-opencode-dispatch-runner-capacity.trigger
+
+concurrency:
+  group: source-fix-opencode-dispatch-runner-capacity
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/opencode-dispatch-runner-capacity-20260902
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Add runner-capacity contract and prove red
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_required_review_runner_image_contract.py")
+          text = path.read_text(encoding="utf-8")
+          constant_anchor = 'OPENCODE_REVIEW = Path(".github/workflows/opencode-review.yml")\n'
+          constant_insert = constant_anchor + 'OPENCODE_DISPATCH = Path(".github/workflows/opencode-review-dispatch.yml")\n'
+          if text.count(constant_anchor) != 1:
+              raise SystemExit("required-review contract constant anchor changed")
+          text = text.replace(constant_anchor, constant_insert, 1)
+          method_anchor = '''    def test_noema_review_uses_explicit_supported_image(self) -> None:\n'''
+          method = '''    def test_opencode_dispatch_uses_explicit_supported_image(self) -> None:\n        """Require every privileged OpenCode dispatch job to use explicit Ubuntu 24.04."""\n        workflow = OPENCODE_DISPATCH.read_text(encoding="utf-8")\n        self.assertNotIn("runs-on: ubuntu-latest", workflow)\n        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 4)\n\n'''
+          if text.count(method_anchor) != 1:
+              raise SystemExit("required-review contract method anchor changed")
+          text = text.replace(method_anchor, method + method_anchor, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          set +e
+          python3 tests/test_required_review_runner_image_contract.py -k opencode_dispatch >"$RUNNER_TEMP/runner-contract-red.log" 2>&1
+          red_status=$?
+          set -e
+          cat "$RUNNER_TEMP/runner-contract-red.log"
+          if [ "$red_status" -eq 0 ]; then
+            echo "::error::runner-capacity contract did not prove the protected-main defect before repair"
+            exit 1
+          fi
+      - name: Pin exact privileged dispatch jobs and prove green
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/opencode-review-dispatch.yml")
+          text = workflow.read_text(encoding="utf-8")
+          old = "runs-on: ubuntu-latest"
+          new = "runs-on: ubuntu-24.04"
+          count = text.count(old)
+          if count != 4:
+              raise SystemExit(f"expected exactly four floating runner jobs, found {count}")
+          text = text.replace(old, new)
+          if text.count(new) < 4 or old in text:
+              raise SystemExit("runner image replacement did not converge")
+          workflow.write_text(text, encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          log = changelog.read_text(encoding="utf-8")
+          anchor = "## [Unreleased]\n"
+          entry = (
+              "- **Pin the privileged OpenCode repository-dispatch path off `ubuntu-latest`.** "
+              "The four default-branch-only dispatch jobs now request explicit `ubuntu-24.04`, matching the already-pinned required review workflows and removing the remaining central queue producer from the observed starved floating runner image. "
+              "`tests/test_required_review_runner_image_contract.py` now covers this dispatch workflow as well as Strix, OpenCode Review, and Noema Review.\n"
+          )
+          if log.count(anchor) != 1:
+              raise SystemExit("changelog Unreleased anchor changed")
+          if entry not in log:
+              log = log.replace(anchor, anchor + entry, 1)
+          changelog.write_text(log, encoding="utf-8")
+          PY
+          python3 tests/test_required_review_runner_image_contract.py
+          git diff --check
+          test "$(grep -c 'runs-on: ubuntu-24.04' .github/workflows/opencode-review-dispatch.yml)" -eq 4
+          ! grep -Fq 'runs-on: ubuntu-latest' .github/workflows/opencode-review-dispatch.yml
+      - name: Self-remove repair driver and publish non-force commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-opencode-dispatch-runner-capacity.yml \
+            .github/source-fix-opencode-dispatch-runner-capacity.trigger
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(opencode): pin dispatch runner capacity'
+          git fetch --no-tags origin fix/opencode-dispatch-runner-capacity-20260902
+          remote_head="$(git rev-parse FETCH_HEAD)"
+          if ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            git merge --no-edit "$remote_head"
+            python3 tests/test_required_review_runner_image_contract.py
+            git diff --check
+          fi
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/opencode-dispatch-runner-capacity-20260902
