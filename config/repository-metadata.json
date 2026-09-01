@@ -15,9 +15,7 @@
         "contextualwisdomlab"
       ],
       "deepwiki": true,
-      "pages": {
-        "enabled": false
-      }
+      "pages": {"enabled": false}
     },
     "ConceptWeave": {
       "description": "Evidence-bound ontology and semantic-model engineering for governed enterprise meaning.",
@@ -31,9 +29,7 @@
         "contextualwisdomlab"
       ],
       "deepwiki": true,
-      "pages": {
-        "enabled": false
-      }
+      "pages": {"enabled": false}
     },
     "learning-content-studio": {
       "description": "Author, review, version, and publish accessible learning content across interoperable learning standards.",
@@ -48,9 +44,22 @@
         "contextualwisdomlab"
       ],
       "deepwiki": true,
-      "pages": {
-        "enabled": false
-      }
+      "pages": {"enabled": false}
+    },
+    "learning-management-platform": {
+      "description": "Standards-oriented learning management for employee, partner, customer, and self-sponsored education.",
+      "topics": [
+        "learning-management",
+        "lms",
+        "education",
+        "xapi",
+        "cmi5",
+        "credentials",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": {"enabled": false}
     },
     "learning-record-store": {
       "description": "Immutable xAPI learning record storage and evidence services for interoperable learning analytics.",
@@ -64,9 +73,7 @@
         "contextualwisdomlab"
       ],
       "deepwiki": true,
-      "pages": {
-        "enabled": false
-      }
+      "pages": {"enabled": false}
     }
   }
 }
