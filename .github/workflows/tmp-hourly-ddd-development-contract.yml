@@ -98,15 +98,25 @@ jobs:
           test "$(grep -c '# cwl-ddd-architecture-audit: required' organization_commercial_readiness_fixtures.py)" -eq 1
           test "$(grep -c 'api.opencode.ai:443' .github/workflows/organization-commercial-readiness-loop.yml)" -eq 1
 
-      - name: Remove bootstrap and publish verified branch commit
+      - name: Publish verified non-workflow branch changes
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           set -euo pipefail
-          rm .github/workflows/tmp-hourly-ddd-development-contract.yml
-          rm scripts/ci/tmp_apply_hourly_ddd_contract.py
-          git diff --check
-          git add -A
+          git restore --source=HEAD -- .github/workflows/organization-commercial-readiness-loop.yml
+          git restore --source=HEAD -- scripts/ci/tmp_apply_hourly_ddd_contract.py
+          git add \
+            CHANGELOG.md \
+            docs/doctoring/organization-commercial-readiness-loop.md \
+            docs/product-technical-gap-baseline.md \
+            organization_commercial_readiness_fixtures.py \
+            scripts/ci/organization_commercial_readiness_loop.py \
+            tests/test_organization_commercial_readiness_loop_credential_contract.py \
+            tests/test_organization_commercial_readiness_loop_policy.py
           test -n "$(git diff --cached --name-only)"
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo '::error::Workflow paths must be published only through the authorized connector.'
+            exit 1
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(automation): enforce hourly DDD development contract'
