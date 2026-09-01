@@ -2756,6 +2756,38 @@ diff range" 지적 2건(project-graph mismatch, 중복검사 workspace 누락)�
 
 세 건 모두 스레드에 답글·resolve 완료.
 
+## 2026-09-01 시간별 재개: naruon CI에 Postgres 서비스가 전혀 없음을 발견 — real-Postgres 테스트 전량이 CI에서 한 번도 실행된 적 없었다
+
+naruon#1486의 Devin 지적("Fresh migrations bypass legacy-table guard")을 검증하려 로컬
+PostgreSQL 16 + pgvector를 직접 설치·기동해 `@pytest.mark.postgres` 테스트를 처음으로 실제
+실행해 본 결과, `naruon/.github/workflows/app-ci.yml`의 backend job에 Postgres 서비스 컨테이너가
+**전혀 구성되어 있지 않음**을 확인했다. `tests/conftest.py`가 `DATABASE_URL`을
+`postgresql+asyncpg://test:test@localhost:5432/test_db`로 기본값 설정하지만 CI 러너에는 그
+주소로 연결 가능한 Postgres가 없어, 이 마커가 붙은 모든 테스트는 CI에서 매번 연결 실패로
+조용히 skip되어 왔다 — 이 저장소가 "real-PostgreSQL smoke test"라고 부르는 테스트 클래스
+전체가 사실상 CI에서 한 번도 실행된 적이 없었다는 뜻이다.
+
+이번 발견으로 실제 실행해 밝혀진 실재 결함(모두 naruon#1486에서 커밋 `b9b02dd0`으로 수정·검증
+완료):
+
+1. **🔴 critical: `0001_initial_control_plane.py::upgrade()`가 guard를 우회해, 신선한 DB에
+   대한 `alembic upgrade head`가 항상 실패.** `Base.metadata.create_all()`가 만들지 않는 legacy
+   `emails` 테이블에 인덱스를 만들려다 `relation "emails" does not exist`로 크래시. 실제 신선한
+   DB에 대해 마이그레이션을 실행해 크래시를 직접 재현(진짜 RED)한 뒤 수정.
+2. **이 PR이 `email_records.workspace_id`를 NOT NULL로 만든 뒤, 이를 반영하지 못한 이 PR과
+   무관한 기존 파일 4개의 real-Postgres 테스트 19건이 하드 실패.** `test_project_graph_api.py`,
+   `test_project_graph_projection.py`, `test_search_postgres.py`, `test_tasks_api.py`의 공유
+   `Email(...)` 시딩 헬퍼가 `workspace_id`를 넘기지 않고 있었다.
+3. **`test_data_api.py`의 raw SQL INSERT 3건이 `workspace_id`뿐 아니라 `is_read`/`attachment_uid`도
+   빠뜨림** — 둘 다 ORM 쪽 Python-side default(서버측 default 없음)라 raw SQL이 이를 우회했다.
+
+**남겨둔 후속 과제 (이번 커밋 범위 밖)**: naruon CI에 실제 Postgres(+ pgvector) 서비스
+컨테이너를 구성해, `@pytest.mark.postgres` 테스트가 매 PR마다 실제로 실행되도록 만드는 것.
+현재 구조에서는 이 테스트 클래스 전체가 로컬에 우연히 Postgres를 설치해 둔 개발자가 수동으로
+실행하지 않는 한 영원히 검증되지 않는 죽은 코드나 다름없다 — 이번처럼 이 문서를 갱신하는
+세션이 우연히 로컬 Postgres를 기동하지 않았다면 이 20건의 결함(1번 critical 포함)은 계속
+발견되지 않았을 것이다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
