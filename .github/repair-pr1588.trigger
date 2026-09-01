@@ -11,3 +11,4 @@ owner-exact-source-kick=20260901T2302+0900
 negative-guard-fix=20260901T2306+0900
 zero-inference-timeout-contract=required
 ref-bound-writer-guard=20260901T2311+0900
+merged-timeout-regression-reconciled=20260901T2317+0900
