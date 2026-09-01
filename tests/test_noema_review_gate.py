@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import http.client
 import json
 import os
 import shlex
@@ -1407,6 +1408,170 @@ def test_call_llm_fails_closed_after_a_repeated_transport_error(monkeypatch):
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
 
     with pytest.raises(RuntimeError, match="Bad Gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_truncated_response_then_succeeds(monkeypatch):
+    """A truncated response body must not crash the job either.
+
+    ``response.read()`` can raise ``http.client.IncompleteRead`` when the
+    server closes the connection before delivering the full
+    ``Content-Length`` body. That exception is neither a ``RuntimeError``
+    nor a ``urllib.error.URLError`` -- it is a plain ``http.client
+    .HTTPException`` -- so it slipped through the transport-error boundary
+    added for the HTTPError/URLError case and still crashed the required
+    check with an unhandled traceback."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            return TruncatedResponse()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_truncated_response(monkeypatch):
+    """Two consecutive truncated reads must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    class TruncatedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            raise http.client.IncompleteRead(b"", 10)
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return TruncatedResponse()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="IncompleteRead"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
+def test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds(monkeypatch):
+    """A raw socket-level failure during the request/connect phase -- not
+    wrapped as a ``urllib.error.URLError`` -- must not crash the job either.
+
+    ``opener.open(request)`` can raise a bare ``OSError`` subtype (e.g. a
+    ``TimeoutError``/``socket.timeout``, or a connection reset) directly from
+    the underlying ``http.client`` connection when the failure happens before
+    urllib gets a chance to wrap it as ``URLError``. This exercises the
+    ``OSError`` branch of the transport-failure boundary on a distinct
+    exception path from the ``http.client.HTTPException`` branch
+    (``IncompleteRead``, above) and the ``urllib.error.URLError`` branch
+    (``HTTPError``, further above)."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise TimeoutError("timed out waiting for the gateway")
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_socket_timeout(monkeypatch):
+    """Two consecutive raw socket timeouts must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise TimeoutError("timed out waiting for the gateway")
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="timed out waiting for the gateway"):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
     assert len(open_calls) == 2
 

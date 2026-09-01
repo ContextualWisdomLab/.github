@@ -22,7 +22,27 @@ Semantic Versioning where the repository publishes a release.
   subtests. (Repo-wide coverage independently confirmed at 99% both before and
   after this change — a pre-existing gap in
   `pr_review_fix_scheduler.py`/`pr_review_merge_scheduler.py` unrelated to this
-  diff.)
+  diff.) Devin Review then found the transport-error boundary still missed a
+  mid-response failure: `response.read()` can raise `http.client
+  .IncompleteRead` (or another `http.client.HTTPException`/raw `OSError`) when
+  the server closes the connection before delivering the full
+  `Content-Length` body, and none of those are `RuntimeError` or
+  `urllib.error.URLError`. Widened the `except` clause to
+  `(RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError)`
+  and simplified the repair-retry re-raise to "re-raise as-is only when it's
+  already our own `RuntimeError`; otherwise wrap in a clean `RuntimeError`" so
+  the fail-closed behavior generalizes to any transport exception type rather
+  than needing another isinstance check added per exception class. Verified
+  genuine RED (`IncompleteRead` reproduced uncaught) before this second fix,
+  GREEN after. A third distinct exception path (a raw `TimeoutError` reaching
+  `opener.open()` directly, never wrapped as `URLError`) was added per the
+  repo owner's explicit request on `#1566` for at least one timeout/disconnect
+  family exercising a genuinely different branch than the HTTPError/URLError
+  and IncompleteRead cases above — also RED→GREEN verified. Full suite 2252
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` itself at 100%
+  line/branch coverage. (A separate, pre-existing SIGPIPE flake in
+  `tests/test_opencode_required_verdict_regression.py`, unrelated to this
+  file, was also reproduced and fixed in its own PR during this verification.)
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

@@ -7,6 +7,7 @@ import argparse
 import ast
 import base64
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -1060,11 +1061,11 @@ def call_llm(
         if decision == "request_changes" and not findings:
             raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except (RuntimeError, urllib.error.URLError) as exc:
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         if repair_error:
-            if isinstance(exc, urllib.error.URLError):
-                raise RuntimeError(str(exc)) from exc
-            raise
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(str(exc)) from exc
         if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."

@@ -2344,6 +2344,64 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
+
+**Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
+unhandled `urllib.error.HTTPError: HTTP Error 502: Bad Gateway`. Root cause: `call_llm` in
+`scripts/ci/noema_review_gate.py` had `with opener.open(request) as response:` sitting outside the
+`try`/`except` that only guarded the JSON-decode/validation steps *after* a successful response --
+identical in shape to, but a distinct bug from, the malformed-verdict crash fixed in `#1507`
+(2026-08-31 entries above). Confirmed via direct fetch that `#1546`'s own `call_llm` (main tip at the
+time, `5686de41`) carried the same unguarded line, so this crash is orthogonal to, and survives
+regardless of, the `#1438`/`#1546` wall-clock-deadline policy question -- `#1438` was closed by the
+repo owner as a stale mixed branch unrelated to this specific bug.
+
+**Fix, round 1**: widened the `try` to cover the request itself and added `urllib.error.URLError`
+alongside `RuntimeError` to the existing repair-retry `except` clause -- one retry on a transient
+transport failure, then a clean `RuntimeError` on a second failure, matching the malformed-verdict
+path's contract. RED (`HTTPError: Bad Gateway` reproduced uncaught) confirmed before, GREEN after.
+
+**Fix, round 2 (Devin Review, then owner confirmation, on `#1566` itself)**: Devin correctly found that
+`response.read()` can raise `http.client.IncompleteRead` -- and, more generally, any
+`http.client.HTTPException` or raw `OSError` (a bare socket timeout/disconnect reaching `opener.open()`
+before urllib gets a chance to wrap it as `URLError`) -- none of which are `RuntimeError` or
+`urllib.error.URLError`, so they still escaped the round-1 boundary. The owner's review comment and
+follow-up issue comment on `#1566` confirmed this independently and specified the exact contract: widen
+to the bounded transport/read exception families without swallowing JSON/validator/programming errors,
+add RED->GREEN regressions for a truncated-body success-after-retry and a repeated-failure case, and at
+least one timeout/disconnect family exercising a distinct exception path -- while preserving `#1546`'s
+unbounded inference semantics (no fixed inference timeout, no direct-provider fallback, no bypass).
+
+Widened the `except` clause to `(RuntimeError, urllib.error.URLError, http.client.HTTPException,
+OSError)` and simplified the repair-retry re-raise from an `isinstance(exc, urllib.error.URLError)`
+check to `isinstance(exc, RuntimeError)`: re-raise as-is only when the second failure is already this
+module's own `RuntimeError` (a malformed verdict, an invalid finding, etc.); otherwise wrap in a clean
+`RuntimeError`. This generalizes the fail-closed contract to any transport exception type without
+needing another `isinstance` branch added per exception class encountered. Three genuinely distinct
+exception paths are now each covered by their own RED->GREEN success-after-retry and repeated-failure
+regression pair (`test_call_llm_repairs_once_after_a_transport_error_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_transport_error` for `HTTPError`/`URLError`;
+`test_call_llm_repairs_once_after_a_truncated_response_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_truncated_response` for `http.client.IncompleteRead`;
+`test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_socket_timeout` for a raw `TimeoutError` reaching
+`opener.open()` directly) -- each verified genuinely RED against the pre-fix boundary before being
+folded in, never transferred from an earlier case as substitute proof. Full suite: 2250 passed, 1
+skipped, 21 subtests; `noema_review_gate.py` at 100% line/branch coverage; 100% docstring coverage.
+
+**Owner**: this repo (`ContextualWisdomLab/.github`), `scripts/ci/noema_review_gate.py`.
+**Status**: fixed on `ContextualWisdomLab/.github#1566` (branch `fix/noema-review-transport-error-retry`),
+pending required checks and final review.
+
+While verifying this fix's full-suite run, an unrelated, pre-existing SIGPIPE (exit 141) flake was also
+found and root-caused in `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`:
+its fake `gh` fixture never drains the JSON piped into it via `--input -` for the dispatch call, so under
+`set -euo pipefail` the pipeline's writer (`jq`) can be killed by `SIGPIPE` if the fake reader exits
+first -- reproduced locally at roughly a 60% failure rate over 15 runs in complete isolation (not merely
+under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/null`) before the fixture
+writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
+that PR for its own evidence.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
