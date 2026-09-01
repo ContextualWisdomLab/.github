@@ -11,6 +11,14 @@ Semantic Versioning where the repository publishes a release.
   `agent-mention-router.yml` pre-filter. A commenter following OpenCode's public GitHub Action docs
   (which document `/opencode`/`/oc`, not this org's locally-invented `@opencode-agent` mention) now
   successfully dispatches the same request instead of silently triggering nothing.
+- Fix the `@cwl-noema-review/@opencode-agent` bare-slash separator alternative in
+  `agent_mention_router.py`'s `MENTION_PATTERNS`: it previously checked only that the slash
+  immediately preceding `/@opencode-agent` was preceded by the literal text `@cwl-noema-review`,
+  without checking that occurrence's own left boundary, so invalid pasted text embedding the Noema
+  mention in a larger token (`foo@cwl-noema-review/@opencode-agent`,
+  `docs/@cwl-noema-review/@opencode-agent`) still dispatched an unintended OpenCode review. The
+  alternative now matches the whole `@cwl-noema-review/@opencode-agent` literal under the same
+  left-boundary exclusion as the standalone `@opencode-agent` alternative.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

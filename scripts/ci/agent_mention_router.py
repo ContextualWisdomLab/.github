@@ -26,9 +26,14 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # (e.g. https://opencode.ai/docs, https://youtube.com/@opencode-agent) or an
 # ordinary path segment (docs/@opencode-agent), not a deliberate trigger. The
 # one deliberate exception is a maintainer separating both supported agent
-# requests with a bare slash and no space (@cwl-noema-review/@opencode-agent);
-# that is recognized only when the slash is immediately preceded by the
-# other pattern's exact literal mention text, not by an arbitrary word.
+# requests with a bare slash and no space (@cwl-noema-review/@opencode-agent).
+# That case is matched as one combined literal — "@cwl-noema-review/@opencode-agent"
+# — guarded by the same left-boundary exclusion as the standalone
+# "@opencode-agent" alternative. A boundary check on the trailing slash alone
+# is not enough: it would still fire for invalid pasted text where
+# "@cwl-noema-review" is itself embedded in a larger token (e.g.
+# foo@cwl-noema-review/@opencode-agent, docs/@cwl-noema-review/@opencode-agent)
+# without checking that the Noema mention has a valid left boundary of its own.
 # The bare /opencode and /oc forms additionally exclude a preceding "=": a
 # URL query string (?next=/opencode, ?redirect=/oc) shares the same "not
 # preceded by a word character" shape as a deliberate standalone command.
@@ -40,7 +45,7 @@ MENTION_PATTERNS = {
     "opencode-agent": re.compile(
         r"(?:"
         r"(?<![A-Za-z0-9_/-])@opencode-agent"
-        r"|(?<=@cwl-noema-review)/@opencode-agent"
+        r"|(?<![A-Za-z0-9_/-])@cwl-noema-review/@opencode-agent"
         r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
         r")(?![A-Za-z0-9_-])",
         re.IGNORECASE,
