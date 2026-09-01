@@ -40,8 +40,9 @@ The focused regression suite must prove at least the following:
 4. generic boilerplate class witnesses fail closed rather than authorizing diversity;
 5. a class witness cannot borrow another changed line as its probe evidence;
 6. two material-change probes using the same validated class fail the diversity requirement;
-7. two valid source-bound class probes can satisfy the formal verdict contract; and
-8. an exercised `call_llm` request contains every supported class and its witness-field schema while making no unwired CodeGraph claim.
+7. two valid source-bound class probes can satisfy the formal verdict contract;
+8. an exercised `call_llm` request contains every supported class and its witness-field schema while making no unwired CodeGraph claim; and
+9. every requirements file installed by the permanent observed-probe workflow is included in that workflow's `pull_request.paths`, so lockfile-only environment changes cannot bypass the focused contracts.
 
 Historical TDD evidence remains predecessor evidence only: hosted RED run `33499442683` established the missing taxonomy contract, and hosted GREEN run `33500648307` passed the then-current focused and full suites. A later independent Devin review demonstrated that non-empty free-form `class_evidence` could still manufacture apparent diversity; the follow-up regression rejects generic prose and unrelated changed-line references, and the validator now requires exact structured changed-line references for every class-specific witness field.
 
