@@ -1,0 +1,119 @@
+name: Repair Actions queue scheduler cadence
+
+on:
+  push:
+    branches:
+      - fix/actions-queue-saturation-scheduler-cadence-20260902
+
+permissions:
+  contents: write
+
+concurrency:
+  group: actions-queue-cadence-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair_scheduler_cadence:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact canonical branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/actions-queue-saturation-scheduler-cadence-20260902
+          fetch-depth: 0
+
+      - name: Apply bounded hourly sweep repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          scheduler_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          scheduler_source = scheduler_path.read_text(encoding='utf-8')
+          old_cron = '*/15 * * * *'
+          hourly_cron = '0 * * * *'
+          assert scheduler_source.count(old_cron) >= 3
+          assert scheduler_source.count('$(date -u +%s) / 900') == 2
+          scheduler_source = scheduler_source.replace(old_cron, hourly_cron)
+          scheduler_source = scheduler_source.replace(
+              'Every-15-minutes org-wide sweep cadence',
+              'Hourly org-wide sweep cadence',
+          )
+          scheduler_source = scheduler_source.replace(
+              'Runs every 15 minutes so an approval or',
+              'Runs hourly so an approval or',
+          )
+          scheduler_source = scheduler_source.replace(
+              "within ~15 minutes instead of sitting idle for up to an hour.",
+              'within about an hour without adding quarter-hourly runner pressure.',
+          )
+          scheduler_source = scheduler_source.replace(
+              'one latest pending 0 * * * * sweep',
+              'one latest pending hourly sweep',
+          )
+          scheduler_source = scheduler_source.replace(
+              '$(date -u +%s) / 900',
+              '$(date -u +%s) / 3600',
+          )
+          assert old_cron not in scheduler_source
+          assert scheduler_source.count(hourly_cron) >= 3
+          assert scheduler_source.count('$(date -u +%s) / 3600') == 2
+          scheduler_path.write_text(scheduler_source, encoding='utf-8')
+
+          queue_contract_path = Path('tests/test_required_workflow_queue_contract.py')
+          queue_contract_source = queue_contract_path.read_text(encoding='utf-8')
+          assert queue_contract_source.count(old_cron) >= 2
+          queue_contract_source = queue_contract_source.replace(old_cron, hourly_cron)
+          queue_contract_source = queue_contract_source.replace(
+              'every 15 minutes so an approval that lands after a PR\'s last event is',
+              'hourly so an approval that lands after a PR\'s last event is',
+          )
+          assert old_cron not in queue_contract_source
+          queue_contract_path.write_text(queue_contract_source, encoding='utf-8')
+
+          rollout_path = Path('docs/org-required-workflow-rollout.md')
+          rollout_source = rollout_path.read_text(encoding='utf-8')
+          assert old_cron in rollout_source
+          rollout_source = rollout_source.replace(old_cron, hourly_cron)
+          rollout_source = rollout_source.replace('runs every 15 minutes', 'runs hourly')
+          rollout_source = rollout_source.replace('at most 15 minutes old', 'at most one hour old')
+          assert old_cron not in rollout_source
+          rollout_path.write_text(rollout_source, encoding='utf-8')
+          PY
+
+      - name: Verify focused executable contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_actions_queue_saturation_scheduler_cadence.py
+          python - <<'PY'
+          from pathlib import Path
+          workflow_source = Path('.github/workflows/pr-review-merge-scheduler.yml').read_text(encoding='utf-8')
+          queue_contract_source = Path('tests/test_required_workflow_queue_contract.py').read_text(encoding='utf-8')
+          rollout_source = Path('docs/org-required-workflow-rollout.md').read_text(encoding='utf-8')
+          assert '- cron: "0 * * * *"' in workflow_source
+          assert '*/15 * * * *' not in workflow_source
+          assert workflow_source.count('$(date -u +%s) / 3600') == 2
+          assert "github.event.schedule == '0 * * * *'" in workflow_source
+          assert "github.event.schedule != '0 * * * *'" in workflow_source
+          assert '*/15 * * * *' not in queue_contract_source
+          assert '*/15 * * * *' not in rollout_source
+          PY
+          git diff --check
+
+      - name: Commit repair and retire source-fix workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/repair_actions_queue_cadence.yml
+          git add \
+            .github/workflows/pr-review-merge-scheduler.yml \
+            tests/test_required_workflow_queue_contract.py \
+            docs/org-required-workflow-rollout.md
+          git diff --cached --check
+          git commit -m "fix(scheduler): bound organization sweep to hourly cadence"
+          git push origin HEAD:fix/actions-queue-saturation-scheduler-cadence-20260902
