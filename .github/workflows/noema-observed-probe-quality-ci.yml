@@ -24,7 +24,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned review CI dependencies
-        run: python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
       - name: Verify observed-probe contracts
         run: |
           set -euo pipefail
