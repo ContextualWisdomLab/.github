@@ -81,7 +81,14 @@ fi
 
 git -C "$source_root" checkout -q --detach refs/noema/head
 rm -f "$askpass"
-unset GH_TOKEN GITHUB_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN
+# The checkout is attacker-controlled review input. Strip every credential this
+# review step can provide before invoking package tooling or CodeGraph. The
+# loader calls this helper before it reads the sidecar bearer, and these unsets
+# are defense-in-depth for direct or legacy callers that already exported it.
+unset \
+  GH_TOKEN GITHUB_TOKEN \
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN \
+  CONTEXTUAL_ORCHESTRATOR_TOKEN CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE
 
 for manifest in \
   "$GITHUB_WORKSPACE/scripts/ci/codegraph-package/package.json" \
