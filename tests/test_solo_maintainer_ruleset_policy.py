@@ -84,6 +84,12 @@ def _repository_ruleset_payload() -> dict:
     }
 
 
+def _review_parameters(payload: dict) -> dict:
+    """Return the unique pull-request rule parameters from ``payload``."""
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    return review_rule["parameters"]
+
+
 def test_central_ruleset_accepts_zero_approvals_without_last_push_approval() -> None:
     """A one-human fleet must not require an approval its sole author cannot give."""
     assert audit.audit_ruleset(_central_ruleset_payload()) == []
@@ -97,8 +103,7 @@ def test_repository_ruleset_accepts_zero_approvals_without_last_push_approval() 
 def test_central_ruleset_rejects_synthetic_required_reviewer() -> None:
     """A named reviewer cannot manufacture independence in a one-human fleet."""
     payload = _central_ruleset_payload()
-    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
-    review_rule["parameters"]["required_reviewers"] = [
+    _review_parameters(payload)["required_reviewers"] = [
         {"reviewer_id": 1234, "reviewer_type": "User"}
     ]
 
@@ -110,11 +115,28 @@ def test_central_ruleset_rejects_synthetic_required_reviewer() -> None:
 def test_repository_ruleset_rejects_synthetic_required_reviewer() -> None:
     """The owner repository cannot reintroduce the same deadlock by reviewer identity."""
     payload = _repository_ruleset_payload()
-    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
-    review_rule["parameters"]["required_reviewers"] = [
+    _review_parameters(payload)["required_reviewers"] = [
         {"reviewer_id": 1234, "reviewer_type": "User"}
     ]
 
     assert audit.audit_repository_ruleset(payload) == [
         "repository solo-maintainer ruleset must not configure required reviewers"
     ]
+
+
+def test_central_ruleset_rejects_malformed_allowed_merge_methods() -> None:
+    """Malformed API payloads must report drift rather than abort central auditing."""
+    expected = ["only merge and squash may be allowed merge methods"]
+    for malformed in (None, 7, "merge", {"merge": True, "squash": True}):
+        payload = _central_ruleset_payload()
+        _review_parameters(payload)["allowed_merge_methods"] = malformed
+        assert audit.audit_ruleset(payload) == expected
+
+
+def test_repository_ruleset_rejects_malformed_allowed_merge_methods() -> None:
+    """Malformed API payloads must report drift rather than abort repository auditing."""
+    expected = ["repository ruleset must allow only merge and squash"]
+    for malformed in (None, 7, "merge", {"merge": True, "squash": True}):
+        payload = _repository_ruleset_payload()
+        _review_parameters(payload)["allowed_merge_methods"] = malformed
+        assert audit.audit_repository_ruleset(payload) == expected
