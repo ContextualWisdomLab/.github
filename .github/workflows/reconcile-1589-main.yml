@@ -27,12 +27,12 @@ jobs:
           cd repo
           git checkout "$TARGET_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git fetch origin main
-          main_head="$(git rev-parse origin/main)"
+          git fetch origin main:refs/remotes/origin/main
+          main_head="$(git rev-parse refs/remotes/origin/main)"
           test "$main_head" = "8c64b545f883d3e8c574200c1ea7274639fc3741"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit -X ours origin/main
+          git merge --no-edit -X ours refs/remotes/origin/main
 
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
           PYTHONPATH=. python3 -m pytest -q \
