@@ -59,3 +59,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert threadweave["pages"] is True
     assert "rfc5256" in threadweave["topics"]
     assert "python" in threadweave["topics"]
+
+    rankweave = repositories["RankWeave"]
+    assert rankweave["description"] == "RankWeave — deterministic retrieval fusion, evaluation, statistical comparison, and auditable ranking workflows for Python."
+    assert rankweave["deepwiki"] is True
+    assert rankweave["pages"] is True
+    assert "information-retrieval" in rankweave["topics"]
+    assert "trec" in rankweave["topics"]
