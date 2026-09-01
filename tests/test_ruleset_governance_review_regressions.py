@@ -68,6 +68,13 @@ def _live() -> dict[str, object]:
     }
 
 
+def _converged() -> dict[str, object]:
+    """Return the reviewed desired state for the repository target."""
+
+    live = _live()
+    return {**live, **module._desired_payload(live, _target())}
+
+
 def _manifest(tmp_path: Path) -> Path:
     """Write the exact two-target manifest accepted by the production parser."""
 
@@ -151,15 +158,16 @@ def test_current_main_is_rechecked_around_put_and_after_convergence(monkeypatch)
     """Stable protected main is checked before final read, PUT, and completion."""
 
     first = _live()
-    desired = module._desired_payload(first, _target())
-    converged = {**first, **desired}
-    replies = iter([first, first, {}, converged])
+    desired = _converged()
+    replies = iter([first, first, {}, desired])
     checks: list[str] = []
     monkeypatch.setattr(module, "_gh_api", lambda *args, **kwargs: next(replies))
+    monkeypatch.setattr(module, "_current_main_sha", lambda: checks.append("main") or "a" * 40)
+    monkeypatch.setattr(module, "_latest_history_version", lambda _target: 1)
     monkeypatch.setattr(
         module,
-        "_current_main_sha",
-        lambda: checks.append("main") or "a" * 40,
+        "_verify_ruleset_history_transition",
+        lambda _target, _baseline, _desired: None,
     )
 
     assert module._reconcile_target(
@@ -168,6 +176,97 @@ def test_current_main_is_rechecked_around_put_and_after_convergence(monkeypatch)
         expected_main_sha="a" * 40,
     ) is True
     assert checks == ["main", "main", "main"]
+
+
+def test_ruleset_target_exposes_history_endpoints() -> None:
+    """Collision evidence is fetched from the exact target's immutable history surface."""
+
+    target = _target()
+    assert target.history_endpoint == "repos/ContextualWisdomLab/.github/rulesets/17921150/history"
+    assert target.history_version_endpoint(7).endswith("/history/7")
+
+
+def test_latest_history_version_rejects_missing_or_malformed_history(monkeypatch) -> None:
+    """Mutation never begins without one trustworthy pre-write history version."""
+
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [])
+    with pytest.raises(module.RulesetGovernanceError, match="ruleset history is empty"):
+        module._latest_history_version(_target())
+
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": True}])
+    with pytest.raises(module.RulesetGovernanceError, match="version identity is malformed"):
+        module._latest_history_version(_target())
+
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": 12}])
+    assert module._latest_history_version(_target()) == 12
+
+
+def test_history_transition_accepts_exactly_one_new_reviewed_version(monkeypatch) -> None:
+    """One new version whose predecessor is the baseline proves no hidden pre-PUT edit."""
+
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 8}, {"version_id": 7}],
+    )
+    monkeypatch.setattr(module, "_history_version_state", lambda _target, version: _converged())
+    module._verify_ruleset_history_transition(_target(), 7, _converged())
+
+
+def test_history_collision_restores_immediate_predecessor_before_failing(monkeypatch) -> None:
+    """A hidden pre-PUT administrator edit is restored instead of being silently lost."""
+
+    desired = _converged()
+    external = _live()
+    external["conditions"] = {"ref_name": {"include": ["refs/heads/reviewed"], "exclude": []}}
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [
+            {"version_id": 10},
+            {"version_id": 9},
+            {"version_id": 7},
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_history_version_state",
+        lambda _target, version: desired if version == 10 else external,
+    )
+    calls: list[tuple[str, object | None]] = []
+    replies = iter([desired, {}, external])
+
+    def fake_api(method, endpoint, *, body=None):
+        calls.append((method, body))
+        return next(replies)
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    with pytest.raises(module.RulesetGovernanceError, match="restored preceding administrator state"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+    assert [method for method, _body in calls] == ["GET", "PUT", "GET"]
+    assert calls[1][1] == module._editable_projection(external)
+
+
+def test_history_collision_does_not_overwrite_a_newer_post_put_admin_edit(monkeypatch) -> None:
+    """If live state advanced again after our PUT, collision recovery preserves that newer state."""
+
+    desired = _converged()
+    external = _live()
+    newer = _live()
+    newer["conditions"] = {"ref_name": {"include": ["refs/heads/newer"], "exclude": []}}
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 10}, {"version_id": 9}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_history_version_state",
+        lambda _target, version: desired if version == 10 else external,
+    )
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: newer)
+    with pytest.raises(module.RulesetGovernanceError, match="advanced again"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
 
 
 def test_reconcile_forwards_expected_main_sha_to_each_target(monkeypatch) -> None:
@@ -224,7 +323,8 @@ def test_docs_state_github_has_no_ruleset_put_compare_and_swap() -> None:
 
     text = DOCTORING.read_text(encoding="utf-8")
     assert "does not support conditional unsafe REST updates" in text
-    assert "exclusive owner-plane maintenance" in text
+    assert "ruleset history" in text
+    assert "restores the immediate pre-write version" in text
     assert "cannot make the final GET-to-PUT interval atomic" in text
 
 
