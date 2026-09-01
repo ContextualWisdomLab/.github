@@ -24,6 +24,9 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
     # Keep assignments exact so reviewed target drift cannot silently escape CI.
     assert payload["assignments"] == [
         {"repository": ".github", "issue": 1582, "type": "feature"},
+        {"repository": ".github", "issue": 1622, "type": "feature"},
+        {"repository": ".github", "issue": 1625, "type": "bug"},
+        {"repository": ".github", "issue": 1634, "type": "documentation"},
         {"repository": "CalendarWeave", "issue": 1, "type": "documentation"},
         {"repository": "ConceptWeave", "issue": 1, "type": "feature"},
         {
