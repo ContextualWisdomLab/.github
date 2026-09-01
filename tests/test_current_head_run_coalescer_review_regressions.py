@@ -23,12 +23,32 @@ def load_module():
     return module
 
 
-def pr_head(*, sha: str = "a" * 40, ref: str = "feature/current") -> dict[str, object]:
+def full_repo(name: str = "ContextualWisdomLab/.github") -> dict[str, object]:
+    """Return the full repository shape emitted by the pull-request endpoint."""
+    return {"id": 1274066402, "full_name": name}
+
+
+def minimal_repo(name: str = "ContextualWisdomLab/.github") -> dict[str, object]:
+    """Return the minimal repository shape embedded in Actions run PR associations."""
+    owner, repository = name.split("/", 1)
+    return {
+        "id": 1274066402,
+        "name": repository,
+        "url": f"https://api.github.com/repos/{owner}/{repository}",
+    }
+
+
+def pr_head(
+    *,
+    sha: str = "a" * 40,
+    ref: str = "feature/current",
+    repository: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Return one PR-style head identity."""
     return {
         "sha": sha,
         "ref": ref,
-        "repo": {"full_name": "ContextualWisdomLab/.github"},
+        "repo": repository or full_repo(),
     }
 
 
@@ -43,7 +63,7 @@ def live_pr(
     return {
         "state": state,
         "head": pr_head(),
-        "base": {"ref": base_ref, "sha": base_sha, "repo": {"full_name": base_repo}},
+        "base": {"ref": base_ref, "sha": base_sha, "repo": full_repo(base_repo)},
     }
 
 
@@ -58,8 +78,11 @@ def run_record(
     base_ref: str = "main",
     base_sha: str = "b" * 40,
     base_repo: str = "ContextualWisdomLab/.github",
+    minimal_association: bool = False,
 ) -> dict[str, object]:
     """Return an Actions run with both workflow and associated-PR identities."""
+    association_repo = minimal_repo() if minimal_association else full_repo()
+    association_base_repo = minimal_repo(base_repo) if minimal_association else full_repo(base_repo)
     return {
         "id": run_id,
         "workflow_id": 10,
@@ -67,19 +90,51 @@ def run_record(
         "event": event,
         "head_sha": top_head_sha,
         "head_branch": top_head_branch,
-        "head_repository": {"full_name": "ContextualWisdomLab/.github"},
+        "head_repository": full_repo(),
         "pull_requests": [
             {
                 "number": pr_number,
-                "head": pr_head(),
+                "head": pr_head(repository=association_repo),
                 "base": {
                     "ref": base_ref,
                     "sha": base_sha,
-                    "repo": {"full_name": base_repo},
+                    "repo": association_base_repo,
                 },
             }
         ],
     }
+
+
+def test_real_actions_repository_shape_normalizes_to_pull_request_identity() -> None:
+    """Minimal Actions associations normalize to the same repository name as live PRs."""
+    module = load_module()
+    minimal_head = pr_head(repository=minimal_repo())
+    assert module._head_tuple(minimal_head) == (
+        "ContextualWisdomLab/.github",
+        "feature/current",
+        "a" * 40,
+    )
+    minimal_base = {"ref": "main", "sha": "b" * 40, "repo": minimal_repo()}
+    assert module._base_tuple(minimal_base) == (
+        "ContextualWisdomLab/.github",
+        "main",
+        "b" * 40,
+    )
+
+
+def test_minimal_actions_associations_pass_exact_scope_for_both_pr_events() -> None:
+    """Real Actions association shapes remain eligible for PR and target-event coalescing."""
+    module = load_module()
+    for event in ("pull_request", "pull_request_target"):
+        candidate = run_record(100, event=event, minimal_association=True)
+        sibling = run_record(101, event=event, minimal_association=True)
+        module.validate_candidate_against_live_state(
+            candidate,
+            live_pr=live_pr(),
+            active_same_head_runs=[candidate, sibling],
+            current_pr_number=2,
+            associated_prs={},
+        )
 
 
 def test_pull_request_target_matches_associated_pr_head_not_trusted_base_head() -> None:
@@ -90,6 +145,7 @@ def test_pull_request_target_matches_associated_pr_head_not_trusted_base_head() 
         event="pull_request_target",
         top_head_sha="c" * 40,
         top_head_branch="main",
+        minimal_association=True,
     )
     assert module._run_identity_matches(
         target_run,
