@@ -64,6 +64,11 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "type": "documentation",
         },
         {"repository": "Orgmetra", "issue": 160, "type": "documentation"},
+        {
+            "repository": "learning-interoperability-contracts",
+            "issue": 1,
+            "type": "feature",
+        },
         {"repository": "noema", "issue": 530, "type": "feature"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
