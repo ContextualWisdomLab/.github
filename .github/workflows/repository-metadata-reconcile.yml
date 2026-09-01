@@ -11,6 +11,7 @@ on:
       - "tests/test_repository_metadata_convergence.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
+      - "tests/test_repository_label_convergence.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
   schedule:
     - cron: "23 * * * *"
@@ -73,7 +74,9 @@ jobs:
           python -m coverage run \
             --branch \
             --include=scripts/ci/reconcile_repository_labels.py \
-            -m pytest -q tests/test_repository_label_reconciliation.py
+            -m pytest -q \
+            tests/test_repository_label_reconciliation.py \
+            tests/test_repository_label_convergence.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
