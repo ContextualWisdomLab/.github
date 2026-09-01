@@ -32,10 +32,154 @@ jobs:
       - name: Install repository-pinned quality tools
         run: python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Apply exact source and fixture repair
+      - name: Apply exact typed-evidence repair
         run: |
           PYTHONPATH=. python scripts/ci/repair_noema_model_output_1617.py
           PYTHONPATH=. python scripts/ci/repair_noema_timeout_fixture_1617.py
+
+      - name: Preserve no-fixed-inference-timeout policy and remove repair machinery
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          source_path = root / 'scripts/ci/noema_review_gate.py'
+          source = source_path.read_text(encoding='utf-8')
+          timeout_block = '''# A repair request corrects an already-completed model verdict; it is not a
+          # second unbounded full review. Fifteen minutes is the hard client-side
+          # ceiling for that one corrective HTTP request. The primary review remains
+          # governed by contextual-orchestrator rather than a fixed inference timeout.
+          NOEMA_REPAIR_TIMEOUT_SECONDS = 15 * 60
+
+
+          '''
+          if source.count(timeout_block) != 1:
+              raise RuntimeError('expected exactly one repair-timeout policy block')
+          source = source.replace(timeout_block, '', 1)
+          bounded_open = '''        if is_retry:
+                      response_context = opener.open(  # nosec B310
+                          request, timeout=NOEMA_REPAIR_TIMEOUT_SECONDS
+                      )
+                  else:
+                      response_context = opener.open(request)  # nosec B310
+                  with response_context as response:
+                      raw_bytes = response.read()
+          '''
+          unbounded_open = '''        with opener.open(request) as response:  # nosec B310
+                      raw_bytes = response.read()
+          '''
+          if source.count(bounded_open) != 1:
+              raise RuntimeError('expected exactly one bounded repair opener block')
+          source = source.replace(bounded_open, unbounded_open, 1)
+          source = source.replace('Noema bounded repair transport was exhausted', 'Noema repair transport was exhausted')
+          source_path.write_text(source, encoding='utf-8')
+
+          test_path = root / 'tests/test_noema_model_output_failure_classification.py'
+          tests = test_path.read_text(encoding='utf-8')
+          old_timeout_assert = '    assert requests[1][1]["timeout"] == gate.NOEMA_REPAIR_TIMEOUT_SECONDS\n'
+          if tests.count(old_timeout_assert) != 1:
+              raise RuntimeError('expected exactly one repair-timeout assertion')
+          tests = tests.replace(old_timeout_assert, '    assert requests[1][1] == {}\n', 1)
+          generic_marker = 'def test_retry_runtime_failure_preserves_initial_model_output_evidence'
+          if generic_marker not in tests:
+              tests += r'''
+
+
+def test_retry_runtime_failure_preserves_initial_model_output_evidence(monkeypatch) -> None:
+    """An unexpected retry RuntimeError keeps the first validator diagnostic."""
+    import json
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    head_sha = "c" * 40
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(_verdict())}}]}
+            ).encode()
+
+    def open_response(_opener, _request, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Response()
+        raise RuntimeError("synthetic retry runtime failure")
+
+    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": head_sha})
+
+    with pytest.raises(RuntimeError) as exc_info:
+        gate.call_llm(
+            "owner/repo",
+            7,
+            {"title": "test", "headRefOid": head_sha},
+            DIFF,
+            False,
+            head_sha,
+            changed_paths=("README.md",),
+        )
+
+    message = str(exc_info.value)
+    assert "initial failure" in message
+    assert "outcome must be falsified or confirmed" in message
+    assert "synthetic retry runtime failure" in message
+    assert calls == 2
+'''
+          test_path.write_text(tests, encoding='utf-8')
+
+          replacements = {
+              root / 'CHANGELOG.md': (
+                  'The one corrective HTTP request has a 15-minute client ceiling while the primary contextual-orchestrator review remains under its no-fixed-inference-timeout contract.',
+                  'The single corrective request preserves the contextual-orchestrator no-fixed-inference-timeout contract while retaining the first validator diagnostic if later transport fails.',
+              ),
+              root / 'ARCHITECTURE.md': (
+                  'but is capped at 15 minutes because it repairs an\nalready-completed verdict rather than performing a second unbounded full\nreview.',
+                  'and preserves the same no-fixed-inference-timeout policy as the primary\nreview; the retry is bounded by attempt count rather than an inference wall clock.',
+              ),
+              root / 'docs/product-technical-gap-baseline.md': (
+                  'the one corrective request has a 900-second hard client ceiling;',
+                  'the one corrective request preserves the no-fixed-inference-timeout contract and is bounded to one repair attempt;',
+              ),
+              root / 'docs/doctoring/noema-model-output-repair-boundary.md': (
+                  'The *single corrective request* is different: it repairs an already-completed verdict and therefore has a hard 900-second `urllib` client timeout.',
+                  'The single corrective request keeps the same no-fixed-inference-timeout contract and is bounded by allowing only one repair attempt.',
+              ),
+          }
+          for path, (old, new) in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise RuntimeError(f'expected policy text missing from {path}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          baseline = (root / 'docs/product-technical-gap-baseline.md')
+          text = baseline.read_text(encoding='utf-8')
+          text = text.replace(
+              'The corrective HTTP request also had no client-side repair-specific ceiling, so a malformed first verdict could initiate another effectively full-duration request.',
+              'A malformed first verdict could initiate one corrective request whose later transport failure replaced the first validator evidence in the top-level diagnostic.',
+          )
+          text = text.replace('malformed-then-502 evidence preservation and the repair-only timeout', 'malformed-then-502 evidence preservation without a fixed inference timeout')
+          baseline.write_text(text, encoding='utf-8')
+
+          doctor = root / 'docs/doctoring/noema-model-output-repair-boundary.md'
+          text = doctor.read_text(encoding='utf-8')
+          text = text.replace('with the 900-second repair-only timeout', 'while preserving the no-fixed-inference-timeout policy')
+          doctor.write_text(text, encoding='utf-8')
+
+          for temporary in (
+              root / 'scripts/ci/repair_noema_model_output_1617.py',
+              root / 'scripts/ci/repair_noema_timeout_fixture_1617.py',
+              root / '.github/workflows/repair-noema-model-output-1617.yml',
+          ):
+              temporary.unlink(missing_ok=True)
+          PY
 
       - name: Verify focused RED-to-GREEN regressions
         run: PYTHONPATH=. python -m pytest -q tests/test_noema_model_output_failure_classification.py tests/test_noema_review_gate.py
@@ -47,12 +191,6 @@ jobs:
           interrogate
           git diff --check
 
-      - name: Remove purpose-complete repair machinery
-        run: |
-          rm scripts/ci/repair_noema_model_output_1617.py
-          rm scripts/ci/repair_noema_timeout_fixture_1617.py
-          rm .github/workflows/repair-noema-model-output-1617.yml
-
       - name: Commit verified production repair
         run: |
           set -euo pipefail
@@ -60,5 +198,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           test -n "$(git status --porcelain)"
-          git commit -m 'fix(noema): classify and bound malformed-verdict repair failures'
+          git commit -m 'fix(noema): classify malformed verdict repair evidence'
           git push origin HEAD:fix/noema-model-output-retry-20260901
