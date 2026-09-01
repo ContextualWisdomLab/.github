@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -107,14 +107,19 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Request current-head OpenCode review execution" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     assert "exchange_github_app_token" in workflow
+    assert "Reject untrusted fork review resource consumption" in workflow
+    assert "github.event.pull_request.head.repo.full_name" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
-    assert "timeout-minutes: 340" in target_job.split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 5" in target_job.split("    steps:\n", 1)[0]
+    assert "for attempt in" not in workflow
+    assert "opencode-review-wait-window-one" not in workflow
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert 'event_type:"merge-scheduler"' in workflow
-    assert "trigger_reviews:true" in workflow
-    assert "for attempt in $(seq 1 660)" in target_job
-    assert "sleep 30" in target_job
-    assert "enable_auto_merge:false" in workflow
+    assert "steps.verdict.outputs.verdict == ''" in target_job
+    assert 'event_type:"opencode-review"' in workflow
+    assert 'sleep "$remaining_seconds"' not in workflow
+    assert workflow.count("timeout 25 gh api --paginate") == 1
+    assert workflow.count('if ! reviews="$(timeout 25 gh api') == 1
+    assert workflow.count('reviews="[]"') == 1
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
@@ -166,7 +171,8 @@ def test_request_review_execution_step_is_also_gated_on_draft() -> None:
     )
     assert (
         if_line
-        == "if: github.event.action != 'closed' && !github.event.pull_request.draft"
+        == "if: github.event.action != 'closed' && !github.event.pull_request.draft "
+        "&& steps.verdict.outputs.verdict == ''"
     )
 
 
@@ -188,16 +194,6 @@ def _extract_run_block(workflow_text: str, step_name: str) -> str:
             break
         block_lines.append(line[run_indent + 2 :] if len(line) >= run_indent + 2 else "")
     return "\n".join(block_lines) + "\n"
-
-
-def _render_step(script: str, *, event_action: str, draft: str) -> str:
-    """Substitute the two inline ``${{ github.* }}`` expressions GitHub Actions
-    would resolve before invoking bash, so the raw step body becomes directly
-    executable outside of Actions."""
-    rendered = script.replace("${{ github.event.action }}", event_action)
-    rendered = rendered.replace("${{ github.event.pull_request.draft }}", draft)
-    assert "${{" not in rendered, "unresolved GitHub Actions expression remains"
-    return rendered
 
 
 def _write_refusing_gh(bin_dir: Path) -> None:
@@ -231,23 +227,7 @@ def _write_reviews_gh(bin_dir: Path, reviews: list[dict[str, object]]) -> Path:
     return fake_gh
 
 
-def _write_noop_sleep(bin_dir: Path) -> None:
-    """Install a fake ``sleep`` on PATH that returns immediately.
-
-    The production step's polling loop calls real ``sleep 30`` between
-    attempts (up to 660 of them per ``test_verdict_poll_budget_covers_the_
-    dispatched_review_jobs_own_ceiling``). A test that drives the loop to
-    exhaustion — proving the fail-closed path still works when no verdict
-    ever appears — would otherwise block on real wall-clock sleeps for
-    hours. Stubbing ``sleep`` keeps the loop's actual iteration/attempt
-    logic under test while making that test fast.
-    """
-    fake_sleep = bin_dir / "sleep"
-    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_sleep.chmod(fake_sleep.stat().st_mode | stat.S_IEXEC)
-
-
-def _run_step(
+def _run_verdict_step(
     tmp_path: Path,
     *,
     event_action: str,
@@ -257,13 +237,16 @@ def _run_step(
     gh_fixture: str = "refuse",
     reviews: list[dict[str, object]] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute the production step body with the given event shape.
+    """Execute the "Resolve current-head formal OpenCode verdict" step body.
 
-    ``gh_fixture`` selects a fake ``gh`` on PATH: ``"refuse"`` fails loudly if
-    invoked (proving an early exit never reaches the Reviews API call), and
-    ``"reviews"`` serves ``reviews`` back from ``gh api``. A no-op ``sleep``
-    is always installed alongside it so a loop that never finds a verdict
-    exhausts its real attempt count without blocking on real wall-clock time.
+    Unlike the old poll-based design, ``PR_ACTION``/``PR_DRAFT`` are passed
+    the same way GitHub Actions passes them in production: as plain ``env:``
+    variables, not inline ``${{ }}`` expressions substituted into the script
+    text. ``gh_fixture`` selects a fake ``gh`` on PATH: ``"refuse"`` fails
+    loudly if invoked (proving an early exit never reaches the Reviews API
+    call), and ``"reviews"`` serves ``reviews`` back from ``gh api``. The
+    step's ``$GITHUB_OUTPUT`` writes are captured in ``tmp_path /
+    "github_output"`` for the caller to inspect.
     """
     bash = shutil.which("bash")
     jq = shutil.which("jq")
@@ -271,10 +254,8 @@ def _run_step(
         pytest.skip("bash and jq are required to execute the production step body")
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    script = _render_step(
-        _extract_run_block(workflow, STEP_NAME),
-        event_action=event_action,
-        draft=draft,
+    script = _extract_run_block(
+        workflow, "Resolve current-head formal OpenCode verdict"
     )
 
     bin_dir = tmp_path / "bin"
@@ -283,8 +264,9 @@ def _run_step(
         _write_refusing_gh(bin_dir)
     else:
         _write_reviews_gh(bin_dir, reviews or [])
-    _write_noop_sleep(bin_dir)
 
+    output_file = tmp_path / "github_output"
+    output_file.write_text("", encoding="utf-8")
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -292,6 +274,9 @@ def _run_step(
         "TARGET_REPOSITORY": "ContextualWisdomLab/example",
         "PR_NUMBER": pr_number,
         "HEAD_SHA": head_sha,
+        "PR_ACTION": event_action,
+        "PR_DRAFT": draft,
+        "GITHUB_OUTPUT": str(output_file),
     }
     return subprocess.run(
         [bash],
@@ -303,8 +288,34 @@ def _run_step(
     )
 
 
-def test_draft_pr_short_circuits_before_the_reviews_api_call(tmp_path: Path) -> None:
-    """A draft PR passes without ever calling the Reviews API.
+def _run_fail_closed_step(verdict: str) -> subprocess.CompletedProcess[str]:
+    """Execute the trivial "Fail closed without a current-head OpenCode
+    verdict" step body given a resolved ``$VERDICT``.
+
+    Unlike the old design, this step no longer calls ``gh`` or loops at all
+    -- the Reviews API call moved entirely into the verdict-resolution step
+    above, so this one only ever inspects the ``VERDICT`` string it is
+    handed.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the production step body")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow, STEP_NAME)
+    return subprocess.run(
+        [bash],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "VERDICT": verdict},
+    )
+
+
+def test_draft_pr_verdict_step_short_circuits_before_the_reviews_api_call(
+    tmp_path: Path,
+) -> None:
+    """A draft PR's verdict step passes without ever calling the Reviews API.
 
     The merge scheduler (``scripts/ci/pr_review_merge_scheduler.py``) never
     dispatches a review request for a draft PR, so this required check must
@@ -313,7 +324,7 @@ def test_draft_pr_short_circuits_before_the_reviews_api_call(tmp_path: Path) -> 
     early-exit runs before the "missing PR number or head SHA" fail-closed
     check that follows it.
     """
-    result = _run_step(
+    result = _run_verdict_step(
         tmp_path,
         event_action="synchronize",
         draft="true",
@@ -321,16 +332,17 @@ def test_draft_pr_short_circuits_before_the_reviews_api_call(tmp_path: Path) -> 
     )
     assert result.returncode == 0, result.stderr
     assert "PR is a draft" in result.stdout
+    assert "verdict=DRAFT" in (tmp_path / "github_output").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
     "event_action", ("opened", "synchronize", "reopened", "converted_to_draft")
 )
-def test_draft_pr_short_circuits_on_every_non_closed_event_type(
+def test_draft_pr_verdict_step_short_circuits_on_every_non_closed_event_type(
     tmp_path: Path, event_action: str
 ) -> None:
     """The draft exemption applies uniformly across opened/synchronize/reopened."""
-    result = _run_step(
+    result = _run_verdict_step(
         tmp_path,
         event_action=event_action,
         draft="true",
@@ -344,7 +356,7 @@ def test_ready_for_review_pr_still_requires_a_current_head_verdict(
     tmp_path: Path,
 ) -> None:
     """Once a PR is not a draft, the real gate still runs unchanged."""
-    result = _run_step(
+    result = _run_verdict_step(
         tmp_path,
         event_action="ready_for_review",
         draft="false",
@@ -355,11 +367,12 @@ def test_ready_for_review_pr_still_requires_a_current_head_verdict(
     )
     assert result.returncode == 0, result.stderr
     assert "Current-head OpenCode verdict: APPROVED." in result.stdout
+    assert "verdict=APPROVED" in (tmp_path / "github_output").read_text(encoding="utf-8")
 
 
-def test_non_draft_pr_without_a_verdict_still_fails_closed(tmp_path: Path) -> None:
-    """A non-draft PR with no matching review still fails closed as before."""
-    result = _run_step(
+def test_non_draft_pr_without_a_verdict_leaves_the_gate_empty(tmp_path: Path) -> None:
+    """A non-draft PR with no matching review resolves an empty verdict."""
+    result = _run_verdict_step(
         tmp_path,
         event_action="synchronize",
         draft="false",
@@ -368,13 +381,18 @@ def test_non_draft_pr_without_a_verdict_still_fails_closed(tmp_path: Path) -> No
         gh_fixture="reviews",
         reviews=[],
     )
-    assert result.returncode == 1
-    assert "No APPROVED or CHANGES_REQUESTED from opencode-agent" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "verdict=" in (tmp_path / "github_output").read_text(encoding="utf-8")
+    assert "verdict=APPROVED" not in (tmp_path / "github_output").read_text(encoding="utf-8")
+    assert "verdict=CHANGES_REQUESTED" not in (tmp_path / "github_output").read_text(
+        encoding="utf-8"
+    )
+    assert _run_fail_closed_step("").returncode == 1
 
 
 def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None:
     """The pre-existing ``closed`` early-exit still takes precedence over draft."""
-    result = _run_step(
+    result = _run_verdict_step(
         tmp_path,
         event_action="closed",
         draft="true",
@@ -383,56 +401,190 @@ def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
     assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
     assert "PR is a draft" not in result.stdout
+    assert "verdict=CLOSED" in (tmp_path / "github_output").read_text(encoding="utf-8")
 
 
-def test_verdict_poll_budget_covers_the_dispatched_review_jobs_own_ceiling() -> None:
-    """The poll must outlast the worker job it is waiting on.
+def test_fail_closed_step_passes_on_draft_verdict() -> None:
+    """The trivial fail-closed step treats VERDICT=DRAFT like VERDICT=CLOSED."""
+    result = _run_fail_closed_step("DRAFT")
+    assert result.returncode == 0, result.stderr
 
-    ContextualWisdomLab/.github#1500, #1506 and contextual-orchestrator#968,
-    #946 all showed the same pattern: the "Request current-head OpenCode
-    review execution" dispatch step always succeeded, but the poll loop below
-    it always gave up (fail-closed, "No APPROVED or CHANGES_REQUESTED...")
-    before opencode-review-dispatch.yml's own opencode-review-target job —
-    whose model-pool step alone is budgeted 205 minutes for
-    contextual-orchestrator sidecar preflight/escalation across its
-    free-tier candidate pool, per
-    test_opencode_job_timeout_contains_full_sequential_review_budget — ever
-    had a chance to post a verdict. A poll budget shorter than the dispatched
-    job's own declared ceiling makes a legitimate slow-but-successful review
-    indistinguishable from a genuinely broken dispatch. Guard both the outer
-    job timeout and the actual poll wall-clock budget against regressing
-    below that ceiling again.
+
+def test_fail_closed_step_passes_on_closed_verdict() -> None:
+    """The trivial fail-closed step still passes VERDICT=CLOSED unchanged."""
+    result = _run_fail_closed_step("CLOSED")
+    assert result.returncode == 0, result.stderr
+
+
+def test_fail_closed_step_fails_without_a_verdict() -> None:
+    """The trivial fail-closed step still fails closed on an empty verdict."""
+    result = _run_fail_closed_step("")
+    assert result.returncode == 1
+    assert "No APPROVED or CHANGES_REQUESTED from opencode-agent" in result.stdout
+
+
+def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> None:
+    """A formal receipt wakes the failed required run instead of polling for hours."""
+    required = WORKFLOW.read_text(encoding="utf-8")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    assert "for attempt in" not in required
+    assert "rerun-failed-jobs" in dispatched
+    assert '--argjson required_run_id "$GITHUB_RUN_ID"' in required
+    assert "required_run_id:$required_run_id" in required
+    assert "id: formal_review_receipt" in dispatched
+    assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
+    assert "github.event.client_payload.required_run_id != ''" in dispatched
+    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in dispatched
+    assert "select(.id == $run_id)" in dispatched
+    assert 'select(.event == "pull_request_target")' in dispatched
+    assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
+    assert "select(.head_sha == $head)" in dispatched
+    wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
+    target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
+    target_permissions = target_job.split("    env:\n", 1)[0]
+    assert "actions: write" in target_permissions
+    assert (
+        "needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token"
+    ) in wake_step
+    assert "steps.opencode_app_token.outputs.token" not in wake_step
+    assert "WAKE_TOKEN_SOURCE" in wake_step
+    assert '"$WAKE_TOKEN_SOURCE" = "unavailable"' in wake_step
+    assert "--paginate" not in wake_step
+    # Identity is the immutable target-repository run id plus event/path/head;
+    # do not depend on context-specific title or workflow_url rendering.
+    assert "display_title ==" not in wake_step
+    assert ".name | startswith(" not in wake_step
+    assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
+
+
+def wake_selector(run: dict[str, object], *, head: str = HEAD, run_id: int = 42) -> str:
+    """Execute the wake step's run-validation jq program in isolation."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production wake selector")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    marker = """jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '"""
+    start = dispatched.index(marker) + len(marker)
+    end = dispatched.index("\n            ')", start)
+    result = subprocess.run(
+        [jq, "-r", "--arg", "head", head, "--argjson", "run_id", str(run_id), dispatched[start:end]],
+        input=json.dumps(run),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github/workflows/opencode-review.yml") -> dict[str, object]:
+    """Build one realistic single-run GET REST API record.
+
+    Mirrors the real shape a sibling repo sees for a run injected by the org's
+    required-workflow ruleset (this repo's actual central-hub use case): `name`
+    is the bare workflow name and `display_title` is a plain PR title, with no
+    PR number or head SHA embedded in either -- unlike a native same-repo
+    trigger, where both fields carry the rendered `run-name`.
     """
-    poll_workflow = WORKFLOW.read_text(encoding="utf-8")
-    dispatch_workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    return {
+        "id": run_id,
+        "head_sha": head_sha,
+        "event": "pull_request_target",
+        "name": "Required OpenCode Review",
+        "display_title": "Fix an unrelated example bug",
+        "path": path,
+        "workflow_url": (
+            "https://api.github.com/repos/ContextualWisdomLab/example"
+            "/actions/required_workflows/9"
+        ),
+        "status": "completed",
+        "conclusion": "failure",
+    }
 
-    target_job = poll_workflow.split("  opencode-review-target:\n", 1)[1]
-    job_section = target_job.split("    steps:\n", 1)[0]
-    poll_job_timeout_match = re.search(r"timeout-minutes: (\d+)", job_section)
-    assert poll_job_timeout_match, "poll job is missing a timeout-minutes value"
-    poll_job_timeout = int(poll_job_timeout_match.group(1))
 
-    attempts_match = re.search(r"for attempt in \$\(seq 1 (\d+)\); do", target_job)
-    sleep_match = re.search(r"\n\s+sleep (\d+)\n", target_job)
-    assert attempts_match and sleep_match, "poll loop shape changed unexpectedly"
-    poll_wait_minutes = (int(attempts_match.group(1)) - 1) * int(sleep_match.group(1)) / 60
+def test_wake_selector_matches_the_referenced_run_without_name_or_display_title() -> None:
+    """The exact-id, exact-head run is matched using only id/event/path/head_sha."""
+    assert wake_selector(required_run()) == "42\tcompleted\tfailure"
 
-    dispatch_job_timeout_match = re.search(
-        r"^  opencode-review-target:\n[\s\S]{0,4000}?^    timeout-minutes: (\d+)$",
-        dispatch_workflow,
-        re.MULTILINE,
+
+def test_wake_selector_rejects_a_referenced_run_with_a_different_head() -> None:
+    """A referenced run whose head_sha has moved on (Devin Review, PR #1507:
+
+    'another PR or head') must not be treated as the current PR's required run
+    -- the realistic failure mode for an id-based reference, e.g. a superseded
+    run or a stale/forged required_run_id.
+    """
+    assert wake_selector(required_run(head_sha="b" * 40)) == ""
+
+
+def test_wake_selector_rejects_a_referenced_run_for_a_different_workflow() -> None:
+    """A referenced run for a different required workflow (Strix) is rejected."""
+    assert wake_selector(required_run(path=".github/workflows/strix.yml")) == ""
+
+
+def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
+    """Execute the production wake script end-to-end against a fake GitHub API."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    run_block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    script = textwrap.dedent(run_block)
+    calls = tmp_path / "calls"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
+if [[ "$*" == *"actions/runs/42"* ]]; then printf '%s\\n' '{json.dumps(required_run())}'; exit 0; fi
+exit 1
+""",
+        encoding="utf-8",
     )
-    assert dispatch_job_timeout_match, "dispatch job timeout contract moved"
-    dispatch_job_timeout = int(dispatch_job_timeout_match.group(1))
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "FAKE_CALLS": str(calls),
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "GH_TOKEN": "actions-write-token",
+            "PR_HEAD_SHA": HEAD,
+            "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = calls.read_text(encoding="utf-8")
+    assert "actions/runs/42/rerun-failed-jobs" in recorded
+    assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded
+    assert "--paginate" not in recorded
 
-    assert poll_job_timeout >= dispatch_job_timeout, (
-        "opencode-review-target's poll job can be killed by its own "
-        f"timeout-minutes ({poll_job_timeout}) before the dispatched "
-        "opencode-review-dispatch.yml job's own ceiling "
-        f"({dispatch_job_timeout}) is reached."
+
+def test_sibling_formal_receipt_fails_closed_without_actions_token() -> None:
+    """A sibling wake without either Actions-capable PAT fails before GitHub I/O."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    script = textwrap.dedent(
+        step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
     )
-    assert poll_wait_minutes >= dispatch_job_timeout, (
-        f"The verdict poll loop gives up after {poll_wait_minutes:.0f}m, "
-        f"sooner than the dispatched review job is allowed to run "
-        f"({dispatch_job_timeout}m)."
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "GH_TOKEN": "",
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_HEAD_SHA": HEAD,
+            "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "unavailable",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    assert result.returncode == 1
+    assert "Actions-capable wake credential is unavailable" in result.stdout

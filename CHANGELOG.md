@@ -5,56 +5,154 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Fix `tests/test_opencode_required_verdict_regression.py`'s
-  `test_non_draft_pr_without_a_verdict_still_fails_closed` test executing the
-  production step's real polling loop with genuine `sleep 30` calls between
-  attempts when no verdict is ever found. That loop's attempt bound moved
-  from 180 to 660 in `#1532`, turning what was already a slow (~90-minute)
-  test into a ~5.5-hour one once merged into this branch. `_run_step` now
-  also installs a no-op `sleep` fake on `PATH` alongside the existing fake
-  `gh`, so the loop's real iteration/attempt logic is still exercised while
-  the test itself completes in seconds. Also re-pins
-  `REVIEW_DISPATCH_BLOB_SHA` and the `opencode-review-dispatch.yml`
-  security-boundary assertions to match `#1533`'s already-merged
-  warn-and-proceed-on-`head_sha`-mismatch design (same root cause and fix
-  already applied in `#1482`; `main` itself is red on these two points until
-  `#1536` lands).
 - Fix `opencode-review.yml`'s required `opencode-review-target` check
-  (`Fail closed without a current-head OpenCode verdict`) reporting a hard
-  `exit 1` failure on every push to a draft PR, forever, until the PR is
-  marked ready for review. Root cause: `scripts/ci/pr_review_merge_scheduler.py`
-  deliberately never dispatches an OpenCode review request for a draft PR
-  (`if pr.get("isDraft"): return Decision(number, "skip", "draft PR")`), but
-  the required check had no draft handling and unconditionally demanded a
-  current-head verdict on every `opened`/`synchronize`/`reopened` event
-  regardless. Adds a `github.event.pull_request.draft` early-exit mirroring
-  the existing `closed` early-exit in style and placement — the job still
-  always runs and reports a status, it just reports success instead of a
-  false-alarm failure for a state that was never going to get a verdict in
-  the first place. The gate is unchanged once a PR is marked ready for
-  review (`ready_for_review` and subsequent `synchronize` events carry
-  `draft: false`). See `tests/test_opencode_required_verdict_regression.py`
-  for shell-level regression coverage executing the production step body.
-  Follow-up: add `converted_to_draft` to the same workflow's
-  `pull_request_target` trigger types. Without it, a ready PR converted
-  back to draft with no new commit never gets a fresh required-workflow
-  run, so its previously failed `opencode-review` check keeps showing
-  failure indefinitely even though the draft exemption above would have
-  passed it.
-- Also gate `opencode-review-target`'s earlier `Request current-head
-  OpenCode review execution` step on `!github.event.pull_request.draft`,
-  not only the later `Fail closed without a current-head OpenCode verdict`
-  step. That earlier step performs its own OIDC token exchange, OpenCode
-  app-token exchange, and `repository_dispatch` call under
-  `set -euo pipefail`; any transient failure there (an OIDC hiccup, the
-  OpenCode token endpoint erroring, a `gh api` dispatch failure) stopped
-  the job with `exit 1` before the later step's draft exemption ever ran,
-  so a genuinely infrastructure-caused outage could still turn a draft
-  PR's required check red even after the fix above. The dispatch step now
-  short-circuits for drafts exactly like the verdict step does, while
-  still running for every non-draft, non-`closed` event. See the new
-  `test_request_review_execution_step_is_also_gated_on_draft` regression
-  test asserting the exact `if:` condition string on this step.
+  reporting a hard `exit 1` failure on every push to a draft PR, forever,
+  until the PR is marked ready for review. Root cause:
+  `scripts/ci/pr_review_merge_scheduler.py` deliberately never dispatches an
+  OpenCode review request for a draft PR (`if pr.get("isDraft"): return
+  Decision(number, "skip", "draft PR")`), but the required check had no
+  draft handling and unconditionally demanded a current-head verdict on
+  every `opened`/`synchronize`/`reopened` event regardless. The
+  `Resolve current-head formal OpenCode verdict` step now exits early with
+  `verdict=DRAFT` for a draft PR (mirroring its existing `closed` early
+  exit), the `Request current-head OpenCode review execution` dispatch
+  step's own `if:` also skips drafts (so a transient OIDC/dispatch failure
+  can't turn a draft PR's required check red before the exemption even
+  runs), and the trivial `Fail closed without a current-head OpenCode
+  verdict` step treats `VERDICT=DRAFT` the same as `VERDICT=CLOSED`. Also
+  adds `converted_to_draft` to the workflow's `pull_request_target` trigger
+  types, so a ready PR converted back to draft with no new commit still
+  gets a fresh required-workflow run that can apply the exemption (without
+  it, its previously failed check would show failure indefinitely). This
+  was re-derived from scratch against the event-driven
+  `opencode-review-target` design `#1507`/`#1532` landed on `main` (the
+  325-minute synchronous poll loop this fix originally targeted no longer
+  exists); see `tests/test_opencode_required_verdict_regression.py` for
+  shell-level regression coverage executing each step's actual production
+  body, including the new `_run_verdict_step`/`_run_fail_closed_step`
+  helpers matching the three-step split.
+- Fail closed when the first top-level Noema JSON candidate is malformed,
+  preventing a later approval object from overriding malformed preface data;
+  multiple-object output remains supported when its first object is valid.
+- Restore the exact-head dispatch contract after the default-branch rollback:
+  queued requests whose supplied head no longer matches the live pull request
+  fail before model work, and the workflow security assertions and reviewed
+  blob pin now enforce that behavior.
+- Reject excessively nested Noema LLM JSON responses with an explicit,
+  string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
+  checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of
+  relying on `raw_decode`'s own recursion behavior to reject deep input
+  (review follow-up on #1507): a real 20,000-level-deep payload raises
+  `RecursionError` from the C-accelerated scanner on Python 3.11-3.13 but
+  decodes successfully with no exception at all on the Python 3.14 hosted
+  runner this job actually runs on, so relying on that behavior made the
+  fail-closed guarantee a property of whichever CPython version happened to
+  run the job rather than of this code. Restored the excessive-nesting
+  regression to a real deep payload (not a monkeypatch) now that this bound
+  makes the real case reproducible everywhere; the synthetic
+  `RecursionError`-from-the-decoder test remains as supplemental coverage.
+- Match JSON delimiter types while discovering Noema verdict candidates, so
+  malformed wrappers such as `[}` or `{]` cannot release a later nested
+  object as an apparently top-level verdict.
+- Convert JSON decoder recursion failures from deeply nested Noema responses
+  into the existing bounded, fingerprinted fail-closed diagnostic instead of
+  allowing an unhandled `RecursionError` to crash the required review.
+- Restrict wrapped Noema JSON recovery to top-level brace groups so a valid
+  nested object cannot escape a malformed outer object and become a verdict.
+- Keep Noema's native concurrency head-specific, then explicitly cancel the
+  same PR's older-head runs only after a `pull_request_target` event proves its
+  payload SHA is still live. New commits stop obsolete four-hour model calls,
+  while delayed workflow events and manual reruns of old attempts cannot
+  cancel the current-head review; cleanup rejects newer run ids and rechecks
+  the live head before each cancellation. Guard that per-cancellation
+  live-head re-check against a transient `gh api` failure (Devin review on
+  #1507): it was an unguarded command substitution under `set -euo
+  pipefail`, so a rate limit or network blip on that one ancillary call
+  would exit the whole cleanup step non-zero and fail the job, blocking a
+  perfectly valid, live-head Noema review over a housekeeping hiccup
+  unrelated to the review itself. Treat "cannot verify" the same as
+  "verified stale": stop cancelling further runs, but exit 0 so the job --
+  and the actual review later in it -- proceeds.
+- Prevent a cancelled upstream `workflow_run` notification from cancelling a
+  live same-head Noema review and then skipping its own Noema job. The shared
+  head-specific group remains serialized, but cancelled upstream completions
+  no longer receive `cancel-in-progress` authority and use a run-unique group,
+  so GitHub cannot evict an already-pending actionable review either.
+- Replace the required OpenCode workflow's two chained 325-minute polling jobs
+  with event-driven continuation. The required run dispatches the authenticated
+  multi-hour review, checks once, and fails closed without retaining a hosted
+  runner; after a formal exact-head receipt is published, the privileged
+  dispatch reruns only that required run's failed job. Long model and coverage
+  budgets remain unchanged. Fork PRs still fail closed before dispatch;
+  maintainers must first materialize them on a trusted base-repository branch.
+  The required workflow passes its immutable run ID in the authenticated
+  dispatch; the continuation fetches that target-repository run directly and
+  revalidates its event, central workflow path, and live PR `head_sha` before
+  rerunning it, independent of queue duration. Scheduler-originated review
+  retries now carry the same run ID parsed from the required check's GitHub
+  Actions details URL, so their valid receipts wake the failed required job too.
+  The wake step now uses its job-scoped `actions: write` workflow token only for
+  native runs and requires `PR_REVIEW_MERGE_TOKEN` or
+  `OPENCODE_APPROVE_TOKEN` for sibling runs; it no longer falls through to the
+  review-only OpenCode app token or an unusable central workflow token.
+- Skip Noema's one-time repair-retry LLM request when the PR head has moved
+  since the first attempt was fired (CodeRabbit review on #1507): `call_llm`
+  now takes `expected_head` and re-checks it against a fresh `fetch_pr`
+  lookup, lowercased like `inspect_and_review`'s existing two stale-head
+  checks, before firing the retry — avoiding a second, potentially
+  multi-hour `NOEMA_LLM_TIMEOUT_SECONDS` call for a verdict
+  `inspect_and_review`'s own post-call check would have discarded anyway. A
+  new `StaleHeadDuringRepairRetryError` reports this distinctly from the
+  existing "stale before model work" / "stale before publication" cases,
+  and `inspect_and_review` treats it the same way: a clean skip, not a
+  failure.
+- Re-pin the reviewed-blob contract test's SHA to the current
+  `opencode-review-dispatch.yml` content after the review run timeout change,
+  restoring `test_independent_review_agent_workflow_matches_reviewed_blob`.
+- Let Contextual Orchestrator use the full 11,700-second review budget in every
+  cadence and the central-review fallback, so reviews exceeding two hours are
+  bounded only by the existing provider-pool watchdog.
+- Cancel queued and running Noema reviews from every historical head group when
+  their pull request closes, preventing abandoned model calls from consuming
+  runner capacity for the long-running review window. Selection is scoped by PR
+  number only (the run's structured display title), never by a bare shared
+  head SHA, so a different open PR that happens to share a commit is never
+  swept up. The five active-status queries stay repository-scoped and
+  server-side status-filtered (not a per-workflow-file, unfiltered-then-
+  client-filtered snapshot, which is not guaranteed to resolve for the
+  sibling-repository runs this cleanup exists to cancel) and now re-scan for
+  up to three bounded passes so a run transitioning between statuses
+  mid-sweep is still caught.
+- Reject caller-controlled uppercase Noema trigger SHAs before model work so
+  equivalent SHA casing cannot create concurrent duplicate reviews.
+- Bind Noema workflow concurrency to the triggering PR head so a delayed
+  OpenCode/Strix completion from an older head cannot cancel the current-head
+  review run. The trigger head is also checked against the live PR before
+  credential/model setup and again before review publication, preventing a
+  stale run from reviewing or publishing against a newer live head. Completion
+  events use the associated pull request's head rather than the workflow's
+  trusted base SHA, and hexadecimal comparison is case-insensitive.
+- Keep the Noema malformed-response UUID fixture covered by gitleaks without
+  weakening the secret gate: the historical ignore is limited to the exact
+  superseded commit, test path, rule, and line, with an executable contract.
+- Allow a Contextual Orchestrator-backed Noema review request to run for up to
+  four hours instead of failing long reviews at a hard-coded 120 seconds.
+- Stop logging raw (even regex-scrubbed) LLM response text in Noema's
+  malformed-JSON fail-closed diagnostic (Devin Review security finding on
+  PR #1507): `noema-review.yml` is a `pull_request_target` workflow with
+  public Actions logs, and a finite secret-scrub pattern list cannot
+  guarantee an LLM-echoed or hallucinated credential in an unrecognized
+  shape is caught. `extract_json_object` now logs only a content length and
+  a SHA-256 fingerprint. Also close a related unhandled-crash gap: a
+  malformed OpenAI-compatible HTTP envelope (non-JSON body, non-object
+  top-level JSON, wrong-shaped `choices`/`message`, non-string `content`)
+  previously crashed `call_llm` before it ever reached the JSON-repair
+  boundary; a new `extract_llm_message_content` validates the envelope
+  explicitly and now shares the same one-time repair-retry and fail-closed
+  `RuntimeError` path as a malformed verdict.
+- Give Noema one bounded schema-repair request when Contextual Orchestrator
+  returns malformed verdict JSON, then fail closed with a scrubbed diagnostic
+  if the corrected response is still invalid.
 - Harden the review sidecar's per-account catalog cap against silent drift:
   `contextual_orchestrator_review_launcher.py`'s two
   `build_zdr_prioritized_catalog` call sites now source their
