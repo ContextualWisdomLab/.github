@@ -12,6 +12,7 @@ from organization_commercial_readiness_fixtures import (
 from scripts.ci.organization_commercial_readiness_loop import (
     ActionKind,
     ActionResult,
+    DDD_CONTRACT_TERMS,
     RunRecord,
     RunReport,
     build_plan,
@@ -21,6 +22,7 @@ from scripts.ci.organization_commercial_readiness_loop import (
     is_manual_product_entrypoint,
     repository_is_eligible,
 )
+from scripts.ci import organization_commercial_readiness_core as coordinator_core
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,18 +49,38 @@ def test_static_and_live_writer_lease_policy() -> None:
     assert not is_live_writer_run(complete)
 
 
-def test_product_entrypoint_requires_manual_nvidia_opt_in() -> None:
-    """Product dispatch requires a marked, unscheduled, credential-isolated workflow."""
+def test_core_fallback_ddd_marker_contract() -> None:
+    """The standalone core fallback retains positive and negative coverage."""
+    assert not coordinator_core.has_domain_driven_development_contract("")
+    source = "\n".join(
+        (
+            coordinator_core.DDD_ENTRYPOINT_MARKER,
+            *coordinator_core.DDD_CONTRACT_TERMS,
+        )
+    )
+    assert coordinator_core.has_domain_driven_development_contract(source)
+
+
+def test_product_entrypoint_requires_manual_nvidia_and_ddd_opt_in() -> None:
+    """Product dispatch requires a manual credential-isolated DDD contract."""
     safe = manual_workflow()
     assert is_manual_product_entrypoint(safe)
     assert not is_manual_product_entrypoint(workflow(state="disabled_manually", content="x"))
     assert not is_manual_product_entrypoint(workflow(content=None))
-    for changed in (
+    mutations = [
         (safe.content or "") + 'schedule:\n  - cron: "1 * * * *"\n',
         (safe.content or "") + "COPILOT_GITHUB_TOKEN: forbidden\n",
         (safe.content or "").replace("# cwl-org-commercial-entrypoint: v1\n", ""),
+        (safe.content or "").replace(
+            "# cwl-ddd-architecture-audit: required\n", ""
+        ),
         (safe.content or "").replace("concurrency:\n", ""),
-    ):
+    ]
+    mutations.extend(
+        (safe.content or "").replace(term, f"missing-{index}", 1)
+        for index, term in enumerate(DDD_CONTRACT_TERMS)
+    )
+    for changed in mutations:
         assert not is_manual_product_entrypoint(workflow(content=changed))
 
 
@@ -160,6 +182,9 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert 'MAX_REVIEW_DISPATCHES: "1"' in workflow_source
     assert 'MAX_DEVELOPMENT_DISPATCHES: "1"' in workflow_source
     assert "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}" in workflow_source
+    assert 'export GH_TOKEN="$app_token"' in workflow_source
+    assert "id-token: write" in workflow_source
+    assert "OIDC_AUDIENCE: opencode-github-action" in workflow_source
     assert "OPENCODE_APPROVE_TOKEN" not in workflow_source
     assert "workflow_dispatch:" not in workflow_source
     assert "|| github.token" not in workflow_source
@@ -173,5 +198,7 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert "github.event.pull_request.head.sha" in quality
     assert "disabled workflow does not hold a lease" in doctoring
     assert "manual-only, explicitly marked" in doctoring
+    assert "# cwl-ddd-architecture-audit: required" in doctoring
+    assert "Misleading directory paths" in doctoring
     assert "does not make every repository directly writable" in doctoring
     assert "GITHUB_TOKEN" in doctoring and "APA 7" in doctoring

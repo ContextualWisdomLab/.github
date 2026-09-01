@@ -9,6 +9,7 @@ Semantic Versioning where the repository publishes a release.
   so long review summaries are not repeatedly scanned past an already-known
   endpoint, while preserving duplicate-label and `docstring coverage:` suffix
   handling.
+- Restore the hourly organization commercial-readiness coordinator when the dedicated maintainer secret is absent by exchanging the protected scheduled job's OIDC identity for a short-lived OpenCode App installation token; retain bounded network calls, token masking, and fail-closed parsing. Require every centrally dispatched product-development entrypoint to accept a machine-checked Domain-Driven Design contract, continuously repairing misleading directory ownership and recording larger bounded-context migrations in `docs/product-technical-gap-baseline.md` without duplicating repository-owned schedules.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
