@@ -1,0 +1,129 @@
+name: One-shot Strix cross-repo Actions capability repair
+
+on:
+  push:
+    branches:
+      - fix/strix-cross-repo-rerun-fallback-20260901
+    paths:
+      - .github/workflows/source-fix-strix-cross-repo-actions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install exact focused-test dependencies
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/requirements.txt" <<'EOF'
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install --only-binary=:all: --require-hashes -r "${RUNNER_TEMP}/requirements.txt"
+
+      - name: Apply capability-bound fallback and retire one-shot workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/strix-cross-repo-rerun-fallback-20260901
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          scheduler = Path("scripts/ci/pr_review_merge_scheduler.py")
+          source = scheduler.read_text(encoding="utf-8")
+          anchor = '''def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:\n    """Dispatch same-head Strix workflow evidence before OpenCode reviews."""\n    job_id = matching_actions_job_id(pr, is_strix_scan_check_run)\n    if job_id:\n'''
+          replacement = '''def can_control_actions_repository(repo: str) -> bool:\n    """Return whether the scheduler can mutate Actions state in the target repository."""\n    target_repo = validate_github_repository(repo)\n    execution_repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()\n    if not execution_repo or execution_repo == target_repo:\n        return True\n    return env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_ACTIONS")\n\n\ndef dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:\n    """Dispatch same-head Strix workflow evidence before OpenCode reviews."""\n    job_id = matching_actions_job_id(pr, is_strix_scan_check_run)\n    if job_id and can_control_actions_repository(repo):\n'''
+          if source.count(anchor) != 1:
+              raise SystemExit(f"expected one Strix dispatch anchor, found {source.count(anchor)}")
+          scheduler.write_text(source.replace(anchor, replacement), encoding="utf-8")
+
+          workflow = Path(".github/workflows/pr-review-merge-scheduler.yml")
+          workflow_text = workflow.read_text(encoding="utf-8")
+          flag_line = "          SCHEDULER_ALLOW_CROSS_REPO_ACTIONS: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}\n"
+          if "SCHEDULER_ALLOW_CROSS_REPO_ACTIONS:" in workflow_text:
+              raise SystemExit("cross-repository Actions capability flag already exists unexpectedly")
+          lines = workflow_text.splitlines(keepends=True)
+          rewritten = []
+          insertions = 0
+          for line in lines:
+              rewritten.append(line)
+              if line.startswith("          SCHEDULER_ACTIONS_TOKEN:"):
+                  rewritten.append(flag_line)
+                  insertions += 1
+          if insertions != 2:
+              raise SystemExit(f"expected two scheduler Actions-token env boundaries, found {insertions}")
+          workflow.write_text("".join(rewritten), encoding="utf-8")
+
+          test_path = Path("tests/test_strix_rerun_job_selection.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          contract = '''\n\ndef test_scheduler_workflow_declares_cross_repo_actions_capability_boundary() -> None:\n    """Only explicit PAT credentials may advertise sibling-repository Actions control."""\n    from pathlib import Path\n\n    workflow = Path(".github/workflows/pr-review-merge-scheduler.yml").read_text(encoding="utf-8")\n    expected = (\n        "SCHEDULER_ALLOW_CROSS_REPO_ACTIONS: "\n        "${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') "\n        "&& 'true' || 'false' }}"\n    )\n    assert workflow.count(expected) == 2\n'''
+          if "test_scheduler_workflow_declares_cross_repo_actions_capability_boundary" not in test_text:
+              test_path.write_text(test_text.rstrip() + contract + "\n", encoding="utf-8")
+
+          procedure = Path("docs/pr-review-and-merge-procedure.md")
+          procedure_text = procedure.read_text(encoding="utf-8")
+          procedure_anchor = "The scheduler dispatches same-head Strix evidence first, then dispatches\nOpenCode for the same PR head when review evidence is missing or stale. This\navoids running PR-head review, CodeGraph, coverage, or PoC code as an\nunbounded local workflow copy.\n"
+          procedure_replacement = procedure_anchor + "\nActions control is capability-scoped separately from PR mutation and central\ndispatch. A same-repository scheduler may rerun the authoritative Strix `strix`\njob directly. A scheduler executing in `ContextualWisdomLab/.github` may rerun a\nsibling repository's Actions job only when an explicit PAT-backed\n`SCHEDULER_ALLOW_CROSS_REPO_ACTIONS` capability is present. The OpenCode App\ntoken is intentionally not granted Actions control; when it is the available\ncross-repository mutation/read credential, the scheduler skips the sibling job\nrerun and uses the existing trusted central `repository_dispatch` `strix-scan`\nentrypoint through the `.github` job token instead. This prevents an expected\nActions-scope 403 from becoming a permanent semantic-review blocker without\nwidening App permissions.\n"
+          if procedure_text.count(procedure_anchor) != 1:
+              raise SystemExit("could not locate central Strix procedure anchor")
+          procedure.write_text(procedure_text.replace(procedure_anchor, procedure_replacement), encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          changelog_anchor = "## [Unreleased]\n"
+          entry = "- Fixed cross-repository Strix recovery so a central scheduler using the OpenCode App token (which intentionally has no Actions permission) no longer attempts a sibling-repository `actions/jobs/{id}/rerun` and fails with HTTP 403. Direct rerun is now limited to same-repository execution or an explicit PAT-backed cross-repository Actions capability; otherwise the scheduler uses the trusted central `strix-scan` repository-dispatch path. BandScope #1055 supplied the live reproduction.\n"
+          if changelog_text.count(changelog_anchor) != 1:
+              raise SystemExit("unexpected Unreleased changelog structure")
+          changelog.write_text(changelog_text.replace(changelog_anchor, changelog_anchor + entry, 1), encoding="utf-8")
+
+          baseline = Path("docs/product-technical-gap-baseline.md")
+          baseline_text = baseline.read_text(encoding="utf-8")
+          baseline_text = baseline_text.replace("작성 기준일: **2026-08-26 10:35 KST**", "작성 기준일: **2026-09-01 live control-plane refresh**", 1)
+          baseline_text = baseline_text.replace("현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`", "보호된 `main` 스냅샷(이번 수정 분기 생성 시점): `035269a76ffa6e176ee467f452467cbf4c2158a8`", 1)
+          baseline_text = baseline_text.replace("현재 열린 PR 수: **107**", "현재 열린 PR 수: **102**", 1)
+          incident_anchor = "## 1. 근거와 범위\n"
+          incident = """## 2026-09-01 control-plane incident: cross-repository Strix Actions capability\n\n- **Downstream evidence:** `ContextualWisdomLab/bandscope#1055` exact head `9b435f5159e1389e0e122b0a12e1a630fba1950f` had clean repository-owned verification but central semantic-review recovery failed after the scheduler selected the correct Strix scan job.\n- **Root cause:** the organization scheduler routed sibling-repository `actions/jobs/{id}/rerun` through `SCHEDULER_ACTIONS_TOKEN`; in PAT-less operation that token is the OpenCode App installation token, whose contract intentionally has no Actions permission. The resulting HTTP 403 is a control-plane capability mismatch, not a BandScope source finding.\n- **Repair contract:** direct Actions rerun is permitted for the execution repository, or across repositories only with an explicit PAT-backed capability. Otherwise current-head Strix evidence is regenerated through the trusted central `repository_dispatch` path using the `.github` runner token. No App permission widening and no status fabrication are allowed.\n- **TDD evidence:** hosted run `33496475884` reproduced the exact pre-fix failure: the focused regression asserted that the read-only App token must not be used for a sibling Actions rerun and failed at `dispatch_strix_evidence()` before the repair. Post-fix exact-head GREEN and downstream canary are required before this incident is closed.\n\n"""
+          if incident_anchor not in baseline_text:
+              raise SystemExit("could not locate baseline section anchor")
+          baseline.write_text(baseline_text.replace(incident_anchor, incident + incident_anchor, 1), encoding="utf-8")
+          PY
+
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_strix_rerun_job_selection.py \
+            tests/test_pr_review_merge_scheduler.py
+          python scripts/ci/pr_review_merge_scheduler.py --self-test
+          git diff --check
+
+          git rm .github/workflows/verify-red-strix-cross-repo-actions.yml
+          git rm .github/workflows/source-fix-strix-cross-repo-actions.yml
+          git add \
+            scripts/ci/pr_review_merge_scheduler.py \
+            .github/workflows/pr-review-merge-scheduler.yml \
+            tests/test_strix_rerun_job_selection.py \
+            docs/pr-review-and-merge-procedure.md \
+            docs/product-technical-gap-baseline.md \
+            CHANGELOG.md
+          git diff --cached --check
+          git status --short
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(scheduler): dispatch Strix when cross-repo rerun lacks Actions scope"
+          git push origin "HEAD:${TARGET_BRANCH}"
