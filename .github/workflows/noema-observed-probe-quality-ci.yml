@@ -1,0 +1,48 @@
+name: Noema Observed Probe Quality CI
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/noema-review.yml
+      - scripts/ci/noema_review_gate.py
+      - scripts/ci/noema_codegraph_context.sh
+      - scripts/ci/codegraph-package/package.json
+      - scripts/ci/codegraph-package/package-lock.json
+      - scripts/ci/opencode_review_normalize_output.py
+      - requirements-opencode-review-ci-hashes.txt
+      - tests/test_noema_review_gate.py
+      - tests/test_noema_codegraph_context_contract.py
+      - tests/test_noema_observed_defect_probe_taxonomy.py
+      - tests/test_noema_probe_source_binding.py
+      - tests/test_noema_observed_probe_doctoring.py
+      - docs/doctoring/noema-observed-defect-probe-taxonomy.md
+      - docs/product-technical-gap-baseline.md
+      - CHANGELOG.md
+      - .github/workflows/noema-observed-probe-quality-ci.yml
+permissions:
+  contents: read
+
+jobs:
+  noema-observed-probe-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned review CI dependencies
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Verify observed-probe contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_codegraph_context_contract.py \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_probe_source_binding.py \
+            tests/test_noema_observed_probe_doctoring.py \
+            tests/test_noema_review_gate.py
+          interrogate --fail-under=100 scripts/ci/noema_review_gate.py
+          python3 -m compileall -q scripts/ci tests
+          git diff --check

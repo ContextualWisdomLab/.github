@@ -1,5 +1,10 @@
 # Product and Technical Gap Baseline
 
+
+## 2026-09-01 — Noema observed-defect adversarial-probe corpus
+
+Live review evidence from `ContextualWisdomLab/noema#528` demonstrated several defect classes that an independent reviewer must actively attack rather than relying on generic correctness prose: Devin found caller-owned mutable checkpoint aliases, changing-getter/Proxy TOCTOU across validation and snapshot, and cross-execution identity confusion; CodeRabbit separately found a vacuous `toContain("released")` oracle and cross-document contract contradictions. The central Noema validator now requires every formal adversarial probe to carry an executable `probe_kind` from the observed corpus (`mutable_alias`, `time_of_check_time_of_use`, `execution_identity`, `coercion_boundary`, `test_oracle`, `cross_contract`, `authority_boundary`, `dependency_context`, `state_machine_race`). Material source/test changes already require two probes; they now must cover distinct classes, and a class label counts only when its exact class-specific `class_evidence` witness schema is present and non-empty, so arbitrary labels cannot satisfy the gate. The prompt explicitly attacks these failure shapes and publishes the validated class for auditability. The same review-quality lane now wires bounded CodeGraph evidence into Noema instead of merely claiming structural context: a trusted helper fetches the exact PR head and base, drops GitHub credentials before running the lock-pinned central CodeGraph CLI, records the reviewed head in the evidence packet, and the gate fails closed if the required packet is missing or stale. Changed-file and review-thread evidence remain available beside that structural context. This strengthens cross-file/dependency reasoning without claiming parity or superiority over proprietary reviewers; the corpus remains grounded only in concrete, independently observed PR findings.
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
@@ -2475,3 +2480,6 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+- Noema observed-defect probe admission now binds every class-specific witness field to the probe's exact changed-side `{path,line,side}` location. Free-form boilerplate and evidence borrowed from another changed line fail closed; distinct class labels no longer manufacture source evidence.
