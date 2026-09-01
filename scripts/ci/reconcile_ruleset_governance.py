@@ -2,10 +2,12 @@
 """Reconcile reviewed GitHub ruleset governance with fail-closed verification.
 
 The reconciler manages only the two rulesets declared in a reviewed manifest. It
-preserves every live condition and non-governance rule, while atomically removing
-routine bypass actors and canonicalizing the pull-request controls required by the
-one-human-maintainer operating model. Live state is re-read immediately before a
-mutation so a concurrent settings change is never silently overwritten.
+preserves live conditions and non-governance rules while canonicalizing the
+reviewed pull-request controls. GitHub does not provide conditional PUT/PATCH
+semantics for this endpoint, so the second live read is a drift detector rather
+than a compare-and-swap guarantee. Privileged mutation is additionally bound to
+the exact protected-main revision and a serialized protected owner-plane run,
+with full post-write convergence verification.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -22,7 +25,9 @@ from typing import Any
 
 API_VERSION = "2026-03-10"
 ORGANIZATION = "ContextualWisdomLab"
+CONTROL_REPOSITORY = "ContextualWisdomLab/.github"
 DESIRED_MERGE_METHODS = ["merge", "squash"]
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class RulesetGovernanceError(RuntimeError):
@@ -157,6 +162,28 @@ def _gh_api(
     )
 
 
+def _current_main_sha() -> str:
+    """Return the exact protected control-repository main SHA from GitHub."""
+
+    payload = _gh_api("GET", f"repos/{CONTROL_REPOSITORY}/git/ref/heads/main")
+    object_data = _plain_dict(payload.get("object"), field="main ref object")
+    sha = str(object_data.get("sha") or "").lower()
+    if not GIT_SHA_RE.fullmatch(sha):
+        raise RulesetGovernanceError("protected main returned a malformed SHA")
+    return sha
+
+
+def _assert_current_main(expected_main_sha: str) -> None:
+    """Fail closed when the privileged run no longer represents current main."""
+
+    if not GIT_SHA_RE.fullmatch(expected_main_sha):
+        raise RulesetGovernanceError("expected protected main SHA is malformed")
+    if _current_main_sha() != expected_main_sha:
+        raise RulesetGovernanceError(
+            "protected main advanced; refusing stale governance mutation"
+        )
+
+
 def _assert_identity(live: dict[str, Any], target: RulesetTarget) -> None:
     """Require the live ruleset to be the exact reviewed object before mutation."""
 
@@ -236,7 +263,12 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
     return desired
 
 
-def _reconcile_target(target: RulesetTarget, *, verify_only: bool) -> bool:
+def _reconcile_target(
+    target: RulesetTarget,
+    *,
+    verify_only: bool,
+    expected_main_sha: str | None = None,
+) -> bool:
     """Verify or reconcile one target; return whether a mutation was performed."""
 
     first = _gh_api("GET", target.endpoint)
@@ -248,26 +280,45 @@ def _reconcile_target(target: RulesetTarget, *, verify_only: bool) -> bool:
             f"{target.scope} ruleset governance drift remains"
         )
 
+    if expected_main_sha is not None:
+        _assert_current_main(expected_main_sha)
     second = _gh_api("GET", target.endpoint)
     if _editable_projection(second) != _editable_projection(first):
         raise RulesetGovernanceError(
             f"{target.scope} ruleset changed concurrently; refusing to overwrite"
         )
     _assert_identity(second, target)
+    if expected_main_sha is not None:
+        _assert_current_main(expected_main_sha)
     _gh_api("PUT", target.endpoint, body=desired)
     after = _gh_api("GET", target.endpoint)
     _assert_identity(after, target)
     if _editable_projection(after) != desired:
         raise RulesetGovernanceError(f"{target.scope} ruleset did not converge")
+    if expected_main_sha is not None:
+        _assert_current_main(expected_main_sha)
     return True
 
 
-def reconcile(targets: tuple[RulesetTarget, ...], *, verify_only: bool) -> int:
+def reconcile(
+    targets: tuple[RulesetTarget, ...],
+    *,
+    verify_only: bool,
+    expected_main_sha: str | None = None,
+) -> int:
     """Reconcile all targets and return the number of successful mutations."""
 
     mutations = 0
     for target in sorted(targets, key=lambda item: item.scope == "organization"):
-        mutations += int(_reconcile_target(target, verify_only=verify_only))
+        if expected_main_sha is None:
+            mutated = _reconcile_target(target, verify_only=verify_only)
+        else:
+            mutated = _reconcile_target(
+                target,
+                verify_only=verify_only,
+                expected_main_sha=expected_main_sha,
+            )
+        mutations += int(mutated)
     return mutations
 
 
@@ -280,6 +331,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("config/ruleset-governance.json"),
         help="Reviewed desired-state target manifest.",
+    )
+    parser.add_argument(
+        "--expected-main-sha",
+        help="Exact trusted protected-main SHA for privileged mutation.",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--validate-only", action="store_true")
@@ -299,7 +354,22 @@ def main(argv: list[str] | None = None) -> int:
         raise RulesetGovernanceError(
             "GH_TOKEN is required for live ruleset governance"
         )
-    mutations = reconcile(targets, verify_only=args.verify_only)
+    if (
+        not args.verify_only
+        and os.environ.get("GITHUB_ACTIONS") == "true"
+        and not args.expected_main_sha
+    ):
+        raise RulesetGovernanceError(
+            "expected protected main SHA is required for Actions mutation"
+        )
+    if args.expected_main_sha is None:
+        mutations = reconcile(targets, verify_only=args.verify_only)
+    else:
+        mutations = reconcile(
+            targets,
+            verify_only=args.verify_only,
+            expected_main_sha=args.expected_main_sha,
+        )
     verb = "verified" if args.verify_only else "reconciled"
     print(f"{verb} {len(targets)} ruleset governance targets; mutations={mutations}")
     return 0
