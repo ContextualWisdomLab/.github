@@ -40,6 +40,23 @@ jobs:
 
           python3 -m py_compile scripts/ci/repair_pr1588_final_source.py
           python3 scripts/ci/repair_pr1588_final_source.py
+
+          # The permanent quick gate already defines the canonical publication
+          # receipt as live_publication.outputs.current. Keep the source repair
+          # on that contract instead of introducing a duplicate synonym.
+          python3 - <<'PY'
+          from pathlib import Path
+          for path in (
+              Path('.github/workflows/strix.yml'),
+              Path('tests/test_strix_control_plane_supersession.py'),
+          ):
+              text = path.read_text(encoding='utf-8')
+              text = text.replace('publication_revalidation', 'live_publication')
+              text = text.replace('echo "valid=true" >> "$GITHUB_OUTPUT"', 'echo "current=true" >> "$GITHUB_OUTPUT"')
+              text = text.replace('.outputs.valid', '.outputs.current')
+              path.write_text(text, encoding='utf-8')
+          PY
+
           python3 - <<'PY'
           import runpy
           scope = runpy.run_path('tests/test_strix_control_plane_supersession.py')
