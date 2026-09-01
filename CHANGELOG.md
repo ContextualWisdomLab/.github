@@ -5,6 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Exclude models with declared non-text input requirements from the Contextual
+  Orchestrator review catalog before cost, privacy, and account selection.
+  Plain-text Chat Completions, Responses, and structured-output review paths
+  remain eligible, while the existing multi-hour per-model review budgets are
+  unchanged (#1415).
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

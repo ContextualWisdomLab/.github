@@ -10,6 +10,45 @@ from scripts.ci import pr_review_fix_scheduler as fix
 from scripts.ci import pr_review_merge_scheduler as merge
 
 
+def test_workflow_name_rest_fallback_paginates_and_skips_incomplete_rows(
+    monkeypatch: Any,
+) -> None:
+    """Workflow identity pagination ignores rows without a complete binding."""
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        calls.append(path)
+        if path.endswith("&page=1"):
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": 7, "name": "Required OpenCode Review"},
+                    *({"check_suite_id": None, "name": ""} for _ in range(99)),
+                ]
+            }
+        return {"workflow_runs": []}
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+
+    assert merge.fetch_workflow_names_by_check_suite_rest(
+        "owner/repo", "a" * 40
+    ) == {7: "Required OpenCode Review"}
+    assert len(calls) == 2
+    assert "page=2" in calls[-1]
+
+
+def test_workflow_name_rest_fallback_propagates_unexpected_errors(
+    monkeypatch: Any,
+) -> None:
+    """Only permission denial degrades to unknown workflow identity."""
+    def fail(_path: str) -> Any:
+        raise RuntimeError("unexpected transport failure")
+
+    monkeypatch.setattr(merge, "gh_api_json", fail)
+
+    with pytest.raises(RuntimeError, match="unexpected transport failure"):
+        merge.fetch_workflow_names_by_check_suite_rest("owner/repo", "b" * 40)
+
+
 def test_rest_fallback_preserves_renamed_opencode_workflow_identity(
     monkeypatch: Any,
 ) -> None:

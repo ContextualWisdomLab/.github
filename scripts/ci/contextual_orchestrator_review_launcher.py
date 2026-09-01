@@ -105,6 +105,29 @@ def _has_text_output(model: object) -> bool:
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
+def _is_text_review_candidate(
+    model: object,
+    *,
+    is_general_chat_agent_model_id: Any,
+    requires_non_text_input: Any,
+) -> bool:
+    """Return whether discovery evidence permits plain-text review traffic.
+
+    Unknown input modality remains eligible because absence of catalog evidence
+    is not evidence of a non-text requirement. Any declared non-text input is
+    excluded conservatively before cost, privacy, or account selection can
+    admit the route. Chat and structured-output capability metadata otherwise
+    remain untouched for the gateway's Responses and Chat Completions paths.
+    """
+    model_id = getattr(model, "model_id", "")
+    input_modalities = getattr(model, "input_modalities", ()) or ()
+    return bool(
+        is_general_chat_agent_model_id(model_id)
+        and _has_text_output(model)
+        and not requires_non_text_input(input_modalities)
+    )
+
+
 _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL = "discovery_diagnostics_complete"
 
 
@@ -796,7 +819,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
-    from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
+    from contextual_orchestrator.chat_capability import (
+        is_general_chat_agent_model_id,
+        requires_non_text_input,
+    )
     from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
@@ -834,8 +860,11 @@ def main(argv: list[str] | None = None) -> int:
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
     for model in routable_discovered:
-        model_id = getattr(model, "model_id", "")
-        if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
+        if not _is_text_review_candidate(
+            model,
+            is_general_chat_agent_model_id=is_general_chat_agent_model_id,
+            requires_non_text_input=requires_non_text_input,
+        ):
             continue
         if args.pool == "free" and _route_identity(model) not in free_route_identities:
             continue
