@@ -1745,12 +1745,13 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     # it as a valid current-head verdict, so the gate must republish rather
     # than silently stall the PR on an unchanged head.
     legacy_pr = make_pr(
-        reviews={"nodes": [review(login="noema", body="<!-- noema-review-gate head_sha=head -->")]}
+        headRefOid=head,
+        reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]},
     )
     calls.clear()
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    assert noema.inspect_and_review("owner/repo", 7, "head") == 0
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
