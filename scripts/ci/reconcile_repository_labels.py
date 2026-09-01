@@ -253,9 +253,9 @@ def main() -> int:
         ) as exc:
             target = f'{assignment["repository"]}#{assignment["issue"]}'
             failures.append(f"{target}: {exc}")
-            print(f"label operation failed for {target}: {exc}", file=sys.stderr)
+            print(f"label reconciliation failed for {target}: {exc}", file=sys.stderr)
     if failures:
-        raise RuntimeError("label operation failed: " + "; ".join(failures))
+        raise RuntimeError("label reconciliation failed: " + "; ".join(failures))
     return 0
 
 
