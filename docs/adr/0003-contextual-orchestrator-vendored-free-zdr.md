@@ -194,6 +194,35 @@ all five, and auto-optimize routing by cost.
   longer waits for an OpenCode approval, review-thread state, or other check
   conclusions before calling the gateway and submitting its current-head
   review. A colliding OpenCode reviewer credential fails closed. The Noema LLM
-  response must include a non-empty summary and an object-list `findings`
-  field; `request_changes` additionally requires a substantive finding, so a
-  bare decision cannot synthesize an evidence-free green review.
+  response must bind every formal verdict to exact LEFT/RIGHT changed lines
+  and publish structured adversarial probes. Executable, test, and workflow
+  changes require at least two distinct probes; other diffs require one.
+  `approve` admits only falsified regression hypotheses, while
+  `request_changes` requires a confirmed probe at a published finding. A
+  generic no-issues summary can no longer synthesize a green review.
+- **2026-08-31 amendment: required OpenCode execution is initiated by the
+  required check.** The unprivileged `pull_request_target` bootstrap exchanges
+  GitHub OIDC for the repository-scoped OpenCode App token and requests the
+  existing central scheduler chain for the exact PR. That chain runs Strix
+  evidence first and then the privileged OpenCode dispatch; both model paths,
+  like Noema, provision the pinned contextual-orchestrator sidecar and use
+  `orchestrator/free`. The bootstrap still checks out no PR code and binds no
+  Actions secret.
+- **2026-08-31 amendment: model inference has no repository- or
+  application-configured fixed wall-clock timeout.**
+  OpenCode, Noema, Strix, and their contextual-orchestrator sidecar MUST NOT
+  impose a fixed wall-clock timeout on model inference, including an initial
+  completion ping, warm-up, retry, repair verdict, or substantive review call.
+  A slow reasoning model such as DeepSeek is not unavailable merely because it
+  takes minutes or hours to produce tokens. Cancellation remains an explicit
+  operator or superseded-head action. The review bootstrap also MUST NOT impose
+  fixed wall-clock limits on loopback `/healthz`, DNS/TLS establishment, ZDR
+  metadata, or provider model-list discovery: those prerequisites can be slow
+  and a short bound can discard an otherwise usable route before inference.
+  A hosting platform or runner termination is an external capacity constraint,
+  not model-unavailability or review evidence. Such an interrupted run is
+  incomplete and non-authoritative: it MUST NOT approve, merge, or classify the
+  model as unavailable, and the exact head MUST be retried or resumed on a
+  runner capable of completing the work.
+  This amendment supersedes all fixed readiness and inference-attempt budgets
+  in ADR 0005.
