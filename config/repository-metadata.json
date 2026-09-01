@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "organization": "ContextualWisdomLab",
+  "repositories": {
+    "CalendarWeave": {
+      "description": "Calendar resource infrastructure for iCalendar, CalDAV, revisions, and interoperable scheduling.",
+      "topics": [
+        "calendar",
+        "caldav",
+        "icalendar",
+        "pim",
+        "rust",
+        "scheduling",
+        "calendar-resource",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": {
+        "enabled": false
+      }
+    },
+    "ConceptWeave": {
+      "description": "Evidence-bound ontology and semantic-model engineering for governed enterprise meaning.",
+      "topics": [
+        "ontology",
+        "semantic-model",
+        "knowledge-graph",
+        "governance",
+        "rust",
+        "data-modeling",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": {
+        "enabled": false
+      }
+    }
+  }
+}
