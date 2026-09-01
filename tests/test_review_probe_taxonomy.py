@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from scripts.ci import noema_review_gate as noema
 from scripts.ci import review_probe_taxonomy as taxonomy
 
 
@@ -119,3 +120,23 @@ def test_rejects_observation_not_quoted_under_its_field():
         "alias_origin records a replacement concrete caller-owned alias observation"
     )
     assert "must be quoted in probe evidence" in error(probe)
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ({"path": "", "line": 1, "side": "RIGHT"}, "requires a non-empty path"),
+        ({"path": "example.py", "line": True, "side": "RIGHT"}, "canonical positive integer line"),
+        ({"path": "example.py", "line": 0, "side": "RIGHT"}, "canonical positive integer line"),
+        ({"path": "example.py", "line": 1, "side": "MIDDLE"}, "requires LEFT or RIGHT side"),
+    ],
+)
+def test_noema_canonical_changed_location_rejects_type_aliases(record, message):
+    with pytest.raises(noema.NoemaModelOutputError, match=message):
+        noema._canonical_noema_changed_location(record, label="Noema probe")
+
+
+def test_noema_canonical_changed_location_accepts_exact_types():
+    assert noema._canonical_noema_changed_location(
+        {"path": "example.py", "line": 1, "side": "LEFT"}, label="Noema probe"
+    ) == ("example.py", 1, "LEFT")
