@@ -1816,6 +1816,85 @@ retirement. Relayed as a comment on `#971` (named the implementation parent, sti
 iterating) rather than reopening `#979` or opening a replacement PR — per the harness's own instruction
 after a PR closes without merging, do not reopen or replace it unless explicitly asked.
 
+## 2026-09-01 owner directive: broadcast review-quality and governance instruction
+
+The owner posted an identical instruction as a comment on 14 open PRs simultaneously
+(`contextual-orchestrator#955/#956/#957/#961`, `.github#1437/#1443/#1478/#1482/#1492/#1495/#1498/#1530`,
+plus two more), a broadcast rather than 14 independent asks. Recording the full instruction and this
+session's response once here rather than 14 times.
+
+**Instruction (paraphrased from the Korean original, preserved in full on the PR comments themselves):**
+1. Fix/resolve everything related to contextual-orchestrator, one way or another.
+2. **Bypass merge is explicitly authorized when needed, for chicken-and-egg situations** — the first
+   time this standing session has received merge-bypass authorization from the owner directly, though
+   scoped to genuine bootstrap deadlocks, not general impatience with review latency.
+3. Using NVIDIA NIM *alone* is not allowed; must route through contextual-orchestrator.
+4. Timeout should be **at least 3 hours** — "something like 120 seconds is bewildering." Reaffirms and
+   strengthens the 2026-08-31 entry above; combined with that entry's finding that `.github#1508`
+   already removes the client-side timeout *entirely* (not merely extends it), "at least 3 hours" reads
+   as a floor compatible with "no fixed deadline," not a contradiction of it.
+5. Make OpenCode and Noema actually review at CodeRabbit/Devin's depth.
+6. Make Strix's security review thorough and run it over the **whole codebase**, not just the diff;
+   the owner has observed Strix legitimately run 6+ hours to catch a vulnerability.
+7. contextual-orchestrator should route review/repair traffic to fast, capable models to cut latency,
+   not just free ones.
+8. A secondary note: internet documentation describes OpenCode's own slash-command trigger as `/oc`,
+   worth checking against this org's `@opencode-agent` convention.
+
+**This session's response, item by item:**
+
+- **(2) Bypass merge — assessed, not exercised.** Checked `.github#1443` (the PR the owner's first
+  comment named specifically) for a genuine chicken-and-egg deadlock: its `opencode-review-target`
+  job depends on `coverage-evidence`, which was still queued (not yet started) at check time, and the
+  org has had severe cross-repo CI-runner queue congestion all session (`contextual-orchestrator#961`'s
+  CI queued 1+ hour before even starting; `.github#1519`'s Strix scan cancelled twice by concurrency-
+  group contention). This reads as ordinary congestion-induced delay, not a structural loop where the
+  check can never produce a verdict — #1443 is not itself a draft PR, so it doesn't trip the very bug
+  it fixes, and nothing about its diff touches the review-*dispatch* mechanism (only the verdict-check
+  bash and a later dispatch-step draft guard). Not bypassing it on this reading; keeping it watched and
+  will reassess if it's still stuck once the CI queue visibly clears elsewhere.
+- **(3) NVIDIA NIM direct-usage audit — clean for active paths, one dormant item flagged.** Full-repo
+  audit (`.github`, current `main`): every workflow site injecting `NVIDIA_NIM_API_KEY`/`_SUB` feeds
+  only `contextual_orchestrator_review_sidecar.sh`'s own loopback (`127.0.0.1:<port>`) credential set —
+  `noema-review.yml`, `pr-review-autofix.yml`, `strix.yml` (which additionally hard-rejects any
+  `STRIX_MODEL_REQUESTED` other than `contextual-orchestrator/orchestrator/free`), and
+  `opencode-review-dispatch.yml` (`OPENCODE_MODEL_CANDIDATES` hardcoded to the single gateway
+  candidate). No direct `integrate.api.nvidia.com` call reachable from any of these in CI. **Dormant,
+  not currently reachable, but retains direct-call capability**: `opencode.jsonc`'s checked-in
+  `nvidia-nim` provider block (`baseURL: https://integrate.api.nvidia.com/v1`) and
+  `run_opencode_review_model_pool.sh`'s `is_nvidia_nim_candidate()` mapping — inert only because the
+  one real invocation hardcodes the gateway candidate and `test_strix_quick_gate.sh` asserts no
+  workflow ever supplies an `nvidia-nim/*` candidate. Same latent-armed-code pattern as the
+  already-removed `scripts/ci/select_nvidia_nim_model.py` (orphaned direct-NIM resolver, removed for
+  having no callers) — worth a small follow-up PR removing both, not done in this pass.
+- **(8) `/oc` vs `@opencode-agent` — resolved, not a bug.** `docs/automation/review-agent-comment-
+  invocation.md` documents `@opencode-agent` as this org's own deliberately-engineered cross-repo
+  mention router (SHA-256-bound invocation keys, exact-name artifact ledger, five-minute organization
+  sweep), built specifically because GitHub's `issue_comment` event does not fire for a workflow file
+  that lives only in the central `.github` repo when the comment is posted on a sibling repo's PR.
+  `/oc` (if that is a real vendor-native OpenCode slash-command) would be a *different* integration
+  model — a single-repo GitHub App receiving `issue_comment` natively — solving a structurally
+  different problem than this org's cross-repo dispatch need. Intentional divergence, not a
+  mismatch to fix.
+- **(While handling the broadcast) `.github#1482` merge conflict resolved.** One real textual conflict
+  in `scripts/ci/noema_review_gate.py::inspect_and_review` between this PR's pre-POST duplicate-
+  submission re-check and `main`'s newly-landed (`#1508`) `changed_paths` threading into `call_llm` —
+  kept both, re-check now runs after the `changed_paths`-aware call. One test needed a new mock
+  (`fetch_changed_file_paths`) it hadn't needed before the merge. Pushed, full suite validating.
+- **(1)(4)(5)(6)(7) — acknowledged, not yet implemented; recorded as the next concrete work items,
+  not claimed done.** (4) is tracked and already substantively addressed via the 2026-08-31 entry
+  above (`#1508`/`#971`, in flight). (5), (6), and (7) are real, large, contract-tested-file changes
+  (`ci-review-prompt.md`, `code-reviewer-prompt.md`, `opencode.jsonc`, `strix.yml`'s
+  `timeout-minutes: 200`/`170` job/step caps and its diff-only path-filter scope) that deserve
+  dedicated, careful sessions rather than a rushed edit inside this already-large response — editing
+  a contract-pinned prompt or workflow file without matching test updates breaks CI immediately per
+  this repo's own convention (`tests/` asserts exact prose of several of these files). Next session
+  picking up this thread should start here: read `ci-review-prompt.md`/`code-reviewer-prompt.md` in
+  full against a CodeRabbit/Devin finding-depth bar, read `strix.yml`'s current scan-scope path
+  filters (currently diff-changed-files-gated, per the file's own header comments) against "whole
+  codebase," and read contextual-orchestrator's `orchestrator/free` selection policy for a
+  speed/capability-weighted route distinct from the existing cost-only ranking.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
