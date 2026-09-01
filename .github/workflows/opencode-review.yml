@@ -10,19 +10,30 @@ on:
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
     # `converted_to_draft` is included so a PR going draft mid-poll fires a
-    # fresh run of this same workflow: the PR-scoped concurrency group below
+    # fresh run of this same workflow: the head-scoped concurrency group below
     # (`cancel-in-progress: true`) cancels any in-flight non-draft
-    # "Fail closed without a current-head OpenCode verdict" poll for that PR.
-    # Every non-closed admission path revalidates the live PR/head before
-    # dispatching, exempting, or polling so out-of-order draft/ready events
-    # cannot publish stale evidence or wait on an impossible verdict.
+    # "Fail closed without a current-head OpenCode verdict" poll for that
+    # exact same head. Every non-closed admission path revalidates the live
+    # PR/head/state before dispatching, exempting, or polling so out-of-order
+    # draft/ready/closed events cannot publish stale evidence or wait on an
+    # impossible verdict.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
+  # Scoped by exact head SHA (not just PR number) so a delayed, out-of-order
+  # run for an older head cannot cancel the authoritative run already active
+  # for a newer head -- GitHub cancels whichever run is currently active in
+  # the group when a new one starts, with no notion of "older"/"newer", so
+  # sharing a group across different heads let a stale event retire the
+  # current head's still-valid run before its own live-head check could ever
+  # reject it (Devin Review on `#1568`). Same-head events (draft<->ready
+  # transitions, a synchronize retry) still share one group, so
+  # `converted_to_draft` still cancels an active same-head verdict poll.
   group: >-
     opencode-review-bootstrap-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event.pull_request.number || github.run_id }}
+    github.event.pull_request.number || github.run_id }}-${{
+    github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -280,13 +291,22 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
-          if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before review dispatch."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
             echo "::error::Could not validate live pull request state before review dispatch."
             exit 1
           fi
           if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
             echo "::error::Pull request head moved while validating live review state."
             exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head OpenCode review is not requested."
+            exit 0
           fi
           if [ "$live_draft" = "true" ]; then
             echo "PR is still a draft on the live exact head; a current-head OpenCode review is not requested until it is marked ready for review."
@@ -374,13 +394,22 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
-          if [ -z "$live_head" ] || [ -z "$live_draft" ]; then
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before verdict admission."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
             echo "::error::Could not validate live pull request state before verdict admission."
             exit 1
           fi
           if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
             echo "::error::Pull request head moved while validating live verdict state."
             exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
+            exit 0
           fi
           if [ "$live_draft" = "true" ]; then
             echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."

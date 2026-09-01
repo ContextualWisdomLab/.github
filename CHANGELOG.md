@@ -5,6 +5,22 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
+  Building on the draft-poll exemption's live PR/head validation, Devin Review found two
+  further defects. (1) The concurrency group was keyed only by repository and PR number, so
+  a delayed run for an *older* head could cancel the *newer*, authoritative head's still-valid
+  run before that older run's own live-head check ever had a chance to reject it (GitHub cancels
+  whichever run is currently active in a group with no notion of "older"/"newer"). Fixed by also
+  scoping the group by exact head SHA, so different heads no longer share a cancellation domain
+  while same-head events (a `converted_to_draft`/`ready_for_review` transition, a `synchronize`
+  retry) still do. (2) A delayed non-closed event ignored a live-closed PR, since `live_pr` only
+  ever extracted `head` and `draft`. Both admission blocks now also validate live `state` and exit
+  before any further API call when it is `"closed"`, failing closed on a missing, null,
+  non-string, or otherwise unrecognized value rather than assuming open. New regressions: a
+  structural contract test for the head-scoped concurrency group; step-body coverage for a stale
+  non-closed event against a live-closed PR (both admission steps), live-closed state taking
+  precedence over a stale live-draft flag, and each invalid `state` shape failing closed. Full
+  suite: 2294 passed, 1 skipped, 21 subtests; `scripts/ci` coverage and docstrings both 100%.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat

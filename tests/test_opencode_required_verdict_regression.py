@@ -209,7 +209,11 @@ def _run_fail_closed_step(
             "PR_ACTION": pr_action,
             "PR_DRAFT": pr_draft,
             "LIVE_PR_JSON": json.dumps(
-                {"draft": pr_draft.lower() == "true", "head": {"sha": head_sha}}
+                {
+                    "draft": pr_draft.lower() == "true",
+                    "head": {"sha": head_sha},
+                    "state": "open",
+                }
             ),
         },
         text=True,
@@ -272,7 +276,11 @@ def _run_request_review_step(
             "BASE_BRANCH": "main",
             "WORKFLOW_SHA": "c" * 40,
             "LIVE_PR_JSON": json.dumps(
-                {"draft": pr_draft.lower() == "true", "head": {"sha": HEAD}}
+                {
+                    "draft": pr_draft.lower() == "true",
+                    "head": {"sha": HEAD},
+                    "state": "open",
+                }
             ),
         },
         text=True,
@@ -358,6 +366,31 @@ def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
+def test_opencode_review_concurrency_group_is_scoped_by_exact_head() -> None:
+    """The bootstrap concurrency group is keyed by head SHA, not just PR number.
+
+    Devin Review on `#1568` found that a delayed, out-of-order run for an
+    older head could cancel the authoritative run already active for a
+    newer head: GitHub cancels whichever run is currently active in a
+    concurrency group when a new one starts, with no notion of "older" or
+    "newer", so a group shared across different heads let a stale event
+    retire the current head's still-valid run before its own live-head
+    check could ever reject it. Scoping the group by exact head SHA
+    isolates different heads from each other while events for the exact
+    same head (a `converted_to_draft`/`ready_for_review` transition, a
+    `synchronize` retry) still share one group and can still cancel each
+    other, which is what lets `converted_to_draft` retire an active
+    same-head verdict poll.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    concurrency_block = workflow.split("\n\nconcurrency:\n", 1)[1].split(
+        "\n\npermissions:", 1
+    )[0]
+    assert "github.event.pull_request.head.sha || github.run_id" in concurrency_block
+    assert "github.event.pull_request.number || github.run_id" in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block
+
+
 def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:
     """The pre-existing ``closed`` early exit still runs before the new draft check."""
     result = _run_fail_closed_step(tmp_path, pr_action="closed", pr_draft="true")
@@ -433,7 +466,9 @@ fi
         "BASE_BRANCH": "main",
         "WORKFLOW_SHA": "c" * 40,
         "GH_TOKEN": "token",
-        "LIVE_PR_JSON": json.dumps({"draft": False, "head": {"sha": HEAD}}),
+        "LIVE_PR_JSON": json.dumps(
+            {"draft": False, "head": {"sha": HEAD}, "state": "open"}
+        ),
     }
     result = subprocess.run(
         ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True

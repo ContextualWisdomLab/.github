@@ -16,9 +16,18 @@ A second edge existed when a ready PR was converted back to draft while a poll w
 - Add `converted_to_draft` to the `pull_request_target` trigger set.
 - Both the request-review and required-verdict polling steps first make one unconditional, authoritative `gh api` live PR lookup (added after the initial fix, per Devin Review on this PR: a stale event-payload `PR_DRAFT`/head cannot be trusted on its own) and fail closed on a lookup error or an exact-head mismatch. Only after that live lookup confirms the PR is still draft on the live exact head does each step exit -- before any *further* GitHub API call or token exchange.
 - Preserve `ready_for_review` behavior and the separate explicit marker-backed draft-review path.
-- Keep the existing PR-scoped `cancel-in-progress: true` concurrency behavior so the converted-to-draft event replaces a stale non-draft poll.
+- Keep `cancel-in-progress: true` concurrency behavior, now scoped by exact head SHA in addition to PR number (see "Head-scoped concurrency" below) so the converted-to-draft event still replaces a stale same-head poll.
 
 Executable regressions cover the trigger, the request-step and verdict-step live-state-then-exit exemptions, closed-event precedence, moved-head fail-closed behavior, and unchanged non-draft behavior.
+
+## Head-scoped concurrency and live closed-state validation (second Devin Review round)
+
+Devin Review found two further defects once the live head/draft lookup above landed:
+
+1. **Stale runs could cancel the current check.** The concurrency group was keyed only by repository and PR number. GitHub cancels whichever run is currently active in a group when a new one starts -- it has no notion of "older" or "newer" -- so a delayed, out-of-order run for an *older* head (e.g. a `synchronize` webhook delivered late under the org's saturated Actions queue) could cancel the *newer*, authoritative head's still-valid run before that older run's own live-head check ever had a chance to reject it. Fixed by also scoping the group by `github.event.pull_request.head.sha`: different heads no longer share a cancellation domain, while events for the exact same head (a `converted_to_draft`/`ready_for_review` transition, a `synchronize` retry) still do, which is what lets `converted_to_draft` retire an active same-head verdict poll.
+2. **A delayed non-closed event ignored a live-closed PR.** `live_pr` only ever extracted `head` and `draft`; a stale `synchronize`/`ready_for_review`/etc. event arriving after the PR was actually closed had no way to notice and could still fetch the receipt-gate helper, exchange an OIDC token, dispatch a scheduler wake, or poll the Reviews API indefinitely. Both admission blocks now also extract and validate live `state`, exiting before any of that when it is `"closed"` -- mirroring the pre-existing `PR_ACTION == "closed"` event-level short-circuit, but driven by live API truth instead of the (possibly stale) event payload. A missing, null, non-string, or otherwise unrecognized `state` value fails closed rather than being treated as open, matching the existing `live_head`/`live_draft` validation style.
+
+Executable regressions: a structural contract test pins the concurrency group's head-SHA scoping; step-body regressions cover a stale non-closed event against a live-closed PR (for both admission steps), live-closed state taking precedence over a stale live-draft flag, and each invalid `state` shape (missing/null/non-string/unexpected value) failing closed.
 
 ## Reconciliation
 

@@ -23,11 +23,23 @@ def _write_live_state_gh(
     *,
     live_draft: bool,
     live_head: str = HEAD,
+    live_state: str = "open",
     later_exit: int = 19,
     approved_receipt: bool = False,
+    live_payload_override: dict[str, object] | None = None,
 ) -> None:
-    """Serve live PR state and optionally one approved receipt helper fixture."""
-    payload = json.dumps({"draft": live_draft, "head": {"sha": live_head}})
+    """Serve live PR state and optionally one approved receipt helper fixture.
+
+    ``live_payload_override`` replaces the whole live-PR JSON body outright,
+    for exercising a missing/null/non-string/unexpected ``state`` field that
+    the convenience ``live_draft``/``live_head``/``live_state`` parameters
+    cannot express.
+    """
+    payload = json.dumps(
+        live_payload_override
+        if live_payload_override is not None
+        else {"draft": live_draft, "head": {"sha": live_head}, "state": live_state}
+    )
     helper_source = """def fetch_reviews(repository, number):
     return [{\"state\": \"APPROVED\"}]
 
@@ -66,9 +78,11 @@ def _run_step(
     *,
     live_draft: bool,
     live_head: str = HEAD,
+    live_state: str = "open",
     event_draft: bool = True,
     action: str = "converted_to_draft",
     approved_receipt: bool = False,
+    live_payload_override: dict[str, object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute one production step against independently controlled live state."""
     bash = shutil.which("bash")
@@ -81,7 +95,9 @@ def _run_step(
         bin_dir,
         live_draft=live_draft,
         live_head=live_head,
+        live_state=live_state,
         approved_receipt=approved_receipt,
+        live_payload_override=live_payload_override,
     )
     return subprocess.run(
         [bash, "-c", script],
@@ -168,3 +184,88 @@ def test_draft_exemption_fails_closed_when_live_head_moved(
 
     assert result.returncode == 1
     assert "head moved while validating live" in result.stdout
+
+
+@pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
+def test_stale_non_closed_event_exempts_a_live_closed_pr(
+    tmp_path: Path,
+    script: str,
+) -> None:
+    """A delayed non-closed event cannot dispatch or poll against a live-closed PR.
+
+    Devin Review on `#1568` found that `live_pr` only ever extracted `head`
+    and `draft` -- a delayed `synchronize`/`ready_for_review`/etc. event
+    arriving after the PR was actually closed would ignore that live closed
+    state entirely and could still fetch the receipt-gate helper, exchange
+    an OIDC token, dispatch a scheduler wake, or poll the Reviews API
+    indefinitely. Both admission blocks now also validate live `state` and
+    exit before any of that when it is `"closed"`, exactly like the
+    pre-existing `PR_ACTION == "closed"` short-circuit for a genuinely
+    closed *event*.
+    """
+    result = _run_step(
+        tmp_path,
+        script,
+        live_draft=False,
+        live_state="closed",
+        event_draft=False,
+        action="synchronize",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PR is closed on the live exact head" in result.stdout
+
+
+@pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
+def test_live_closed_state_takes_precedence_over_live_draft(
+    tmp_path: Path,
+    script: str,
+) -> None:
+    """A live-closed PR is reported as closed, not draft, even if also draft."""
+    result = _run_step(
+        tmp_path,
+        script,
+        live_draft=True,
+        live_state="closed",
+        event_draft=False,
+        action="synchronize",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PR is closed on the live exact head" in result.stdout
+    assert "still a draft on the live exact head" not in result.stdout
+
+
+@pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
+@pytest.mark.parametrize(
+    "live_payload_override",
+    (
+        {"draft": False, "head": {"sha": HEAD}},
+        {"draft": False, "head": {"sha": HEAD}, "state": None},
+        {"draft": False, "head": {"sha": HEAD}, "state": 1},
+        {"draft": False, "head": {"sha": HEAD}, "state": "merged"},
+    ),
+    ids=("missing", "null", "non-string", "unexpected-value"),
+)
+def test_live_invalid_state_fails_closed(
+    tmp_path: Path,
+    script: str,
+    live_payload_override: dict[str, object],
+) -> None:
+    """A missing, null, non-string, or unrecognized live `state` fails closed.
+
+    GitHub's own REST API only ever reports `"open"` or `"closed"`; anything
+    else is treated as untrustworthy live evidence rather than assumed open
+    (Devin Review on `#1568`).
+    """
+    result = _run_step(
+        tmp_path,
+        script,
+        live_draft=False,
+        event_draft=False,
+        action="synchronize",
+        live_payload_override=live_payload_override,
+    )
+
+    assert result.returncode == 1
+    assert "Could not validate live pull request state" in result.stdout
