@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import contextlib
 import hashlib
 import http.client
 import ipaddress
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -61,6 +63,53 @@ DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
+# A repair request corrects an already-completed model verdict; it is not a
+# second unbounded full review. Fifteen minutes is an absolute wall-clock
+# deadline for the complete corrective attempt (open/read/decode/validate),
+# not a socket inactivity timeout. The primary review remains governed by
+# contextual-orchestrator rather than a fixed inference timeout.
+NOEMA_REPAIR_DEADLINE_SECONDS = 15 * 60
+
+
+class NoemaModelOutputError(RuntimeError):
+    """Raised when untrusted model output violates the trusted verdict contract."""
+
+
+class NoemaTransportError(RuntimeError):
+    """Raised when the bounded review transport cannot produce usable evidence."""
+
+
+class NoemaRepairDeadlineExceeded(TimeoutError):
+    """Raised when the corrective attempt exceeds its total wall-clock budget."""
+
+
+def _stable_failure_diagnostic(exc: BaseException) -> str:
+    """Return actionable trusted diagnostics without reflecting model values."""
+    message = scrub_sensitive_data(str(exc)) or type(exc).__name__
+    if not isinstance(exc, NoemaModelOutputError):
+        return message
+
+    # Model-output exceptions are raised only by deterministic parsing and
+    # validation code. Preserve those static/structural diagnostics because
+    # they tell the corrective model and operators exactly which contract was
+    # violated. The one validator that embeds an untrusted model value is the
+    # unsupported-decision check; redact that value. Unknown model-output
+    # exception text fails closed to a stable code rather than being reflected.
+    if message.startswith("Noema LLM returned unsupported decision:"):
+        return "Noema LLM returned unsupported decision"
+    trusted_prefixes = (
+        "Noema LLM response ",
+        "Noema LLM request_changes ",
+        "Noema formal verdict ",
+        "Noema reviewed line ",
+        "Noema adversarial validation ",
+        "Noema adversarial probe ",
+        "Noema approve ",
+        "Noema request_changes ",
+    )
+    if message.startswith(trusted_prefixes):
+        return message
+    return "model-output-contract-invalid"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -387,57 +436,57 @@ def validate_substantive_verdict(
 
     reviewed_lines = verdict.get("reviewed_lines")
     if not isinstance(reviewed_lines, list) or not reviewed_lines:
-        raise RuntimeError("Noema formal verdict requires at least one reviewed changed line")
+        raise NoemaModelOutputError("Noema formal verdict requires at least one reviewed changed line")
     for index, reviewed in enumerate(reviewed_lines, start=1):
         if not isinstance(reviewed, dict):
-            raise RuntimeError(f"Noema reviewed line {index} must be an object")
+            raise NoemaModelOutputError(f"Noema reviewed line {index} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+            raise NoemaModelOutputError(f"Noema reviewed line {index} is not an exact changed-side line")
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
-            raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
+            raise NoemaModelOutputError(f"Noema reviewed line {index} requires concrete analysis")
 
     validation = verdict.get("adversarial_validation")
     if not isinstance(validation, dict):
-        raise RuntimeError("Noema formal verdict requires adversarial_validation")
+        raise NoemaModelOutputError("Noema formal verdict requires adversarial_validation")
     status = validation.get("status")
     expected_status = "passed" if decision == "approve" else "failed"
     if status != expected_status:
-        raise RuntimeError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
+        raise NoemaModelOutputError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
     residual_risk = validation.get("residual_risk")
     if not isinstance(residual_risk, str) or not residual_risk.strip():
-        raise RuntimeError("Noema adversarial validation requires residual_risk")
+        raise NoemaModelOutputError("Noema adversarial validation requires residual_risk")
     probes = validation.get("probes")
     all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
     required_probes = 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
     if not isinstance(probes, list) or len(probes) < required_probes:
-        raise RuntimeError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
+        raise NoemaModelOutputError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
-            raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+            raise NoemaModelOutputError(f"Noema adversarial probe {index} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+            raise NoemaModelOutputError(f"Noema adversarial probe {index} is not an exact changed-side line")
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
-                raise RuntimeError(f"Noema adversarial probe {index} requires {field}")
+                raise NoemaModelOutputError(f"Noema adversarial probe {index} requires {field}")
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
-            raise RuntimeError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
+            raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
         identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
         if identity in identities:
-            raise RuntimeError(f"Noema adversarial probe {index} duplicates an earlier probe")
+            raise NoemaModelOutputError(f"Noema adversarial probe {index} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
-        raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+        raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
     if decision == "request_changes":
         finding_locations = {
             (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
@@ -445,7 +494,7 @@ def validate_substantive_verdict(
             if isinstance(finding, dict)
         }
         if not confirmed or not confirmed.intersection(finding_locations):
-            raise RuntimeError("Noema request_changes requires a confirmed probe on a published finding")
+            raise NoemaModelOutputError("Noema request_changes requires a confirmed probe on a published finding")
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -749,7 +798,7 @@ MAX_JSON_NESTING_DEPTH = 100
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response.
 
-    Fails closed with ``RuntimeError`` — the same "no usable verdict" failure
+    Fails closed with ``NoemaModelOutputError`` — the same "no usable verdict" failure
     path ``call_llm`` already raises for an unsupported decision, a missing
     summary, or a malformed finding — instead of letting a malformed or
     truncated LLM response's ``json.JSONDecodeError`` propagate as an
@@ -875,7 +924,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         return candidate
 
     if "{" not in stripped:
-        raise RuntimeError("Noema LLM response did not contain a JSON object")
+        raise NoemaModelOutputError("Noema LLM response did not contain a JSON object")
 
     exc = decode_error or json.JSONDecodeError(
         "No JSON object could be decoded", stripped, 0
@@ -886,7 +935,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         fingerprint = hashlib.sha256(
             stripped.encode("utf-8", errors="surrogatepass")
         ).hexdigest()[:16]
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response was not valid JSON ({exc}). Raw model output "
             "is not logged here (this pull_request_target workflow's logs "
             "are public and a finite secret-scrub pattern list cannot "
@@ -918,21 +967,21 @@ def extract_llm_message_content(raw: str) -> str:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Noema LLM response body was not valid JSON: {exc}") from exc
+        raise NoemaModelOutputError(f"Noema LLM response body was not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
         )
     choices = data.get("choices")
     if not choices:
         choices = [{}]
     elif not isinstance(choices, list):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'choices' was not a list (got {type(choices).__name__})"
         )
     first_choice = choices[0]
     if not isinstance(first_choice, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             "Noema LLM response choices[0] was not a JSON object "
             f"(got {type(first_choice).__name__})"
         )
@@ -940,14 +989,14 @@ def extract_llm_message_content(raw: str) -> str:
     if not message:
         message = {}
     elif not isinstance(message, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'message' was not a JSON object (got {type(message).__name__})"
         )
     content = message.get("content")
     if not content:
         content = ""
     elif not isinstance(content, str):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'content' was not a string (got {type(content).__name__})"
         )
     return content.strip()
@@ -978,7 +1027,7 @@ def decode_llm_response_body(raw_bytes: bytes) -> str:
         return raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response body was not valid UTF-8 ({exc}). Raw "
             "response bytes are not logged here (this pull_request_target "
             "workflow's logs are public and a finite secret-scrub pattern "
@@ -1073,6 +1122,43 @@ def reject_private_llm_url(api_url: str) -> None:
             continue
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
             raise ValueError("URL cannot target internal IP addresses")
+
+
+@contextlib.contextmanager
+def _repair_wall_clock_deadline(seconds: float):
+    """Interrupt the entire corrective attempt after ``seconds`` of wall time.
+
+    ``urllib``'s timeout is a socket-operation timeout and can be extended by
+    trickling bytes. Required Noema Review runs on Linux, so ITIMER_REAL gives
+    the repair attempt one process-level wall-clock budget across open, read,
+    decode, and deterministic validation. An existing process alarm is not
+    overwritten; that condition fails closed instead.
+    """
+    if seconds <= 0:
+        raise ValueError("repair wall-clock deadline must be positive")
+    if not hasattr(signal, "setitimer") or not hasattr(signal, "ITIMER_REAL"):
+        raise RuntimeError("repair wall-clock deadline requires POSIX setitimer support")
+    previous_remaining, previous_interval = signal.getitimer(signal.ITIMER_REAL)
+    if previous_remaining > 0 or previous_interval > 0:
+        raise RuntimeError("repair wall-clock deadline refused to overwrite an active process alarm")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def expire(_signum, _frame):
+        """Raise the typed deadline signal without reflecting response content."""
+        raise NoemaRepairDeadlineExceeded(
+            f"Noema repair exceeded {seconds:g}-second absolute wall-clock deadline"
+        )
+
+    try:
+        signal.signal(signal.SIGALRM, expire)
+    except ValueError as exc:
+        raise RuntimeError("repair wall-clock deadline must run on the process main thread") from exc
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 class StaleHeadDuringRepairRetryError(RuntimeError):
@@ -1207,40 +1293,65 @@ def call_llm(
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
     try:
-        with opener.open(request) as response:  # nosec B310
-            raw_bytes = response.read()
-        raw = decode_llm_response_body(raw_bytes)
-        content = extract_llm_message_content(raw)
-        verdict = extract_json_object(content)
-        decision = str(verdict.get("decision") or "").strip().lower()
-        if decision not in {"approve", "request_changes", "comment"}:
-            raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
-        summary = verdict.get("summary")
-        if not isinstance(summary, str) or not summary.strip():
-            raise RuntimeError("Noema LLM response did not contain a substantive summary")
-        findings = verdict.get("findings")
-        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-            raise RuntimeError("Noema LLM response findings must be a list of objects")
-        for finding in findings:
-            if (
-                finding.get("severity") not in {"high", "medium", "low"}
-                or not isinstance(finding.get("file"), str)
-                or not finding["file"].strip()
-                or type(finding.get("line")) is not int
-                or finding["line"] <= 0
-                or finding.get("side") not in {"RIGHT", "LEFT"}
-                or not isinstance(finding.get("message"), str)
-                or not finding["message"].strip()
-            ):
-                raise RuntimeError("Noema LLM response contained a malformed finding")
-        if decision == "request_changes" and not findings:
-            raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
-        validate_substantive_verdict(verdict, diff, changed_paths)
+        deadline_context = (
+            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)
+            if is_retry
+            else contextlib.nullcontext()
+        )
+        with deadline_context:
+            with opener.open(request) as response:  # nosec B310
+                raw_bytes = response.read()
+            raw = decode_llm_response_body(raw_bytes)
+            content = extract_llm_message_content(raw)
+            verdict = extract_json_object(content)
+            decision = str(verdict.get("decision") or "").strip().lower()
+            if decision not in {"approve", "request_changes", "comment"}:
+                raise NoemaModelOutputError(f"Noema LLM returned unsupported decision: {decision!r}")
+            summary = verdict.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                raise NoemaModelOutputError("Noema LLM response did not contain a substantive summary")
+            findings = verdict.get("findings")
+            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
+                raise NoemaModelOutputError("Noema LLM response findings must be a list of objects")
+            for finding in findings:
+                if (
+                    finding.get("severity") not in {"high", "medium", "low"}
+                    or not isinstance(finding.get("file"), str)
+                    or not finding["file"].strip()
+                    or type(finding.get("line")) is not int
+                    or finding["line"] <= 0
+                    or finding.get("side") not in {"RIGHT", "LEFT"}
+                    or not isinstance(finding.get("message"), str)
+                    or not finding["message"].strip()
+                ):
+                    raise NoemaModelOutputError("Noema LLM response contained a malformed finding")
+            if decision == "request_changes" and not findings:
+                raise NoemaModelOutputError("Noema LLM request_changes response did not contain a substantive finding")
+            validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        current_failure = _stable_failure_diagnostic(exc)
         if is_retry:
-            if isinstance(exc, RuntimeError):
-                raise
-            raise RuntimeError(str(exc)) from exc
+            initial_failure = (
+                scrub_sensitive_data(repair_error)
+                or "no diagnostic message was available"
+            )
+            if isinstance(exc, NoemaModelOutputError):
+                raise NoemaModelOutputError(
+                    "Noema model-output repair remained invalid; "
+                    f"initial failure: {initial_failure}; repair failure: {current_failure}"
+                ) from None
+            if isinstance(
+                exc, (urllib.error.URLError, http.client.HTTPException, OSError)
+            ):
+                raise NoemaTransportError(
+                    "Noema bounded repair transport was exhausted; "
+                    f"initial failure: {initial_failure}; repair failure: "
+                    f"{type(exc).__name__}: {current_failure}"
+                ) from exc
+            raise RuntimeError(
+                "Noema repair failed closed; "
+                f"initial failure: {initial_failure}; repair failure: {current_failure}"
+            ) from exc
         if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."
@@ -1254,7 +1365,7 @@ def call_llm(
             expected_head,
             review_context,
             changed_paths,
-            str(exc),
+            current_failure,
             is_retry=True,
         )
     return verdict

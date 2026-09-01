@@ -469,12 +469,12 @@ def test_opencode_ignores_superseded_cancelled_rollup_checks():
 def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     """Keep PR-controlled test execution off the pull_request_target path."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    assert "required-workflow-bootstrap:" in workflow
-    assert "OpenCode repository-dispatch review run materialized." in workflow
-    bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
-    bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
-    bootstrap_job = workflow[bootstrap_start:bootstrap_end]
-    assert "\n    if:" not in bootstrap_job
+    # required-workflow-bootstrap is the trusted-source-resolution sentinel needed
+    # only where the org ruleset targets a pull_request_target entrypoint
+    # (opencode-review.yml). This repository_dispatch-only workflow is not itself
+    # a required-workflow path, so it must not carry a copy-pasted, need-less
+    # orphan of that job.
+    assert "required-workflow-bootstrap:" not in workflow
     assert (
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
