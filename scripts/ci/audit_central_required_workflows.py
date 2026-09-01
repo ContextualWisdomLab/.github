@@ -5,15 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any, TextIO
-
 
 RULESET_ID = 18156473
 RULESET_NAME = "CWL Central required workflows"
 STACKED_RULESET_ID = 21732164
 STACKED_RULESET_NAME = "CWL Stacked OpenCode required workflow"
+REPOSITORY_RULESET_ID = 17921150
+REPOSITORY_RULESET_NAME = "Lock default branch"
+REPOSITORY_RULESET_SOURCE = "ContextualWisdomLab/.github"
 SOURCE_REPOSITORY_ID = 1274066402
 SOURCE_REF = "refs/heads/main"
 SOURCE_ORGANIZATION = "ContextualWisdomLab"
@@ -32,6 +34,17 @@ REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
 )
+CENTRAL_ALLOWED_RULE_TYPES = {
+    "workflows",
+    "pull_request",
+    "deletion",
+    "non_fast_forward",
+}
+REPOSITORY_ALLOWED_RULE_TYPES = {
+    "pull_request",
+    "deletion",
+    "non_fast_forward",
+}
 STACKED_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
 
 
@@ -47,6 +60,26 @@ def _typed_rules(payload: dict[str, Any], rule_type: str) -> list[dict[str, Any]
     ]
 
 
+def _forbidden_rule_types(
+    payload: dict[str, Any], allowed_rule_types: set[str]
+) -> list[str]:
+    """Return undeclared or malformed rule types from a ruleset payload."""
+    rules = payload.get("rules")
+    if not isinstance(rules, list):
+        return []
+    forbidden: set[str] = set()
+    for rule in rules:
+        if not isinstance(rule, dict):
+            forbidden.add("<malformed>")
+            continue
+        rule_type = rule.get("type")
+        if not isinstance(rule_type, str) or not rule_type:
+            forbidden.add("<missing>")
+        elif rule_type not in allowed_rule_types:
+            forbidden.add(rule_type)
+    return sorted(forbidden)
+
+
 def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     """Return explicit drift reasons for a live organization ruleset payload."""
     errors: list[str] = []
@@ -59,6 +92,8 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         errors.append("central ruleset target is not branch")
     if payload.get("enforcement") != "active":
         errors.append("central ruleset enforcement is not active")
+    if payload.get("bypass_actors") != []:
+        errors.append("central ruleset must not configure bypass actors")
 
     conditions = payload.get("conditions")
     conditions = conditions if isinstance(conditions, dict) else {}
@@ -73,7 +108,9 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     )
     if is_inherited_org_payload:
         malformed_scope = sorted(
-            name for name, inherited in inherited_scope.items() if not isinstance(inherited, bool)
+            name
+            for name, inherited in inherited_scope.items()
+            if not isinstance(inherited, bool)
         )
         if malformed_scope:
             errors.append(
@@ -115,18 +152,39 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
 
     ref_names = conditions.get("ref_name")
     ref_names = ref_names if isinstance(ref_names, dict) else {}
-    if "~DEFAULT_BRANCH" not in (ref_names.get("include") or []):
-        errors.append("central ruleset does not target every default branch")
+    if (
+        ref_names.get("include") != ["~DEFAULT_BRANCH"]
+        or ref_names.get("exclude") != []
+    ):
+        errors.append("central ruleset ref scope must be exactly the default branch")
 
     workflow_rules = _typed_rules(payload, "workflows")
+    workflow_parameters: dict[str, Any] = {}
     if len(workflow_rules) != 1:
         errors.append(f"expected one workflows rule, found {len(workflow_rules)}")
         workflows: list[Any] = []
     else:
         parameters = workflow_rules[0].get("parameters")
-        parameters = parameters if isinstance(parameters, dict) else {}
-        workflows = parameters.get("workflows")
+        workflow_parameters = parameters if isinstance(parameters, dict) else {}
+        workflows = workflow_parameters.get("workflows")
         workflows = workflows if isinstance(workflows, list) else []
+
+    if (
+        len(workflow_rules) == 1
+        and workflow_parameters.get("do_not_enforce_on_create") is not True
+    ):
+        errors.append("central required workflows block the branch create transition")
+
+    malformed_workflows = sum(
+        1
+        for workflow in workflows
+        if not isinstance(workflow, dict) or not isinstance(workflow.get("path"), str)
+    )
+    if malformed_workflows:
+        suffix = "entry" if malformed_workflows == 1 else "entries"
+        errors.append(
+            f"central required workflows contain {malformed_workflows} malformed {suffix}"
+        )
 
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}
     for workflow in workflows:
@@ -134,13 +192,19 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
             continue
         workflows_by_path.setdefault(workflow["path"], []).append(workflow)
 
+    unexpected_workflows = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
+    if unexpected_workflows:
+        errors.append(f"unexpected central required workflows: {unexpected_workflows}")
+
     for path in REQUIRED_WORKFLOW_PATHS:
         matches = workflows_by_path.get(path, [])
         if not matches:
             errors.append(f"missing central required workflow {path}")
             continue
         if len(matches) != 1:
-            errors.append(f"central required workflow {path} is configured {len(matches)} times")
+            errors.append(
+                f"central required workflow {path} is configured {len(matches)} times"
+            )
         if not any(
             workflow.get("repository_id") == SOURCE_REPOSITORY_ID
             and workflow.get("ref") == SOURCE_REF
@@ -158,22 +222,44 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         parameters = review_rules[0].get("parameters")
         parameters = parameters if isinstance(parameters, dict) else {}
         approving_reviews = parameters.get("required_approving_review_count")
-        if approving_reviews != 2:
-            errors.append("exactly two approving reviews are not required")
+        if approving_reviews != 0:
+            errors.append(
+                "central solo-maintainer ruleset must not require approving reviews"
+            )
+        if parameters.get("required_reviewers") not in (None, []):
+            errors.append(
+                "central solo-maintainer ruleset must not configure required reviewers"
+            )
+        if parameters.get("require_code_owner_review") is not False:
+            errors.append(
+                "central solo-maintainer ruleset must not require code-owner review"
+            )
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not True:
-            errors.append("last-push approval protection is disabled")
+        if parameters.get("require_last_push_approval") is not False:
+            errors.append(
+                "central solo-maintainer ruleset must not require last-push approval"
+            )
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("review-thread resolution protection is disabled")
-        allowed_methods = set(parameters.get("allowed_merge_methods") or [])
-        if not {"merge", "squash"}.issubset(allowed_methods):
-            errors.append("merge and squash are not both allowed merge methods")
+        raw_allowed_methods = parameters.get("allowed_merge_methods")
+        allowed_methods = (
+            set(raw_allowed_methods)
+            if isinstance(raw_allowed_methods, list)
+            and all(isinstance(method, str) for method in raw_allowed_methods)
+            else set()
+        )
+        if allowed_methods != {"merge", "squash"}:
+            errors.append("only merge and squash may be allowed merge methods")
 
     if not _typed_rules(payload, "deletion"):
         errors.append("default-branch deletion protection is missing")
     if not _typed_rules(payload, "non_fast_forward"):
         errors.append("default-branch non-fast-forward protection is missing")
+
+    forbidden_rule_types = _forbidden_rule_types(payload, CENTRAL_ALLOWED_RULE_TYPES)
+    if forbidden_rule_types:
+        errors.append(f"central ruleset has forbidden rule types: {forbidden_rule_types}")
 
     return errors
 
@@ -237,6 +323,86 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
     return errors
 
 
+def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
+    """Return drift reasons for the owner repository's default-branch policy."""
+
+    errors: list[str] = []
+    if payload.get("id") != REPOSITORY_RULESET_ID:
+        errors.append(f"expected repository ruleset id {REPOSITORY_RULESET_ID}")
+    if payload.get("name") != REPOSITORY_RULESET_NAME:
+        errors.append(f"expected repository ruleset name {REPOSITORY_RULESET_NAME}")
+    if (
+        payload.get("source_type") != "Repository"
+        or payload.get("source") != REPOSITORY_RULESET_SOURCE
+    ):
+        errors.append("repository ruleset source is not ContextualWisdomLab/.github")
+    if payload.get("target") != "branch":
+        errors.append("repository ruleset target is not branch")
+    if payload.get("enforcement") != "active":
+        errors.append("repository ruleset enforcement is not active")
+    if payload.get("bypass_actors") != []:
+        errors.append("repository ruleset must not configure bypass actors")
+
+    conditions = payload.get("conditions")
+    conditions = conditions if isinstance(conditions, dict) else {}
+    ref_names = conditions.get("ref_name")
+    ref_names = ref_names if isinstance(ref_names, dict) else {}
+    if ref_names != {"include": ["~DEFAULT_BRANCH"], "exclude": []}:
+        errors.append("repository ruleset ref scope must be exactly the default branch")
+
+    review_rules = _typed_rules(payload, "pull_request")
+    if len(review_rules) != 1:
+        errors.append(f"expected one repository pull_request rule, found {len(review_rules)}")
+    else:
+        raw_parameters = review_rules[0].get("parameters")
+        parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
+        if parameters.get("required_approving_review_count") != 0:
+            errors.append(
+                "repository solo-maintainer ruleset must not require approving reviews"
+            )
+        if parameters.get("required_reviewers") not in (None, []):
+            errors.append(
+                "repository solo-maintainer ruleset must not configure required reviewers"
+            )
+        if parameters.get("require_code_owner_review") is not False:
+            errors.append(
+                "repository solo-maintainer ruleset must not require code-owner review"
+            )
+        if parameters.get("dismiss_stale_reviews_on_push") is not True:
+            errors.append("repository ruleset stale-review dismissal on push is disabled")
+        if parameters.get("require_last_push_approval") is not False:
+            errors.append(
+                "repository solo-maintainer ruleset must not require last-push approval"
+            )
+        if parameters.get("required_review_thread_resolution") is not True:
+            errors.append(
+                "repository ruleset review-thread resolution protection is disabled"
+            )
+        raw_allowed_methods = parameters.get("allowed_merge_methods")
+        allowed_methods = (
+            set(raw_allowed_methods)
+            if isinstance(raw_allowed_methods, list)
+            and all(isinstance(method, str) for method in raw_allowed_methods)
+            else set()
+        )
+        if allowed_methods != {"merge", "squash"}:
+            errors.append("repository ruleset must allow only merge and squash")
+
+    if not _typed_rules(payload, "deletion"):
+        errors.append("repository default-branch deletion protection is missing")
+    if not _typed_rules(payload, "non_fast_forward"):
+        errors.append("repository default-branch non-fast-forward protection is missing")
+
+    forbidden_rule_types = _forbidden_rule_types(
+        payload, REPOSITORY_ALLOWED_RULE_TYPES
+    )
+    if forbidden_rule_types:
+        errors.append(
+            f"repository ruleset has forbidden rule types: {forbidden_rule_types}"
+        )
+    return errors
+
+
 def load_payload(path: Path | None, stdin: TextIO) -> dict[str, Any]:
     """Load a ruleset object from ``path`` or standard input."""
     if path is None:
@@ -252,7 +418,9 @@ def load_payload(path: Path | None, stdin: TextIO) -> dict[str, Any]:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the optional ruleset JSON path."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stacked", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--stacked", action="store_true")
+    mode.add_argument("--repository", action="store_true")
     parser.add_argument("ruleset_json", nargs="?", type=Path)
     return parser.parse_args(argv)
 
@@ -266,9 +434,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: unable to load ruleset JSON: {exc}", file=sys.stderr)
         return 2
 
-    auditor = audit_stacked_ruleset if args.stacked else audit_ruleset
-    ruleset_id = STACKED_RULESET_ID if args.stacked else RULESET_ID
-    workflow_count = 1 if args.stacked else len(REQUIRED_WORKFLOW_PATHS)
+    if args.repository:
+        auditor = audit_repository_ruleset
+        ruleset_id = REPOSITORY_RULESET_ID
+        workflow_count = 0
+    elif args.stacked:
+        auditor = audit_stacked_ruleset
+        ruleset_id = STACKED_RULESET_ID
+        workflow_count = 1
+    else:
+        auditor = audit_ruleset
+        ruleset_id = RULESET_ID
+        workflow_count = len(REQUIRED_WORKFLOW_PATHS)
     errors = auditor(payload)
     if errors:
         for error in errors:
@@ -279,7 +456,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if args.stacked:
+    if args.repository:
+        print(f"PASS: repository ruleset {ruleset_id} protects the default branch")
+    elif args.stacked:
         print(
             f"PASS: ruleset {ruleset_id} audits {workflow_count} "
             "central required workflows in evaluate mode"

@@ -1,12 +1,13 @@
+import json
 from copy import deepcopy
 from io import StringIO
-import json
 from pathlib import Path
 
 from scripts.ci import audit_central_required_workflows as audit
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
     workflow_paths = (
@@ -23,6 +24,7 @@ def ruleset_payload() -> dict:
         "name": "CWL Central required workflows",
         "target": "branch",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
@@ -34,7 +36,7 @@ def ruleset_payload() -> dict:
             {
                 "type": "workflows",
                 "parameters": {
-                    "do_not_enforce_on_create": False,
+                    "do_not_enforce_on_create": True,
                     "workflows": [
                         {
                             "repository_id": 1274066402,
@@ -48,10 +50,10 @@ def ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 2,
+                    "required_approving_review_count": 0,
                     "dismiss_stale_reviews_on_push": True,
                     "require_code_owner_review": False,
-                    "require_last_push_approval": True,
+                    "require_last_push_approval": False,
                     "required_review_thread_resolution": True,
                     "required_reviewers": [],
                     "allowed_merge_methods": ["merge", "squash"],
@@ -108,6 +110,37 @@ def stacked_ruleset_payload() -> dict:
     }
 
 
+def repository_ruleset_payload() -> dict:
+    """Return the expected strong default-branch policy for the owner repo."""
+
+    return {
+        "id": 17921150,
+        "name": "Lock default branch",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "ContextualWisdomLab/.github",
+        "enforcement": "active",
+        "bypass_actors": [],
+        "conditions": {
+            "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
+        },
+        "rules": [
+            {
+                "type": "pull_request",
+                "parameters": {
+                    "required_approving_review_count": 0,
+                    "dismiss_stale_reviews_on_push": True,
+                    "require_last_push_approval": False,
+                    "required_review_thread_resolution": True,
+                    "allowed_merge_methods": ["merge", "squash"],
+                },
+            },
+            {"type": "deletion"},
+            {"type": "non_fast_forward"},
+        ],
+    }
+
+
 def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     monkeypatch.setattr(audit.sys, "stdin", StringIO(json.dumps(ruleset_payload())))
 
@@ -118,8 +151,226 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     )
 
 
+def test_central_ruleset_rejects_unexpected_and_malformed_workflows() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"].extend(
+        [
+            {
+                "repository_id": 1274066402,
+                "path": ".github/workflows/unexpected.yml",
+                "ref": "refs/heads/main",
+            },
+            {"repository_id": 1274066402, "path": 42, "ref": "refs/heads/main"},
+        ]
+    )
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "unexpected central required workflows: ['.github/workflows/unexpected.yml']" in errors
+    assert "central required workflows contain 1 malformed entry" in errors
+
+
+def test_central_ruleset_rejects_rebase_merge_method() -> None:
+    payload = ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["allowed_merge_methods"].append("rebase")
+
+    assert "only merge and squash may be allowed merge methods" in audit.audit_ruleset(payload)
+
+
+def test_central_ruleset_rejects_bypass_actors() -> None:
+    payload = ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": None,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset must not configure bypass actors",
+    ]
+
+
+def test_central_ruleset_rejects_missing_bypass_evidence() -> None:
+    payload = ruleset_payload()
+    del payload["bypass_actors"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset must not configure bypass actors",
+    ]
+
+
 def test_inherited_ruleset_and_organization_scope_probes_pass() -> None:
     assert audit.audit_ruleset(inherited_ruleset_payload()) == []
+
+
+def test_expected_repository_ruleset_passes() -> None:
+    assert hasattr(audit, "audit_repository_ruleset"), (
+        "the central audit must inspect the repository ruleset that protects .github"
+    )
+    assert audit.audit_repository_ruleset(repository_ruleset_payload()) == []
+
+
+def test_repository_ruleset_rejects_unsatisfiable_review_controls() -> None:
+    assert hasattr(audit, "audit_repository_ruleset"), (
+        "the central audit must inspect the repository ruleset that protects .github"
+    )
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["required_approving_review_count"] = 1
+    review_rule["parameters"]["require_last_push_approval"] = True
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository solo-maintainer ruleset must not require approving reviews",
+        "repository solo-maintainer ruleset must not require last-push approval",
+    ]
+
+
+def test_repository_ruleset_rejects_rebase_merge_method() -> None:
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"]["allowed_merge_methods"].append("rebase")
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must allow only merge and squash",
+    ]
+
+
+def test_repository_ruleset_rejects_bypass_actors() -> None:
+    payload = repository_ruleset_payload()
+    payload["bypass_actors"] = [
+        {
+            "actor_id": None,
+            "actor_type": "OrganizationAdmin",
+            "bypass_mode": "always",
+        }
+    ]
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must not configure bypass actors",
+    ]
+
+
+def test_repository_ruleset_rejects_missing_bypass_evidence() -> None:
+    payload = repository_ruleset_payload()
+    del payload["bypass_actors"]
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository ruleset must not configure bypass actors",
+    ]
+
+
+def test_repository_ruleset_reports_structural_and_protection_drift() -> None:
+    payload = {
+        "id": 0,
+        "name": "drifted",
+        "source_type": "Organization",
+        "source": "ContextualWisdomLab",
+        "target": "tag",
+        "enforcement": "disabled",
+        "conditions": None,
+        "rules": "not-a-list",
+    }
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "expected repository ruleset id 17921150",
+        "expected repository ruleset name Lock default branch",
+        "repository ruleset source is not ContextualWisdomLab/.github",
+        "repository ruleset target is not branch",
+        "repository ruleset enforcement is not active",
+        "repository ruleset must not configure bypass actors",
+        "repository ruleset ref scope must be exactly the default branch",
+        "expected one repository pull_request rule, found 0",
+        "repository default-branch deletion protection is missing",
+        "repository default-branch non-fast-forward protection is missing",
+    ]
+
+
+def test_repository_ruleset_rejects_malformed_review_parameters() -> None:
+    payload = repository_ruleset_payload()
+    review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
+    review_rule["parameters"] = None
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository solo-maintainer ruleset must not require approving reviews",
+        "repository ruleset stale-review dismissal on push is disabled",
+        "repository solo-maintainer ruleset must not require last-push approval",
+        "repository ruleset review-thread resolution protection is disabled",
+        "repository ruleset must allow only merge and squash",
+    ]
+
+
+def test_repository_ruleset_cli_reports_passing_policy(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        audit.sys,
+        "stdin",
+        StringIO(json.dumps(repository_ruleset_payload())),
+    )
+
+    assert audit.main(["--repository"]) == 0
+    assert (
+        "PASS: repository ruleset 17921150 protects the default branch"
+        in capsys.readouterr().out
+    )
+
+
+def test_ref_scope_rejects_all_branch_and_extra_proposal_branch_targets() -> None:
+    for include in (
+        ["~ALL"],
+        ["~DEFAULT_BRANCH", "~ALL"],
+        ["~DEFAULT_BRANCH", "refs/heads/feature/*"],
+    ):
+        payload = ruleset_payload()
+        payload["conditions"]["ref_name"]["include"] = include
+
+        assert audit.audit_ruleset(payload) == [
+            "central ruleset ref scope must be exactly the default branch"
+        ]
+
+
+def test_ref_scope_rejects_branch_exclusions() -> None:
+    """The strict default-branch ruleset must not hide excluded refs."""
+
+    payload = ruleset_payload()
+    payload["conditions"]["ref_name"]["exclude"] = ["refs/heads/release/*"]
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset ref scope must be exactly the default branch"
+    ]
+
+
+def test_ref_scope_rejects_string_include() -> None:
+    """The ruleset API contract requires an exact include list."""
+    payload = ruleset_payload()
+    payload["conditions"]["ref_name"]["include"] = "~ALL"
+
+    assert audit.audit_ruleset(payload) == [
+        "central ruleset ref scope must be exactly the default branch"
+    ]
+
+
+def test_workflows_must_not_block_branch_create_transition() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["do_not_enforce_on_create"] = False
+
+    assert audit.audit_ruleset(payload) == [
+        "central required workflows block the branch create transition"
+    ]
+
+
+def test_multiple_workflow_rules_do_not_invent_create_transition_drift() -> None:
+    """Report structural multiplicity without attributing a missing flag to it."""
+    payload = ruleset_payload()
+    payload["rules"].append(payload["rules"][0].copy())
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "expected one workflows rule, found 2" in errors
+    assert "central required workflows block the branch create transition" not in errors
 
 
 def test_expected_stacked_ruleset_passes(monkeypatch, capsys) -> None:
@@ -265,17 +516,17 @@ def test_wrong_workflow_ref_reports_exact_drift() -> None:
     )
 
 
-def test_review_policy_weakening_reports_exact_drift() -> None:
+def test_unsatisfiable_review_policy_reports_exact_drift() -> None:
     payload = ruleset_payload()
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
     review_rule["parameters"]["required_approving_review_count"] = 1
-    review_rule["parameters"]["require_last_push_approval"] = False
+    review_rule["parameters"]["require_last_push_approval"] = True
     review_rule["parameters"]["required_review_thread_resolution"] = False
 
     errors = audit.audit_ruleset(payload)
 
-    assert "exactly two approving reviews are not required" in errors
-    assert "last-push approval protection is disabled" in errors
+    assert "central solo-maintainer ruleset must not require approving reviews" in errors
+    assert "central solo-maintainer ruleset must not require last-push approval" in errors
     assert "review-thread resolution protection is disabled" in errors
 
 
@@ -296,9 +547,10 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "expected ruleset name CWL Central required workflows",
         "central ruleset target is not branch",
         "central ruleset enforcement is not active",
+        "central ruleset must not configure bypass actors",
         "central ruleset does not include all repositories",
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
-        "central ruleset does not target every default branch",
+        "central ruleset ref scope must be exactly the default branch",
         "expected one workflows rule, found 0",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
@@ -313,7 +565,7 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
     ]
 
 
-def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters() -> None:
+def test_audit_handles_duplicate_workflows_and_unsatisfiable_review_parameters() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
     workflows = workflow_rule["parameters"]["workflows"]
@@ -322,9 +574,9 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     workflows.append(deepcopy(workflows[-1]))
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
     review_rule["parameters"] = {
-        "required_approving_review_count": 0,
+        "required_approving_review_count": 1,
         "dismiss_stale_reviews_on_push": False,
-        "require_last_push_approval": False,
+        "require_last_push_approval": True,
         "required_review_thread_resolution": False,
         "allowed_merge_methods": ["squash"],
     }
@@ -332,11 +584,11 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     errors = audit.audit_ruleset(payload)
 
     assert "central required workflow .github/workflows/sast-semgrep.yml is configured 2 times" in errors
-    assert "exactly two approving reviews are not required" in errors
+    assert "central solo-maintainer ruleset must not require approving reviews" in errors
     assert "stale-review dismissal on push is disabled" in errors
-    assert "last-push approval protection is disabled" in errors
+    assert "central solo-maintainer ruleset must not require last-push approval" in errors
     assert "review-thread resolution protection is disabled" in errors
-    assert "merge and squash are not both allowed merge methods" in errors
+    assert "only merge and squash may be allowed merge methods" in errors
 
 
 def test_audit_handles_malformed_rule_parameter_shapes() -> None:
@@ -349,7 +601,8 @@ def test_audit_handles_malformed_rule_parameter_shapes() -> None:
     errors = audit.audit_ruleset(payload)
 
     assert "missing central required workflow .github/workflows/sast-semgrep.yml" in errors
-    assert "exactly two approving reviews are not required" in errors
+    assert "central solo-maintainer ruleset must not require approving reviews" in errors
+    assert "central solo-maintainer ruleset must not require last-push approval" in errors
 
 
 def test_load_payload_rejects_non_object_and_main_logs_load_reason(monkeypatch, capsys) -> None:
@@ -379,6 +632,12 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert "Ruleset audit could not read inherited organization ruleset" in workflow
     assert 'STACKED_RULESET_ID: "21732164"' in workflow
     assert "audit_central_required_workflows.py --stacked" in workflow
+    assert 'REPOSITORY_RULESET_ID: "17921150"' in workflow
+    assert (
+        "repos/${ORG_LOGIN}/.github/rulesets/${REPOSITORY_RULESET_ID}"
+        in workflow
+    )
+    assert "audit_central_required_workflows.py --repository" in workflow
     assert "CWL Stacked OpenCode required workflow" in rollout
     assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
