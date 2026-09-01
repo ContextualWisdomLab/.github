@@ -339,6 +339,20 @@ def parse_diff_path(raw: str, prefix: str) -> str:
 
 
 
+
+def _canonical_changed_location(record: dict[str, Any], label: str) -> tuple[str, int, str]:
+    """Return a canonical changed-side location without bool/int coercion."""
+    path_value = record.get("path")
+    line_value = record.get("line")
+    side_value = record.get("side")
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise RuntimeError(f"{label} requires a canonical changed-side path")
+    if type(line_value) is not int or line_value <= 0:
+        raise RuntimeError(f"{label} requires a canonical positive integer line")
+    if side_value not in {"LEFT", "RIGHT"}:
+        raise RuntimeError(f"{label} requires canonical LEFT/RIGHT side")
+    return (path_value, line_value, side_value)
+
 def _validate_observed_probe_class_evidence(
     probe: dict[str, Any], probe_kind: str, index: int, location: tuple[Any, ...]
 ) -> None:
@@ -351,7 +365,6 @@ def _validate_observed_probe_class_evidence(
             f"Noema adversarial probe {index} class_evidence for {probe_kind} "
             f"must contain exactly: {expected}"
         )
-    expected_ref = {"path": location[0], "line": location[1], "side": location[2]}
     for field in required_fields:
         source_ref = class_evidence.get(field)
         if not isinstance(source_ref, dict) or set(source_ref) != {"path", "line", "side"}:
@@ -359,7 +372,10 @@ def _validate_observed_probe_class_evidence(
                 f"Noema adversarial probe {index} class_evidence.{field} requires a "
                 "source-bound changed-line reference"
             )
-        if source_ref != expected_ref:
+        source_location = _canonical_changed_location(
+            source_ref, f"Noema adversarial probe {index} class_evidence.{field}"
+        )
+        if source_location != location:
             raise RuntimeError(
                 f"Noema adversarial probe {index} class_evidence.{field} must bind to "
                 "the probe location"
@@ -382,7 +398,7 @@ def validate_substantive_verdict(
     for index, reviewed in enumerate(reviewed_lines, start=1):
         if not isinstance(reviewed, dict):
             raise RuntimeError(f"Noema reviewed line {index} must be an object")
-        location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
+        location = _canonical_changed_location(reviewed, f"Noema reviewed line {index}")
         if location not in locations:
             raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
         analysis = reviewed.get("analysis")
@@ -416,7 +432,7 @@ def validate_substantive_verdict(
             raise RuntimeError(
                 f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
             )
-        location = (probe.get("path"), probe.get("line"), probe.get("side"))
+        location = _canonical_changed_location(probe, f"Noema adversarial probe {index}")
         if location not in locations:
             raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
         _validate_observed_probe_class_evidence(probe, probe_kind, index, location)
