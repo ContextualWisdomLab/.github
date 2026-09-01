@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Merge protected main without executing target code
+      - name: Reconcile protected main without executing target code
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
@@ -31,9 +31,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git merge --no-edit origin/main
-          test -n "$(git grep -n 'OBSERVED_REVIEW_PROBE_KINDS' -- scripts/ci/noema_review_gate.py)"
-          test -n "$(git grep -n 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py)"
+          git merge --no-edit -X theirs origin/main
+          git merge-base --is-ancestor origin/main HEAD
+          git grep -q 'OBSERVED_REVIEW_PROBE_KINDS' -- scripts/ci/noema_review_gate.py
+          git grep -q '_validate_observed_probe_class_evidence' -- scripts/ci/noema_review_gate.py
+          git grep -q 'Classify every adversarial probe with one observed defect class' -- scripts/ci/noema_review_gate.py
+          git grep -q 'def fetch_merge_base_sha' -- scripts/ci/noema_review_gate.py
+          git grep -q 'removed_file_context_section' -- scripts/ci/noema_review_gate.py
           test -z "$(find .github/workflows -maxdepth 1 -type f -name 'source-fix-1589*.yml' -print -quit)"
           git diff --check HEAD^1 HEAD
           git push origin "HEAD:${TARGET_BRANCH}"
