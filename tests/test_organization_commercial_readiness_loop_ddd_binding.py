@@ -280,6 +280,31 @@ def test_rejects_non_step_and_unreachable_agent_bindings() -> None:
     assert not coordinator.has_domain_driven_development_contract(skipped)
 
 
+def test_accepts_valid_yaml_keys_and_unrelated_shell_structures() -> None:
+    """Valid YAML spellings and unrelated shell regions retain eligibility."""
+    source = _source()
+    quoted = source.replace("jobs:\n", '"jobs": # root jobs\n', 1).replace(
+        "  develop:\n", "  'develop': # product job\n", 1
+    ).replace("    steps:\n", '    "steps": # executable list\n', 1)
+    assert coordinator.has_domain_driven_development_contract(quoted)
+
+    direct = (
+        "product-agent --prompt-env CWL_PRODUCT_AGENT_PROMPT "
+        "--architecture-contract-env CWL_DDD_CONTRACT_CAPABILITIES"
+    )
+    for unrelated in (
+        "cat <<'NOTE'\n          inert prose\n          NOTE",
+        "if false; then\n          echo skipped\n          fi",
+        "if false; then\n          while false; do\n          echo skipped\n          done\n          fi",
+    ):
+        assert coordinator.has_domain_driven_development_contract(
+            _replace_command(source, f"{unrelated}\n          {direct}")
+        )
+        assert coordinator.has_domain_driven_development_contract(
+            _replace_command(source, f"{direct}\n          {unrelated}")
+        )
+
+
 def test_private_command_edges_and_compatibility_script_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

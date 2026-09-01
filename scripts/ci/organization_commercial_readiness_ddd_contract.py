@@ -47,6 +47,11 @@ _COMMAND_OPERATORS = frozenset({";", "&&", "||", "&", "|"})
 _NON_AGENT_EXECUTABLES = frozenset(
     {":", "[", "echo", "export", "false", "printf", "test", "true"}
 )
+_YAML_MAPPING_KEY_RE = re.compile(
+    r'^(?:"(?P<double>[^"]+)"|\'(?P<single>[^\']+)\'|(?P<plain>[A-Za-z0-9_.-]+))'
+    r":\s*(?:#.*)?$"
+)
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _top_level_mapping_bodies(source: str, key: str) -> tuple[str, ...]:
@@ -116,14 +121,53 @@ def _step_run_blocks(source: str) -> tuple[str, ...]:
             if len(remaining) < 2:
                 break
             job, jobs = remaining[:2]
+            steps_key = _yaml_mapping_key(steps[1])
+            job_key = _yaml_mapping_key(job[1])
+            jobs_key = _yaml_mapping_key(jobs[1])
             if (
-                steps[1] == "steps:"
-                and job[1].endswith(":")
-                and jobs == (0, "jobs:")
+                steps_key == "steps"
+                and job_key is not None
+                and jobs[0] == 0
+                and jobs_key == "jobs"
             ):
                 accepted.append(block)
                 break
     return tuple(accepted)
+
+
+def _yaml_mapping_key(line: str) -> str | None:
+    """Return a simple YAML mapping key while allowing quotes and comments."""
+    match = _YAML_MAPPING_KEY_RE.fullmatch(line)
+    if match is None:
+        return None
+    return next(value for value in match.groups() if value is not None)
+
+
+def _reachable_shell(block: str) -> str:
+    """Remove heredoc bodies and conditional regions from a shell block."""
+    reachable: list[str] = []
+    heredoc_delimiter: str | None = None
+    control_depth = 0
+    for line in block.splitlines():
+        stripped = line.strip()
+        if heredoc_delimiter is not None:
+            if stripped == heredoc_delimiter:
+                heredoc_delimiter = None
+            continue
+        if control_depth:
+            if re.match(r"^(?:if|case|while|until)\b", stripped):
+                control_depth += 1
+            if re.match(r"^(?:fi|esac|done)\b", stripped):
+                control_depth -= 1
+            continue
+        if re.match(r"^(?:if|case|while|until)\b", stripped):
+            control_depth = 1
+            continue
+        if match := _HEREDOC_RE.search(stripped):
+            heredoc_delimiter = match.group("delimiter")
+            continue
+        reachable.append(line)
+    return "\n".join(reachable)
 
 
 def _contract_version(environment: str) -> str | None:
@@ -197,11 +241,7 @@ def _has_bound_agent_invocation(source: str) -> bool:
     for run_block in _step_run_blocks(source):
         if DDD_PROMPT_BINDING_MARKER not in run_block:
             continue
-        if "<<" in run_block or re.search(
-            r"(?m)^\s*(?:if|case|while|until)\b", run_block
-        ):
-            continue
-        for tokens in _shell_segments(run_block):
+        for tokens in _shell_segments(_reachable_shell(run_block)):
             executable = _executable(tokens)
             if executable is None or executable in _NON_AGENT_EXECUTABLES:
                 continue
