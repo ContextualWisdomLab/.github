@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fail closed when Strix exits 0 with zero vulnerability report artifacts:
+  `run_strix_once()` and `has_only_below_threshold_vulnerabilities()` in
+  `scripts/ci/strix_quick_gate.sh` now verify that at least one valid
+  report artifact was produced, eliminating false-clean hollow scan results.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
