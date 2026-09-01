@@ -458,6 +458,7 @@ jobs:
             echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
             exit 1
           fi
+          echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
     # Scoping the concurrency group above by exact head SHA (so a delayed
@@ -541,7 +542,8 @@ jobs:
                 echo "::notice::OpenCode review cleanup target changed before cancellation; leaving runs unchanged."
                 return 0
               fi
-              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/opencode-cleanup-cancel-error; then
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/opencode-cleanup-cancel-error ||
+                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/opencode-cleanup-cancel-error; then
                 echo "Cancelled superseded Required OpenCode Review run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
               else
                 echo "::warning::OpenCode review cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
@@ -553,4 +555,4 @@ jobs:
           for active_status in queued in_progress requested waiting pending; do
             cancel_runs "$active_status"
           done
-          echo "Current-head OpenCode verdict: ${verdict}."
+          echo "Superseded OpenCode review run cleanup completed."
