@@ -4,8 +4,9 @@ from pathlib import Path
 import re
 
 
-DOCTORING = Path("docs/doctoring/noema-observed-defect-probe-taxonomy.md")
-WORKFLOW = Path(".github/workflows/noema-observed-probe-quality-ci.yml")
+ROOT = Path(__file__).resolve().parents[1]
+DOCTORING = ROOT / "docs/doctoring/noema-observed-defect-probe-taxonomy.md"
+WORKFLOW = ROOT / ".github/workflows/noema-observed-probe-quality-ci.yml"
 
 
 def _pull_request_paths(text: str) -> set[str]:
