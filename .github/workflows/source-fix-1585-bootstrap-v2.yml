@@ -1,5 +1,6 @@
 name: One-shot PR 1585 verified repair bootstrap
 
+# Rerun after scoping the regression's head-SHA assertion to the concurrency block.
 on:
   push:
     branches:
