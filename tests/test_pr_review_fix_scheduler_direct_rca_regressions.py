@@ -89,6 +89,18 @@ def test_scan_queue_control_plane_failure_does_not_trigger_rca() -> None:
     assert fix.needs_rca_repair(pr) == (False, ())
 
 
+@pytest.mark.parametrize("draft", [True, False])
+def test_conflicted_pr_requires_nondraft_authorization(monkeypatch: Any, draft: bool) -> None:
+    """A draft or otherwise unauthorized conflict cannot dispatch repair."""
+    pr = make_pr(is_draft=draft)
+    pr["mergeStateStatus"] = "DIRTY"
+    monkeypatch.setattr(fix, "needs_conflict_resolution", lambda *_args, **_kwargs: (False, ()))
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"])
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+    assert action == "skip"
+    assert reasons == (("draft PR",) if draft else ("merge conflict is not authorized for repair",))
+
+
 @pytest.mark.parametrize(
     "workflow_name",
     ["OpenCode Review", "Required OpenCode Review", "OpenCode PR Review"],
