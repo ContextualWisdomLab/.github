@@ -1,0 +1,23 @@
+name: Hosted Runner Admission Canary
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/hosted-runner-admission-canary.yml
+      - tests/test_hosted_runner_admission_canary_contract.py
+
+concurrency:
+  group: hosted-runner-admission-canary-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  admission:
+    name: Acquire a GitHub-hosted runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record runner admission
+        run: "true"
