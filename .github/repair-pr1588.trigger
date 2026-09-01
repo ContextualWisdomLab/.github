@@ -1,2 +1,2 @@
-repair PR1588 live-state and timeout contract
-retry=parse-safe-2-20260901T2210+0900
+repair PR1588 live-state admission contract
+retry=unbounded-inference-preserved-20260901T2212+0900
