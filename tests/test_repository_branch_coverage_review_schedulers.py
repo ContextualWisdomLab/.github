@@ -62,12 +62,12 @@ def test_noema_public_dns_result_reaches_valid_model_response(
     class Opener:
         """Open one deterministic provider response."""
 
-        def open(self, _request: Any, timeout: int) -> Response:
-            assert timeout == 120
+        def open(self, _request: Any, timeout: int | None = None) -> Response:
+            assert timeout is None
             return Response()
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
-    verdict = noema.call_llm("owner/repo", 1, {"headRefOid": "a" * 40}, "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, {"headRefOid": "a" * 40}, "diff", False, "a" * 40)
     assert verdict["decision"] == "approve"
 
 
