@@ -46,7 +46,11 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # lookahead treated "/" as a word character. This mirrors the
 # leading-boundary "/" exclusion already applied above and closes the same
 # false-positive class from the trailing side, for every alternative rather
-# than only the bare /opencode and /oc forms.
+# than only the bare /opencode and /oc forms. It also excludes a following
+# "?": a query string glued directly onto the alias with no separator
+# (/oc?mode=docs, /opencode?next=x) is a URL path with a query component,
+# not a standalone command, and shares the exact same "alias text is a
+# complete match, but something non-word continues right after it" shape.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
@@ -57,7 +61,7 @@ MENTION_PATTERNS = {
         r"(?<![A-Za-z0-9_/-])@opencode-agent"
         r"|(?<![A-Za-z0-9_/-])@cwl-noema-review/@opencode-agent"
         r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
-        r")(?![A-Za-z0-9_/-])",
+        r")(?![A-Za-z0-9_/?-])",
         re.IGNORECASE,
     ),
 }
