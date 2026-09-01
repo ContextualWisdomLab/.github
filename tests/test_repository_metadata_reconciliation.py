@@ -146,6 +146,14 @@ def test_load_manifest_contracts(tmp_path) -> None:
             "schema or organization",
         ),
         (
+            {
+                "schema_version": True,
+                "organization": RECONCILER.ORGANIZATION,
+                "repositories": {"Repo": desired()},
+            },
+            "schema or organization",
+        ),
+        (
             {"schema_version": 1, "organization": "Other", "repositories": {}},
             "schema or organization",
         ),
@@ -227,6 +235,49 @@ def test_pages_and_docs_probes(monkeypatch) -> None:
         RECONCILER._docs_index_exists("Repo", "main")
 
 
+def test_pages_configuration_contracts(monkeypatch) -> None:
+    """Pages state is parsed exactly and converged legacy /docs sites are recognized."""
+
+    monkeypatch.setattr(
+        RECONCILER,
+        "_gh_api",
+        lambda *args, **kwargs: json.dumps(
+            {
+                "build_type": "legacy",
+                "source": {"branch": "main", "path": "/docs"},
+            }
+        ),
+    )
+    current = RECONCILER._pages_configuration("Repo")
+    assert RECONCILER._pages_configuration_matches(current, "main") is True
+    assert RECONCILER._pages_configuration_matches({}, "main") is False
+    assert (
+        RECONCILER._pages_configuration_matches(
+            {"source": {"branch": "develop", "path": "/docs"}}, "main"
+        )
+        is False
+    )
+    assert (
+        RECONCILER._pages_configuration_matches(
+            {"source": {"branch": "main", "path": "/"}}, "main"
+        )
+        is False
+    )
+    assert (
+        RECONCILER._pages_configuration_matches(
+            {
+                "build_type": "workflow",
+                "source": {"branch": "main", "path": "/docs"},
+            },
+            "main",
+        )
+        is False
+    )
+    monkeypatch.setattr(RECONCILER, "_gh_api", lambda *args, **kwargs: "[]")
+    with pytest.raises(RECONCILER.ManifestError, match="Pages configuration"):
+        RECONCILER._pages_configuration("Repo")
+
+
 def test_deepwiki_requires_one_linked_badge(monkeypatch) -> None:
     """Disconnected, wrong-case, and wrong-target DeepWiki badges are rejected."""
 
@@ -291,6 +342,9 @@ def test_reconcile_preconditions(monkeypatch) -> None:
         RECONCILER.reconcile_repository("Repo", desired(deepwiki=True))
 
     monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: True)
+    with pytest.raises(RuntimeError, match="DeepWiki badge is disabled"):
+        RECONCILER.reconcile_repository("Repo", desired())
+
     monkeypatch.setattr(RECONCILER, "_docs_index_exists", lambda *args: False)
     with pytest.raises(RuntimeError, match="Pages requested"):
         RECONCILER.reconcile_repository("Repo", desired(deepwiki=True, pages=True))
@@ -305,7 +359,7 @@ def test_reconcile_preconditions(monkeypatch) -> None:
 
 
 def test_reconcile_mutation_matrix(monkeypatch) -> None:
-    """Descriptions, topics, Pages creation/update, and Pages disable all reconcile."""
+    """Descriptions, topics, Pages create/update/disable all reconcile."""
 
     calls = []
 
@@ -313,6 +367,10 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
         calls.append((method, endpoint, kwargs))
         if method == "GET" and endpoint.endswith("/topics"):
             return json.dumps({"names": ["old"]})
+        if method == "GET" and endpoint.endswith("/pages"):
+            return json.dumps(
+                {"build_type": "workflow", "source": {"branch": "main", "path": "/"}}
+            )
         if method == "GET":
             return json.dumps({"default_branch": "main", "description": "old"})
         return ""
@@ -337,19 +395,20 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
     calls.clear()
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
     RECONCILER.reconcile_repository(
-        "Repo", desired(description="new", topics=["new"], pages=True)
+        "Repo", desired(description="new", topics=["new"], deepwiki=True, pages=True)
     )
     assert any(call[0] == "PUT" and call[1].endswith("/pages") for call in calls)
 
     calls.clear()
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
     RECONCILER.reconcile_repository(
         "Repo", desired(description="new", topics=["new"], pages=False)
     )
     assert any(call[0] == "DELETE" and call[1].endswith("/pages") for call in calls)
 
 
-def test_reconcile_noops_when_already_desired_and_pages_absent(monkeypatch) -> None:
-    """An already-converged repository causes no write calls."""
+def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
+    """Already-converged repository and Pages state cause no writes."""
 
     calls = []
 
@@ -357,14 +416,29 @@ def test_reconcile_noops_when_already_desired_and_pages_absent(monkeypatch) -> N
         calls.append((method, endpoint, kwargs))
         if endpoint.endswith("/topics"):
             return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {
+                    "build_type": "legacy",
+                    "source": {"branch": "main", "path": "/docs"},
+                }
+            )
         return json.dumps(
             {"default_branch": "main", "description": "Useful product."}
         )
 
     monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
     RECONCILER.reconcile_repository("Repo", desired())
     assert [call[0] for call in calls] == ["GET", "GET"]
+
+    calls.clear()
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: True)
+    monkeypatch.setattr(RECONCILER, "_docs_index_exists", lambda *args: True)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    RECONCILER.reconcile_repository("Repo", desired(deepwiki=True, pages=True))
+    assert [call[0] for call in calls] == ["GET", "GET", "GET"]
 
 
 def test_parse_args(monkeypatch, tmp_path) -> None:
@@ -396,18 +470,14 @@ def test_main_modes_and_failure_aggregation(monkeypatch, tmp_path, capsys) -> No
     monkeypatch.setattr(
         RECONCILER,
         "parse_args",
-        lambda: argparse.Namespace(
-            manifest=path, validate_only=True, repository=[]
-        ),
+        lambda: argparse.Namespace(manifest=path, validate_only=True, repository=[]),
     )
     assert RECONCILER.main() == 0
 
     monkeypatch.setattr(
         RECONCILER,
         "parse_args",
-        lambda: argparse.Namespace(
-            manifest=path, validate_only=False, repository=[]
-        ),
+        lambda: argparse.Namespace(manifest=path, validate_only=False, repository=[]),
     )
     monkeypatch.delenv("GH_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="GH_TOKEN"):
@@ -429,9 +499,7 @@ def test_main_modes_and_failure_aggregation(monkeypatch, tmp_path, capsys) -> No
     monkeypatch.setattr(
         RECONCILER,
         "parse_args",
-        lambda: argparse.Namespace(
-            manifest=path, validate_only=False, repository=[]
-        ),
+        lambda: argparse.Namespace(manifest=path, validate_only=False, repository=[]),
     )
     seen = []
 
@@ -458,9 +526,7 @@ def test_main_catches_supported_errors(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         RECONCILER,
         "parse_args",
-        lambda: argparse.Namespace(
-            manifest=path, validate_only=False, repository=[]
-        ),
+        lambda: argparse.Namespace(manifest=path, validate_only=False, repository=[]),
     )
     exceptions = [
         RECONCILER.ManifestError("x"),
