@@ -76,3 +76,12 @@ def test_deepwiki_intent_is_an_executable_default_branch_gate() -> None:
     assert "https://deepwiki.com/badge.svg" in source
     assert "https://deepwiki.com/{ORGANIZATION}/{repository}" in source
     assert "DeepWiki badge requested for {repository}" in source
+
+
+def test_apply_continues_independent_repositories_before_reporting_failures() -> None:
+    """One not-yet-ready repository must not prevent safe siblings from reconciling."""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "failures: list[str] = []" in source
+    assert "failures.append" in source
+    assert "metadata reconciliation failed:" in source
