@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: repository-metadata-reconcile-${{ github.event_name }}
+  group: repository-metadata-reconcile-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
