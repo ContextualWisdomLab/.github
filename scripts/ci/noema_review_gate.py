@@ -300,6 +300,38 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
     return locations
 
 
+def _compact_line_ranges(lines: Sequence[int]) -> str:
+    """Compress sorted line numbers into comma-separated inclusive ranges."""
+    if not lines:
+        return ""
+    ranges: list[str] = []
+    start = previous = lines[0]
+    for line in lines[1:]:
+        if line == previous + 1:
+            previous = line
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = line
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ",".join(ranges)
+
+
+def changed_line_manifest(locations: Sequence[tuple[str, int, str]]) -> str:
+    """Serialize exact changed-side locations as compact deterministic JSON."""
+    grouped: dict[str, dict[str, set[int]]] = {}
+    for path, line, side in locations:
+        grouped.setdefault(path, {"LEFT": set(), "RIGHT": set()})[side].add(line)
+    entries: list[dict[str, str]] = []
+    for path in sorted(grouped):
+        entry = {"path": path}
+        for side in ("LEFT", "RIGHT"):
+            lines = sorted(grouped[path][side])
+            if lines:
+                entry[side] = _compact_line_ranges(lines)
+        entries.append(entry)
+    return json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+
+
 def parse_diff_path(raw: str, prefix: str) -> str:
     """Decode a Git unified-diff path, including C-quoted UTF-8 paths."""
     value = raw.split("\t", 1)[0]
@@ -1058,10 +1090,12 @@ def call_llm(
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
     reject_private_llm_url(api_url)
 
+    changed_locations = sorted(changed_diff_locations(diff))
     allowed_locations = [
         {"path": path, "line": line, "side": side}
-        for path, line, side in sorted(changed_diff_locations(diff))
+        for path, line, side in changed_locations
     ]
+    location_manifest = changed_line_manifest(changed_locations)
     location_example = (
         allowed_locations[0]
         if allowed_locations
@@ -1105,13 +1139,16 @@ def call_llm(
                     },
                     separators=(",", ":"),
                 ),
+                "Authoritative exact changed-side coordinate manifest (inclusive line ranges):",
+                location_manifest,
+                "For reviewed_lines.path, adversarial_validation.probes.path, and findings.file, copy a manifest path and side exactly and choose an integer line inside that side's ranges. This manifest, not additional context or visual line counting, is the sole coordinate authority.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
                         "Your prior verdict was rejected by the trusted validator: "
                         f"{repair_error or 'no diagnostic message was available'}",
-                        "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
+                        "Return one corrected JSON verdict using only exact changed-side locations from the authoritative coordinate manifest.",
                     ]
                     if is_retry
                     else []

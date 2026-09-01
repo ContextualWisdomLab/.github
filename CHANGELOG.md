@@ -5,6 +5,12 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Ground Noema formal-review coordinates before the first request and its repair retry.**
+  The trusted exact-line validator remains fail-closed, but the model now receives a compact,
+  deterministic JSON manifest of every allowed path, side, and inclusive changed-line range.
+  This prevents long-running retries from guessing coordinates out of whole-file context, as
+  observed in `ContextualWisdomLab/bandscope#1122` job `99792663163`, while preserving rejection
+  of any reviewed line, adversarial probe, or finding outside the parsed unified diff.
 - **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
   Building on the draft-poll exemption's live PR/head validation, Devin Review found two
   further defects. (1) The concurrency group was keyed only by repository and PR number, so
