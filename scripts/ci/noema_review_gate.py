@@ -36,6 +36,17 @@ DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
+# The org's standing operating directive requires at least a 3-hour floor for
+# central Strix/OpenCode/Noema review latency (docs/product-goal-directive.md).
+# Unlike the sidecar's own preflight self-check (ADR-0005, deliberately kept at
+# 120s with its own bounded same-budget retry), this single call has no retry
+# of its own -- a live reproduction (naruon#1486, job 99690488248, 2026-09-01)
+# shows the gateway's own routing pool degraded (11/12 candidates rejected)
+# picking its one remaining "ready" agent, whose real completion for a full PR
+# diff then ran past the old 120s bound with nothing to fall back to, failing
+# the entire required review. 10800s gives the gateway's own internal
+# retry/failover machinery room to land on a working agent instead.
+NOEMA_LLM_REQUEST_TIMEOUT_SECONDS = 10800
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -653,7 +664,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=120) as response:  # nosec B310
+    with opener.open(request, timeout=NOEMA_LLM_REQUEST_TIMEOUT_SECONDS) as response:  # nosec B310
         raw = response.read().decode("utf-8")
     data = json.loads(raw)
     content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()

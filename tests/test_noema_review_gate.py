@@ -688,7 +688,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
 
     class Opener:
         def open(self, request, timeout):
-            assert timeout == 120
+            assert timeout == noema.NOEMA_LLM_REQUEST_TIMEOUT_SECONDS
             payloads.append(json.loads(request.data))
             return Response(invalid if len(payloads) == 1 else valid)
 

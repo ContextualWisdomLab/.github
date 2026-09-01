@@ -2660,7 +2660,18 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
+    assert '[ "$SUPPLIED_BASE_REF" = "$live_base_ref" ]' in metadata_step
+    assert '[ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ]' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ]' in metadata_step
+    # A head_sha-only advance between dispatch capture and this job is normal PR
+    # activity (Actions queue backlog widens the window); every downstream job
+    # re-checks the re-fetched live head_sha with its own STALE_HEAD guard, so
+    # this is a warn-and-proceed, not an exact-match fail-closed rejection.
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' not in metadata_step
+    assert (
+        'if [ -n "$SUPPLIED_HEAD_SHA" ] && [ "$SUPPLIED_HEAD_SHA" != "$live_head_sha" ]; then'
+    ) in metadata_step
+    assert "repository_dispatch head advanced since dispatch" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in metadata_step
