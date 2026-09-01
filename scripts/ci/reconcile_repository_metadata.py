@@ -265,7 +265,9 @@ def _repository_file_exists(repository: str, default_branch: str, path: str) -> 
     combined = f"{completed.stdout}\n{completed.stderr}"
     if "HTTP 404" in combined or "Not Found" in combined:
         return False
-    raise RuntimeError(f"repository file state could not be resolved for {repository}:{path}")
+    raise RuntimeError(
+        f"GitHub Pages source state could not be resolved for {repository}:{path}"
+    )
 
 
 def _docs_index_exists(repository: str, default_branch: str) -> bool:
@@ -438,7 +440,15 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     badge_exists = _deepwiki_badge_exists(repository, default_branch)
     if badge_exists != desired["deepwiki"]:
         raise RuntimeError(f"DeepWiki state did not converge for {repository}")
-    _pages_precondition(repository, default_branch, desired)
+    if desired["pages"]:
+        pages_mode = desired.get("pages_mode", "legacy")
+        if pages_mode == "workflow":
+            if not _workflow_pages_definition_exists(repository, default_branch):
+                raise RuntimeError(
+                    f"Pages workflow source did not converge for {repository}"
+                )
+        elif not _docs_index_exists(repository, default_branch):
+            raise RuntimeError(f"Pages source did not converge for {repository}")
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
