@@ -15,13 +15,39 @@ from typing import Any, Sequence
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# "opencode-agent" also accepts /opencode and /oc: upstream OpenCode's own
+# GitHub Action documents those as its trigger phrases
+# (https://open-code.ai/en/docs/github), and this repo's dispatch pipeline
+# accepts them as aliases of the same @opencode-agent request rather than
+# forcing commenters to learn a locally-invented mention instead.
+#
+# None of the three alternatives below may be preceded by a bare "/": a
+# preceding slash almost always means the match is embedded in a URL path
+# (e.g. https://opencode.ai/docs, https://youtube.com/@opencode-agent) or an
+# ordinary path segment (docs/@opencode-agent), not a deliberate trigger. The
+# one deliberate exception is a maintainer separating both supported agent
+# requests with a bare slash and no space (@cwl-noema-review/@opencode-agent).
+# That case is matched as one combined literal — "@cwl-noema-review/@opencode-agent"
+# — guarded by the same left-boundary exclusion as the standalone
+# "@opencode-agent" alternative. A boundary check on the trailing slash alone
+# is not enough: it would still fire for invalid pasted text where
+# "@cwl-noema-review" is itself embedded in a larger token (e.g.
+# foo@cwl-noema-review/@opencode-agent, docs/@cwl-noema-review/@opencode-agent)
+# without checking that the Noema mention has a valid left boundary of its own.
+# The bare /opencode and /oc forms additionally exclude a preceding "=": a
+# URL query string (?next=/opencode, ?redirect=/oc) shares the same "not
+# preceded by a word character" shape as a deliberate standalone command.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
-        r"(?<![A-Za-z0-9_-])@opencode-agent(?![A-Za-z0-9_-])",
+        r"(?:"
+        r"(?<![A-Za-z0-9_/-])@opencode-agent"
+        r"|(?<![A-Za-z0-9_/-])@cwl-noema-review/@opencode-agent"
+        r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
+        r")(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
 }

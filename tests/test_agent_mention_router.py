@@ -111,6 +111,131 @@ def test_exact_mentions_and_parse_event() -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/opencode please re-review",
+        "/oc please re-review",
+        "kicking off /oc",
+        "/OC",
+        "/OpenCode",
+    ],
+)
+def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
+    """Upstream OpenCode's own /opencode and /oc trigger phrases also dispatch."""
+
+    module = load_module()
+    assert module.exact_mentions(body) == ("opencode-agent",)
+
+
+def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
+    """A slash used to separate two agent requests must not swallow the @mention.
+
+    Devin/owner review regression on #1537, across three rounds:
+
+    1. Excluding a preceding ``/`` from the lookbehind to reject
+       documentation-link false positives (see
+       ``test_exact_mentions_rejects_slash_opencode_substrings``) was
+       originally applied to the whole ``@opencode-agent|/opencode|/oc``
+       alternation, so a maintainer separating both requested agents with a
+       bare slash and no space (``@cwl-noema-review/@opencode-agent``)
+       silently lost the OpenCode request.
+    2. Simply exempting the ``@`` form from the slash exclusion reopened the
+       same false-positive class for ``/@opencode-agent`` embedded in an
+       arbitrary URL or path segment.
+    3. Recognizing ``/@opencode-agent`` only when the slash is immediately
+       preceded by the other pattern's exact literal mention text
+       (``@cwl-noema-review``) checked only the boundary of the trailing
+       slash, not whether that ``@cwl-noema-review`` occurrence itself has a
+       valid left boundary, so invalid pasted text such as
+       ``foo@cwl-noema-review/@opencode-agent`` still dispatched OpenCode
+       (see ``test_exact_mentions_rejects_invalid_separator_prefixes``).
+
+    The final pattern matches the whole separator form
+    (``@cwl-noema-review/@opencode-agent``) as one literal, guarded by the
+    same left-boundary exclusion as the standalone ``@opencode-agent``
+    alternative.
+    """
+
+    module = load_module()
+    assert module.exact_mentions("@cwl-noema-review/@opencode-agent") == (
+        "cwl-noema-review",
+        "opencode-agent",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "foo@cwl-noema-review/@opencode-agent",
+        "docs/@cwl-noema-review/@opencode-agent",
+        "user.name@cwl-noema-review/@opencode-agent",
+    ],
+)
+def test_exact_mentions_rejects_invalid_separator_prefixes(body: str) -> None:
+    """The combined separator literal must not fire when embedded in a larger token.
+
+    Fifth-round finding on #1537, reported directly by the repository owner
+    (not a review bot): the separator alternative
+    ``(?<=@cwl-noema-review)/@opencode-agent`` only checked the literal text
+    immediately before the slash, not whether that ``@cwl-noema-review``
+    occurrence itself has a valid left boundary. Pasted text embedding the
+    Noema mention inside a larger token — a preceding word
+    (``foo@cwl-noema-review/@opencode-agent``), a path segment
+    (``docs/@cwl-noema-review/@opencode-agent``), or an email-like local part
+    (``user.name@cwl-noema-review/@opencode-agent``) — still dispatched an
+    unintended OpenCode review. The fix matches the whole
+    ``@cwl-noema-review/@opencode-agent`` literal with the same left-boundary
+    exclusion as the standalone ``@opencode-agent`` alternative, so it no
+    longer fires unless the combined mention itself starts at a valid
+    boundary. Some of these inputs still independently match the unrelated,
+    pre-existing ``cwl-noema-review`` pattern (e.g. a preceding ``/`` is not
+    excluded there); that pattern predates this PR and is out of scope for
+    this fix, so only the OpenCode dispatch is asserted here.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "the /occupied seat",
+        "visit /oceanography for more",
+        "see /opencode-docs for the guide",
+        "check out https://opencode.ai/docs for more info",
+        "see http://open-code.ai/en/docs/github",
+        "share this: https://youtube.com/@opencode-agent",
+        "see docs/@opencode-agent for the config file",
+        "visit https://example.com/?next=/opencode for the redirect",
+        "visit https://example.com/?next=/oc for the redirect",
+    ],
+)
+def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
+    """A longer token merely starting with /oc or /opencode is not a mention.
+
+    Includes a URL whose path component happens to embed ``/opencode`` right
+    after the scheme's own ``//`` (Devin review finding on #1537): the prior
+    lookbehind excluded a preceding letter/digit/underscore/hyphen but not a
+    preceding ``/``, so a documentation link like ``https://opencode.ai``
+    satisfied it and could launch an unintended review. Also includes a
+    second-round Devin finding on the same PR: restoring plain recognition of
+    ``@opencode-agent`` after a bare slash (so a maintainer could write
+    ``@cwl-noema-review/@opencode-agent`` with no space) reopened the same
+    class of false positive for ``/@opencode-agent`` embedded in an arbitrary
+    URL or path segment, since both share the exact same "word char, then
+    slash, then the mention" shape as the deliberate separator case. A third
+    finding (CodeRabbit, same PR) noted the slash-preceded exclusion for the
+    bare ``/opencode``/``/oc`` forms did not also exclude a preceding ``=``,
+    so a URL query string such as ``?next=/opencode`` or ``?next=/oc`` still
+    matched.
+    """
+
+    module = load_module()
+    assert module.exact_mentions(body) == ()
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
