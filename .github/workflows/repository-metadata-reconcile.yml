@@ -57,6 +57,8 @@ jobs:
             --taxonomy config/repository-label-taxonomy.json \
             --validate-only
       - name: Run metadata contract tests at repository quality gates
+        env:
+          COVERAGE_RCFILE: /dev/null
         run: |
           set -euo pipefail
           python -m coverage run \
