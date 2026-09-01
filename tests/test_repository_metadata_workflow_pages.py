@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -72,6 +73,23 @@ def test_workflow_pages_definition_probe_uses_standard_reviewed_path(monkeypatch
     assert seen == [("Repo", "main", ".github/workflows/pages.yml")]
 
 
+def test_repository_file_probe_requires_a_regular_file(monkeypatch) -> None:
+    """A directory or listing at a required source path must not satisfy the file contract."""
+
+    responses = iter(
+        [
+            SimpleNamespace(returncode=0, stdout=json.dumps({"type": "file"}), stderr=""),
+            SimpleNamespace(returncode=0, stdout=json.dumps({"type": "dir"}), stderr=""),
+            SimpleNamespace(returncode=0, stdout=json.dumps([{"type": "file"}]), stderr=""),
+        ]
+    )
+    monkeypatch.setattr(RECONCILER.subprocess, "run", lambda *args, **kwargs: next(responses))
+
+    assert RECONCILER._repository_file_exists("Repo", "main", "docs/index.md")
+    assert not RECONCILER._repository_file_exists("Repo", "main", "docs/index.md")
+    assert not RECONCILER._repository_file_exists("Repo", "main", "docs/index.md")
+
+
 def test_workflow_pages_precondition_rejects_missing_reviewed_workflow(monkeypatch) -> None:
     """Workflow intent fails before mutation when the reviewed Pages workflow is absent."""
 
@@ -113,6 +131,42 @@ def test_workflow_pages_reconcile_preserves_live_actions_mode(monkeypatch) -> No
         if call[1].endswith("/pages") and call[0] in {"POST", "PUT", "DELETE"}
     ]
     assert page_writes == []
+
+
+def test_workflow_pages_reconcile_fails_closed_before_any_metadata_write(monkeypatch) -> None:
+    """Invalid workflow Pages state is rejected before description or topic mutation."""
+
+    writes = []
+
+    def gh_api(method, endpoint, **kwargs):
+        if method in {"PATCH", "PUT", "POST", "DELETE"}:
+            writes.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["old-topic"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps({"build_type": "legacy"})
+        return json.dumps({"default_branch": "main", "description": "Old product."})
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(
+        RECONCILER, "_workflow_pages_definition_exists", lambda *args: True
+    )
+
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    with pytest.raises(RuntimeError, match="not configured"):
+        RECONCILER.reconcile_repository("Repo", desired())
+    assert writes == []
+
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    monkeypatch.setattr(
+        RECONCILER,
+        "_pages_configuration",
+        lambda *args: {"build_type": "legacy", "source": {"branch": "main", "path": "/docs"}},
+    )
+    with pytest.raises(RuntimeError, match="not Actions-backed"):
+        RECONCILER.reconcile_repository("Repo", desired())
+    assert writes == []
 
 
 def test_workflow_pages_reconcile_fails_closed_on_missing_or_wrong_mode(monkeypatch) -> None:
