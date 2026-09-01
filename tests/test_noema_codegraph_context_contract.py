@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -168,6 +169,148 @@ def test_token_loader_refuses_head_change_before_codegraph_materialization(tmp_p
     assert result.returncode != 0
     assert "refused stale or malformed pull-request source identity" in result.stderr
     assert not (runner_temp / "base-seen").exists()
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """Run git in one fixture repository and return trimmed stdout."""
+    result = subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _diverged_pr_remote(tmp_path: Path) -> tuple[Path, str, str]:
+    """Create a PR head and an independently advanced base from one merge base."""
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(work)], check=True, capture_output=True)
+    _git(work, "config", "user.email", "noema-test@example.invalid")
+    _git(work, "config", "user.name", "Noema Test")
+    (work / "common.txt").write_text("common\n", encoding="utf-8")
+    _git(work, "add", "common.txt")
+    _git(work, "commit", "-m", "common")
+    _git(work, "branch", "-M", "main")
+    _git(work, "remote", "add", "origin", remote.resolve().as_uri())
+    _git(work, "push", "origin", "main")
+
+    _git(work, "checkout", "-b", "feature")
+    (work / "pr-only.txt").write_text("pull request\n", encoding="utf-8")
+    _git(work, "add", "pr-only.txt")
+    _git(work, "commit", "-m", "pr change")
+    head_sha = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "origin", "HEAD:refs/heads/feature")
+    _git(remote, "update-ref", "refs/pull/7/head", head_sha)
+
+    _git(work, "checkout", "main")
+    (work / "base-only.txt").write_text("upstream\n", encoding="utf-8")
+    _git(work, "add", "base-only.txt")
+    _git(work, "commit", "-m", "base change")
+    base_sha = _git(work, "rev-parse", "HEAD")
+    _git(work, "push", "origin", "main")
+    return remote, head_sha, base_sha
+
+
+def test_codegraph_helper_scopes_diverged_pr_from_merge_base(tmp_path: Path) -> None:
+    """Base-only changes must never enter CodeGraph's pull-request changed scope."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    remote, head_sha, base_sha = _diverged_pr_remote(tmp_path)
+    runner_temp = tmp_path / "runner-codegraph"
+    workspace = tmp_path / "workspace-codegraph"
+    bin_dir = tmp_path / "bin-codegraph"
+    package_dir = workspace / "scripts" / "ci" / "codegraph-package"
+    runner_temp.mkdir()
+    package_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    (package_dir / "package.json").write_text("{}\n", encoding="utf-8")
+    (package_dir / "package-lock.json").write_text(
+        '{"packages":{"node_modules/picomatch":{"version":"4.0.4"}}}\n',
+        encoding="utf-8",
+    )
+
+    _write_executable(
+        bin_dir / "git",
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [ \"${1:-}\" = -C ] && [ \"${3:-}\" = remote ] && "
+        "[ \"${4:-}\" = add ] && [ \"${5:-}\" = origin ]; then\n"
+        "  exec \"$REAL_GIT\" \"$1\" \"$2\" remote add origin \"$TEST_REMOTE_URL\"\n"
+        "fi\n"
+        "exec \"$REAL_GIT\" \"$@\"\n",
+    )
+    _write_executable(
+        bin_dir / "npm",
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "case \"${1:-}\" in\n"
+        "  ci)\n"
+        "    mkdir -p node_modules/.bin node_modules/picomatch "
+        "node_modules/@colbymchenry/codegraph-test/lib/node_modules/picomatch\n"
+        "    printf '%s\\n' '{\"version\":\"4.0.4\"}' >node_modules/picomatch/package.json\n"
+        "    printf '%s\\n' '{\"version\":\"4.0.4\"}' >node_modules/@colbymchenry/codegraph-test/lib/node_modules/picomatch/package.json\n"
+        "    printf '%s\\n' '{\"packages\":{\"node_modules/picomatch\":{\"version\":\"0.0.0\"}}}' >node_modules/@colbymchenry/codegraph-test/lib/node_modules/.package-lock.json\n"
+        "    cat >node_modules/.bin/codegraph <<'CODEGRAPH'\n"
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "case \"${1:-}\" in\n"
+        "  init) exit 0 ;;\n"
+        "  status) printf '%s\\n' 'index ready' ;;\n"
+        "  explore) printf '%s\\n' \"${2:-}\" ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
+        "CODEGRAPH\n"
+        "    chmod 0700 node_modules/.bin/codegraph\n"
+        "    ;;\n"
+        "  audit) exit 0 ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n",
+    )
+    _write_executable(
+        bin_dir / "node",
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' '4.0.4'\n",
+    )
+    _write_executable(
+        bin_dir / "jq",
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [ \"${1:-}\" = -r ]; then\n"
+        "  printf '%s\\n' '4.0.4'\n"
+        "else\n"
+        "  printf '%s\\n' '{\"packages\":{\"node_modules/picomatch\":{\"version\":\"4.0.4\"}}}'\n"
+        "fi\n",
+    )
+
+    evidence = runner_temp / "evidence.md"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env.get('PATH', '')}",
+            "REAL_GIT": real_git,
+            "TEST_REMOTE_URL": remote.resolve().as_uri(),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD_SHA": head_sha,
+            "PR_BASE_SHA": base_sha,
+            "NOEMA_CODEGRAPH_CONTEXT_PATH": str(evidence),
+            "GH_TOKEN": "fixture-token",
+            "RUNNER_TEMP": str(runner_temp),
+            "GITHUB_WORKSPACE": str(workspace),
+        }
+    )
+    subprocess.run(
+        ["bash", str(CODEGRAPH_HELPER)],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    packet = evidence.read_text(encoding="utf-8")
+    assert "pr-only.txt" in packet
+    assert "base-only.txt" not in packet
 
 
 def test_noema_gate_requires_exact_head_bound_codegraph_when_workflow_requests_it() -> None:
