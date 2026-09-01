@@ -98,6 +98,24 @@ def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypat
     assert "--slurp" in requests[0]
 
 
+def test_inspect_pr_reports_stale_snapshot_without_dispatch(monkeypatch):
+    """A moved head is not mislabeled as an active worker or dispatched stale."""
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
+    monkeypatch.setattr(fix, "needs_autofix", lambda _pr: (True, ("review",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda _repo, _number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda *_args, **_kwargs: pytest.fail("stale snapshot must not dispatch"),
+    )
+
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("scheduler PR snapshot is stale; retry with the current live head",),
+    )
+
+
 def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys):
     """Dry-run reports an older head without mutating Actions state."""
     stale = "b" * 40
@@ -158,7 +176,7 @@ def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monk
         workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
         workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
         dry_run=False,
-    )
+    ) is None
 
 
 def test_needs_autofix_uses_current_head_evidence():

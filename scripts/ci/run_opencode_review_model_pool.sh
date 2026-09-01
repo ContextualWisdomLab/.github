@@ -397,16 +397,18 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_poll_seconds
+	local opencode_pid fatal_kill_grace_seconds fatal_poll_seconds
 
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
+	fatal_kill_grace_seconds="${OPENCODE_FATAL_KILL_GRACE_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
 	env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
 		opencode run "$(cat "$prompt_file")" \
 		--pure \
 		--agent "$agent" \
@@ -423,12 +425,12 @@ run_one_model_attempt() {
 		if has_fatal_provider_error_event "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s logged a fatal provider error while still running; cancelling that failed process.\n' \
 				"$model_candidate" "$attempt" "$attempts"
-			kill "$opencode_pid" 2>/dev/null
-			for _ in $(seq 1 30); do
-				kill -0 "$opencode_pid" 2>/dev/null || break
+			kill -TERM -- "-$opencode_pid" 2>/dev/null
+			for _ in $(seq 1 "$fatal_kill_grace_seconds"); do
+				kill -0 -- "-$opencode_pid" 2>/dev/null || break
 				sleep 1
 			done
-			kill -9 "$opencode_pid" 2>/dev/null
+			kill -KILL -- "-$opencode_pid" 2>/dev/null
 			break
 		fi
 		sleep "$fatal_poll_seconds"

@@ -92,7 +92,7 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
         in cleanup
     )
     assert "could not re-verify the live PR head before cancelling" in cleanup
-    assert '"${live_head,,}" != "${EXPECTED_HEAD,,}"' in cleanup
+    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
     assert 'endswith("@" + $head)' in cleanup
     assert "| not)" in cleanup
 
@@ -117,7 +117,7 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" \'\n'
+    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" \'\n'
     start = workflow.index(start_marker) + len(start_marker)
     end = workflow.index('\n                \' <<<"$runs_json"', start)
     selector = workflow[start:end]
@@ -141,7 +141,7 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     assert "github.event.workflow_run.head_sha" not in workflow
     assert "EXPECTED_HEAD_SHA:" in workflow
     assert "--expected-head \"$EXPECTED_HEAD_SHA\"" in workflow
-    assert '"${live_head,,}" != "${EXPECTED_HEAD,,}"' in workflow
+    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in workflow
     assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
         "Select fail-closed Noema reviewer credential"
     )
@@ -165,7 +165,7 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" \'\n'
+    start_marker = '--arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" \'\n'
     start = workflow.index(start_marker) + len(start_marker)
     end = workflow.index('\n                \' <<<"$runs_json"', start)
     selector = workflow[start:end]
@@ -338,7 +338,7 @@ def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) 
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_CALLS"
-if [[ "$*" == *"/pulls/7"* ]]; then printf '%s\n' "$EXPECTED_HEAD"; exit 0; fi
+if [[ "$*" == *"/pulls/7"* ]]; then printf '%s\n' "$EXPECTED_HEAD_SHA"; exit 0; fi
 if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
 """,
         encoding="utf-8",
@@ -348,7 +348,7 @@ if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
         [shutil.which("bash") or "/bin/bash", "-c", _superseded_cleanup_script()],
         env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
              "TARGET_REPOSITORY": "ContextualWisdomLab/example", "PR_NUMBER": "7",
-             "EXPECTED_HEAD": current_head, "CURRENT_RUN_ID": "200",
+             "EXPECTED_HEAD_SHA": current_head, "CURRENT_RUN_ID": "200",
              "FAKE_RUNS": str(fixture), "FAKE_CALLS": str(calls)},
         capture_output=True, text=True, check=False,
     )
@@ -405,7 +405,7 @@ if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
         [shutil.which("bash") or "/bin/bash", "-c", _superseded_cleanup_script()],
         env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
              "TARGET_REPOSITORY": "ContextualWisdomLab/example", "PR_NUMBER": "7",
-             "EXPECTED_HEAD": current_head, "CURRENT_RUN_ID": "200",
+             "EXPECTED_HEAD_SHA": current_head, "CURRENT_RUN_ID": "200",
              "FAKE_RUNS": str(fixture), "FAKE_CALLS": str(calls)},
         capture_output=True, text=True, check=False,
     )

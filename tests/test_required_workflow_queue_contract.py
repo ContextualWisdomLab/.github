@@ -390,6 +390,34 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
+def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
+    """Required-workflow runs retain exact PR/head cleanup without run-name rendering."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup selector")
+    workflow = workflow_text("strix.yml")
+    marker = '--arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \'\n'
+    start = workflow.index(marker) + len(marker)
+    end = workflow.index('\n              \' <<<"$runs_json"', start)
+    runs = {
+        "workflow_runs": [
+            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
+            {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
+            {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+        ]
+    }
+    result = subprocess.run(
+        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "current", "--arg", "action", "synchronize", "--arg", "repo", "owner/repo", "--arg", "current", "99", workflow[start:end]],
+        input=json.dumps(runs),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["1"]
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
@@ -418,6 +446,8 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "TARGET_PR_HEAD_SHA" in workflow
             assert 'select(.event == "pull_request_target")' in workflow
             assert 'select(.event == "repository_dispatch")' not in workflow
+            assert "(.pull_requests // [])" in workflow
+            assert ".head.sha // \"\"" in workflow
             assert "leaving runs unchanged" in workflow
             assert (
                 "for active_status in queued in_progress requested waiting pending"

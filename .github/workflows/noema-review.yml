@@ -279,13 +279,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
             exit 1
           fi
           live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
-            echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD}, observed ${live_head}."
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+            echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD_SHA}, observed ${live_head}."
             exit 1
           fi
 
@@ -319,7 +319,7 @@ jobs:
               # current run even when its display_title never rendered a
               # matching "@$head" suffix to exclude by.
               if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
-                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD" '
+                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" '
                   .workflow_runs[]
                   | select(.id < $current)
                   | select(.path == ".github/workflows/noema-review.yml")
@@ -351,7 +351,7 @@ jobs:
                   sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
                   exit 0
                 fi
-                if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+                if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
                   echo "::notice::Noema cleanup stopped because the PR head advanced."
                   exit 0
                 fi

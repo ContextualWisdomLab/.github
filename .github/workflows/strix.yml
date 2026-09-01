@@ -115,8 +115,21 @@ jobs:
                 | select((.id | tostring) != $current)
                 | select(.name == "Strix Security Scan")
                 | select(.event == "pull_request_target")
-                | select((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@"))
-                | select($action == "closed" or ((.display_title // "") | endswith("@" + $head_sha) | not))
+                | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
+                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
+                | select($title_matches or $metadata_matches)
+                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr)
+                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
+                  )) as $metadata_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr) and ((.head.sha // "") != "")
+                  )) as $metadata_has_head
+                | select(
+                    $action == "closed"
+                    or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
+                  )
                 | .id
               ' <<<"$runs_json")"; then
               echo "::warning::Strix cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."

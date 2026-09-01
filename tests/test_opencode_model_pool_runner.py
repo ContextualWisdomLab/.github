@@ -160,6 +160,9 @@ def run_failed_model(
         '  [ -z "${FAKE_OPENCODE_PROMPT_CAPTURE:-}" ] || printf \'%s\\n\' "$2" > "$FAKE_OPENCODE_PROMPT_CAPTURE"\n'
         '  [ -z "${FAKE_OPENCODE_JSON:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_JSON"\n'
         '  [ -z "${FAKE_OPENCODE_STDERR:-}" ] || printf \'%s\\n\' "$FAKE_OPENCODE_STDERR" >&2\n'
+        '  if [ "${FAKE_OPENCODE_SPAWN_TERM_IGNORING_CHILD:-}" = 1 ]; then\n'
+        "    (trap '' TERM; sleep 120) &\n"
+        "  fi\n"
         '  sleep "${FAKE_OPENCODE_HANG_SECONDS:-0}"\n'
         '  exit "${FAKE_OPENCODE_RUN_EXIT:-1}"\n'
         "fi\n"
@@ -581,6 +584,26 @@ def test_fatal_provider_error_kills_hung_opencode_run_early(
     assert "logged a fatal provider error while still running" in result.stdout
     assert "skipping remaining attempts for this model" in result.stdout
     assert elapsed < 25
+
+
+def test_fatal_provider_error_kills_term_ignoring_descendant(tmp_path: Path) -> None:
+    """Fatal cancellation kills the whole dedicated group, including descendants."""
+    start = time.monotonic()
+    result = run_failed_model(
+        tmp_path,
+        json_line=(
+            '{"type":"error","error":{"name":"ProviderQuotaError","data":'
+            '{"message":"insufficient_quota: request rejected"}}}'
+        ),
+        extra_env={
+            "FAKE_OPENCODE_HANG_SECONDS": "120",
+            "FAKE_OPENCODE_SPAWN_TERM_IGNORING_CHILD": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "logged a fatal provider error while still running" in result.stdout
+    assert time.monotonic() - start < 25
 
 
 def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -> None:

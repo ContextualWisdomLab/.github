@@ -352,8 +352,8 @@ def prepare_autofix_slot(
     workflow: str,
     workflow_repository: str,
     dry_run: bool,
-) -> bool:
-    """Cancel older-head workers and report whether this exact head already owns the slot."""
+) -> bool | None:
+    """Cancel older-head workers; return ``None`` when this PR snapshot went stale."""
     dispatch_repo = workflow_repository or repo
     payload = run_json(
         [
@@ -394,7 +394,7 @@ def prepare_autofix_slot(
         if dry_run:
             print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
         elif not live_head_matches(repo, pr):
-            return True
+            return None
         else:
             force_cancel_workflow_runs(dispatch_repo, stale_ids)
     return same_head
@@ -458,13 +458,16 @@ def inspect_pr(
     ):
         return "wait", ("recent autofix marker exists for this head",)
 
-    if prepare_autofix_slot(
+    slot_state = prepare_autofix_slot(
         repo,
         pr,
         workflow=args.autofix_workflow,
         workflow_repository=args.autofix_repository,
         dry_run=args.dry_run,
-    ):
+    )
+    if slot_state is None:
+        return "wait", ("scheduler PR snapshot is stale; retry with the current live head",)
+    if slot_state:
         return "wait", ("current-head autofix run is already queued or running",)
 
     dispatch_kwargs: dict[str, Any] = {
