@@ -507,28 +507,30 @@ while :; do
   if [ "$gateway_http_status" = "200" ]; then
     break
   fi
-  if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then
-    if [ -z "$gateway_http_status" ]; then
-      # A transport failure on every attempt has two structurally different
-      # causes that "could not reach the sidecar" alone cannot distinguish:
-      # the sidecar process is still running (a real network/gateway issue),
-      # or it has already exited (its own bug/crash/OOM, unrelated to the
-      # network at all). Check which one this is before recording generic
-      # transport-exhausted evidence, so a died sidecar is never
-      # misclassified as merely unreachable -- exact-head evidence: Strix
-      # run/job 33341290448/99337282309 for ContextualWisdomLab/.github#1460
-      # target 2cc819a9 passed healthz/provider-route readiness after 23s,
-      # then six minutes later all 3 gateway-preflight attempts failed to
-      # reach the sidecar at all, with no evidence of whether it had died.
-      if ! kill -0 "$sidecar_pid" 2>/dev/null; then
-        sidecar_exit_status=0
-        wait "$sidecar_pid" 2>/dev/null || sidecar_exit_status=$?
-        # The sidecar has fully exited (confirmed above), so draining here
-        # cannot hang, and it guarantees $sidecar_stderr holds everything the
-        # sidecar wrote before we read it -- the same discipline the healthz
-        # branch above uses for the same reason.
-        wait_for_sidecar_sanitizers
-        "$sidecar_python" - "$preflight_report" "$gateway_attempt" "$sidecar_exit_status" <<'PY'
+  if [ -z "$gateway_http_status" ] && ! kill -0 "$sidecar_pid" 2>/dev/null; then
+    # A transport failure has two structurally different causes that "could
+    # not reach the sidecar" alone cannot distinguish: the sidecar process is
+    # still running (a real network/gateway issue), or it has already exited
+    # (its own bug/crash/OOM, unrelated to the network at all). Check which
+    # one this is on EVERY failed attempt, not only once the attempt budget
+    # is exhausted -- a died sidecar can never succeed on a later retry, so
+    # waiting for the remaining attempts only delays detection. Exact-head
+    # evidence -- Strix run/job 33341290448/99337282309 for
+    # ContextualWisdomLab/.github#1460 target 2cc819a9: the sidecar passed
+    # healthz/provider-route readiness after 23s, then six minutes later all
+    # 3 gateway-preflight attempts failed to reach it at all (roughly the
+    # full 3 x 120s max-time budget, since the last-attempt-only check that
+    # used to live here could not have caught it any earlier); Devin Review
+    # (ContextualWisdomLab/.github#1438) is what prompted checking on every
+    # attempt instead.
+    sidecar_exit_status=0
+    wait "$sidecar_pid" 2>/dev/null || sidecar_exit_status=$?
+    # The sidecar has fully exited (confirmed above), so draining here
+    # cannot hang, and it guarantees $sidecar_stderr holds everything the
+    # sidecar wrote before we read it -- the same discipline the healthz
+    # branch above uses for the same reason.
+    wait_for_sidecar_sanitizers
+    "$sidecar_python" - "$preflight_report" "$gateway_attempt" "$sidecar_exit_status" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -552,13 +554,18 @@ temporary = report_path.with_suffix(".tmp")
 temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 temporary.replace(report_path)
 PY
-        fail "sidecar process exited after readiness, before gateway preflight completed (status ${sidecar_exit_status}); stderr: $(sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" "$sidecar_stderr")"
-      fi
-      # Sidecar still running -- every configured attempt exhausted with no
-      # usable HTTP response at all (Trigger A never resolved) -- record that
-      # before failing closed, using the same sanitize-then-atomic-replace
-      # pattern as the non-2xx and invalid-content paths below, so this exact
-      # failure case (the one telemetry matters most for) does not leave zero
+    fail "sidecar process exited after readiness, before gateway preflight completed (status ${sidecar_exit_status}); stderr: $(sed -n "1,${SIDECAR_STDERR_TAIL_LINES}p" "$sidecar_stderr")"
+  fi
+  if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then
+    if [ -z "$gateway_http_status" ]; then
+      # The dead-sidecar case is already ruled out above (it fails closed
+      # immediately, before this point is ever reached), so every attempt
+      # counted here was against a sidecar confirmed still running -- every
+      # configured attempt exhausted with no usable HTTP response at all
+      # (Trigger A never resolved) -- record that before failing closed,
+      # using the same sanitize-then-atomic-replace pattern as the non-2xx
+      # and invalid-content paths below, so this exact failure case (the one
+      # telemetry matters most for) does not leave zero
       # evidence trail.
       "$sidecar_python" - "$preflight_report" "$gateway_attempt" <<'PY'
 import json

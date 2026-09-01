@@ -189,6 +189,14 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-latest
+    # Explicit, not just the platform's own 360-minute (6h) default for
+    # unset timeout-minutes: NOEMA_LLM_TOTAL_BUDGET_SECONDS (19800s = 5.5h,
+    # scripts/ci/noema_review_gate.py) already budgets this job against that
+    # ceiling and relies on ~30 minutes of margin for checkout, credential
+    # minting, and posting the review; stating it here makes the relationship
+    # auditable/testable instead of implicit (Devin Review,
+    # ContextualWisdomLab/.github#1438).
+    timeout-minutes: 360
     if: >-
       github.event_name == 'repository_dispatch'
       || (

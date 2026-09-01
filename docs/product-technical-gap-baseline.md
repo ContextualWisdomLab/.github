@@ -3577,6 +3577,51 @@ Devin이 `naruon#1486`(`tests/test_stacked_pr_workflow_contract.py:16`)에 남�
 ruff clean, `scripts/ci/test_pr_governance_gate.sh: PASS`. Devin 스레드
 (`PRRT_kwDOSNjZ2s6d9SmZ`)에 근거를 남기고 resolve 처리했다.
 
+## 2026-09-01 웨이크업: naruon#1486 CI-wiring 수정 자체에 대한 Devin 후속 지적 2건 + `.github#1438`
+Devin 후속 지적 3건 — 모두 실재, 모두 수정
+
+이번 웨이크업은 두 PR에서 각각 "직전 수정 자체를 겨냥한" Devin의 새 리뷰를 받았다. 둘 다 추측이
+아니라 코드/스크립트를 직접 추적해 실재를 확인한 뒤 수정했다.
+
+**naruon#1486 (2건, 둘 다 실재):**
+1. **CI 배선 테스트가 주석도 통과시킴.** 직전 커밋의 회귀 테스트가 `"pytest -q tests" in
+   workflow` 원문 substring 검사여서, 실제 스텝이 삭제되고 같은 문자열이 주석으로만 남아도
+   통과했다. `yaml.safe_load`로 워크플로를 파싱해 `jobs.backend.steps[].run`에 실제로 존재하는
+   스텝만 인정하도록 재작성 — 손수 만든 fixture(주석만 남은 YAML)로 매치 0건임을 직접 확인.
+2. **repo-root `tests/` 스텝에 출력 스크리닝 누락.** 기존 backend 테스트 스텝과 달리 새
+   스텝에는 Timeout/Fatal/Warn/Denied 그레핑이 없어, 이 스텝만 금지된 출력을 내고도 CI를
+   통과할 수 있었다. 동일한 `grep -qiE` 가드 추가, 회귀 테스트에 통합. 두 항목 모두 수정 전
+   상태로 되돌려 진짜 RED 확인 후 복원 → GREEN. 커밋 `ede7f4b1`. 전체 백엔드 스위트 1906
+   passed/40 skipped, ruff clean. 두 Devin 스레드에 근거를 남기고 resolve 처리했다.
+
+**`.github#1438` (3건, 모두 실재):**
+1. **🟡 공유 데드라인이 trickle 응답에 뚫린다.** `scripts/ci/noema_review_gate.py::call_llm`이
+   `urllib.request`의 `timeout=` 인자 하나로만 5.5시간 공유 예산을 강제하고 있었는데, 그
+   인자는 소켓 단일 연산의 inactivity 타임아웃일 뿐 요청 전체의 wall-clock 상한이 아니다 —
+   응답이 각 타임아웃 구간이 끝나기 전에 최소 1바이트씩 계속 흘러들어오면(trickle) 실제
+   데드라인을 무한정 초과할 수 있었다. 실제 네트워크 호출을 daemon 스레드에서 실행하고
+   `Thread.join(timeout=remaining_budget)`으로 절대 wall-clock 데드라인을 강제하도록 재작성 —
+   daemon 스레드이므로 데드라인 초과 후에도 (여전히 trickle을 기다리며) 살아있어도 프로세스
+   종료를 막지 않는다. 실제 wall-clock을 쓰는(모킹하지 않는) 새 테스트로 진짜 RED(2초 trickle
+   응답이 0.05초 데드라인을 무시하고 정상 반환) → GREEN(0.24초 내 TimeoutError) 확인. 큐를
+   통한 예외 전달 경로 자체의 커버리지 공백(성공 케이스만 있고 전송 실패 케이스가 없었음)도
+   별도 테스트로 메움.
+2. **🔍 job의 6시간 상한이 암묵적이었다.** `noema-review` job에 명시적 `timeout-minutes`가
+   없어 5.5시간 예산과 GitHub의 암묵적 360분 기본값 사이의 관계가 감사 불가능했다 —
+   `timeout-minutes: 360`을 명시하고 계약 테스트 추가, 진짜 RED(부재) → GREEN 확인.
+3. **🔍 죽은 사이드카 감지가 마지막 시도까지 지연됐다.** `scripts/ci/contextual_orchestrator_review_sidecar.sh`의
+   게이트웨이 preflight 재시도 루프에서 `kill -0` 사이드카 생존 체크가 마지막 시도에서만
+   실행되어, 1번째 시도에서 이미 죽은 사이드카도 나머지 시도(기본 3회, 시도당 최대 120초)를
+   모두 소진한 뒤에야 감지되었다 — 이 분기가 존재하게 된 실제 사고(Strix job 99337282309,
+   .github#1460)의 근거 자체가 "6분 동안 3번의 시도가 모두 실패"로, 정확히 3×120초에 해당해
+   매 시도가 거의 풀타임 소요됐음을 보여준다(즉 이론적 우려가 아니라 실측 낭비). 데드-사이드카
+   체크를 매 실패 시도마다(시도 예산 소진 여부와 무관하게) 즉시 실행하도록 이동. 계약 테스트를
+   새 순서(체크가 attempt-budget 검사보다 먼저 실행됨)에 맞게 재작성 — 옛 스크립트에 대해 진짜
+   RED(`26104 < 25156` 실패) 확인 후 복원해 GREEN.
+
+세 항목 모두 `bash -n` 문법 확인, 전체 스위트 2214 passed/1 skipped/21 subtests, coverage 100%,
+interrogate 100%.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.

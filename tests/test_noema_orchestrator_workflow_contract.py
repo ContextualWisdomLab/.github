@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import shutil
 import subprocess
 import textwrap
@@ -183,6 +184,25 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+
+
+def test_noema_review_job_has_an_explicit_timeout_matching_its_llm_budget() -> None:
+    """The job's own timeout must be explicit, not just GitHub's implicit default.
+
+    Devin Review (ContextualWisdomLab/.github#1438): NOEMA_LLM_TOTAL_BUDGET_SECONDS
+    (19800s = 5.5h, scripts/ci/noema_review_gate.py) is budgeted against the
+    platform's 360-minute (6h) hosted-runner ceiling, but that relationship
+    previously relied on nothing being set here at all -- an unrelated future
+    edit to this job could silently shrink or drop that relied-upon margin
+    with no contract catching it.
+    """
+    workflow = workflow_text("noema-review.yml")
+    marker = "\n  noema-review:\n"
+    start = workflow.index(marker) + len(marker)
+    remainder = workflow[start:]
+    next_job = re.search(r"\n  [a-zA-Z_-]+:\n", remainder)
+    job_block = remainder[: next_job.start()] if next_job else remainder
+    assert "timeout-minutes: 360" in job_block
 
 
 def _expected_head_from_workflow_run_event(event: dict) -> str:

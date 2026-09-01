@@ -570,37 +570,44 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
 def test_gateway_preflight_distinguishes_a_dead_sidecar_from_an_unreachable_one() -> None:
     """A sidecar that dies between readiness and gateway preflight gets its own
     diagnosis (exit status + stderr tail), not the generic transport-exhausted
-    message a merely-unreachable-but-still-running sidecar gets.
+    message a merely-unreachable-but-still-running sidecar gets -- and that
+    diagnosis must run on every failed attempt, not only once the attempt
+    budget is exhausted.
 
     Exact-head evidence (Strix run/job 33341290448/99337282309 for
     ContextualWisdomLab/.github#1460 target 2cc819a9): the sidecar passed
     healthz/provider-route readiness after 23s, then six minutes later all 3
-    gateway-preflight attempts failed to reach it at all. The existing
-    ``gateway_transport_exhausted`` branch cannot tell that case apart from a
-    sidecar that is still running but merely unreachable over the network --
-    it reports the same generic message either way, discarding the one piece
-    of evidence (the process's own exit status) that would tell an operator
-    whether the sidecar crashed.
+    gateway-preflight attempts failed to reach it at all -- roughly the full
+    3 x 120s max-time budget, since a last-attempt-only dead-sidecar check
+    cannot detect a process that already died on attempt 1 until the
+    remaining attempts are burned against it first (Devin Review,
+    ContextualWisdomLab/.github#1438). The ``gateway_transport_exhausted``
+    branch also cannot tell a died sidecar apart from one that is merely
+    unreachable over the network -- it reports the same generic message
+    either way, discarding the one piece of evidence (the process's own exit
+    status) that would tell an operator whether the sidecar crashed.
     """
     text = _read(SIDECAR)
+    loop_start = text.index("gateway_attempt=1")
     exhausted_branch = text.index("gateway_transport_exhausted")
-    # Scope strictly to this branch's own opening condition so the search
-    # cannot accidentally match the unrelated, textually-earlier "sidecar
-    # exited before healthz" branch's own `kill -0 "$sidecar_pid"` check.
-    unreachable_branch_start = text.rindex(
-        'if [ -z "$gateway_http_status" ]; then', 0, exhausted_branch
+    max_attempts_check = text.index(
+        'if [ "$gateway_attempt" -ge "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" ]; then',
+        loop_start,
     )
-    dead_sidecar_check = text.index(
-        'kill -0 "$sidecar_pid"', unreachable_branch_start, exhausted_branch
-    )
-    # The dead-sidecar diagnosis must run BEFORE the generic
-    # transport-exhausted evidence is recorded, so a died sidecar is never
-    # misclassified as merely unreachable.
-    assert dead_sidecar_check < exhausted_branch
+    # Scoped to start at the preflight loop itself so this cannot
+    # accidentally match the unrelated, textually-earlier "sidecar exited
+    # before healthz" branch's own `kill -0 "$sidecar_pid"` check.
+    dead_sidecar_check = text.index('kill -0 "$sidecar_pid"', loop_start)
+    # The dead-sidecar diagnosis must run on every failed attempt -- before
+    # the attempt-budget check even runs, let alone the generic
+    # transport-exhausted evidence recorded once it is exhausted -- so a
+    # died sidecar is detected immediately, not only after the retry budget
+    # is spent, and is never misclassified as merely unreachable.
+    assert dead_sidecar_check < max_attempts_check < exhausted_branch
     dead_sidecar_message = text.index(
         "sidecar process exited after readiness, before gateway preflight completed"
     )
-    assert dead_sidecar_check < dead_sidecar_message < exhausted_branch
+    assert dead_sidecar_check < dead_sidecar_message < max_attempts_check
     # Must reuse the same drain-then-read discipline as the healthz branch:
     # wait() for the confirmed-dead child before reading its stderr tail, and
     # drain the sanitizer first so the tail is not read mid-flight.

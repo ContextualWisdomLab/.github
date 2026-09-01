@@ -5,6 +5,30 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **(Devin 리뷰 대응, 실재 결함 3건) 지난 timeout/deadline 수정 자체에 대한 Devin의 후속 지적 3건
+  반영.** (1) 🟡 `scripts/ci/noema_review_gate.py::call_llm`의 공유 데드라인이
+  `urllib.request`의 `timeout=` 인자만으로 강제되고 있었는데, 그 인자는 소켓 단일 연산의
+  inactivity(무응답) 타임아웃일 뿐 요청 전체의 wall-clock 상한이 아니다 -- 응답이 각 타임아웃
+  구간이 끝나기 전에 최소 1바이트씩 계속 흘러들어오면(trickle) 5.5시간 공유 예산을 무한정
+  초과할 수 있었다. 실제 네트워크 호출을 daemon 스레드에서 실행하고 `Thread.join(timeout=
+  remaining_budget)`으로 절대 wall-clock 데드라인을 강제하도록 재작성 -- daemon이라 데드라인
+  초과 후에도 스레드가 계속 트리클을 기다리고 있어도 프로세스 종료를 막지 않는다. 실제
+  wall-clock을 사용하는(모킹하지 않는) 새 회귀 테스트로 진짜 RED(2초 트리클 응답이 0.05초
+  데드라인을 무시하고 정상 반환) → GREEN(0.24초 내 TimeoutError) 확인. 큐를 통한 예외 전달
+  경로 자체의 커버리지 공백(성공 케이스만 있고 전송 실패 케이스가 없었음)도 별도 테스트로
+  메움. (2) 🔍 `noema-review.yml`의 `noema-review` job에 명시적 `timeout-minutes`가 없어
+  5.5시간 예산과 GitHub의 암묵적 360분(6시간) 기본값 사이의 관계가 감사 불가능했다 --
+  `timeout-minutes: 360`을 명시하고 계약 테스트 추가, 진짜 RED(부재) → GREEN 확인. (3) 🔍
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`의 게이트웨이 preflight 재시도
+  루프에서, 사이드카가 죽었는지 확인하는 `kill -0` 체크가 마지막 시도에서만 실행되어, 1번째
+  시도에서 이미 죽은 사이드카도 나머지 시도(기본 3회, 시도당 최대 120초)를 모두 소진한 뒤에야
+  감지되었다 -- 실제 이 분기가 존재하게 된 사고(Strix job 99337282309, .github#1460)의
+  근거 자체가 "6분 동안 3번의 시도가 모두 실패"로, 정확히 3×120초에 해당해 매 시도가 거의
+  풀타임 소요됐음을 보여준다. 데드-사이드카 체크를 매 실패 시도마다(시도 예산 소진 여부와
+  무관하게) 즉시 실행하도록 이동. 계약 테스트를 새 구조(체크가 attempt-budget 검사보다 먼저
+  실행됨)에 맞게 재작성, 옛 스크립트에 대해 진짜 RED(`26104 < 25156` 실패) 확인 후 복원해
+  GREEN. 세 항목 모두 `bash -n` 문법 확인, 전체 스위트 2214 passed/1 skipped/21 subtests,
+  coverage 100%, interrogate 100%.
 - Fix a false-positive in `scripts/ci/test_strix_quick_gate.sh`'s
   `assert_opencode_review_uses_codegraph_and_contextual_orchestrator`: its
   `awk '/^  required-workflow-bootstrap:$/,/^[^ ]/'` range never actually

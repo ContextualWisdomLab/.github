@@ -10,10 +10,12 @@ import hashlib
 import ipaddress
 import json
 import os
+import queue
 import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -909,6 +911,29 @@ class StaleHeadDuringRepairRetryError(RuntimeError):
     """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
 
 
+def _open_llm_request(
+    opener: urllib.request.OpenerDirector,
+    request: urllib.request.Request,
+    timeout: float,
+    result_queue: "queue.Queue[tuple[str, Any]]",
+) -> None:
+    """Run the blocking LLM call on a background thread.
+
+    ``urllib``'s own ``timeout=`` argument bounds only per-socket-operation
+    inactivity, not the request's total wall-clock duration: a response that
+    keeps sending at least one byte before each such window elapses can keep
+    a synchronous caller blocked indefinitely (Devin Review,
+    ContextualWisdomLab/.github#1438). Running the call here lets ``call_llm``
+    enforce its own absolute shared deadline with ``Thread.join(timeout=...)``
+    regardless of how the far end paces its response.
+    """
+    try:
+        with opener.open(request, timeout=timeout) as response:  # nosec B310
+            result_queue.put(("ok", response.read()))
+    except BaseException as exc:  # noqa: BLE001 - forwarded to the caller thread, never swallowed
+        result_queue.put(("error", exc))
+
+
 def call_llm(
     repo: str,
     number: int,
@@ -1000,8 +1025,23 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=request_timeout) as response:  # nosec B310
-        raw_bytes = response.read()
+    result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+    request_thread = threading.Thread(
+        target=_open_llm_request,
+        args=(opener, request, request_timeout, result_queue),
+        daemon=True,
+    )
+    request_thread.start()
+    request_thread.join(timeout=remaining_budget)
+    if request_thread.is_alive():
+        raise TimeoutError(
+            "Noema LLM review exceeded its shared wall-clock budget "
+            "(the connection kept receiving data past the deadline)"
+        )
+    status, payload = result_queue.get_nowait()
+    if status == "error":
+        raise payload
+    raw_bytes = payload
     try:
         raw = decode_llm_response_body(raw_bytes)
         content = extract_llm_message_content(raw)

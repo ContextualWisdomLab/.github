@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -2161,6 +2162,90 @@ def test_call_llm_raises_instead_of_sending_a_request_on_an_expired_budget(monke
         noema.call_llm(
             "owner/repo", 7, make_pr(), "diff", False, "head", deadline=expired_deadline
         )
+
+
+def test_call_llm_enforces_absolute_deadline_against_a_trickling_response(monkeypatch):
+    """A response that keeps sending bytes must not block past the shared deadline.
+
+    Devin Review (ContextualWisdomLab/.github#1438): urllib's own
+    ``timeout=`` parameter bounds only per-socket-operation inactivity, not
+    the request's total wall-clock duration. A gateway that trickles at
+    least one byte before each such window elapses could keep call_llm
+    blocked indefinitely, exceeding NOEMA_LLM_TOTAL_BUDGET_SECONDS with
+    nothing left to enforce the reserved cleanup margin. This uses real
+    wall-clock time (not a monkeypatched clock) because it is asserting on
+    actual blocking behavior, not on the value passed as a timeout argument.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
+
+    class TricklingResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            # Far longer than the deadline below -- simulates a connection
+            # that keeps resetting its own per-operation inactivity timeout.
+            # Returns a well-formed verdict so the old, unfixed code path
+            # (which would simply block here for the full 2s) completes
+            # normally instead of failing for an unrelated reason.
+            time.sleep(2.0)
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "approve", "summary": "clean", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    class Opener:
+        def open(self, _request, timeout):
+            return TricklingResponse()
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    deadline = noema.time.monotonic() + 0.05
+    start = noema.time.monotonic()
+    with pytest.raises(TimeoutError, match="shared wall-clock budget"):
+        noema.call_llm(
+            "owner/repo", 7, make_pr(), "diff", False, "head", deadline=deadline
+        )
+    elapsed = noema.time.monotonic() - start
+    assert elapsed < 1.0, f"call_llm blocked past its absolute deadline: {elapsed}s"
+
+
+def test_call_llm_propagates_a_transport_error_raised_on_the_background_thread(monkeypatch):
+    """A genuine transport failure inside the background request thread must
+    still surface to the caller unchanged, not be swallowed by the queue.
+
+    ``_open_llm_request`` captures any exception from ``opener.open()``/
+    ``response.read()`` onto a queue so ``call_llm``'s own absolute-deadline
+    join can preempt a trickling connection (see the sibling deadline test
+    above); this proves that plumbing does not alter or discard a genuine
+    ``URLError`` -- the realistic outcome when the per-request socket
+    inactivity timeout itself fires with no data at all.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+
+    class Opener:
+        def open(self, _request, timeout):
+            raise noema.urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.urllib.error.URLError):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
 
 
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():
