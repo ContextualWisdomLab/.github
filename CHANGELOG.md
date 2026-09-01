@@ -59,6 +59,24 @@ Semantic Versioning where the repository publishes a release.
   flags) that `has_only_below_threshold_vulnerabilities()` now checks and
   fails closed on, mirroring its existing `INFRA_ERROR_DETECTED` guard.
   New regression: `hollow-success-with-below-threshold-report-fails-closed`.
+  A fifth round then found the fourth round's flag only guarded one of two
+  alternate success paths: `evaluate_pull_request_findings()` can
+  independently set `PR_FINDINGS_DECISION=allow_baseline` (an at-or-above-
+  threshold finding confined to unchanged PR files) and let the caller
+  return success, with no visibility into completion evidence at all --
+  reachable at both the primary and fallback-model call sites once
+  `has_only_below_threshold_vulnerabilities()` had already failed. Gated
+  both call sites' success branch on `STRIX_HOLLOW_SUCCESS_DETECTED` too
+  (the function itself is still always called, so `PR_FINDINGS_DECISION`
+  stays freshly computed for downstream logic), with an explicit fail-closed
+  return immediately after. This also surfaced that the flag needed
+  rescoping: it was reset once per `run_current_target_scan()` call
+  (matching the deliberately cumulative `INFRA_ERROR_DETECTED`), but a
+  hollow *primary* attempt must not taint a genuinely completed *fallback*
+  attempt's own evaluation -- moved the reset to the top of every
+  `run_strix_once()` attempt instead, so it reflects only the
+  most-recently-concluded attempt. New regression:
+  `hollow-success-with-baseline-unchanged-report-fails-closed`.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat

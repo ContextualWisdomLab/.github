@@ -65,18 +65,25 @@ REPO_NAME="${REPO_ROOT##*/}"
 # this flag because the scan itself produced a complete result set, *unless*
 # STRIX_HOLLOW_SUCCESS_DETECTED below says otherwise.
 INFRA_ERROR_DETECTED=0
-# Sticky flag: set when an attempt's own Strix invocation exited 0 (claimed
-# success) but has_new_completed_strix_run() found no genuinely new completed
-# run.json for it (run_strix_once()'s own hollow-success fail-closed branch).
-# A rc=0 attempt can still leave behind a genuine below-threshold
-# vulnerabilities/*.md report from the same attempt -- has_new_strix_vulnerability_report_artifact()
-# is deliberately not completion-scoped, since it also has to accept a
-# nonzero-exit crash's partial-but-real findings (see that function's own
+# Per-attempt flag (reset at the top of every run_strix_once() call, unlike
+# the cumulative INFRA_ERROR_DETECTED/ZERO_FINDINGS_REPORTED flags above and
+# below): set when that specific attempt's own Strix invocation exited 0
+# (claimed success) but has_new_completed_strix_run() found no genuinely new
+# completed run.json for it (run_strix_once()'s own hollow-success
+# fail-closed branch). A rc=0 attempt can still leave behind a genuine
+# below-threshold vulnerabilities/*.md report or an at-threshold finding
+# confined to unchanged PR files -- has_new_strix_vulnerability_report_artifact()
+# and evaluate_pull_request_findings() are deliberately not completion-scoped,
+# since they also have to accept a nonzero-exit crash's partial-but-real
+# findings (see has_new_strix_vulnerability_report_artifact()'s own
 # docstring). Without this flag, has_only_below_threshold_vulnerabilities()
-# cannot tell that below-threshold case apart from an rc=0 attempt Strix
-# itself already declared incomplete, and would let its below-threshold
-# bypass rescue exactly the hollow-success case run_strix_once() just failed
-# closed on (Devin review on `#1563`).
+# and evaluate_pull_request_findings() cannot tell those cases apart from an
+# rc=0 attempt Strix itself already declared incomplete, and would let their
+# alternate-success paths rescue exactly the hollow-success case
+# run_strix_once() just failed closed on (Devin review on `#1563`, rounds 4
+# and 5). Reset per attempt, not per run_current_target_scan() call: a
+# fallback model's own genuinely completed attempt must not be judged hollow
+# just because an earlier attempt in the same scan was.
 STRIX_HOLLOW_SUCCESS_DETECTED=0
 ZERO_FINDINGS_REPORTED=0
 PR_FINDINGS_DECISION="not_applicable"
@@ -2689,6 +2696,13 @@ run_strix_once() {
 	fi
 	capture_attempt_start_vulnerability_files
 	capture_attempt_start_run_records
+	# Reset per attempt, not per run_current_target_scan() call (unlike the
+	# cumulative INFRA_ERROR_DETECTED/ZERO_FINDINGS_REPORTED flags): a run
+	# reused for a fallback model, or a later transient retry of the same
+	# model, must not still be judged hollow because an *earlier* attempt in
+	# this scan was, once this specific attempt goes on to write its own
+	# genuine completed run record.
+	STRIX_HOLLOW_SUCCESS_DETECTED=0
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
@@ -4641,10 +4655,26 @@ run_current_target_scan() {
 		return 0
 	fi
 
+	# evaluate_pull_request_findings() is always called (not short-circuited
+	# on STRIX_HOLLOW_SUCCESS_DETECTED) so it still freshly computes
+	# PR_FINDINGS_DECISION for this attempt -- the case statement and
+	# fail_unmapped_threshold_report() below depend on that, and skipping
+	# the call would leave a stale decision from whatever last set it.
+	# STRIX_HOLLOW_SUCCESS_DETECTED must gate every alternate success path
+	# below has_only_below_threshold_vulnerabilities(), not just that one:
+	# evaluate_pull_request_findings() can independently set
+	# PR_FINDINGS_DECISION=allow_baseline (an at-or-above-threshold finding
+	# confined to unchanged PR files) and let the caller return success, and
+	# it has no visibility into the completion-evidence question at all
+	# (Devin Review on `#1563`).
 	if evaluate_pull_request_findings; then
-		if [ "$strict_primary_provider_fallback" -eq 0 ]; then
+		if [ "$strict_primary_provider_fallback" -eq 0 ] && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]; then
 			return 0
 		fi
+	fi
+	if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
+		echo "Strix exited successfully but produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt." >&2
+		return 1
 	fi
 
 	case "$PR_FINDINGS_DECISION" in
@@ -4723,9 +4753,13 @@ run_current_target_scan() {
 		fi
 
 		if evaluate_pull_request_findings; then
-			if [ "$strict_fallback_provider_signal" -eq 0 ]; then
+			if [ "$strict_fallback_provider_signal" -eq 0 ] && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]; then
 				return 0
 			fi
+		fi
+		if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
+			echo "Strix exited successfully but produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt." >&2
+			return 1
 		fi
 
 		case "$PR_FINDINGS_DECISION" in

@@ -5399,6 +5399,27 @@ EOS
 		echo "Penetration test failed: baseline critical finding"
 		exit 1
 		;;
+	hollow-success-with-baseline-unchanged-report-fails-closed)
+		# Devin review round 5 on #1563: an rc=0 attempt with no completed
+		# run record can still leave behind an at-or-above-threshold finding
+		# confined to an unchanged PR file (the sibling
+		# pr-baseline-critical-unchanged scenario above models the
+		# legitimate nonzero-exit-crash version of this same report).
+		# evaluate_pull_request_findings() would classify that as
+		# PR_FINDINGS_DECISION=allow_baseline and let the caller return
+		# success -- has_only_below_threshold_vulnerabilities() alone cannot
+		# catch this, since the finding is at/above threshold, not below it.
+		# Deliberately never calls strix_fake_emit_default_success_evidence
+		# (no run.json).
+		mkdir -p "$STRIX_REPORTS_DIR/fake-hollow-baseline/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-hollow-baseline/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java:5
+EOS
+		echo "scan ok with a baseline-unchanged-file report but no completed run record"
+		exit 0
+		;;
 	pr-critical-changed)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -6643,6 +6664,28 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/hollow-below-threshold-primary" \
 			"<unset>"
+		;;
+	hollow-success-with-baseline-unchanged-report-fails-closed)
+		run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"1" \
+			"produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt" \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
 		;;
 	retry-hollow-second-attempt-fails-closed)
 		run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
@@ -12827,6 +12870,31 @@ run_gate_case "pr-baseline-critical-unchanged" \
 	"" \
 	"0" \
 	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+# Devin review round 5 on #1563: an rc=0 attempt that never wrote a
+# completed run.json must not be rescued by evaluate_pull_request_findings()'s
+# baseline-allow path (an at-or-above-threshold finding confined to an
+# unchanged PR file) any more than by has_only_below_threshold_vulnerabilities().
+run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt" \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \

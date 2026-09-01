@@ -2524,6 +2524,55 @@ scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); full `test_strix_quick_ga
 full pytest suite -- 2268 passed, 1 skipped, 21 subtests; `coverage run -m pytest tests && coverage
 report` -- 100% on `scripts/ci`; `interrogate` -- 100% docstrings.
 
+**Round 5 -- Devin Review found round 4's fix guarded only one of two alternate success paths, still
+on `#1563`**: `has_only_below_threshold_vulnerabilities()` and `run_strix_once()`'s own rc=0 acceptance
+were both correctly gated on `STRIX_HOLLOW_SUCCESS_DETECTED`, but `run_current_target_scan()` has a
+*third* path to success -- `evaluate_pull_request_findings()`, called at both the primary and
+fallback-model call sites once the below-threshold guard has already failed. That function can
+independently set `PR_FINDINGS_DECISION=allow_baseline` (an at-or-above-threshold finding confined to
+files this PR does not change) and let the caller return success; it has no visibility into completion
+evidence at all, since it answers a different question ("is this finding in scope for this PR")
+entirely orthogonal to "did this attempt genuinely complete." A hollow rc=0 attempt whose report happens
+to contain such a finding could therefore still be rescued via this second, unguarded path.
+
+**Fix**: gated the `return 0` branch immediately following each `evaluate_pull_request_findings()` call
+(primary and fallback) on `STRIX_HOLLOW_SUCCESS_DETECTED` too, with an explicit fail-closed `return 1`
+right after (rather than letting a hollow, baseline-allowed attempt fall through into the unrelated
+`case "$PR_FINDINGS_DECISION"` / `fail_unmapped_threshold_report()` / fallback-model logic below and
+hoping it happens to fail there too). `evaluate_pull_request_findings()` itself is still always called
+unconditionally at both sites -- skipping it when hollow would leave `PR_FINDINGS_DECISION` stale from
+whatever last set it, which that downstream logic depends on being freshly computed for the current
+attempt.
+
+Implementing this exposed a second, deeper bug in round 4's own scoping: `STRIX_HOLLOW_SUCCESS_DETECTED`
+was reset once per `run_current_target_scan()` call, matching the *cumulative* `INFRA_ERROR_DETECTED`/
+`ZERO_FINDINGS_REPORTED` flags (correct for them, since `has_only_below_threshold_vulnerabilities()`'s
+own severity scan is itself cumulative across every attempt). But hollow-success is not a cumulative
+property of the whole scan -- it is a property of one specific attempt. With the once-per-scan reset, a
+hollow *primary* attempt would leave the flag set to `1` for the rest of the scan, wrongly blocking a
+*fallback* model's own genuinely completed attempt from ever succeeding via either alternate path, even
+though that fallback attempt itself did nothing wrong. Moved the reset to the top of every
+`run_strix_once()` invocation (alongside `capture_attempt_start_vulnerability_files()`/
+`capture_attempt_start_run_records()`), so by the time `run_current_target_scan()` reads it after
+`run_strix_with_transient_retry()` returns, it reflects only the most-recently-concluded individual
+attempt -- consistent with how the existing attempt-scoped evidence snapshots already behave (each
+`run_strix_once()` call only recognizes evidence written since its own start, not an earlier retry's).
+
+**Regression**: new scenario `hollow-success-with-baseline-unchanged-report-fails-closed` -- a fake Strix
+invocation exits `0`, writes a CRITICAL-severity finding whose location is a file this PR does not
+change (the sibling `pr-baseline-critical-unchanged` scenario models the legitimate nonzero-exit-crash
+version of the identical report), and never writes `run.json`. Before the fix this passed the gate via
+`evaluate_pull_request_findings()`'s baseline-allow path; after the fix it fails closed with the new
+message.
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-success-with-baseline-unchanged-report-fails-closed bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); full `test_strix_quick_gate.sh` harness -- PASS
+(also re-confirms round 4's `hollow-success-with-below-threshold-report-fails-closed` and the unrelated
+`pr-baseline-critical-unchanged`/`retry-hollow-second-attempt-fails-closed`/`success-zero-report-artifacts`
+scenarios still pass under the rescoped per-attempt flag); full pytest suite -- 2301 passed, 1 skipped,
+21 subtests; `coverage run -m pytest tests && coverage report` -- 100% on `scripts/ci`; `interrogate` --
+100% docstrings.
+
 ## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 
 **Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
