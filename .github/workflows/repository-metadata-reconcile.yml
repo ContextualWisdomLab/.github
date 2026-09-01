@@ -17,6 +17,7 @@ on:
       - "tests/test_repository_label_identity.py"
       - "tests/test_repository_label_live_verification.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
+  workflow_dispatch:
   schedule:
     - cron: "23 * * * *"
 
