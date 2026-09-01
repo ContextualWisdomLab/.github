@@ -307,4 +307,4 @@ def test_installer_main_composes_validation_install_and_publication(monkeypatch,
     assert calls[0] == "version"
     assert calls[1] == ("validate", (executable, scripts_root, expected))
     assert calls[2] == ("install", (source, scripts_root))
-    assert calls[3] == ("publish", (installed, scripts_root))
+    assert calls[3] == ("publish", (github_env, installed, scripts_root))
