@@ -1718,7 +1718,8 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
 ## 2026-09-01 opencode-review verdict-poll/dispatch-worker budget mismatch fixed; three follow-up product gaps opened
 
 - **Root-caused and fixed the systemic `opencode-review` blocker** that had left `.github#1500`, `#1506`,
-  `#1527`, `#1529`, and `contextual-orchestrator#968`/`#946` all stuck: `opencode-review.yml`'s verdict
+  `#1527`, `#1529`, and `ContextualWisdomLab/contextual-orchestrator#968`/
+  `ContextualWisdomLab/contextual-orchestrator#946` all stuck: `opencode-review.yml`'s verdict
   poll job (`timeout-minutes: 100`, 90 minutes of polling) was structurally shorter than the dispatched
   `opencode-review-dispatch.yml` worker job's own ceiling (`timeout-minutes: 325`, 205 minutes reserved
   for its model-pool step alone, needed because the contextual-orchestrator sidecar preflight probes ~12
