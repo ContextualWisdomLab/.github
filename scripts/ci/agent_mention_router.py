@@ -26,7 +26,7 @@ MENTION_PATTERNS = {
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
-        r"(?<![A-Za-z0-9_-])(?:@opencode-agent|/opencode|/oc)(?![A-Za-z0-9_-])",
+        r"(?<![A-Za-z0-9_/-])(?:@opencode-agent|/opencode|/oc)(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
 }

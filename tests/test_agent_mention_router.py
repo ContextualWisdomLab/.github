@@ -133,10 +133,19 @@ def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
         "the /occupied seat",
         "visit /oceanography for more",
         "see /opencode-docs for the guide",
+        "check out https://opencode.ai/docs for more info",
+        "see http://open-code.ai/en/docs/github",
     ],
 )
 def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
-    """A longer token merely starting with /oc or /opencode is not a mention."""
+    """A longer token merely starting with /oc or /opencode is not a mention.
+
+    Includes a URL whose path component happens to embed ``/opencode`` right
+    after the scheme's own ``//`` (Devin review finding on #1537): the prior
+    lookbehind excluded a preceding letter/digit/underscore/hyphen but not a
+    preceding ``/``, so a documentation link like ``https://opencode.ai``
+    satisfied it and could launch an unintended review.
+    """
 
     module = load_module()
     assert module.exact_mentions(body) == ()
