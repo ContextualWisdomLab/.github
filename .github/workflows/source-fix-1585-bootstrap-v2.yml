@@ -23,8 +23,8 @@ jobs:
         run: |
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
-          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
-          cd repo
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" audit-repo
+          cd audit-repo
           git checkout "$TARGET_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
@@ -53,6 +53,7 @@ jobs:
           PY
 
           cd "$GITHUB_WORKSPACE"
+          rm -rf audit-repo
           bash /tmp/pr1585-source-fix.sh
 
           cd repo
