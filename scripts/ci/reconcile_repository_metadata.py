@@ -47,22 +47,37 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError(f"repositories.{name} must contain exactly {sorted(expected)}")
 
     description = item["description"]
-    if type(description) is not str or not description.strip() or len(description) > MAX_DESCRIPTION_CHARS:
+    if (
+        type(description) is not str
+        or not description.strip()
+        or len(description) > MAX_DESCRIPTION_CHARS
+    ):
         raise ManifestError(f"repositories.{name}.description is invalid")
     lowered = description.lower()
-    if "do not " in lowered or "#" in description or "http://" in lowered or "https://" in lowered:
-        raise ManifestError(f"repositories.{name}.description contains internal-facing or navigational text")
+    if (
+        "do not " in lowered
+        or "#" in description
+        or "http://" in lowered
+        or "https://" in lowered
+    ):
+        raise ManifestError(
+            f"repositories.{name}.description contains internal-facing or navigational text"
+        )
 
     topics = item["topics"]
     if type(topics) is not list or not 1 <= len(topics) <= 20:
         raise ManifestError(f"repositories.{name}.topics must contain 1..20 topics")
-    if any(type(topic) is not str or not TOPIC_RE.fullmatch(topic) for topic in topics):
+    if any(
+        type(topic) is not str or not TOPIC_RE.fullmatch(topic) for topic in topics
+    ):
         raise ManifestError(f"repositories.{name}.topics contains an invalid topic")
     if len(set(topics)) != len(topics):
         raise ManifestError(f"repositories.{name}.topics contains duplicates")
 
     if type(item["deepwiki"]) is not bool or type(item["pages"]) is not bool:
-        raise ManifestError(f"repositories.{name} deepwiki/pages flags must be booleans")
+        raise ManifestError(
+            f"repositories.{name} deepwiki/pages flags must be booleans"
+        )
     return {
         "description": description,
         "topics": list(topics),
@@ -83,10 +98,19 @@ def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
     repositories = _require_exact_dict(root["repositories"], field="repositories")
     if not repositories:
         raise ManifestError("manifest must declare at least one repository")
-    return {name: _validate_repository(name, value) for name, value in repositories.items()}
+    return {
+        name: _validate_repository(name, value)
+        for name, value in repositories.items()
+    }
 
 
-def _gh_api(method: str, endpoint: str, *, fields: dict[str, Any] | None = None, body: Any = None) -> str:
+def _gh_api(
+    method: str,
+    endpoint: str,
+    *,
+    fields: dict[str, Any] | None = None,
+    body: Any = None,
+) -> str:
     """Call GitHub CLI with fixed API endpoints and content-bounded arguments."""
 
     command = ["gh", "api", "--method", method, endpoint]
@@ -111,7 +135,13 @@ def _pages_exists(repository: str) -> bool:
     """Return whether GitHub Pages already exists for the repository."""
 
     command = ["gh", "api", f"repos/{ORGANIZATION}/{repository}/pages"]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     if completed.returncode == 0:
         return True
     combined = f"{completed.stdout}\n{completed.stderr}"
@@ -123,9 +153,17 @@ def _pages_exists(repository: str) -> bool:
 def _docs_index_exists(repository: str, default_branch: str) -> bool:
     """Return whether the reviewed default branch contains docs/index.md."""
 
-    endpoint = f"repos/{ORGANIZATION}/{repository}/contents/docs/index.md?ref={default_branch}"
+    endpoint = (
+        f"repos/{ORGANIZATION}/{repository}/contents/docs/index.md?ref={default_branch}"
+    )
     command = ["gh", "api", endpoint]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     if completed.returncode == 0:
         return True
     combined = f"{completed.stdout}\n{completed.stderr}"
@@ -134,8 +172,22 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
     raise RuntimeError(f"Pages source state could not be resolved for {repository}")
 
 
+def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
+    """Return whether one badge image links to the exact repository DeepWiki target."""
+
+    image = re.escape("https://deepwiki.com/badge.svg")
+    target = re.escape(f"https://deepwiki.com/{ORGANIZATION}/{repository}")
+    markdown = re.compile(rf"\[!\[[^\]]*\]\({image}\)\]\({target}\)")
+    html = re.compile(
+        rf"<a\s+[^>]*href=[\"']{target}[\"'][^>]*>.*?"
+        rf"<img\s+[^>]*src=[\"']{image}[\"'][^>]*>.*?</a>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return bool(markdown.search(readme) or html.search(readme))
+
+
 def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
-    """Return whether the default-branch README carries the exact DeepWiki badge."""
+    """Return whether the default-branch README carries the exact linked badge."""
 
     endpoint = f"repos/{ORGANIZATION}/{repository}/contents/README.md?ref={default_branch}"
     command = [
@@ -145,29 +197,39 @@ def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
         "Accept: application/vnd.github.raw+json",
         endpoint,
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     if completed.returncode != 0:
         combined = f"{completed.stdout}\n{completed.stderr}"
         if "HTTP 404" in combined or "Not Found" in combined:
             return False
         raise RuntimeError(f"README state could not be resolved for {repository}")
-    badge_image = "https://deepwiki.com/badge.svg"
-    badge_target = f"https://deepwiki.com/{ORGANIZATION}/{repository}"
-    return badge_image in completed.stdout and badge_target in completed.stdout
+    return _deepwiki_badge_linked(completed.stdout, repository)
 
 
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
-    repository_payload = json.loads(_gh_api("GET", f"repos/{ORGANIZATION}/{repository}"))
+    repository_payload = json.loads(
+        _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
+    )
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
 
     if desired["deepwiki"] and not _deepwiki_badge_exists(repository, default_branch):
-        raise RuntimeError(f"DeepWiki badge requested for {repository} but the exact badge is not on {default_branch}")
+        raise RuntimeError(
+            f"DeepWiki badge requested for {repository} but the exact badge is not on {default_branch}"
+        )
     if desired["pages"] and not _docs_index_exists(repository, default_branch):
-        raise RuntimeError(f"Pages requested for {repository} but docs/index.md is not on {default_branch}")
+        raise RuntimeError(
+            f"Pages requested for {repository} but docs/index.md is not on {default_branch}"
+        )
 
     if repository_payload.get("description") != desired["description"]:
         _gh_api(
@@ -176,7 +238,9 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
             body={"description": desired["description"]},
         )
 
-    current_topics = json.loads(_gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")).get("names", [])
+    current_topics = json.loads(
+        _gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")
+    ).get("names", [])
     if current_topics != desired["topics"]:
         _gh_api(
             "PUT",
@@ -184,12 +248,16 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
             body={"names": desired["topics"]},
         )
 
+    pages_exists = _pages_exists(repository)
     if desired["pages"]:
         pages_body = {"source": {"branch": default_branch, "path": "/docs"}}
-        if _pages_exists(repository):
-            _gh_api("PUT", f"repos/{ORGANIZATION}/{repository}/pages", body=pages_body)
-        else:
-            _gh_api("POST", f"repos/{ORGANIZATION}/{repository}/pages", body=pages_body)
+        _gh_api(
+            "PUT" if pages_exists else "POST",
+            f"repos/{ORGANIZATION}/{repository}/pages",
+            body=pages_body,
+        )
+    elif pages_exists:
+        _gh_api("DELETE", f"repos/{ORGANIZATION}/{repository}/pages")
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,9 +288,17 @@ def main() -> int:
     for repository in selected:
         try:
             reconcile_repository(repository, repositories[repository])
-        except (ManifestError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        except (
+            ManifestError,
+            RuntimeError,
+            json.JSONDecodeError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             failures.append(f"{repository}: {exc}")
-            print(f"repository metadata reconciliation failed for {repository}: {exc}", file=sys.stderr)
+            print(
+                f"repository metadata reconciliation failed for {repository}: {exc}",
+                file=sys.stderr,
+            )
     if failures:
         raise RuntimeError("metadata reconciliation failed: " + "; ".join(failures))
     return 0
