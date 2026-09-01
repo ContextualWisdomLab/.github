@@ -103,6 +103,30 @@
       "topics": ["mhtml", "etl", "data-ingestion", "sap", "postgresql", "data-governance", "python", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "PolicyWeave": {
+      "description": "PolicyWeave — local-first privacy-policy fact authoring, completeness review, and deterministic draft generation for web and app operators.",
+      "topics": ["privacy", "privacy-policy", "privacy-engineering", "policy-authoring", "local-first", "react", "typescript", "vite", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "supply-chain-control-plane": {
+      "description": "Supply Chain Control Plane — evidence-backed supply-network dependency modeling and deterministic downstream disruption-impact analysis.",
+      "topics": ["supply-chain", "disruption-management", "dependency-graph", "provenance", "risk-analysis", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-management-platform": {
+      "description": "Learning Management Platform — enrollment, learning-journey, completion, and credential orchestration for employee and external learners.",
+      "topics": ["learning-management-system", "learning-platform", "enrollment", "completion", "credentialing", "rust", "postgresql", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-content-studio": {
+      "description": "Learning Content Studio — evidence-bound LCMS for authoring, approving, releasing, and deterministically publishing reusable learning content.",
+      "topics": ["lcms", "learning-content", "content-authoring", "content-management", "accessibility", "scorm", "cmi5", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
