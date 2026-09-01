@@ -5,9 +5,12 @@ on:
     branches: [fix/stacked-pr-central-required-workflows]
     paths:
       - ".github/workflows/solo-maintainer-ruleset-contract.yml"
+      - ".github/workflows/audit-central-ruleset.yml"
       - "scripts/ci/audit_central_required_workflows.py"
+      - "docs/org-required-workflow-rollout.md"
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_solo_maintainer_ruleset_policy.py"
+      - "tests/test_ruleset_audit_completeness_regression.py"
 
 permissions:
   contents: read
@@ -41,4 +44,5 @@ jobs:
             -r "${RUNNER_TEMP}/solo-maintainer-ruleset-requirements.txt"
           python -m pytest -q \
             tests/test_central_required_workflow_ruleset_audit.py \
-            tests/test_solo_maintainer_ruleset_policy.py
+            tests/test_solo_maintainer_ruleset_policy.py \
+            tests/test_ruleset_audit_completeness_regression.py
