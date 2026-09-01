@@ -230,6 +230,7 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("current-head OpenCode requested changes",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -956,6 +957,7 @@ def test_inspect_pr_dispatches_failed_check_rca(monkeypatch):
     )
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -978,6 +980,7 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
     """An approved conflicting PR dispatches autofix in resolve_conflict mode."""
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -998,6 +1001,7 @@ def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, caps
     pr = _approved_dirty_pr(baseRefName="feature-base")
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
