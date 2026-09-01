@@ -70,6 +70,16 @@ Semantic Versioning where the repository publishes a release.
   live `gh api repos/.../pulls/<number>` response it already uses for
   closed/draft, and the dispatch step builds its payload from
   `steps.verdict.outputs.*` instead of the event payload.
+- Fix a fourth gap in the same lineage (owner direction, agreeing with and
+  extending a Devin review comment on `#1443`): the formal-review-matching
+  jq query still keyed off the triggering event's own `HEAD_SHA`, the one
+  event-derived value the three fixes above hadn't yet touched. A stale
+  rerun's event payload could therefore match an approval that was only
+  ever valid for a predecessor head, or miss a real approval already posted
+  against the actual live head. The verdict step now matches reviews
+  against the live `head.sha` from the same `gh api` fetch it already uses
+  for closed/draft/dispatch metadata, so a stale rerun can neither accept a
+  predecessor-head approval nor miss a live-head one.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

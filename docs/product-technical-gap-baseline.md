@@ -2355,7 +2355,7 @@ required-workflow OpenCode review dispatch work they could never complete or mer
 kind of wasted required-workflow queue allocation `#1531` tracks — while presenting a false-alarm
 failure with no actionable next step for the PR author.
 
-**Fix, in three review-driven rounds, all on `.github#1443`:**
+**Fix, in four review-driven rounds, all on `.github#1443`:**
 1. The `Resolve current-head formal OpenCode verdict` step now exits early (`verdict=DRAFT`) for a
    draft PR, mirroring its existing `closed` early exit, and the `Request current-head OpenCode review
    execution` dispatch step's own `if:` matches — so a draft PR no longer dispatches OpenCode review
@@ -2376,17 +2376,23 @@ failure with no actionable next step for the PR author.
    `validate-pr-metadata` check, leaving the required check red with no review ever requested. The
    verdict step now exposes `base_ref`/`base_sha`/`head_ref`/`head_sha` as step outputs from that same
    live fetch, and the dispatch step builds its payload from those outputs instead.
+4. Devin review flagged, and the owner's direction extended, one remaining event-derived value: the
+   formal-review-matching jq query still keyed off the triggering event's own `HEAD_SHA`, the one value
+   the first three rounds hadn't yet touched. A stale rerun's event payload could therefore match an
+   approval that was only ever valid for a predecessor head, or miss a real approval already posted
+   against the actual live head. The verdict step now matches reviews against the same live `head.sha`
+   it already fetches for closed/draft/dispatch metadata, so a stale rerun can neither accept a
+   predecessor-head approval nor miss a live-head one. Regression coverage exercises both directions
+   with an event `head_sha` deliberately distinct from the live one.
 
-**Net result.** Stale workflow reruns can no longer grant a draft/closed exemption or dispatch stale
-base/head metadata — the exemption decision and the dispatch payload are both sourced from one live
-PR-state fetch per run, never from the frozen triggering-event payload. One event-derived value remains
-deliberate, not a residual gap: the formal-review-match step still keys off the triggering event's own
-`HEAD_SHA` (Devin review, same PR) — this run's own check result is itself attributed to whatever commit
-GitHub associated with it at creation, so matching a review against any other ("live") SHA would search
-the wrong commit for what this exact check result represents. Full regression coverage in
-`tests/test_opencode_required_verdict_regression.py` executes each step's actual production bash body
-against fake `gh` fixtures. This closes one confirmed, now-eliminated source of required-workflow queue
-waste (draft PRs); it does not by itself resolve the separate org-wide runner-capacity congestion
+**Net result.** Stale workflow reruns can no longer grant a draft/closed exemption, dispatch stale
+base/head metadata, or have their formal-review match accept a predecessor-head approval or miss a
+live-head one — the exemption decision, the review match, and the dispatch payload are all sourced
+from one live PR-state fetch per run, never from the frozen triggering-event payload. Full regression
+coverage in `tests/test_opencode_required_verdict_regression.py` executes each step's actual production
+bash body against fake `gh` fixtures. This closes one confirmed, now-eliminated source of
+required-workflow queue waste (draft PRs); it does not by itself resolve the separate org-wide
+runner-capacity congestion
 `#1531` also tracks.
 
 ## 5. 실행 루프와 고객의 다음 행동

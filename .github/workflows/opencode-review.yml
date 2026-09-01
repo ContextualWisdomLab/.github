@@ -282,6 +282,10 @@ jobs:
           fi
           pr_state="$(printf '%s' "$pr" | jq -r '.state // ""')"
           pr_draft="$(printf '%s' "$pr" | jq -r '.draft // false')"
+          pr_base_ref="$(printf '%s' "$pr" | jq -r '.base.ref')"
+          pr_base_sha="$(printf '%s' "$pr" | jq -r '.base.sha')"
+          pr_head_ref="$(printf '%s' "$pr" | jq -r '.head.ref')"
+          pr_head_sha="$(printf '%s' "$pr" | jq -r '.head.sha')"
           # Exposed for the dispatch step below so its repository_dispatch
           # payload also comes from this same live fetch, not from
           # github.event.pull_request.* -- a manual re-run of an old job
@@ -290,10 +294,10 @@ jobs:
           # validate-pr-metadata check hard-rejects a stale base_ref/base_sha,
           # so the dispatch would fail even once this step correctly decides
           # one is needed (Devin review on #1443).
-          printf 'base_ref=%s\n' "$(printf '%s' "$pr" | jq -r '.base.ref')" >>"$GITHUB_OUTPUT"
-          printf 'base_sha=%s\n' "$(printf '%s' "$pr" | jq -r '.base.sha')" >>"$GITHUB_OUTPUT"
-          printf 'head_ref=%s\n' "$(printf '%s' "$pr" | jq -r '.head.ref')" >>"$GITHUB_OUTPUT"
-          printf 'head_sha=%s\n' "$(printf '%s' "$pr" | jq -r '.head.sha')" >>"$GITHUB_OUTPUT"
+          printf 'base_ref=%s\n' "$pr_base_ref" >>"$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$pr_base_sha" >>"$GITHUB_OUTPUT"
+          printf 'head_ref=%s\n' "$pr_head_ref" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$pr_head_sha" >>"$GITHUB_OUTPUT"
           if [ "$pr_state" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             echo "verdict=CLOSED" >>"$GITHUB_OUTPUT"
@@ -307,7 +311,12 @@ jobs:
           if ! reviews="$(timeout 25 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
             reviews="[]"
           fi
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+          # Match against the live head SHA fetched above, not the event's
+          # own HEAD_SHA -- a stale rerun's event payload could otherwise
+          # match an approval that was only ever valid for a predecessor
+          # head, or miss a real approval already posted against the actual
+          # live head (owner direction, Devin review on #1443).
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$pr_head_sha" '
             (add // [])
             | [
                 .[]

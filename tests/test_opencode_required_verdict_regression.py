@@ -36,7 +36,7 @@ def runtime_verdict(reviews: list[dict[str, object]], head_sha: str = HEAD) -> s
     if jq is None:
         pytest.skip("jq is required to execute the production verdict filter")
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    marker = """jq -r -s --arg sha "$HEAD_SHA" '"""
+    marker = """jq -r -s --arg sha "$pr_head_sha" '"""
     start = workflow.index(marker) + len(marker)
     end = workflow.index("\n          ')", start)
     result = subprocess.run(
@@ -520,6 +520,57 @@ def test_verdict_step_exposes_live_base_and_head_for_the_dispatch_payload(
     assert f"base_sha={'d' * 40}" in output
     assert "head_ref=feature/live" in output
     assert f"head_sha={live_head}" in output
+
+
+def test_verdict_step_matches_reviews_against_the_live_head_not_the_event_head(
+    tmp_path: Path,
+) -> None:
+    """Review matching must use the live head SHA, not the stale event one.
+
+    Owner direction (agreeing with and extending Devin's review): a stale
+    rerun's event-derived ``HEAD_SHA`` must neither let the check accept an
+    approval that was only ever posted for a predecessor head, nor let it
+    miss a real approval already posted against the actual live head. Both
+    directions are exercised here with an event ``head_sha`` deliberately
+    different from the live one.
+    """
+    event_head = HEAD
+    live_head = "e" * 40
+    assert event_head != live_head
+
+    # An approval posted only for the stale event-derived head must not
+    # satisfy the check once the live head has moved on.
+    stale_dir = tmp_path / "stale"
+    stale_dir.mkdir()
+    stale_only = _run_verdict_step(
+        stale_dir,
+        pr_number="1437",
+        head_sha=event_head,
+        gh_fixture="reviews",
+        pr_state="open",
+        pr_draft=False,
+        reviews=[review(state="APPROVED", commit_id=event_head)],
+        live_head_sha=live_head,
+    )
+    assert stale_only.returncode == 0, stale_only.stderr
+    assert "verdict=APPROVED" not in (stale_dir / "github_output").read_text(encoding="utf-8")
+
+    # An approval already posted for the actual live head must be found
+    # even though the (stale) event payload names a different head.
+    live_dir = tmp_path / "live"
+    live_dir.mkdir()
+    live_only = _run_verdict_step(
+        live_dir,
+        pr_number="1437",
+        head_sha=event_head,
+        gh_fixture="reviews",
+        pr_state="open",
+        pr_draft=False,
+        reviews=[review(state="APPROVED", commit_id=live_head)],
+        live_head_sha=live_head,
+    )
+    assert live_only.returncode == 0, live_only.stderr
+    assert "verdict=APPROVED" in (live_dir / "github_output").read_text(encoding="utf-8")
 
 
 def test_dispatch_step_payload_sources_base_and_head_from_the_verdict_step() -> None:
