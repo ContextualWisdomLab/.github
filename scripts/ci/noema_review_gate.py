@@ -565,7 +565,10 @@ def extract_json_object(text: str) -> dict[str, Any]:
     closes) is empty, so a valid nested object cannot escape a malformed
     outer *object or array* wrapper. Every candidate starts at a ``{``,
     making each successful parse a JSON object (``dict``); only the decode
-    failure itself needs converting.
+    failure itself needs converting. Once a top-level candidate begins, a
+    decode failure rejects the response rather than scanning forward to a
+    later verdict; multiple objects remain supported only when the first
+    candidate decodes successfully.
 
     A closer that cannot legally match the innermost open bracket — nothing
     open at all, or the innermost open bracket is the other type — stops
@@ -674,7 +677,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
             break
         except json.JSONDecodeError as exc:
             decode_error = exc
-            continue
+            break
         return candidate
 
     if "{" not in stripped:

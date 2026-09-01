@@ -745,14 +745,23 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
 def test_extract_json_object_balances_wrapped_and_multiple_objects():
     """Decode one complete object without joining unrelated brace-bearing text."""
     verdict = {"decision": "approve", "summary": "balanced { text }"}
-    assert noema.extract_json_object(
-        "prose {not JSON} before " + json.dumps(verdict) + " after {brace prose}"
-    ) == verdict
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            "prose {not JSON} before " + json.dumps(verdict) + " after {brace prose}"
+        )
     assert noema.extract_json_object(
         json.dumps(verdict) + "\n" + json.dumps({"decision": "comment"})
     ) == verdict
     escaped = {"decision": "approve", "summary": 'escaped " { text }'}
     assert noema.extract_json_object(json.dumps(escaped)) == escaped
+
+
+def test_extract_json_object_rejects_approval_after_malformed_top_level_candidate():
+    """A malformed first candidate must not release a later approval verdict."""
+    with pytest.raises(RuntimeError, match="was not valid JSON"):
+        noema.extract_json_object(
+            '{"broken": invalid} {"decision":"approve","summary":"later"}'
+        )
 
 
 def test_extract_json_object_rejects_nested_recovery_from_malformed_outer_object():
