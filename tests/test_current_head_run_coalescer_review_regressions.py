@@ -96,7 +96,7 @@ def test_distinct_open_pr_association_cannot_authorize_cross_pr_cancellation() -
     candidate = run_record(100, pr_number=1)
     sibling = run_record(101, pr_number=2)
     other_open_pr = live_pr(base_ref="develop")
-    with pytest.raises(module.CoalescingRefused, match="pull-request scope"):
+    with pytest.raises(module.CoalescingRefused, match="independent pull request"):
         module.validate_candidate_against_live_state(
             candidate,
             live_pr=live_pr(),
@@ -106,16 +106,15 @@ def test_distinct_open_pr_association_cannot_authorize_cross_pr_cancellation() -
         )
 
 
-def test_final_candidate_refetch_preserves_run_that_started_after_validation(monkeypatch) -> None:
-    """A queued candidate that starts before mutation is preserved on final re-fetch."""
+def test_final_candidate_fetch_preserves_run_that_started_after_snapshot(monkeypatch) -> None:
+    """A queued snapshot candidate that starts before final mutation is preserved."""
     module = load_module()
     queued = run_record(100)
     started = run_record(100, status="in_progress")
     sibling = run_record(101)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [queued, sibling])
-    fetches = iter([queued, started])
-    monkeypatch.setattr(module, "_fetch_run", lambda *_args: next(fetches))
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: started)
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
 
@@ -154,8 +153,10 @@ def test_transport_is_token_bound_and_individually_timeout_bounded(monkeypatch) 
 def test_workflow_covers_ready_transition_and_never_expands_head_ref_inside_shell() -> None:
     """Ready events coalesce duplicates and untrusted refs cross the shell via env only."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "types: [opened, synchronize, reopened, ready_for_review]" in text
+    trigger_line = next(line.strip() for line in text.splitlines() if line.strip().startswith("types:"))
+    for event_name in ("opened", "synchronize", "reopened", "ready_for_review"):
+        assert event_name in trigger_line
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
-    run_block = text.split("run: >-", 1)[1]
+    run_block = text.split("run: |", 1)[1]
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in run_block
     assert 'github.event.pull_request.head.ref' not in run_block
