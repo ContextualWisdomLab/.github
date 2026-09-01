@@ -103,5 +103,31 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "issue": 7,
             "type": "documentation",
         },
+        {
+            "repository": "learning-content-studio",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-content-studio",
+            "issue": 8,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-management-platform",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "metering-billing-platform",
+            "issue": 175,
+            "type": "documentation",
+        },
+        {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
+        {
+            "repository": "supply-chain-control-plane",
+            "issue": 1,
+            "type": "feature",
+        },
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
