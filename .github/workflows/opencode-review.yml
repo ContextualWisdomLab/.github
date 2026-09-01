@@ -33,6 +33,22 @@ jobs:
           echo "Required OpenCode workflow materialized without checking out or
           executing pull-request content."
 
+      - name: Reject untrusted fork review resource consumption
+        env:
+          PR_ACTION: ${{ github.event.action }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "$PR_ACTION" = "closed" ]; then
+            echo "PR closed; fork-resource-consumption check is not required."
+            exit 0
+          fi
+          if [ -z "$BASE_REPOSITORY" ] || [ -z "$HEAD_REPOSITORY" ] || [ "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]; then
+            echo "::error::Long-running required review is restricted to branches in the base repository. A maintainer must materialize an external contribution on a trusted branch before review."
+            exit 1
+          fi
+
       - name: Resolve immutable central policy source
         id: trusted_source
         env:
@@ -280,9 +296,10 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event.action }}" = "closed" ]; then
+          if [ "$PR_ACTION" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
             exit 0
           fi

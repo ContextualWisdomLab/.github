@@ -268,7 +268,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        assert "github.event.pull_request.head.sha" not in concurrency_contract
+        if filename != "noema-review.yml":
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
@@ -424,6 +425,13 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )
             cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
                 "  strix:", 1
+            )[0]
+        elif filename == "noema-review.yml":
+            assert "cancel-closed-pr-runs:" in workflow
+            assert "Cancel queued and running Noema reviews for the closed pull request" in workflow
+            assert "leaving runs unchanged" in workflow
+            cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
+                "  noema-review:", 1
             )[0]
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job

@@ -34,6 +34,7 @@ jobs:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: read
@@ -224,6 +225,7 @@ jobs:
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       id-token: write
@@ -371,6 +373,7 @@ jobs:
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
       # identity, secret, or write token is available to untrusted tests.
@@ -2310,7 +2313,7 @@ jobs:
     # overhead without truncating a late current-head verdict, handoff, merge
     # scheduler follow-up, or bounded failure reason.
     permissions:
-      actions: read
+      actions: write
       checks: read
       id-token: write
       contents: read
@@ -7511,6 +7514,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Enforce current-head formal OpenCode review receipt
+        id: formal_review_receipt
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
@@ -7533,6 +7537,61 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --head-sha "$PR_HEAD_SHA" \
             "${draft_args[@]}"
+
+      - name: Wake exact-head required OpenCode workflow
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+          && github.event.client_payload.required_run_id != ''
+        env:
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            echo "::error::Actions-capable wake credential is unavailable. Native runs use github.token; sibling runs require PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN."
+            exit 1
+          fi
+          [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Required OpenCode run id is missing or non-canonical."
+            exit 1
+          }
+          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
+          # event, central workflow path, and live PR head before rerunning it;
+          # rendered titles and workflow_url differ between native and
+          # organization-required workflow contexts.
+          for attempt in $(seq 1 12); do
+            run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id)
+              | select(.event == "pull_request_target")
+              | select(.path == ".github/workflows/opencode-review.yml")
+              | select(.head_sha == $head)
+              | [(.id // ""), (.status // ""), (.conclusion // "")]
+              | @tsv
+            ')"
+            IFS=$'\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
+              gh api -X POST "repos/${GH_REPOSITORY}/actions/runs/${required_run_id}/rerun-failed-jobs" >/dev/null
+              echo "Re-ran failed jobs for exact-head Required OpenCode Review run ${required_run_id}."
+              exit 0
+            fi
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "success" ]; then
+              echo "Exact-head Required OpenCode Review run ${required_run_id} already succeeded."
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Formal OpenCode receipt exists, but the exact-head required workflow did not reach a rerunnable failed state."
+          exit 1
 
       - name: Publish repository_dispatch OpenCode status
         if: >-
