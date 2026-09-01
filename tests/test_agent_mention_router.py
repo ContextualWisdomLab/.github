@@ -374,14 +374,50 @@ def test_exact_mentions_rejects_encoded_path_and_uri_scheme_continuations(
     ``/opencode``/``/oc`` forms' boundary excluded neither a following
     ``%`` (a percent-encoded path continuation, ``/oc%2Fconfig``) nor a
     preceding ``:`` (a URI scheme separator, ``scheme:/oc``, ``app:/oc``),
-    so both still matched as complete, standalone mentions. The fix adds
-    ``%`` and ``:`` to that alternative's own leading/trailing exclusion
-    set, alongside the ``.``, ``/``, ``?``, ``=``, and ``#`` already
-    excluded there.
+    so both still matched as complete, standalone mentions. Originally
+    fixed by adding both ``%`` and ``:`` to both the leading and trailing
+    exclusion set; see
+    ``test_exact_mentions_accepts_slash_command_beside_unrelated_punctuation``
+    for why an eleventh-round finding narrowed that to just the direction
+    each character actually indicates a URL/path continuation from.
     """
 
     module = load_module()
     assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:",
+        "/opencode:",
+        "100%/oc",
+        "100%/opencode",
+    ],
+)
+def test_exact_mentions_accepts_slash_command_beside_unrelated_punctuation(
+    body: str,
+) -> None:
+    """A colon after, or a percent sign before, the alias is not a URL indicator.
+
+    Eleventh-round finding on #1537's successor PR (Devin), a regression
+    from the tenth-round fix above: that fix added both ``%`` and ``:`` to
+    the *same* leading-and-trailing exclusion set, but each character is
+    only ever a URL/path continuation indicator from the direction it
+    actually appears in a URL — a percent sign starts percent-encoding
+    escapes (``%2F``), so it only matters as a *trailing* character
+    (``/oc%2Fconfig``); a colon separates a URI scheme from its path, so it
+    only matters as a *leading* character (``scheme:/oc``). Excluding "%"
+    on the leading side and ":" on the trailing side too had no motivating
+    false-positive case and instead rejected ordinary usage: ``/oc:`` (a
+    colon used as a label separator after the command) and ``100%/oc`` (a
+    percentage immediately before a command, no space). The fix splits the
+    two into direction-specific exclusion sets instead of one shared set
+    applied to both boundaries.
+    """
+
+    module = load_module()
+    assert module.exact_mentions(body) == ("opencode-agent",)
 
 
 @pytest.mark.parametrize(

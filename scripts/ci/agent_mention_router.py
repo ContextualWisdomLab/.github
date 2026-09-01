@@ -49,16 +49,28 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #   docs/@cwl-noema-review/@opencode-agent) without checking that the
 #   Noema mention has a valid left boundary of its own.
 # - The bare "/opencode"/"/oc" forms are the most URL/path-context-prone,
-#   so both sides exclude the full set of characters that continue a
-#   URL/path/filename token: a Unicode word character, ".", "/", "?", "=",
-#   "#", "%", ":", or "-". This rejects, on the leading side, a query
-#   string (?next=/opencode), a URL fragment identifier
+#   so both sides exclude the characters that continue a URL/path/filename
+#   token, but NOT the same set on both sides — each excluded character is
+#   only ever a continuation indicator from the direction it actually
+#   appears in a URL. Leading exclusion: a Unicode word character, ".",
+#   "/", "?", "=", "#", ":", or "-". This rejects a query string
+#   (?next=/opencode), a URL fragment identifier
 #   (https://example.com/#/oc), and a URI scheme separator (scheme:/oc,
-#   app:/opencode); and on the trailing side, a root-relative path
-#   (/oc/config), a dotted filename continuation (/oc.json), a query
-#   string glued on with no separator (/oc?mode=docs), a percent-encoded
-#   path continuation (/oc%2Fconfig), and a Unicode word continuation
-#   (/océan) that a plain ASCII character class would miss.
+#   app:/opencode) — but NOT a preceding "%", since percent-encoding syntax
+#   is "%" followed by hex digits, never followed by a literal "/", so a
+#   leading "%" before "/oc" (100%/oc) is not a URL-encoding pattern and
+#   was, in an earlier version of this exclusion, wrongly rejected as one.
+#   Trailing exclusion: a Unicode word character, ".", "/", "?", "=", "#",
+#   "%", or "-". This rejects a root-relative path (/oc/config), a dotted
+#   filename continuation (/oc.json), a query string glued on with no
+#   separator (/oc?mode=docs), a percent-encoded path continuation
+#   (/oc%2Fconfig), and a Unicode word continuation (/océan) that a plain
+#   ASCII character class would miss — but NOT a trailing ":", since a
+#   colon is not itself a path/URL continuation character in this
+#   direction (unlike the scheme-separator case, which is a *preceding*
+#   colon), so excluding it on the trailing side too, in an earlier
+#   version, wrongly rejected ordinary usage like "/oc:" (a colon used as
+#   a label separator after the command, not as part of a URL).
 # - "@cwl-noema-review" on its own additionally excludes a preceding "/"
 #   (closing the same URL/path-embedding class as "@opencode-agent" above)
 #   but deliberately NOT a trailing "/": that would break recognition of
@@ -73,7 +85,7 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![\w/-])@opencode-agent(?![\w/-])"
         r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
-        r"|(?<![\w./?=#%:-])(?:/opencode|/oc)(?![\w./?=#%:-])"
+        r"|(?<![\w./?=#:-])(?:/opencode|/oc)(?![\w./?=#%-])"
         r")",
         re.IGNORECASE,
     ),
