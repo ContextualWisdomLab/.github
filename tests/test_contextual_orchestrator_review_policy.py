@@ -342,13 +342,12 @@ def test_build_catalog_rejects_unknown_pool() -> None:
 
 
 @pytest.mark.parametrize(("field", "value"), [("limit", True), ("account_cap", 1.5)])
-def test_build_catalog_rejects_malformed_legacy_cap_inputs(field: str, value: object) -> None:
-    """Compatibility-only inputs still fail closed when their type is malformed."""
-    kwargs = {field: value}
-    with pytest.raises(policy.PolicyError, match="legacy"):
-        policy.build_zdr_prioritized_catalog(
-            policy.parse_discovery_report(_report()), **kwargs
-        )
+def test_build_catalog_ignores_legacy_cap_input_types(field: str, value: object) -> None:
+    """Retired compatibility inputs cannot regain admission authority through type gates."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()), **{field: value}
+    )
+    assert result["report"][f"legacy_{field}_ignored"] is True
 
 
 def test_build_catalog_assigns_neutral_priorities() -> None:

@@ -439,13 +439,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", required=True, help="Path to write audit JSON")
     parser.add_argument(
         "--limit",
-        type=int,
         default=DEFAULT_CATALOG_LIMIT,
         help="Deprecated compatibility input; does not affect admission.",
     )
     parser.add_argument(
         "--account-cap",
-        type=int,
         default=DEFAULT_ACCOUNT_CAP,
         help="Deprecated compatibility input; does not affect admission.",
     )

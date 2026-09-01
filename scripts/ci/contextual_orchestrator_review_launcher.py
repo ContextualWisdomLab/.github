@@ -12,7 +12,7 @@ The difference from ``review_gateway.main()`` is the agent pool: discovery runs
 in-process (so the KV-backed credentials are visible to it), the zero-cost
 ("free") routes are collected into a report, and
 ``scripts/ci/contextual_orchestrator_review_policy.py`` turns that report into a
-ZDR-prioritized, credential-account-diverse catalog for ``orchestrator/free``.
+evidence-admitted catalog for ``orchestrator/free``; routing preference remains owned by the orchestrator's explicit evidence model.
 Keeping the decision logic in that stdlib-only module lets every branch of the
 ZDR policy be tested offline in this repository while ``orchestrator/free``
 still resolves from authentically zero-priced models discovered by the
@@ -42,8 +42,6 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
-REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -619,60 +617,6 @@ def _write_json(path: str, payload: object) -> None:
     )
 
 
-def _bounded_primary_catalog_limit(
-    requested_limit: int, *, pool: str, has_free_rows: bool
-) -> int:
-    """Return the primary-stage route limit within one startup budget."""
-    if requested_limit < 1:
-        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
-    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
-    if pool == "auto" and has_free_rows:
-        return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
-    return total_limit
-
-
-def _bounded_fallback_catalog_limit(
-    requested_limit: int, *, primary_count: int
-) -> int:
-    """Return remaining priced-fallback capacity after primary selection."""
-    if requested_limit < 1:
-        raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
-    total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
-    if primary_count < 0 or primary_count > total_limit:
-        raise ValueError("primary route count exceeds the preflight budget")
-    return total_limit - primary_count
-
-
-def _catalog_account_cap(default: int) -> int:
-    """Return the configured per-account catalog admission cap.
-
-    ``default`` must be ``scripts.ci.contextual_orchestrator_review_policy``'s
-    own ``DEFAULT_ACCOUNT_CAP`` -- the single source of truth for how many
-    routes one credential account may contribute to the bounded preflight
-    budget. A caller must never substitute a total-routes-scale constant
-    (e.g. ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES``) here: doing so silently
-    disables per-account diversification and lets one rate-limited account
-    consume the entire preflight budget. That is not a hypothetical failure
-    mode -- a sibling in-flight branch's own ``_catalog_family_cap()``
-    fell back to exactly ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` and, in a live
-    production run, let two NVIDIA NIM credentials sharing one rate-limited
-    upstream jointly occupy 12/12 preflight slots, of which 10 were then
-    rejected with 429/404/timeout (see ContextualWisdomLab/.github#1415 and
-    the "빈 깡통 경로" report it responds to). Routing the default through the
-    caller-supplied ``policy.DEFAULT_ACCOUNT_CAP`` (rather than hand-typing a
-    literal here) keeps this module's cap from silently drifting out of sync
-    with the policy module's own declared intent.
-
-    Args:
-        default: The cap to use when ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` is
-            unset, always ``policy.DEFAULT_ACCOUNT_CAP``.
-
-    Returns:
-        The per-account cap to pass to ``build_zdr_prioritized_catalog``.
-    """
-    return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
-
-
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -794,7 +738,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     from contextual_orchestrator.server import SecurityConfig, serve
     from scripts.ci.contextual_orchestrator_review_policy import (
-        DEFAULT_ACCOUNT_CAP,
         PolicyError,
         _load_zdr_endpoints,
         build_zdr_prioritized_catalog,
@@ -856,10 +799,6 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
-    primary_limit = _bounded_primary_catalog_limit(
-        requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
-    )
     primary_rows = (
         (admitted_free_rows or admitted_priced_rows)
         if args.pool == "auto"
@@ -867,8 +806,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     result = build_zdr_prioritized_catalog(
         primary_rows,
-        limit=primary_limit,
-        account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
@@ -886,20 +823,14 @@ def main(argv: list[str] | None = None) -> int:
     primary_report = result["report"]
     fallback_result = None
     fallback_agents: list[object] = []
-    fallback_limit = _bounded_fallback_catalog_limit(
-        requested_catalog_limit, primary_count=len(result["agents"])
-    )
     if (
         args.pool == "auto"
         and admitted_free_rows
         and admitted_priced_rows
-        and fallback_limit
     ):
         try:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
-                limit=fallback_limit,
-                account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",

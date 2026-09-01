@@ -2475,3 +2475,8 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+## 2026-09-01 Noema/OpenCode admission/runtime reconciliation
+
+Devin Review exposed a contract split in PR #1591: the policy layer correctly stopped truncating evidence-eligible routes, while the launcher still rejected any primary catalog larger than the historical 12-route preflight budget. The causal owner is the central `.github` launcher/sidecar boundary, not a leaf repository. The repair removes catalog cardinality and per-account caps from launcher admission, preserves the full primary and evidence-triggered priced fallback catalogs, and keeps neutral policy priority. Legacy `limit` and `account_cap` inputs remain accepted but are explicitly non-authoritative. Regression coverage includes >12 primary routes, >8 free routes with a priced fallback set, shared escalation evidence across a larger catalog, and arbitrary ignored compatibility values. The former `12 base attempts + 4 escalations = 160s` statement is historical rather than a current admission invariant; startup-latency control must not silently evict eligible routes without an independently justified decision model.
