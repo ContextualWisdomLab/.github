@@ -163,8 +163,8 @@
     },
     {
       "repository": "keyverse",
-      "issue": 127,
-      "type": "documentation"
+      "issue": 103,
+      "type": "feature"
     },
     {
       "repository": "mhtml-etl-gateway",
