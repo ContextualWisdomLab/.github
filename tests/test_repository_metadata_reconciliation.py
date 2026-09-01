@@ -45,3 +45,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert concept["pages"] is True
     assert "semantic-model" in concept["topics"]
     assert "ontology" in concept["topics"]
+
+    contracts = repositories["context-graph-contracts"]
+    assert contracts["description"] == "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts."
+    assert contracts["deepwiki"] is True
+    assert contracts["pages"] is True
+    assert "interoperability" in contracts["topics"]
+    assert "cloudevents" in contracts["topics"]
