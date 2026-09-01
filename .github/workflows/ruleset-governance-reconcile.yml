@@ -7,6 +7,8 @@ on:
       - "scripts/ci/reconcile_ruleset_governance.py"
       - "tests/test_ruleset_governance_reconciliation.py"
       - "tests/test_ruleset_governance_review_regressions.py"
+      - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_central_required_workflow_ruleset_audit.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
   push:
@@ -17,6 +19,8 @@ on:
       - "scripts/ci/reconcile_ruleset_governance.py"
       - "tests/test_ruleset_governance_reconciliation.py"
       - "tests/test_ruleset_governance_review_regressions.py"
+      - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_central_required_workflow_ruleset_audit.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
   workflow_dispatch:
@@ -35,10 +39,13 @@ concurrency:
 
 jobs:
   validate:
-    # Every trigger, including a disabled hourly owner-plane schedule, validates
-    # the reviewed source/manifest offline. The enable variable gates mutation,
-    # not detection of configuration or regression drift.
-    runs-on: ubuntu-24.04
+    # Source/regression drift is already validated on PR, push, and manual runs.
+    # When privileged reconciliation is deliberately disabled, an hourly static
+    # rerun cannot observe live ruleset drift and only consumes shared capacity.
+    if: >-
+      github.event_name != 'schedule' ||
+      vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
+    runs-on: ubuntu-slim
     timeout-minutes: 20
     steps:
       - name: Harden runner
@@ -74,7 +81,11 @@ jobs:
           python -m coverage run \
             --branch \
             --include=scripts/ci/reconcile_ruleset_governance.py \
-            -m pytest -q tests/test_ruleset_governance_reconciliation.py tests/test_ruleset_governance_review_regressions.py
+            -m pytest -q \
+              tests/test_ruleset_governance_reconciliation.py \
+              tests/test_ruleset_governance_review_regressions.py \
+              tests/test_ruleset_governance_review_round2.py \
+              tests/test_central_required_workflow_ruleset_audit.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
