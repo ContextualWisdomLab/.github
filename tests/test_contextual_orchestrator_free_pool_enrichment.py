@@ -32,11 +32,13 @@ def test_discovery_enrichment_recomputes_free_pool_counts_from_full_rows() -> No
         stage_report,
         rows,
         provider_account=lambda provider: provider,
+        outage_domain=lambda row: row["provider"],
     )
 
     assert enriched["total_routes"] == 3
     assert enriched["total_free_routes"] == 2
     assert enriched["free_account_diversity"] == 2
+    assert enriched["free_outage_domain_diversity"] == 2
     assert enriched["free_pool_admitted_routes"] == 1
     assert enriched["free_pool_excluded_source_count"] == 1
     assert enriched["free_pool_account_diversity"] == 1
