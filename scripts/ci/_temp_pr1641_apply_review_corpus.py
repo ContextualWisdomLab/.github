@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+# Contents-API touch intentionally triggers the now-valid one-shot workflow.
 SOURCE = Path("scripts/ci/noema_review_gate.py")
 
 
