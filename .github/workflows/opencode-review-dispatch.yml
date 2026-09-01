@@ -200,19 +200,10 @@ jobs:
             [ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")
             [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
             [ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")
+            [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
             if [ "${#mismatches[@]}" -gt 0 ]; then
               printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
               exit 1
-            fi
-            # A head advance between dispatch capture and this job is normal PR
-            # activity, and Actions queue backlog widens the window. Every
-            # downstream job consumes the re-fetched live head_sha emitted below
-            # and independently re-checks it against the live PR head with
-            # STALE_HEAD guards, so a head_sha-only change is not a trust failure:
-            # warn and proceed on the current head instead of failing closed and
-            # leaving the required review check with no verdict.
-            if [ -n "$SUPPLIED_HEAD_SHA" ] && [ "$SUPPLIED_HEAD_SHA" != "$live_head_sha" ]; then
-              printf '::warning::repository_dispatch head advanced since dispatch: supplied_head_sha=%s live_head_sha=%s; proceeding with the live head.\n' "$SUPPLIED_HEAD_SHA" "$live_head_sha"
             fi
           fi
 
