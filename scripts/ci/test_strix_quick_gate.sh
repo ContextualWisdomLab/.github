@@ -289,7 +289,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "strix workflow provisions the central contextual-orchestrator sidecar"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "strix workflow uses the sidecar base URL"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "strix workflow uses the sidecar token"
-	assert_file_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job budget preserves multi-hour scans and artifact publication margin"
+	assert_file_contains "$workflow_file" "timeout-minutes: 360" "strix workflow job budget preserves multi-hour scans and artifact publication margin"
 	assert_file_contains "$workflow_file" "timeout-minutes: 170" "strix workflow scan step permits legitimate 150-minute repository reviews"
 	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
 	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=9300"' "strix workflow preserves a 155-minute bounded total Strix budget"
