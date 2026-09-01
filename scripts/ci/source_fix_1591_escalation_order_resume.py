@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resume PR #1591 escalation repair after retiring its stale quota test."""
+"""Resume PR #1591 escalation repair after retiring stale predecessor contracts."""
 
 from __future__ import annotations
 
@@ -7,6 +7,28 @@ from pathlib import Path
 import re
 
 from scripts.ci import source_fix_1591_escalation_order as fix
+
+
+def repair_adr_contract() -> None:
+    """Keep the accepted sidecar pin and exact no-timeout language executable tests require."""
+    path = Path("docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md")
+    text = path.read_text(encoding="utf-8")
+    pin = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
+    if pin not in text:
+        raise SystemExit("accepted sidecar pin disappeared from ADR-0003")
+    old = (
+        "including initial completion probes, warm-up, retry, repair verdicts, "
+        "or substantive review calls."
+    )
+    new = (
+        "including initial completion ping, warm-up, retry, repair verdicts, "
+        "or substantive review calls."
+    )
+    if old in text:
+        text = text.replace(old, new, 1)
+    if "initial completion ping" not in text:
+        raise SystemExit("ADR-0003 no-timeout contract lacks initial completion ping")
+    path.write_text(text, encoding="utf-8")
 
 
 def update_tests_and_docs() -> None:
@@ -22,6 +44,7 @@ def update_tests_and_docs() -> None:
         raise SystemExit("obsolete shared escalation-cap regression changed unexpectedly")
     path.write_text(text, encoding="utf-8")
     fix.update_tests_and_docs_original()
+    repair_adr_contract()
 
 
 def commit_and_push(message: str) -> None:
