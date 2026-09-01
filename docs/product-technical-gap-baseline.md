@@ -93,9 +93,9 @@ flowchart LR
 | G-13 | hourly scheduler는 존재하지만 no-op/credential unavailable/queued Checks의 customer next action을 모든 caller가 동일한 receipt로 내는지 미확인이다 | 자동화가 실패해도 운영자가 무엇을 고쳐야 하는지 알 수 없다 | `skipped_credential_unavailable` receipt와 다음 행동 문구를 exact-head Checks로 검증하고, bounded receipt schema, retry floor, single-flight, no secret fallback을 모든 caller contract test로 고정한다 |
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
-| G-16 | OpenCode/Noema의 실제 리뷰 산출물 깊이·정확도가 CodeRabbit/Devin과 대등한지 측정된 적이 없다 (owner directive, 2026-09-01) | 자동 리뷰가 형식적으로만 통과하고 실제 결함은 사람이나 외부 봇에만 의존해 발견된다 | 동일 PR 집합에 대한 finding 수/정밀도/심각도 비교 방법론을 정의하고, `opencode.jsonc`/`ci-review-prompt.md`/`code-reviewer-prompt.md`/`scripts/ci/noema_review_gate.py`의 프롬프트·설정을 감사한 뒤 parity 기준에 맞춰 조정한다 |
-| G-17 | Strix의 현재 보안 스캔 범위가 diff-only인지 전체 코드베이스인지 `strix.yml` 설정 기준으로 확인되지 않았다 (owner directive, 2026-09-01: "보안 리뷰는 전체 코드로 수행") | diff만 스캔하면 기존 코드에 남아 있는 취약점이 영구히 미탐지 상태로 남는다 | `strix.yml`의 실제 스캔 대상 설정을 확인하고 diff-only이면 전체 저장소로 확장하며, 실행시간·timeout 예산(§G-16/이번 항목의 3시간 하한과 연동)을 함께 재산정한다 |
-| G-18 | contextual-orchestrator의 리뷰용 모델 선택이 free-tier 후보를 대체로 동등하게 취급해 12개 후보 순차 preflight 같은 지연이 발생한다 (owner directive, 2026-09-01: "빠르면서 능력이 좋은 모델에 요청을 보내어 시간을 당기시오") | 리뷰 1건이 수 시간씩 걸려 병합 루프 전체가 느려진다 | `model_discovery.py`의 provider별 응답 시간 데이터(있다면) 또는 신규 latency 신호를 정의하고, free+ZDR 제약 내에서 속도·능력 가중 랭킹을 구현한다 |
+| G-19 | OpenCode/Noema의 실제 리뷰 산출물 깊이·정확도가 CodeRabbit/Devin과 대등한지 측정된 적이 없다 (owner directive, 2026-09-01) | 자동 리뷰가 형식적으로만 통과하고 실제 결함은 사람이나 외부 봇에만 의존해 발견된다 | 동일 PR 집합에 대한 finding 수/정밀도/심각도 비교 방법론을 정의하고, `opencode.jsonc`/`ci-review-prompt.md`/`code-reviewer-prompt.md`/`scripts/ci/noema_review_gate.py`의 프롬프트·설정을 감사한 뒤 parity 기준에 맞춰 조정한다 |
+| G-20 | Strix의 현재 보안 스캔 범위가 diff-only인지 전체 코드베이스인지 `strix.yml` 설정 기준으로 확인되지 않았다 (owner directive, 2026-09-01: "보안 리뷰는 전체 코드로 수행") | diff만 스캔하면 기존 코드에 남아 있는 취약점이 영구히 미탐지 상태로 남는다 | `strix.yml`의 실제 스캔 대상 설정을 확인하고 diff-only이면 전체 저장소로 확장하며, 실행시간·timeout 예산(§ 2026-09-01 owner directive의 3시간 하한과 연동)을 함께 재산정한다 |
+| G-21 | contextual-orchestrator의 리뷰용 모델 선택이 free-tier 후보를 대체로 동등하게 취급해 12개 후보 순차 preflight 같은 지연이 발생한다 (owner directive, 2026-09-01: "빠르면서 능력이 좋은 모델에 요청을 보내어 시간을 당기시오") | 리뷰 1건이 수 시간씩 걸려 병합 루프 전체가 느려진다 | `model_discovery.py`의 provider별 응답 시간 데이터(있다면) 또는 신규 latency 신호를 정의하고, free+ZDR 제약 내에서 속도·능력 가중 랭킹을 구현한다 |
 
 ## 4. 열린 PR live inventory
 
@@ -1753,19 +1753,21 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
   **does not yet meet this directive's 3-hour floor**; still under active iteration against fresh Devin
   findings (including this exact gap, independently flagged there), not merged, and not counted as
   resolved here.
-- **Three new tracked product gaps opened by this directive (register entries G-16/G-17/G-18 above),
+- **Three new tracked product gaps opened by this directive (register entries G-19/G-20/G-21 above —
+  numbered past `#1348`'s pending `G-16` allocation for its own queue-hygiene gap, still open and
+  unmerged as of this writing, to avoid a future collision),
   not yet scoped or started:**
-  - **G-16 (G-Review-Depth)**: OpenCode/Noema review output quality/thoroughness has no measured parity target
+  - **G-19 (G-Review-Depth)**: OpenCode/Noema review output quality/thoroughness has no measured parity target
     against CodeRabbit/Devin. Needs: a comparison methodology (same PRs, same findings categories),
     review prompt/config audit (`opencode.jsonc`, `ci-review-prompt.md`, `code-reviewer-prompt.md`,
     `scripts/ci/noema_review_gate.py`'s prompt construction), and a decision on what "parity" concretely
     means (finding count, finding precision, severity calibration, or some combination) before any
     prompt/config change is made.
-  - **G-17 (G-Strix-FullScope)**: Strix's current security-review scope (diff-only vs. whole-repository) needs
+  - **G-20 (G-Strix-FullScope)**: Strix's current security-review scope (diff-only vs. whole-repository) needs
     to be confirmed against `strix.yml`'s actual scan configuration, then widened to full-codebase if it
     is currently diff-scoped, with a cost/runtime-budget analysis (a whole-repo scan changes the timeout
     arithmetic this same directive also touches).
-  - **G-18 (G-FastModelRouting)**: `contextual-orchestrator`'s model selection for review workloads currently
+  - **G-21 (G-FastModelRouting)**: `contextual-orchestrator`'s model selection for review workloads currently
     treats free-tier candidates largely interchangeably (see the 12-candidate sequential preflight cost
     above); the directive asks for latency-aware ranking toward fast, capable models within the
     free+ZDR-constrained pool, which needs a defined speed/capability signal (e.g. `model_discovery.py`'s
