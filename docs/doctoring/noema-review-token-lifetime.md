@@ -15,3 +15,6 @@ The envelope is deleted after every publication attempt, including malformed-env
 ## Verification and downstream replay
 
 Focused CI runs the token-lifetime and two-phase handoff regressions with hash-pinned review dependencies whenever the workflow/helper/contracts change. After protected-main merge, replay unchanged `naruon#1497@152d1998c4e8024be9dc7026c8789d343c884fd0`: Required Noema Review must finish with current-head schema-valid review evidence or a typed review-unavailable result, never opaque expired-token 401 and never stale-head publication. A pre-merge run does not prove the merged workflow-source path and is not promoted to release evidence.
+### Regression-suite migration
+
+The two-phase migration also updates pre-existing executable workflow contracts to target the `Prepare Noema model verdict` step and the explicit prepare/publish helper invocations. This prevents a green focused gate from coexisting with stale broader-suite expectations for the retired single-process command or step name.

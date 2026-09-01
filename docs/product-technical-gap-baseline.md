@@ -2572,4 +2572,7 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Executable evidence.** `tests/test_noema_reviewer_token_lifetime.py` binds the production workflow step graph to prepare → fresh App mint → publish with exact-head arguments and source-specific credentials. `tests/test_noema_two_phase_handoff.py` executes the helper against controlled gate doubles and proves no preparation-side publication, fresh-head/actor rebinding, stale-head non-publication, draft skip behavior, cleanup on malformed handoff, and hard-link alias rejection. `.github/workflows/noema-token-lifetime-quality-ci.yml` runs these contracts with hash-pinned dependencies on every relevant seam.
 
+
+**Regression-suite consistency.** Legacy broader-suite assertions that still named the retired single-process Noema step/module are migrated to the two-phase prepare/publish contract, including step-scoped helper and envelope-argument evidence. This closes the false-GREEN gap where focused token-lifetime CI could pass while unchanged broader contracts described an impossible execution path.
+
 **Residual external verification.** After this central change reaches protected `main`, replay Required Noema Review for unchanged `naruon#1497@152d1998c4e8024be9dc7026c8789d343c884fd0`. Closure evidence requires a current-head schema-valid review or typed review-unavailable outcome without expired-token 401; a pre-merge run cannot prove the merged workflow-source path and is not promoted to release evidence.
