@@ -1484,8 +1484,10 @@ def test_context_review_and_check_helpers(monkeypatch):
     )
     assert sched.matching_actions_job_id(check_jobs, sched.is_opencode_context) == "11"
     assert sched.matching_actions_job_id(check_jobs, sched.is_strix_context) == "22"
+    assert sched.matching_actions_run_id(check_jobs, sched.is_opencode_context) == 1
     no_job_url = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.matching_actions_job_id(no_job_url, sched.is_opencode_context) is None
+    assert sched.matching_actions_run_id(no_job_url, sched.is_opencode_context) is None
 
     assert sched.parse_github_datetime(None) is None
     assert sched.parse_github_datetime("not-a-date") is None
