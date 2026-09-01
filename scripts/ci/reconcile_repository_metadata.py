@@ -133,6 +133,28 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
     raise RuntimeError(f"Pages source state could not be resolved for {repository}")
 
 
+def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
+    """Return whether the default-branch README carries the exact DeepWiki badge."""
+
+    endpoint = f"repos/{ORGANIZATION}/{repository}/contents/README.md?ref={default_branch}"
+    command = [
+        "gh",
+        "api",
+        "-H",
+        "Accept: application/vnd.github.raw+json",
+        endpoint,
+    ]
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    if completed.returncode != 0:
+        combined = f"{completed.stdout}\n{completed.stderr}"
+        if "HTTP 404" in combined or "Not Found" in combined:
+            return False
+        raise RuntimeError(f"README state could not be resolved for {repository}")
+    badge_image = "https://deepwiki.com/badge.svg"
+    badge_target = f"https://deepwiki.com/{ORGANIZATION}/{repository}"
+    return badge_image in completed.stdout and badge_target in completed.stdout
+
+
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
@@ -140,6 +162,11 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
+
+    if desired["deepwiki"] and not _deepwiki_badge_exists(repository, default_branch):
+        raise RuntimeError(f"DeepWiki badge requested for {repository} but the exact badge is not on {default_branch}")
+    if desired["pages"] and not _docs_index_exists(repository, default_branch):
+        raise RuntimeError(f"Pages requested for {repository} but docs/index.md is not on {default_branch}")
 
     if repository_payload.get("description") != desired["description"]:
         _gh_api(
@@ -157,8 +184,6 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
         )
 
     if desired["pages"]:
-        if not _docs_index_exists(repository, default_branch):
-            raise RuntimeError(f"Pages requested for {repository} but docs/index.md is not on {default_branch}")
         pages_body = {"source": {"branch": default_branch, "path": "/docs"}}
         if _pages_exists(repository):
             _gh_api("PUT", f"repos/{ORGANIZATION}/{repository}/pages", body=pages_body)
