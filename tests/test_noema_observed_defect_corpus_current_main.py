@@ -161,3 +161,6 @@ def test_noema_prompt_names_every_observed_defect_class(monkeypatch: pytest.Monk
         assert probe_kind in prompt
     assert "class_evidence" in prompt
     assert "exact changed-side" in prompt
+    assert "source_excerpt" in prompt
+    assert "workflow-starting credential" in prompt
+    assert "downstream required checks" in prompt
