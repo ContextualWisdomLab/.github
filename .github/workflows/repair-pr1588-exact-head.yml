@@ -39,6 +39,7 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
 
+          dollar = '$'
           workflow_path = Path('.github/workflows/strix.yml')
           workflow = workflow_path.read_text(encoding='utf-8')
 
@@ -79,15 +80,19 @@ jobs:
           )
 
           permissions_anchor = '      models: read\n      statuses: write\n'
-          if permissions_anchor in workflow and '      pull-requests: read\n' not in workflow.split('  strix:\n', 1)[1].split('    env:\n', 1)[0]:
+          strix_header = workflow.split('  strix:\n', 1)[1].split('    env:\n', 1)[0]
+          if permissions_anchor in workflow and '      pull-requests: read\n' not in strix_header:
               workflow = workflow.replace(
                   permissions_anchor,
                   '      models: read\n      pull-requests: read\n      statuses: write\n',
                   1,
               )
 
+          def expression(body: str) -> str:
+              return dollar + '{{ ' + body + ' }}'
+
           def validation_step(name: str, *, publication: bool = False) -> str:
-              condition = "${{ always() && github.event_name == 'pull_request_target' }}" if publication else "github.event_name == 'pull_request_target'"
+              condition = expression("always() && github.event_name == 'pull_request_target'") if publication else "github.event_name == 'pull_request_target'"
               step_id = '        id: live_publication\n' if publication else ''
               output = '          echo "current=true" >>"$GITHUB_OUTPUT"\n' if publication else ''
               return (
@@ -95,10 +100,10 @@ jobs:
                   f'        if: {condition}\n'
                   f'{step_id}'
                   '        env:\n'
-                  '          GH_TOKEN: ${{ github.token }}\n'
-                  '          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}\n'
-                  '          PR_NUMBER: ${{ github.event.pull_request.number }}\n'
-                  '          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n'
+                  f'          GH_TOKEN: {expression("github.token")}\n'
+                  f'          TARGET_REPOSITORY: {expression("github.event.pull_request.base.repo.full_name || github.repository")}\n'
+                  f'          PR_NUMBER: {expression("github.event.pull_request.number")}\n'
+                  f'          EXPECTED_HEAD_SHA: {expression("github.event.pull_request.head.sha")}\n'
                   '        run: |\n'
                   '          set -euo pipefail\n'
                   '          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"\n'
@@ -136,8 +141,8 @@ jobs:
                   raise SystemExit('missing publication marker')
               workflow = workflow.replace(marker, validation_step(publication_name, publication=True) + marker, 1)
 
-          collect_old = "        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}\n"
-          collect_new = "        if: ${{ always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true') }}\n"
+          collect_old = '        if: ' + expression("always() && steps.gate.outputs.enabled == 'true'") + '\n'
+          collect_new = '        if: ' + expression("always() && steps.gate.outputs.enabled == 'true' && (github.event_name != 'pull_request_target' || steps.live_publication.outputs.current == 'true')") + '\n'
           collect_marker = '      - name: Collect Strix reports for artifact upload\n'
           collect_start = workflow.index(collect_marker)
           upload_start = workflow.index('      - name: Upload Strix reports artifact\n', collect_start)
@@ -160,17 +165,17 @@ jobs:
               raise SystemExit('stale zero Strix model-preflight timeout remains')
           if 'cancel-superseded-pr-runs:' in workflow:
               raise SystemExit('runner-backed Strix cleanup job remains')
-
           workflow_path.write_text(workflow, encoding='utf-8')
 
           test_path = Path('tests/test_strix_control_plane_supersession.py')
           tests = test_path.read_text(encoding='utf-8')
           tests = tests.replace('    assert "export LLM_TIMEOUT=0" in workflow\n', '    assert "export LLM_TIMEOUT=300" in workflow\n')
           publication_anchor = '    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'
+          output_contract = "steps.live_publication.outputs.current == 'true'"
           extra = (
               '    assert "id: live_publication" in recheck\n'
               '    assert "current=true" in recheck\n'
-              '    assert "steps.live_publication.outputs.current == \'true\'" in workflow\n'
+              f'    assert "{output_contract}" in workflow\n'
           )
           if extra not in tests:
               if publication_anchor not in tests:
