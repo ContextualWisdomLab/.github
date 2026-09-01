@@ -51,6 +51,34 @@ if [ "${observed_base,,}" != "${PR_BASE_SHA,,}" ]; then
   exit 1
 fi
 git -C "$source_root" update-ref refs/noema/base "$observed_base"
+
+merge_base=""
+if ! merge_base="$(git -C "$source_root" merge-base refs/noema/base refs/noema/head 2>/dev/null)"; then
+  merge_base=""
+fi
+for deepen_by in 64 256 1024 4096; do
+  [ -n "$merge_base" ] && break
+  GIT_ASKPASS="$askpass" GIT_ASKPASS_REQUIRE=force GIT_TERMINAL_PROMPT=0 \
+    git -C "$source_root" fetch --no-tags --deepen="$deepen_by" origin \
+      "refs/pull/${PR_NUMBER}/head" "$PR_BASE_SHA"
+  if ! merge_base="$(git -C "$source_root" merge-base refs/noema/base refs/noema/head 2>/dev/null)"; then
+    merge_base=""
+  fi
+done
+if ! [[ "$merge_base" =~ ^[0-9a-fA-F]{40}$ ]] ||
+  ! git -C "$source_root" merge-base --is-ancestor "$merge_base" refs/noema/head ||
+  ! git -C "$source_root" merge-base --is-ancestor "$merge_base" refs/noema/base; then
+  echo "::error::Noema CodeGraph could not establish a bounded exact merge base for the reviewed pull request."
+  exit 1
+fi
+materialized_head="$(git -C "$source_root" rev-parse refs/noema/head)"
+materialized_base="$(git -C "$source_root" rev-parse refs/noema/base)"
+if [ "${materialized_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] ||
+  [ "${materialized_base,,}" != "${PR_BASE_SHA,,}" ]; then
+  echo "::error::Noema CodeGraph exact source refs moved while materializing merge-base history."
+  exit 1
+fi
+
 git -C "$source_root" checkout -q --detach refs/noema/head
 rm -f "$askpass"
 unset GH_TOKEN GITHUB_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_RUNTIME_TOKEN
@@ -132,7 +160,7 @@ test -x "$CODEGRAPH_BIN"
 export CODEGRAPH_NO_DOWNLOAD=1
 codegraph_status="$(mktemp)"
 codegraph_raw="$(mktemp)"
-changed_scope="$(git -C "$source_root" diff --name-only refs/noema/base refs/noema/head | sed -n '1,80p' | tr '\n' ' ')"
+changed_scope="$(git -C "$source_root" diff --name-only "$merge_base" refs/noema/head | sed -n '1,80p' | tr '\n' ' ')"
 cd "$source_root"
 "$CODEGRAPH_BIN" init -i
 if ! "$CODEGRAPH_BIN" status >"$codegraph_status" 2>&1; then
@@ -150,7 +178,8 @@ fi
 {
   printf '# Trusted CodeGraph current-head evidence\n\n'
   printf -- '- Head SHA: `%s`\n' "$EXPECTED_HEAD_SHA"
-  printf -- '- Base SHA: `%s`\n\n' "$PR_BASE_SHA"
+  printf -- '- Base SHA: `%s`\n' "$PR_BASE_SHA"
+  printf -- '- Merge-base SHA: `%s`\n\n' "$merge_base"
   printf '## CodeGraph status\n\n'
   head -c 3000 "$codegraph_status"
   printf '\n\n## Changed-scope exploration\n\n'
