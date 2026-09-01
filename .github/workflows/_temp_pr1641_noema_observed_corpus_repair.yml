@@ -1,5 +1,5 @@
 name: Temporary PR1641 Noema observed-corpus repair
-# execution nonce: review-followup-v4
+# execution nonce: review-followup-v5-structural-roles
 
 on:
   push:
@@ -89,10 +89,16 @@ jobs:
           fi
           echo "Verified generic relabeling RED against first-stage implementation (pytest rc=$red_rc)."
 
-      - name: Apply review-followup observation-evidence repair
+      - name: Apply exact-source observation repair
         run: python3 scripts/ci/_temp_pr1641_finish_review_findings.py
 
-      - name: Verify GREEN focused and broader contracts
+      - name: Apply token-shape and truncation repair
+        run: python3 scripts/ci/_temp_pr1641_finish_review_findings_round2.py
+
+      - name: Replace lexical causal admission with structural claim roles
+        run: python3 scripts/ci/_temp_pr1641_finish_review_findings_round3.py
+
+      - name: Verify GREEN focused, full, coverage, and documentation contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -101,30 +107,43 @@ jobs:
             tests/test_noema_class_evidence_observation_contract.py \
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_review_gate.py
-          PYTHONPATH=. python3 -m pytest -q
+          PYTHONPATH=. python3 -m pytest -q \
+            --cov=scripts.ci.noema_review_gate \
+            --cov-branch \
+            --cov-fail-under=100
           interrogate --fail-under=100 \
             scripts/ci/noema_review_gate.py \
             scripts/ci/_temp_pr1641_apply_review_corpus.py \
-            scripts/ci/_temp_pr1641_finish_review_findings.py
+            scripts/ci/_temp_pr1641_finish_review_findings.py \
+            scripts/ci/_temp_pr1641_finish_review_findings_round2.py \
+            scripts/ci/_temp_pr1641_finish_review_findings_round3.py
           python3 -m compileall -q scripts/ci tests
           git diff --check
 
-      - name: Remove temporary repair mechanism and commit publishable tree
+      - name: Remove temporary repair mechanism and commit only publishable tree
         shell: bash
         run: |
           set -euo pipefail
           rm -f \
             .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml \
             scripts/ci/_temp_pr1641_apply_review_corpus.py \
-            scripts/ci/_temp_pr1641_finish_review_findings.py
+            scripts/ci/_temp_pr1641_finish_review_findings.py \
+            scripts/ci/_temp_pr1641_finish_review_findings_round2.py \
+            scripts/ci/_temp_pr1641_finish_review_findings_round3.py
           test ! -e .github/workflows/_temp_pr1641_noema_observed_corpus_repair.yml
           test ! -e scripts/ci/_temp_pr1641_apply_review_corpus.py
           test ! -e scripts/ci/_temp_pr1641_finish_review_findings.py
+          test ! -e scripts/ci/_temp_pr1641_finish_review_findings_round2.py
+          test ! -e scripts/ci/_temp_pr1641_finish_review_findings_round3.py
           git config user.name 'ContextualWisdomLab repair automation'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'fix(noema): enforce observed defect-class evidence'
+          if git diff --cached --quiet; then
+            echo '::error::Repair produced no publishable change.'
+            exit 1
+          fi
+          git commit -m 'fix(noema): enforce structural observed-defect evidence'
 
       - name: Push only if writer head is still exact
         shell: bash
