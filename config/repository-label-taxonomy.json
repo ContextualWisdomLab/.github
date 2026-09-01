@@ -198,6 +198,11 @@
     },
     {
       "repository": "metering-billing-platform",
+      "issue": 157,
+      "type": "documentation"
+    },
+    {
+      "repository": "metering-billing-platform",
       "issue": 175,
       "type": "documentation"
     },
