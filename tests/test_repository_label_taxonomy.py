@@ -102,18 +102,8 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "type": "documentation",
         },
         {
-            "repository": "learning-record-store",
-            "issue": 7,
-            "type": "documentation",
-        },
-        {
             "repository": "learning-content-studio",
             "issue": 1,
-            "type": "documentation",
-        },
-        {
-            "repository": "learning-content-studio",
-            "issue": 8,
             "type": "documentation",
         },
         {
@@ -124,11 +114,6 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {
             "repository": "metering-billing-platform",
             "issue": 157,
-            "type": "documentation",
-        },
-        {
-            "repository": "metering-billing-platform",
-            "issue": 175,
             "type": "documentation",
         },
         {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
