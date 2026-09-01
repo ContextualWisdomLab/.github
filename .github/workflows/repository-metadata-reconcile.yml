@@ -8,6 +8,7 @@ on:
       - "scripts/ci/reconcile_repository_metadata.py"
       - "scripts/ci/reconcile_repository_labels.py"
       - "tests/test_repository_metadata_reconciliation.py"
+      - "tests/test_repository_metadata_convergence.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
@@ -111,8 +112,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
         run: |
-          set -euo pipefail
+          set +e
           python scripts/ci/reconcile_repository_metadata.py \
             --manifest config/repository-metadata.json
+          metadata_status=$?
           python scripts/ci/reconcile_repository_labels.py \
             --taxonomy config/repository-label-taxonomy.json
+          label_status=$?
+          set -e
+          if (( metadata_status != 0 || label_status != 0 )); then
+            printf 'metadata_status=%s label_status=%s\n' \
+              "${metadata_status}" "${label_status}" >&2
+            exit 1
+          fi
