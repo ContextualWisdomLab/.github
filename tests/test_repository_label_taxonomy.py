@@ -90,7 +90,7 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "clearfolio", "issue": 538, "type": "documentation"},
         {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
         {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
-        {"repository": "keyverse", "issue": 127, "type": "documentation"},
+        {"repository": "keyverse", "issue": 103, "type": "feature"},
         {
             "repository": "mhtml-etl-gateway",
             "issue": 56,
