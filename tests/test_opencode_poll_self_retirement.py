@@ -1,6 +1,11 @@
 """Regression contract for self-retiring Required OpenCode verdict polls."""
 
+from __future__ import annotations
+
+import json
+import os
 from pathlib import Path
+import subprocess
 
 
 WORKFLOW = Path(".github/workflows/opencode-review.yml")
@@ -22,6 +27,64 @@ def _poll_loop() -> str:
     )[0]
 
 
+def _run_poll_loop(
+    tmp_path: Path,
+    *,
+    head_sha: str,
+    live_pr: dict[str, object],
+    reviews: list[dict[str, object]] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Execute the production poll body against a deterministic fake ``gh``."""
+    call_log = tmp_path / "gh-calls.log"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$GH_CALL_LOG"
+[ "${1:-}" = "api" ] || exit 90
+shift
+if [ "${1:-}" = "--paginate" ]; then
+  printf '%s\\n' "$GH_REVIEWS"
+else
+  printf '%s\\n' "$GH_LIVE_PR"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            'verdict=""',
+            "while :; do",
+            _poll_loop(),
+            "done",
+        )
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{tmp_path}{os.pathsep}{env.get('PATH', '')}",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "42",
+            "HEAD_SHA": head_sha,
+            "GH_CALL_LOG": str(call_log),
+            "GH_LIVE_PR": json.dumps(live_pr),
+            "GH_REVIEWS": json.dumps(reviews or []),
+        }
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    return result, calls
+
+
 def test_poll_revalidates_live_pr_before_every_reviews_api_read() -> None:
     """An occupied runner must retire itself when its PR head stops being live."""
     loop = _poll_loop()
@@ -38,9 +101,7 @@ def test_poll_revalidates_live_pr_before_every_reviews_api_read() -> None:
     assert 'live_poll_head="$(printf \'%s\' "$live_poll_pr" | jq -r ' in loop
     assert 'live_poll_draft="$(printf \'%s\' "$live_poll_pr" | jq -r ' in loop
     assert 'live_poll_state="$(printf \'%s\' "$live_poll_pr" | jq -r ' in loop
-    assert (
-        'if [ "${live_poll_head,,}" != "${HEAD_SHA,,}" ]; then' in loop
-    )
+    assert 'if [ "${live_poll_head,,}" != "${HEAD_SHA,,}" ]; then' in loop
     assert "superseded Required OpenCode Review poll" in loop
     assert 'if [ "$live_poll_state" = "closed" ]; then' in loop
     assert 'if [ "$live_poll_draft" = "true" ]; then' in loop
@@ -60,6 +121,62 @@ def test_poll_live_state_revalidation_fails_closed_on_malformed_evidence() -> No
         'if [ "$live_poll_state" != "open" ] && '
         '[ "$live_poll_state" != "closed" ]; then' in loop
     )
+
+
+def test_poll_executes_superseded_head_retirement_before_reviews_read(
+    tmp_path: Path,
+) -> None:
+    """A moved head exits non-passing before the Reviews API is consulted."""
+    head_sha = "a" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": "b" * 40}, "draft": False, "state": "open"},
+    )
+
+    assert result.returncode == 1
+    assert "retiring superseded Required OpenCode Review poll" in result.stdout
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
+
+
+def test_poll_executes_closed_pr_retirement_without_reviews_read(tmp_path: Path) -> None:
+    """A closed current-head PR releases the occupied runner successfully."""
+    head_sha = "c" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "closed"},
+    )
+
+    assert result.returncode == 0
+    assert "PR closed while waiting" in result.stdout
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
+
+
+def test_poll_executes_live_state_read_before_current_head_review_read(
+    tmp_path: Path,
+) -> None:
+    """A live head reads PR state first and then accepts only its current review."""
+    head_sha = "d" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        reviews=[
+            {
+                "user": {"login": "opencode-agent[bot]"},
+                "commit_id": head_sha,
+                "state": "APPROVED",
+                "body": "Source-backed current-head semantic review.",
+            }
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+    ]
 
 
 def test_self_retirement_does_not_replace_semantic_review_with_a_short_timeout() -> None:
