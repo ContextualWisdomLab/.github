@@ -384,20 +384,21 @@ def _preflight_review_agent(
 def _preflight_review_agents(
     agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object]]:
-    """Probe admitted routes concurrently and report evidence in catalog order.
+    """Probe all admitted routes with provider-account bounded concurrency.
 
     Admission and readiness are separate contracts. Every evidence-eligible
     route stays admitted; this stage only establishes immediate serving
-    readiness. All admitted routes start one equal base probe concurrently, so
-    one slow route cannot serialize startup behind every other provider. A
-    route receives one larger-budget retry only when its own response carries
-    the explicit budget-starvation signature. There is no shared first-come
-    quota, route cap, provider preference, or completion-order authority.
+    readiness. Independently credentialed provider accounts progress in
+    parallel, while routes sharing the same current provider-account identity
+    are probed serially so one shared credential cannot receive an unbounded
+    simultaneous burst. The account identity is the same provider-name
+    boundary used by ``contextual_orchestrator_review_policy.provider_account``;
+    no fixed route cap, rank, quota, or provider preference is introduced.
 
-    Results are consumed in input order, preserving exact catalog/source
-    evidence even when providers complete out of order. ``ModelClient`` keeps
-    per-call usage in thread-local storage and its provider-slot guard is
-    thread-safe, so one shared client does not alias route telemetry.
+    A route receives one larger-budget retry only when its own response carries
+    the explicit budget-starvation signature. Results are restored to original
+    catalog order before evidence or viable routes are emitted, so provider
+    completion timing cannot become routing authority.
     """
     if not agents:
         report: dict[str, object] = {
@@ -412,14 +413,30 @@ def _preflight_review_agents(
             "no provider route passed the Strix plain-chat preflight", report
         )
 
-    with ThreadPoolExecutor(
-        max_workers=len(agents), thread_name_prefix="review-preflight"
-    ) as executor:
-        futures = [
-            executor.submit(_preflight_review_agent, agent, client=client)
-            for agent in agents
+    provider_lanes: dict[str, list[tuple[int, object]]] = {}
+    for index, agent in enumerate(agents):
+        provider_account = str(getattr(agent, "provider_name", "") or "unknown")
+        provider_lanes.setdefault(provider_account, []).append((index, agent))
+
+    def probe_lane(
+        lane: list[tuple[int, object]],
+    ) -> list[tuple[int, tuple[object | None, dict[str, object], int]]]:
+        return [
+            (index, _preflight_review_agent(agent, client=client))
+            for index, agent in lane
         ]
-        outcomes = [future.result() for future in futures]
+
+    with ThreadPoolExecutor(
+        max_workers=len(provider_lanes), thread_name_prefix="review-preflight"
+    ) as executor:
+        futures = [executor.submit(probe_lane, lane) for lane in provider_lanes.values()]
+        indexed_outcomes = [
+            indexed_outcome
+            for future in futures
+            for indexed_outcome in future.result()
+        ]
+    indexed_outcomes.sort(key=lambda item: item[0])
+    outcomes = [outcome for _index, outcome in indexed_outcomes]
 
     viable: list[object] = []
     routes: list[dict[str, object]] = []
