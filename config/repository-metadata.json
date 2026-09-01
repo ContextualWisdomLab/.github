@@ -13,6 +13,12 @@
       "topics": ["semantic-model", "ontology", "knowledge-graph", "data-governance", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "context-graph-contracts": {
+      "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
+      "topics": ["interoperability", "json-schema", "asyncapi", "cloudevents", "provenance", "context-graph", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
