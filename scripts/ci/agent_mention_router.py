@@ -37,8 +37,16 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # The bare /opencode and /oc forms additionally exclude a preceding "=": a
 # URL query string (?next=/opencode, ?redirect=/oc) shares the same "not
 # preceded by a word character" shape as a deliberate standalone command.
-# They also reject a following slash so root-relative paths such as
-# /oc/config and /opencode/docs cannot masquerade as standalone commands.
+#
+# The shared trailing boundary after any of the three alternatives also
+# excludes a following "/": without it, a root-relative path continuation
+# right after the alias (/oc/config, /opencode/docs, @opencode-agent/config,
+# @cwl-noema-review/@opencode-agent/foo) still matched, since the alias text
+# itself is a complete, valid match and nothing in the original trailing
+# lookahead treated "/" as a word character. This mirrors the
+# leading-boundary "/" exclusion already applied above and closes the same
+# false-positive class from the trailing side, for every alternative rather
+# than only the bare /opencode and /oc forms.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
@@ -48,8 +56,8 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![A-Za-z0-9_/-])@opencode-agent"
         r"|(?<![A-Za-z0-9_/-])@cwl-noema-review/@opencode-agent"
-        r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)(?![A-Za-z0-9_/-])"
-        r")(?![A-Za-z0-9_-])",
+        r"|(?<![A-Za-z0-9_/=-])(?:/opencode|/oc)"
+        r")(?![A-Za-z0-9_/-])",
         re.IGNORECASE,
     ),
 }

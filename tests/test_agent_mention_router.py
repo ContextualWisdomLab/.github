@@ -236,6 +236,35 @@ def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/oc/config",
+        "/opencode/docs",
+        "@opencode-agent/config",
+        "@cwl-noema-review/@opencode-agent/foo",
+    ],
+)
+def test_exact_mentions_rejects_trailing_path_continuation(body: str) -> None:
+    """A root-relative path continuation right after the alias is not a mention.
+
+    Sixth-round finding on #1537's successor PR (Devin): the shared trailing
+    boundary after all three ``opencode-agent`` alternatives excluded a
+    following letter, digit, underscore, or hyphen but not a following
+    ``/``, so a root-relative path glued directly onto the alias — ``/oc``
+    followed by ``/config``, ``/opencode`` followed by ``/docs``, or even
+    ``@opencode-agent`` or the ``@cwl-noema-review/@opencode-agent``
+    separator followed by ``/config`` or ``/foo`` — still matched as a
+    complete, valid mention, since nothing treated the alias text itself as
+    incomplete just because a slash continued right after it. The fix adds
+    ``/`` to the shared trailing exclusion, mirroring the leading-boundary
+    ``/`` exclusion already applied to each alternative from the other side.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
