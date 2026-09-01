@@ -240,6 +240,16 @@
       "repository": "kaefa",
       "issue": 82,
       "type": "documentation"
+    },
+    {
+      "repository": "aFIPC",
+      "issue": 261,
+      "type": "documentation"
+    },
+    {
+      "repository": "nonnest2",
+      "issue": 115,
+      "type": "documentation"
     }
   ]
 }
