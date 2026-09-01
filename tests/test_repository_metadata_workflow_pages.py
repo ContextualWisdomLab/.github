@@ -38,10 +38,7 @@ def test_metadata_pr_validation_cancels_superseded_head_runs() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
 
-    assert (
-        "repository-metadata-reconcile-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.ref }}"
-        in concurrency
-    )
+    assert "group: repository-metadata-reconcile-${{ github.ref }}" in concurrency
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in concurrency
     assert "github.event.pull_request.head.sha" not in concurrency
 
