@@ -1,0 +1,69 @@
+name: Repair PR1588 stale Strix shell contract
+
+on:
+  push:
+    branches: [fix/strix-control-plane-supersession-20260901]
+    paths: [.github/repair-pr1588-shell-contract.trigger]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  reconcile-shell-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/strix-control-plane-supersession-20260901
+          fetch-depth: 0
+      - name: Replace stale shell assertions and retrigger exact-head repair
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          starting_head="$GITHUB_SHA"
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1588" --jq '.head.sha')"
+          test "$live_head" = "$starting_head"
+
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          test_path = Path("scripts/ci/test_strix_quick_gate.sh")
+          text = test_path.read_text(encoding="utf-8")
+
+          replacements = {
+              'assert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow runs superseded-head cleanup outside the provider scan queue"':
+                  'assert_file_not_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow does not depend on a runner-backed superseded-head cleanup job"',
+              'assert_file_contains "$workflow_file" "re-dispatches exact-head evidence" "strix workflow documents current-head queue recovery"':
+                  'assert_file_contains "$workflow_file" "Validate live pull request before Strix setup" "strix workflow validates live PR identity before setup"\n\tassert_file_contains "$workflow_file" "Revalidate live pull request before provider execution" "strix workflow revalidates live PR identity before provider work"\n\tassert_file_contains "$workflow_file" "Revalidate live pull request before evidence publication" "strix workflow revalidates live PR identity before publication"\n\tassert_file_contains "$workflow_file" "steps.live_publication.outputs.current == \'true\'" "strix workflow gates publication on current live-head identity"',
+              'assert_file_contains "$workflow_file" "export LLM_TIMEOUT=0" "strix disables the model client inference timeout"':
+                  'assert_file_contains "$workflow_file" "export LLM_TIMEOUT=300" "strix keeps the positive model-client inference timeout required by the current compatibility contract"',
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"stale assertion not found: {old}")
+              text = text.replace(old, new, 1)
+
+          test_path.write_text(text, encoding="utf-8")
+          PY
+
+          grep -Fq 'assert_file_not_contains "$workflow_file" "cancel-superseded-pr-runs:"' scripts/ci/test_strix_quick_gate.sh
+          grep -Fq 'Revalidate live pull request before evidence publication' scripts/ci/test_strix_quick_gate.sh
+          grep -Fq 'export LLM_TIMEOUT=300' scripts/ci/test_strix_quick_gate.sh
+          ! grep -Fq 'export LLM_TIMEOUT=0" "strix disables the model client inference timeout' scripts/ci/test_strix_quick_gate.sh
+          git diff --check
+
+          latest_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1588" --jq '.head.sha')"
+          test "$latest_head" = "$starting_head"
+
+          printf '\nshell-contract-reconciled=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" >> .github/repair-pr1588.trigger
+          rm -f .github/workflows/repair-pr1588-shell-contract.yml .github/repair-pr1588-shell-contract.trigger
+          git add -A
+          git diff --cached --check
+          git commit -m 'test(strix): align shell gate with live-head revalidation contract'
+          git push origin HEAD:fix/strix-control-plane-supersession-20260901
