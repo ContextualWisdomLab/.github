@@ -241,7 +241,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert "cancel-in-progress: true" in workflow
+        if filename != "noema-review.yml":
+            assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
             "security-scan.yml",
@@ -255,7 +256,11 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
-            assert "github.event_name" not in concurrency_contract
+            assert "github.event_name" not in concurrency_contract.split(
+                "cancel-in-progress:", 1
+            )[0]
+            assert "github.event.action == 'synchronize'" in concurrency_contract
+            assert "github.event.action == 'closed'" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -500,7 +505,12 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
     assert "noema-review-${{" in concurrency_contract
-    assert "github.event_name" not in concurrency_contract
+    assert "github.event_name" not in concurrency_contract.split(
+        "cancel-in-progress:", 1
+    )[0]
+    assert "github.event.action == 'synchronize'" in concurrency_contract
+    assert "github.event.action == 'closed'" in concurrency_contract
+    assert "cancel-in-progress: true" not in concurrency_contract
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 

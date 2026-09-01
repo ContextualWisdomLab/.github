@@ -22,7 +22,9 @@ concurrency:
     github.event.pull_request.number ||
     github.event.client_payload.pr_number ||
     github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request_target' &&
+    (github.event.action == 'synchronize' || github.event.action == 'closed') }}
 
 permissions:
   contents: read
