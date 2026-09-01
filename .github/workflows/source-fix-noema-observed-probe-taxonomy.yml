@@ -23,6 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           export GIT_TERMINAL_PROMPT=0
+          # Retry after fixing the fixture migrator to advance by probe occurrence.
           git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
           cd repo
           git checkout "$TARGET_BRANCH"
