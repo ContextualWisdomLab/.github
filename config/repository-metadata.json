@@ -67,6 +67,18 @@
       "topics": ["accounting", "ledger", "journal", "reconciliation", "financial-reporting", "postgresql", "python", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "pg-erd-cloud": {
+      "description": "PostgreSQL 스키마를 리버스 엔지니어링하고 ERD·DDL 공유 흐름으로 관리하는 클라우드 서비스.",
+      "topics": ["cloud", "database-schema", "ddl", "erd", "postgresql", "reverse-engineering", "saas", "python", "javascript", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "clearfolio": {
+      "description": "Clearfolio — secure document conversion, tenant-scoped viewing, and controlled artifact delivery.",
+      "topics": ["document-viewer", "document-conversion", "file-preview", "pdf", "java", "spring-boot", "javascript", "web-app", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
