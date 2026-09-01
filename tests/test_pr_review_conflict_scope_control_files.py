@@ -18,10 +18,7 @@ from scripts.ci import pr_review_conflict_scope as scope
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 QUALITY_WORKFLOW = (
-    REPOSITORY_ROOT
-    / ".github"
-    / "workflows"
-    / "contextual-orchestrator-review-repair-quality.yml"
+    REPOSITORY_ROOT / ".github" / "workflows" / "hourly-nvidia-nim-review-repair.yml"
 )
 CONTRACT_PATH = "tests/test_pr_review_conflict_scope_control_files.py"
 DOCTORING_PATH = "docs/doctoring/conflict-control-evidence-isolation.md"
