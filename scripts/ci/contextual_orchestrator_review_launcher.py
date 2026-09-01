@@ -57,9 +57,6 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # already-proven-working REVIEW_MAX_OUTPUT_TOKENS rather than inventing a new
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
-# Shared cap on how many candidates in one preflight run may use the
-# escalation retry above. It bounds request count, never model response time.
-REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
 class ReviewPreflightError(RuntimeError):
@@ -316,7 +313,7 @@ def _response_has_reasoning_without_content(response: object) -> bool:
 
 
 def _preflight_review_agents(
-    agents: list[object], *, client: Any, escalations_used: int = 0
+    agents: list[object], *, client: Any
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
@@ -332,14 +329,9 @@ def _preflight_review_agents(
     across the pool, and this is the exact original failure mode PR #1436
     responded to) -- that *same* candidate is retried once at a larger,
     escalated budget (``REVIEW_PREFLIGHT_ESCALATED_TOKENS``) before being
-    marked rejected -- bounded by a shared ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
-    counter, which the ``escalations_used`` argument carries forward across
-    calls (not per candidate, and not reset per call): a caller that probes
-    two stages of the same preflight run (e.g. ``_preflight_with_fallback``'s
-    primary and fallback stages) must pass the previous stage's ending count
-    back in here so the two stages share one budget instead of each getting
-    its own -- otherwise the computed worst-case bound this counter exists to
-    enforce silently doubles. Every other failure class (transport exception,
+    marked rejected. The retry decision is local to that candidate and
+    cannot be exhausted by earlier catalog entries. Every other failure class
+    (transport exception,
     non-2xx, or empty content matching neither signature) is not retried: a
     genuinely-down candidate never reaches the escalation path, so it cannot
     produce a false "healthy" read.
@@ -369,21 +361,17 @@ def _preflight_review_agents(
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
-        escalations_used: Escalations already spent earlier in this same
-            preflight run (e.g. by a prior stage), so the shared budget is
-            honored across calls rather than restarted at zero.
-
     Returns:
         A pair of viable agents and a sanitized preflight report. The
-        report's ``escalations_used`` is the running total including
-        ``escalations_used``'s starting value, so a caller chaining another
-        stage can pass it straight back in.
+        report's ``escalations_used`` is observed telemetry for this
+        stage only and never an admission quota.
 
     Raises:
         ReviewPreflightError: If no provider route returns usable text.
     """
     viable: list[object] = []
     routes: list[dict[str, object]] = []
+    escalations_used = 0
     for agent in agents:
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
@@ -437,28 +425,9 @@ def _preflight_review_agents(
         reasoning_without_content = _response_has_reasoning_without_content(response)
         row["reasoning_without_content"] = reasoning_without_content
         budget_signature = finish_reason == "length" or reasoning_without_content
-        # KNOWN, ACCEPTED, TRACKED LIMITATION on the escalations_used >=
-        # REVIEW_PREFLIGHT_MAX_ESCALATIONS branch below, ContextualWisdomLab/.github#1458
-        # (originally documented on ADR-0005, docs/adr/0005-sidecar-preflight-token-budget.md):
-        # escalations_used is one shared, first-come-first-served counter for
-        # the whole run, consumed in catalog order
-        # (build_zdr_prioritized_catalog's (cost_evidence_rank,
-        # zdr_attested_rank, provider, model) sort, not random). A
-        # later-sorting candidate can be denied its own escalation attempt
-        # purely because REVIEW_PREFLIGHT_MAX_ESCALATIONS earlier candidates
-        # already claimed the shared budget -- even if it would have been the
-        # only one to succeed at REVIEW_PREFLIGHT_ESCALATED_TOKENS.
-        # Deliberately not reordered (round-robin/random): a fixed-size
-        # shared budget smaller than the candidate pool always has to deny
-        # someone an escalation, so reordering only changes who, and picking
-        # a specific policy without real telemetry on which candidates
-        # actually need escalation would itself be the kind of unjustified
-        # heuristic this design rejects elsewhere.
-        if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
+        if not budget_signature:
             row["status"] = "rejected"
-            row["error_type"] = (
-                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
-            )
+            row["error_type"] = "invalid_chat_response"
             routes.append(row)
             continue
         escalations_used += 1
@@ -511,7 +480,6 @@ def _preflight_review_agents(
         "ready_count": len(viable),
         "rejected_count": len(agents) - len(viable),
         "escalations_used": escalations_used,
-        "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
     }
     if not viable:
@@ -526,17 +494,12 @@ def _preflight_with_fallback(
 ) -> tuple[list[object], dict[str, object], bool]:
     """Use the priced catalog only after every primary route rejects.
 
-    The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
-    budget for the whole preflight run, not one budget each: the primary
-    stage's ending ``escalations_used`` is passed as the fallback stage's
-    starting point, so a run that rejects all 8 primary routes and then
-    probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations). This bounds request count, not individual
-    model response or sidecar readiness time. Both
-    stages' reports remain in the result: the fallback (or sole) stage's
-    report carries the run's final, cumulative ``escalations_used``, and
-    ``primary_attempt`` nests the primary stage's own report -- including its
-    own ``escalations_used`` -- whenever a fallback stage ran at all.
+    Each candidate keeps the same two-attempt evidence contract used by
+    ``_preflight_review_agents``. A candidate that returns the explicit
+    budget-starvation signature receives exactly one larger-budget retry;
+    another candidate's earlier position cannot consume or deny that retry.
+    Primary and fallback reports preserve their own observed escalation counts
+    for audit without using those counts as admission authority.
     """
     try:
         viable, report = _preflight_review_agents(primary_agents, client=client)
@@ -544,10 +507,9 @@ def _preflight_with_fallback(
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
             raise
-        escalations_used = int(primary_error.report.get("escalations_used", 0))
         try:
             viable, report = _preflight_review_agents(
-                fallback_agents, client=client, escalations_used=escalations_used
+                fallback_agents, client=client
             )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report

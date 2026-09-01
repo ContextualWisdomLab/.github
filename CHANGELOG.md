@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Remove the shared first-come-first-served review preflight escalation quota. Every route that emits the explicit budget-starvation signature now receives its own single evidence-bearing escalation, so catalog order cannot deny later eligible routes a viability test; primary/fallback escalation counts remain audit telemetry only.
 - Remove the retired Noema/OpenCode catalog cardinality heuristics from the review launcher and sidecar. Evidence-eligible routes are no longer truncated before runtime preflight, auto-mode keeps the full priced fallback set, and legacy `limit`/`account_cap` inputs are accepted only as ignored compatibility arguments. This closes the >12-route startup crash found by Devin Review without making serialization order or provider identity a routing preference.
 - **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
   Building on the draft-poll exemption's live PR/head validation, Devin Review found two

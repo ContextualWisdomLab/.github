@@ -1105,37 +1105,6 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     assert report["escalations_used"] == 1
 
 
-def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
-    """Once ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` is spent, a further candidate
-    that would otherwise qualify is rejected immediately, without a second
-    call -- the shared budget is per-run, not per-candidate.
-    """
-    namespace = _load_launcher()
-    preflight = namespace["_preflight_review_agents"]
-    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-
-    length_response = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
-    agents = [
-        SimpleNamespace(id=f"budget_user_{index}", provider_name="openrouter", model="x/free")
-        for index in range(max_escalations)
-    ]
-    exhausted = SimpleNamespace(
-        id="budget_exhausted", provider_name="openrouter", model="x/free"
-    )
-    client = _ProbeClient(
-        {agent.id: dict(length_response) for agent in agents}
-        | {exhausted.id: dict(length_response)}
-    )
-
-    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
-        preflight([*agents, exhausted], client=client)
-
-    exhausted_row = failure.value.report["routes"][-1]
-    assert exhausted_row["attempts"] == 1
-    assert exhausted_row["error_type"] == "escalation_budget_exhausted"
-    assert failure.value.report["escalations_used"] == max_escalations
-    assert len(client.calls) == max_escalations * 2 + 1
-
 
 @pytest.mark.parametrize(
     ("http_status", "exception_type_name"),
@@ -1409,18 +1378,17 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
 
 
-def test_fallback_escalation_budget_is_shared_across_full_admitted_catalog() -> None:
-    """Escalation retries stay shared without evicting evidence-admitted routes."""
+def test_fallback_escalation_is_independent_of_primary_catalog_order() -> None:
+    """Primary starvation cannot consume a fallback candidate's own retry."""
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
-    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
     primary_agents = [
         SimpleNamespace(id=f"primary_{index}", provider_name="openrouter", model="x/free")
-        for index in range(13)
+        for index in range(6)
     ]
     fallback_agents = [
         SimpleNamespace(id=f"fallback_{index}", provider_name="openrouter", model="y/priced")
-        for index in range(5)
+        for index in range(3)
     ]
     starved = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
     client = _ProbeClient({agent.id: dict(starved) for agent in [*primary_agents, *fallback_agents]})
@@ -1428,9 +1396,14 @@ def test_fallback_escalation_budget_is_shared_across_full_admitted_catalog() -> 
     with pytest.raises(namespace["ReviewPreflightError"]) as failure:
         preflight(primary_agents, fallback_agents, client=client)
 
-    assert failure.value.report["escalations_used"] == max_escalations
-    assert failure.value.report["primary_attempt"]["escalations_used"] == max_escalations
-    assert len(client.calls) == len(primary_agents) + len(fallback_agents) + max_escalations
+    assert failure.value.report["escalations_used"] == len(fallback_agents)
+    assert failure.value.report["primary_attempt"]["escalations_used"] == len(primary_agents)
+    assert len(client.calls) == 2 * (len(primary_agents) + len(fallback_agents))
+    assert all(
+        row.get("error_type") != "escalation_budget_exhausted"
+        for report in (failure.value.report["primary_attempt"], failure.value.report)
+        for row in report["routes"]
+    )
 
 
 
