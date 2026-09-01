@@ -15,7 +15,6 @@ concurrency:
 
 jobs:
   repair:
-    if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae' && github.triggering_actor == 'seonghobae'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -35,6 +34,9 @@ jobs:
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "ContextualWisdomLab/.github"
+          test "${GITHUB_ACTOR}" = "seonghobae"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "seonghobae"
           test "${GITHUB_REF_NAME}" = "$WRITER_BRANCH"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
@@ -46,58 +48,42 @@ jobs:
           scheduler = Path('.github/workflows/pr-review-merge-scheduler.yml')
           source = scheduler.read_text(encoding='utf-8')
 
-          env_anchor = "      ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}\n"
-          env_insert = env_anchor + """      # Resolve each discovered PR branch through its live Git ref before any
-      # destructive queue-hygiene cancellation. Bound the lookup work
-      # independently so API pressure cannot turn incomplete evidence into a
-      # cancellation decision.
-      ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS: ${{ vars.ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS || '100' }}
-"""
-          assert source.count(env_anchor) == 1, source.count(env_anchor)
+          max_prs_prefix = '      ORG_SWEEP_MAX_PRS:'
+          lines = source.splitlines(keepends=True)
+          matches = [index for index, line in enumerate(lines) if line.startswith(max_prs_prefix)]
+          assert len(matches) == 1, matches
           assert 'ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS:' not in source
-          source = source.replace(env_anchor, env_insert, 1)
+          expression = '$' + "{{ vars.ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS || '100' }}"
+          insertion = (
+              '      # Resolve each discovered PR branch through its live Git ref before any\n'
+              '      # destructive queue-hygiene cancellation. Bound the lookup work\n'
+              '      # independently so incomplete evidence can never authorize cancellation.\n'
+              f'      ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS: {expression}\n'
+          )
+          lines.insert(matches[0] + 1, insertion)
+          source = ''.join(lines)
 
-          validation_anchor = """          if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
+          validation_anchor = '''          if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
             echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
             exit 1
           fi
-"""
-          validation_insert = validation_anchor + """          if ! [[ "$ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" =~ ^[1-9][0-9]*$ ]]; then
+'''
+          validation_insert = validation_anchor + '''          if ! [[ "$ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS must be a positive integer; got '${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}'. Fix the ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS repository variable."
             exit 1
           fi
-"""
+'''
           assert source.count(validation_anchor) == 1, source.count(validation_anchor)
           source = source.replace(validation_anchor, validation_insert, 1)
 
-          old_block = """            queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
-              gh api \\
-                -H "Accept: application/vnd.github+json" \\
-                "/repos/${repo_full_name}/pulls?state=open&per_page=100" \\
-                --paginate \\
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\\(.head.repo.full_name):\\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
-                  '
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
-              queue_hygiene_ready=false
-            fi
-"""
-          new_block = """            queue_hygiene_ready=true
+          queue_comment = '            # Queue hygiene, part 1:'
+          section_start = source.index(queue_comment)
+          old_start = source.index('            queue_hygiene_ready=true\n', section_start)
+          old_end = source.index('            if ! current_default_sha="$(\n', old_start)
+          old = source[old_start:old_end]
+          assert 'value: .head.sha' in old
+          assert '.head.sha != null' in old
+          new = '''            queue_hygiene_ready=true
             open_pr_heads_json="{}"
             if open_pr_refs_tsv="$(
               gh api \\
@@ -149,20 +135,17 @@ jobs:
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
               queue_hygiene_ready=false
             fi
-"""
-          assert source.count(old_block) == 1, source.count(old_block)
-          source = source.replace(old_block, new_block, 1)
+'''
+          source = source[:old_start] + new + source[old_end:]
           scheduler.write_text(source, encoding='utf-8')
 
-          test_path = Path('tests/test_queue_hygiene_live_ref_current_head.py')
-          test_path.write_text('''"""Regression contract for live-ref queue-hygiene cancellation."""\n\nfrom pathlib import Path\n\n\ndef _workflow() -> str:\n    return Path(".github/workflows/pr-review-merge-scheduler.yml").read_text(encoding="utf-8")\n\n\ndef _queue_hygiene_block() -> str:\n    workflow = _workflow()\n    start = workflow.index("# Queue hygiene, part 1:")\n    end = workflow.index("if ! current_default_sha=", start)\n    return workflow[start:end]\n\n\ndef test_queue_hygiene_resolves_live_git_refs_before_cancellation() -> None:\n    workflow = _workflow()\n    block = _queue_hygiene_block()\n    assert "ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" in workflow\n    assert '"/repos/${head_repo}/git/ref/heads/${encoded_head_ref}"' in block\n    assert '$value | split("/") | map(@uri) | join("/")' in block\n    assert "--jq '.object.sha // empty'" in block\n    assert "value: .head.sha" not in block\n    assert ".head.sha != null" not in block\n\n\ndef test_queue_hygiene_fails_closed_on_partial_live_ref_evidence() -> None:\n    block = _queue_hygiene_block()\n    assert "open PR refs exceed the live-ref lookup limit" in block\n    assert "an open PR has a malformed head repository or ref" in block\n    assert "live ref ${head_repo}:${head_ref} could not be resolved safely" in block\n    assert block.count("queue_hygiene_ready=false") >= 3\n''', encoding='utf-8')
+          Path('tests/test_queue_hygiene_live_ref_current_head.py').write_text('''"""Regression contract for live-ref queue-hygiene cancellation."""\n\nfrom pathlib import Path\n\n\ndef _workflow() -> str:\n    return Path(".github/workflows/pr-review-merge-scheduler.yml").read_text(encoding="utf-8")\n\n\ndef _queue_hygiene_block() -> str:\n    workflow = _workflow()\n    start = workflow.index("# Queue hygiene, part 1:")\n    end = workflow.index("if ! current_default_sha=", start)\n    return workflow[start:end]\n\n\ndef test_queue_hygiene_resolves_live_git_refs_before_cancellation() -> None:\n    workflow = _workflow()\n    block = _queue_hygiene_block()\n    assert "ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" in workflow\n    assert '"/repos/${head_repo}/git/ref/heads/${encoded_head_ref}"' in block\n    assert '$value | split("/") | map(@uri) | join("/")' in block\n    assert "--jq '.object.sha // empty'" in block\n    assert "value: .head.sha" not in block\n    assert ".head.sha != null" not in block\n\n\ndef test_queue_hygiene_fails_closed_on_partial_live_ref_evidence() -> None:\n    block = _queue_hygiene_block()\n    assert "open PR refs exceed the live-ref lookup limit" in block\n    assert "an open PR has a malformed head repository or ref" in block\n    assert "live ref ${head_repo}:${head_ref} could not be resolved safely" in block\n    assert block.count("queue_hygiene_ready=false") >= 3\n''', encoding='utf-8')
 
-          doctoring = Path('docs/doctoring/queue-hygiene-live-ref-race.md')
-          doctoring.write_text('''# Queue hygiene live-reference race\n\n## Incident\n\nThe organization queue sweep could observe a newly pushed PR head in Actions while the open-pull-request listing still exposed the predecessor SHA. Treating that payload SHA as authoritative let the sweep cancel legitimate current-head runs as superseded, creating a stale-event/concurrency admission cycle.\n\n## Decision\n\nOpen PR payloads are discovery-only for head repository and branch name. Before cancelling any PR run, the scheduler resolves every discovered branch through GitHub's live Git-reference endpoint and compares active runs with that authoritative SHA. A malformed/inaccessible ref or a lookup set above the bounded ceiling disables destructive cancellation for that repository; incomplete evidence can never authorize cancellation.\n\n## Verification\n\n`tests/test_queue_hygiene_live_ref_current_head.py` locks the live-ref endpoint, ref encoding, rejection of payload `.head.sha` as cancellation authority, lookup bound, and fail-closed error paths. Exact-head hosted checks remain authoritative after this source mutation.\n\n## Lineage\n\nThis is the current-main successor of historical PR #1348, ported onto protected main after #1630 reduced scheduler queue pressure. The historical branch was more than one hundred commits behind and conflicted with the current scheduler, so its semantic delta was reapplied without rewriting concurrent history.\n''', encoding='utf-8')
+          Path('docs/doctoring/queue-hygiene-live-ref-race.md').write_text('''# Queue hygiene live-reference race\n\n## Incident\n\nThe organization queue sweep could observe a newly pushed PR head in Actions while the open-pull-request listing still exposed the predecessor SHA. Treating that payload SHA as authoritative let the sweep cancel legitimate current-head runs as superseded, creating a stale-event/concurrency admission cycle.\n\n## Decision\n\nOpen PR payloads are discovery-only for head repository and branch name. Before cancelling any PR run, the scheduler resolves every discovered branch through GitHub's live Git-reference endpoint and compares active runs with that authoritative SHA. A malformed/inaccessible ref or a lookup set above the bounded ceiling disables destructive cancellation for that repository; incomplete evidence can never authorize cancellation.\n\n## Verification\n\n`tests/test_queue_hygiene_live_ref_current_head.py` locks the live-ref endpoint, ref encoding, rejection of payload `.head.sha` as cancellation authority, lookup bound, and fail-closed error paths. Exact-head hosted checks remain authoritative after this source mutation.\n\n## Lineage\n\nThis is the current-main successor of historical PR #1348, ported onto protected main after #1630 reduced scheduler queue pressure. The historical branch was more than one hundred commits behind and conflicted with the current scheduler, so its semantic delta was reapplied without rewriting concurrent history.\n''', encoding='utf-8')
 
           changelog = Path('CHANGELOG.md')
           text = changelog.read_text(encoding='utf-8')
-          entry = """- **Prevent stale PR payloads from cancelling current-head Actions runs.**\n  Organization queue hygiene now resolves every discovered PR branch through its\n  live Git ref before destructive cancellation and fails closed on missing,\n  malformed, or over-budget ref evidence. This ports the #1348 race repair onto\n  the post-#1630 scheduler without carrying its stale branch ancestry.\n"""
+          entry = '''- **Prevent stale PR payloads from cancelling current-head Actions runs.**\n  Organization queue hygiene now resolves every discovered PR branch through its\n  live Git ref before destructive cancellation and fails closed on missing,\n  malformed, or over-budget ref evidence. This ports the #1348 race repair onto\n  the post-#1630 scheduler without carrying its stale branch ancestry.\n'''
           marker = '## [Unreleased]\n'
           assert text.count(marker) == 1
           if entry not in text:
@@ -180,9 +163,11 @@ jobs:
           rm .github/workflows/repair-queue-hygiene-live-ref-20260902.yml
           python3 -m pytest -q tests/test_queue_hygiene_live_ref_current_head.py
           git diff --check
-          git add .github/workflows/pr-review-merge-scheduler.yml CHANGELOG.md docs/doctoring/queue-hygiene-live-ref-race.md docs/product-technical-gap-baseline.md tests/test_queue_hygiene_live_ref_current_head.py .github/workflows/repair-queue-hygiene-live-ref-20260902.yml
+          git add -A
           git diff --cached --check
-          test "$(git diff --cached --name-only | LC_ALL=C sort)" = "$(printf '%s\n' .github/workflows/pr-review-merge-scheduler.yml CHANGELOG.md docs/doctoring/queue-hygiene-live-ref-race.md docs/product-technical-gap-baseline.md tests/test_queue_hygiene_live_ref_current_head.py .github/workflows/repair-queue-hygiene-live-ref-20260902.yml | LC_ALL=C sort)"
+          actual="$(git diff --cached --name-only | LC_ALL=C sort)"
+          expected="$(printf '%s\n' .github/workflows/pr-review-merge-scheduler.yml .github/workflows/repair-queue-hygiene-live-ref-20260902.yml CHANGELOG.md docs/doctoring/queue-hygiene-live-ref-race.md docs/product-technical-gap-baseline.md tests/test_queue_hygiene_live_ref_current_head.py | LC_ALL=C sort)"
+          test "$actual" = "$expected"
 
       - name: Commit and push exact verified tree
         shell: bash
