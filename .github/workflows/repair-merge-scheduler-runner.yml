@@ -1,0 +1,118 @@
+name: Repair merge scheduler runner image
+
+on:
+  push:
+    branches: [fix/merge-scheduler-explicit-runner-20260901]
+    paths: [.github/repair-merge-scheduler-runner.trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  repair-scheduler-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/merge-scheduler-explicit-runner-20260901
+          fetch-depth: 0
+      - name: Prove RED then repair scheduler runner selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch='fix/merge-scheduler-explicit-runner-20260901'
+          starting_head="$GITHUB_SHA"
+          remote_head="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" --jq '.object.sha')"
+          test "$remote_head" = "$starting_head"
+
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git fetch --no-tags origin main
+          git merge --no-edit origin/main
+
+          cat > tests/test_merge_scheduler_runner_image_contract.py <<'PY'
+          """Contract tests for the queue-draining merge scheduler runner image."""
+
+          from __future__ import annotations
+
+          from pathlib import Path
+          import re
+          import unittest
+
+
+          WORKFLOW = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          JOB_HEADER = re.compile(r'^  ([A-Za-z0-9_-]+):\n', re.MULTILINE)
+
+
+          def job_block(workflow: str, job_name: str) -> str:
+              """Return one top-level job block from the merge scheduler workflow."""
+              marker = f'  {job_name}:\n'
+              start = workflow.index(marker)
+              match = JOB_HEADER.search(workflow, start + len(marker))
+              end = match.start() if match else len(workflow)
+              return workflow[start:end]
+
+
+          class MergeSchedulerRunnerImageContract(unittest.TestCase):
+              """Keep queue-draining control jobs off the starved floating image."""
+
+              def test_queue_draining_jobs_use_explicit_supported_image(self) -> None:
+                  """Require the scheduler control plane to use explicit Ubuntu 24.04."""
+                  workflow = WORKFLOW.read_text(encoding='utf-8')
+                  for job_name in (
+                      'cancel-closed-pr-runs',
+                      'scan-pr-queue',
+                      'org-queue-sweep',
+                  ):
+                      block = job_block(workflow, job_name)
+                      self.assertIn('runs-on: ubuntu-24.04', block, job_name)
+                      self.assertNotIn('runs-on: ubuntu-latest', block, job_name)
+                  self.assertNotIn('runs-on: ubuntu-latest', workflow)
+
+
+          if __name__ == '__main__':
+              unittest.main()
+          PY
+
+          set +e
+          python3 tests/test_merge_scheduler_runner_image_contract.py
+          red_rc=$?
+          set -e
+          if [ "$red_rc" -eq 0 ]; then
+            echo '::error::Runner-image regression did not reproduce RED before the production repair.'
+            exit 1
+          fi
+          printf 'Observed expected RED runner-image contract (rc=%s).\n' "$red_rc"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          text = path.read_text(encoding='utf-8')
+          floating = 'runs-on: ubuntu-latest'
+          explicit = 'runs-on: ubuntu-24.04'
+          count = text.count(floating)
+          if count < 3:
+              raise SystemExit(
+                  f'expected at least three floating scheduler runner selectors, found {count}'
+              )
+          text = text.replace(floating, explicit)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python3 tests/test_merge_scheduler_runner_image_contract.py
+          python3 scripts/ci/pr_review_merge_scheduler.py --self-test
+          git diff --check
+
+          latest_remote="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" --jq '.object.sha')"
+          test "$latest_remote" = "$starting_head"
+
+          rm -f \
+            .github/workflows/repair-merge-scheduler-runner.yml \
+            .github/repair-merge-scheduler-runner.trigger
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(ci): pin merge scheduler to ubuntu-24.04'
+          git push origin "HEAD:${branch}"
