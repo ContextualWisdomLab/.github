@@ -249,7 +249,15 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert "cancel-in-progress: true" in workflow
+        if filename == "noema-review.yml":
+            assert "cancel-in-progress: ${{" in concurrency_contract
+            assert "github.event_name != 'workflow_run'" in concurrency_contract
+            assert (
+                "github.event.workflow_run.conclusion != 'cancelled'"
+                in concurrency_contract
+            )
+        else:
+            assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
             "security-scan.yml",
@@ -262,7 +270,26 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "opencode-review-bootstrap-" in concurrency_contract
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run.pull_requests[0].number" in concurrency_contract
-            assert "github.event_name }}" not in concurrency_contract
+            assert "github.event.pull_request.head.sha" in concurrency_contract
+            assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency_contract
+            assert "github.event.workflow_run.head_sha" not in concurrency_contract
+            assert "github.event.client_payload.pr_head_sha" in concurrency_contract
+            assert "github.event.workflow_run.conclusion == 'cancelled'" in (
+                concurrency_contract
+            )
+            assert "format('cancelled-{0}', github.run_id)" in concurrency_contract
+            assert "'actionable'" in concurrency_contract
+            procedure = (
+                REPO_ROOT / "docs" / "pr-review-and-merge-procedure.md"
+            ).read_text(encoding="utf-8")
+            assert "head-specific native concurrency" in procedure
+            assert "live-head validation explicitly cancels" in procedure
+            for source in (
+                "`pull_request_target` uses `pull_request.head.sha`",
+                "`workflow_run` uses `workflow_run.pull_requests[0].head.sha`",
+                "`repository_dispatch` uses `client_payload.pr_head_sha`",
+            ):
+                assert source in procedure
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -270,7 +297,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        assert "github.event.pull_request.head.sha" not in concurrency_contract
+        if filename != "noema-review.yml":
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
@@ -407,27 +435,30 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
         assert "closed" in workflow
         assert "cancel-closed-pr-runs:" in workflow
-        if filename == "strix.yml":
-            assert "Cancel queued and running scans for the closed pull request" in workflow
-            assert (
-                "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
-                "|| github.token"
-            ) in workflow
-            assert "DISPATCH_REPOSITORY" not in workflow
-            assert "CLOSED_PR_HEAD_SHA" in workflow
-            assert 'select(.event == "pull_request_target")' in workflow
-            assert 'select(.event == "repository_dispatch")' not in workflow
+        if filename in {"strix.yml", "noema-review.yml"}:
+            noun = "scans" if filename == "strix.yml" else "Noema reviews"
+            assert f"Cancel queued and running {noun} for the closed pull request" in workflow
             assert "leaving runs unchanged" in workflow
-            assert (
-                "for active_status in queued in_progress requested waiting pending"
-                in workflow
-            )
+            next_job = "strix" if filename == "strix.yml" else "noema-review"
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
-                "  strix:", 1
+                f"  {next_job}:", 1
             )[0]
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+            if filename == "strix.yml":
+                assert "CLOSED_PR_HEAD_SHA" in workflow
+                assert (
+                    "for active_status in queued in_progress requested waiting pending"
+                    in workflow
+                )
+                assert (
+                    "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
+                    "|| github.token"
+                ) in workflow
+                assert "DISPATCH_REPOSITORY" not in workflow
+                assert 'select(.event == "pull_request_target")' in workflow
+                assert 'select(.event == "repository_dispatch")' not in workflow
         else:
             assert (
                 "PR closed; this run only cancels older runs through workflow concurrency."
@@ -504,7 +535,9 @@ def test_noema_triggers_serialize_one_review_per_pull_request() -> None:
 
     assert "github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "github.event_name }}" not in concurrency_contract
+    assert "github.event.workflow_run.conclusion == 'cancelled'" in concurrency_contract
+    assert "format('cancelled-{0}', github.run_id)" in concurrency_contract
+    assert "'actionable'" in concurrency_contract
 
 
 def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ import pytest
 
 HEAD = "a" * 40
 WORKFLOW = Path(".github/workflows/opencode-review.yml")
+DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 STATUS_HELPER = Path("scripts/ci/opencode_dispatch_status.py")
 
 
@@ -102,14 +105,19 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Request current-head OpenCode review execution" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     assert "exchange_github_app_token" in workflow
+    assert "Reject untrusted fork review resource consumption" in workflow
+    assert "github.event.pull_request.head.repo.full_name" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
-    assert "timeout-minutes: 100" in target_job.split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 5" in target_job.split("    steps:\n", 1)[0]
+    assert "for attempt in" not in workflow
+    assert "opencode-review-wait-window-one" not in workflow
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert 'event_type:"merge-scheduler"' in workflow
-    assert "trigger_reviews:true" in workflow
-    assert "for attempt in $(seq 1 180)" in target_job
-    assert "sleep 30" in target_job
-    assert "enable_auto_merge:false" in workflow
+    assert "steps.verdict.outputs.verdict == ''" in target_job
+    assert 'event_type:"opencode-review"' in workflow
+    assert 'sleep "$remaining_seconds"' not in workflow
+    assert workflow.count("timeout 25 gh api --paginate") == 1
+    assert workflow.count('if ! reviews="$(timeout 25 gh api') == 1
+    assert workflow.count('reviews="[]"') == 1
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
@@ -117,3 +125,170 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "Review approval remains a separate current-head PR review requirement"
         not in workflow
     )
+
+
+def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> None:
+    """A formal receipt wakes the failed required run instead of polling for hours."""
+    required = WORKFLOW.read_text(encoding="utf-8")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    assert "for attempt in" not in required
+    assert "rerun-failed-jobs" in dispatched
+    assert '--argjson required_run_id "$GITHUB_RUN_ID"' in required
+    assert "required_run_id:$required_run_id" in required
+    assert "id: formal_review_receipt" in dispatched
+    assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
+    assert "github.event.client_payload.required_run_id != ''" in dispatched
+    assert 'gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in dispatched
+    assert "select(.id == $run_id)" in dispatched
+    assert 'select(.event == "pull_request_target")' in dispatched
+    assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
+    assert "select(.head_sha == $head)" in dispatched
+    wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
+    target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
+    target_permissions = target_job.split("    env:\n", 1)[0]
+    assert "actions: write" in target_permissions
+    assert (
+        "needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token"
+    ) in wake_step
+    assert "steps.opencode_app_token.outputs.token" not in wake_step
+    assert "WAKE_TOKEN_SOURCE" in wake_step
+    assert '"$WAKE_TOKEN_SOURCE" = "unavailable"' in wake_step
+    assert "--paginate" not in wake_step
+    # Identity is the immutable target-repository run id plus event/path/head;
+    # do not depend on context-specific title or workflow_url rendering.
+    assert "display_title ==" not in wake_step
+    assert ".name | startswith(" not in wake_step
+    assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
+
+
+def wake_selector(run: dict[str, object], *, head: str = HEAD, run_id: int = 42) -> str:
+    """Execute the wake step's run-validation jq program in isolation."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production wake selector")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    marker = """jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '"""
+    start = dispatched.index(marker) + len(marker)
+    end = dispatched.index("\n            ')", start)
+    result = subprocess.run(
+        [jq, "-r", "--arg", "head", head, "--argjson", "run_id", str(run_id), dispatched[start:end]],
+        input=json.dumps(run),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github/workflows/opencode-review.yml") -> dict[str, object]:
+    """Build one realistic single-run GET REST API record.
+
+    Mirrors the real shape a sibling repo sees for a run injected by the org's
+    required-workflow ruleset (this repo's actual central-hub use case): `name`
+    is the bare workflow name and `display_title` is a plain PR title, with no
+    PR number or head SHA embedded in either -- unlike a native same-repo
+    trigger, where both fields carry the rendered `run-name`.
+    """
+    return {
+        "id": run_id,
+        "head_sha": head_sha,
+        "event": "pull_request_target",
+        "name": "Required OpenCode Review",
+        "display_title": "Fix an unrelated example bug",
+        "path": path,
+        "workflow_url": (
+            "https://api.github.com/repos/ContextualWisdomLab/example"
+            "/actions/required_workflows/9"
+        ),
+        "status": "completed",
+        "conclusion": "failure",
+    }
+
+
+def test_wake_selector_matches_the_referenced_run_without_name_or_display_title() -> None:
+    """The exact-id, exact-head run is matched using only id/event/path/head_sha."""
+    assert wake_selector(required_run()) == "42\tcompleted\tfailure"
+
+
+def test_wake_selector_rejects_a_referenced_run_with_a_different_head() -> None:
+    """A referenced run whose head_sha has moved on (Devin Review, PR #1507:
+
+    'another PR or head') must not be treated as the current PR's required run
+    -- the realistic failure mode for an id-based reference, e.g. a superseded
+    run or a stale/forged required_run_id.
+    """
+    assert wake_selector(required_run(head_sha="b" * 40)) == ""
+
+
+def test_wake_selector_rejects_a_referenced_run_for_a_different_workflow() -> None:
+    """A referenced run for a different required workflow (Strix) is rejected."""
+    assert wake_selector(required_run(path=".github/workflows/strix.yml")) == ""
+
+
+def test_formal_receipt_wakes_the_exact_head_failed_required_run(tmp_path: Path) -> None:
+    """Execute the production wake script end-to-end against a fake GitHub API."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    run_block = step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    script = textwrap.dedent(run_block)
+    calls = tmp_path / "calls"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"actions/runs/42/rerun-failed-jobs"* ]]; then exit 0; fi
+if [[ "$*" == *"actions/runs/42"* ]]; then printf '%s\\n' '{json.dumps(required_run())}'; exit 0; fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "FAKE_CALLS": str(calls),
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "GH_TOKEN": "actions-write-token",
+            "PR_HEAD_SHA": HEAD,
+            "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = calls.read_text(encoding="utf-8")
+    assert "actions/runs/42/rerun-failed-jobs" in recorded
+    assert "repos/ContextualWisdomLab/example/actions/runs/42" in recorded
+    assert "--paginate" not in recorded
+
+
+def test_sibling_formal_receipt_fails_closed_without_actions_token() -> None:
+    """A sibling wake without either Actions-capable PAT fails before GitHub I/O."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    step = dispatched.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
+    script = textwrap.dedent(
+        step.split("        run: |\n", 1)[1].split("\n\n      - name:", 1)[0]
+    )
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "GH_TOKEN": "",
+            "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_HEAD_SHA": HEAD,
+            "REQUIRED_RUN_ID": "42",
+            "WAKE_TOKEN_SOURCE": "unavailable",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "Actions-capable wake credential is unavailable" in result.stdout
