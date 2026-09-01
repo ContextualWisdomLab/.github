@@ -13,12 +13,13 @@ The existing license classifier is intentionally high-recall but is not a legal 
 
 1. Refresh the organization inventory every hour.
 2. Build the owned target set from live GitHub repository metadata and admit only entries with `isFork == false` before any SBOM collection.
-3. Reconcile SPDX/CycloneDX evidence with manifests, lockfiles, vendored/native/binary assets, container inputs, generated packages, and dependency-graph evidence before calling an inventory complete.
-4. Interpret license expressions as evidence requiring an explicit `allow`, `review`, or `replace/block` outcome tied to the actual product distribution and hosted-service model. Do not equate copyleft with non-commercial use.
-5. For an actionable incompatibility, remediate in this order: remove an unused component; replace it with a maintained permissively licensed equivalent; implement only the bounded required capability cleanly in-house from independent product/API/standards behavior; isolate it behind an independently deployed service/process boundary only when that genuinely changes the technical and legal coupling; or redesign the feature to remove the dependency.
-6. A replacement implementation must not copy protected source, tests, comments, data, expressive structure, or other copyrightable material from the incompatible implementation. Product contracts, published standards, independent interoperability documentation, and lawful black-box behavior are the acceptable specification sources.
-7. Update manifests and lockfiles, SBOMs, NOTICE/THIRD_PARTY_NOTICES, tests, architecture/ADR evidence, CHANGELOG when release-relevant, and `docs/product-technical-gap-baseline.md`; then rerun exact-head Checks/reviews and merge only through ordinary branch protection.
-8. Preserve concurrent writers. The recurring inventory publication branch must advance without history rewriting; a race fails closed and is retried on a later run.
+3. Require an organization-wide SBOM credential before discovery or collection. The repository-scoped `github.token` is not an acceptable fallback because it can silently hide private sibling repositories; absence of the dedicated token or successful OpenCode app exchange fails closed instead of publishing a partial inventory.
+4. Reconcile SPDX/CycloneDX evidence with manifests, lockfiles, vendored/native/binary assets, container inputs, generated packages, and dependency-graph evidence before calling an inventory complete.
+5. Interpret license expressions as evidence requiring an explicit `allow`, `review`, or `replace/block` outcome tied to the actual product distribution and hosted-service model. Do not equate copyleft with non-commercial use.
+6. For an actionable incompatibility, remediate in this order: remove an unused component; replace it with a maintained permissively licensed equivalent; implement only the bounded required capability cleanly in-house from independent product/API/standards behavior; isolate it behind an independently deployed service/process boundary only when that genuinely changes the technical and legal coupling; or redesign the feature to remove the dependency.
+7. A replacement implementation must not copy protected source, tests, comments, data, expressive structure, or other copyrightable material from the incompatible implementation. Product contracts, published standards, independent interoperability documentation, and lawful black-box behavior are the acceptable specification sources.
+8. Update manifests and lockfiles, SBOMs, NOTICE/THIRD_PARTY_NOTICES, tests, architecture/ADR evidence, CHANGELOG when release-relevant, and `docs/product-technical-gap-baseline.md`; then rerun exact-head Checks/reviews and merge only through ordinary branch protection.
+9. Preserve concurrent writers. The recurring inventory publication branch must advance without history rewriting; a race fails closed and is retried on a later run. Because checkout deliberately keeps `persist-credentials: false`, publication establishes Git authentication through the masked organization-wide `GH_TOKEN` with `gh auth setup-git` before the first remote Git operation.
 
 ## Standards and interpretation baseline
 
@@ -31,7 +32,7 @@ This is an engineering governance policy and evidence record, not legal advice. 
 
 ## Verification contract
 
-The scheduler contract is executable in `tests/test_sbom_inventory_scheduler_contract.py`: it requires an hourly cron, live `isFork == false` filtering, explicit repository arguments into the aggregator, and absence of force-push behavior. The first inventory run after merge is not considered complete merely because it reports zero findings; unavailable SBOMs and incomplete dependency materialization remain explicit defects to repair.
+The scheduler contract is executable in `tests/test_sbom_inventory_scheduler_contract.py`: it binds assertions to the named executable discovery, aggregation, credential, and publication steps; requires an hourly cron; requires live `isFork == false` filtering; passes only the verified repositories explicitly to the aggregator; rejects `github.token` fallback; configures authenticated Git before remote publication; and prohibits force-push behavior. The first inventory run after merge is not considered complete merely because it reports zero findings; unavailable SBOMs and incomplete dependency materialization remain explicit defects to repair.
 
 ## References
 
