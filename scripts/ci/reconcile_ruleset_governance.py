@@ -6,8 +6,9 @@ preserves live conditions and non-governance rules while canonicalizing the
 reviewed pull-request controls. GitHub does not provide conditional PUT/PATCH
 semantics for this endpoint, so the second live read is a drift detector rather
 than a compare-and-swap guarantee. Privileged mutation is additionally bound to
-the exact protected-main revision and a serialized protected owner-plane run,
-with full post-write convergence verification.
+the exact protected-main revision, serialized owner-plane execution, and the
+immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
+overwritten, the reconciler restores the immediate predecessor before failing.
 """
 
 from __future__ import annotations
@@ -51,6 +52,19 @@ class RulesetTarget:
         if self.scope == "organization":
             return f"orgs/{self.owner}/rulesets/{self.ruleset_id}"
         return f"repos/{self.owner}/{self.repository}/rulesets/{self.ruleset_id}"
+
+    @property
+    def history_endpoint(self) -> str:
+        """Return the immutable history endpoint for this exact ruleset."""
+
+        return f"{self.endpoint}/history"
+
+    def history_version_endpoint(self, version_id: int) -> str:
+        """Return one exact immutable ruleset-history version endpoint."""
+
+        if type(version_id) is not int or version_id <= 0:
+            raise RulesetGovernanceError("ruleset history version identity is malformed")
+        return f"{self.history_endpoint}/{version_id}"
 
     @property
     def source(self) -> str:
@@ -128,15 +142,10 @@ def load_manifest(path: Path) -> tuple[RulesetTarget, ...]:
     return tuple(targets)
 
 
-def _gh_api(
-    method: str,
-    endpoint: str,
-    *,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Call GitHub's versioned REST API without exposing credential material."""
+def _gh_command(method: str, endpoint: str) -> list[str]:
+    """Build one versioned GitHub CLI command for the reviewed REST boundary."""
 
-    command = [
+    return [
         "gh",
         "api",
         "--method",
@@ -145,6 +154,17 @@ def _gh_api(
         f"X-GitHub-Api-Version: {API_VERSION}",
         endpoint,
     ]
+
+
+def _run_gh_json(
+    method: str,
+    endpoint: str,
+    *,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    """Call GitHub REST and decode JSON without exposing credential diagnostics."""
+
+    command = _gh_command(method, endpoint)
     if body is not None:
         command.extend(["--input", "-"])
     completed = subprocess.run(
@@ -157,8 +177,29 @@ def _gh_api(
     )
     if completed.returncode != 0:
         raise RulesetGovernanceError(f"GitHub API request failed for {endpoint}")
+    return json.loads(completed.stdout)
+
+
+def _gh_api(
+    method: str,
+    endpoint: str,
+    *,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call GitHub REST and require an object response."""
+
     return _plain_dict(
-        json.loads(completed.stdout), field=f"GitHub response for {endpoint}"
+        _run_gh_json(method, endpoint, body=body),
+        field=f"GitHub response for {endpoint}",
+    )
+
+
+def _gh_api_list(method: str, endpoint: str) -> list[Any]:
+    """Call GitHub REST and require an array response."""
+
+    return _plain_list(
+        _run_gh_json(method, endpoint),
+        field=f"GitHub response for {endpoint}",
     )
 
 
@@ -182,6 +223,34 @@ def _assert_current_main(expected_main_sha: str) -> None:
         raise RulesetGovernanceError(
             "protected main advanced; refusing stale governance mutation"
         )
+
+
+def _history_version_id(entry: Any) -> int:
+    """Return one positive ruleset-history version ID or fail closed."""
+
+    item = _plain_dict(entry, field="ruleset history entry")
+    version_id = item.get("version_id")
+    if type(version_id) is not int or version_id <= 0:
+        raise RulesetGovernanceError("ruleset history version identity is malformed")
+    return version_id
+
+
+def _latest_history_version(target: RulesetTarget) -> int:
+    """Return the newest immutable history version before mutation."""
+
+    history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=1")
+    if not history:
+        raise RulesetGovernanceError("ruleset history is empty")
+    return _history_version_id(history[0])
+
+
+def _history_version_state(target: RulesetTarget, version_id: int) -> dict[str, Any]:
+    """Return the exact ruleset state stored at one immutable history version."""
+
+    payload = _gh_api("GET", target.history_version_endpoint(version_id))
+    state = _plain_dict(payload.get("state"), field="ruleset history version state")
+    _assert_identity(state, target)
+    return state
 
 
 def _assert_identity(live: dict[str, Any], target: RulesetTarget) -> None:
@@ -263,6 +332,55 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
     return desired
 
 
+def _verify_ruleset_history_transition(
+    target: RulesetTarget,
+    baseline_version: int,
+    desired: dict[str, Any],
+) -> None:
+    """Detect hidden pre-PUT edits and restore their immediate predecessor state.
+
+    GitHub records immutable ruleset versions but does not offer conditional
+    unsafe updates. After a successful PUT, the newest history state must equal
+    our reviewed body and its immediate predecessor must be the version sampled
+    before the final live read. If another version intervened, our write
+    overwrote a concurrent administrator edit. In that case the immediate
+    predecessor is restored only while live state still equals our own write;
+    otherwise a newer administrator state is preserved untouched.
+    """
+
+    history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=3")
+    if len(history) < 2:
+        raise RulesetGovernanceError("ruleset history did not expose a predecessor")
+    newest_id = _history_version_id(history[0])
+    predecessor_id = _history_version_id(history[1])
+    if newest_id == baseline_version:
+        raise RulesetGovernanceError("ruleset mutation is not visible in history")
+
+    newest_state = _history_version_state(target, newest_id)
+    if _editable_projection(newest_state) != desired:
+        raise RulesetGovernanceError("latest ruleset history does not match reviewed mutation")
+    if predecessor_id == baseline_version:
+        return
+
+    predecessor_state = _history_version_state(target, predecessor_id)
+    predecessor_payload = _editable_projection(predecessor_state)
+    current = _gh_api("GET", target.endpoint)
+    _assert_identity(current, target)
+    if _editable_projection(current) != desired:
+        raise RulesetGovernanceError(
+            "concurrent ruleset history detected but live state advanced again; refusing rollback"
+        )
+
+    _gh_api("PUT", target.endpoint, body=predecessor_payload)
+    restored = _gh_api("GET", target.endpoint)
+    _assert_identity(restored, target)
+    if _editable_projection(restored) != predecessor_payload:
+        raise RulesetGovernanceError("concurrent ruleset collision rollback did not converge")
+    raise RulesetGovernanceError(
+        "concurrent ruleset history detected; restored preceding administrator state"
+    )
+
+
 def _reconcile_target(
     target: RulesetTarget,
     *,
@@ -280,8 +398,10 @@ def _reconcile_target(
             f"{target.scope} ruleset governance drift remains"
         )
 
+    baseline_version: int | None = None
     if expected_main_sha is not None:
         _assert_current_main(expected_main_sha)
+        baseline_version = _latest_history_version(target)
     second = _gh_api("GET", target.endpoint)
     if _editable_projection(second) != _editable_projection(first):
         raise RulesetGovernanceError(
@@ -295,6 +415,8 @@ def _reconcile_target(
     _assert_identity(after, target)
     if _editable_projection(after) != desired:
         raise RulesetGovernanceError(f"{target.scope} ruleset did not converge")
+    if baseline_version is not None:
+        _verify_ruleset_history_transition(target, baseline_version, desired)
     if expected_main_sha is not None:
         _assert_current_main(expected_main_sha)
     return True
