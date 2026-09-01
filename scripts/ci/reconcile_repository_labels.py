@@ -58,6 +58,7 @@ def load_taxonomy(path: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
         raise TaxonomyError("assignments must be an array")
     assignments: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
+    casing_by_identity: dict[str, str] = {}
     for index, raw in enumerate(raw_assignments):
         assignment = _plain_dict(raw, field=f"assignments[{index}]")
         if set(assignment) != {"repository", "issue", "type"}:
@@ -71,7 +72,14 @@ def load_taxonomy(path: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
             raise TaxonomyError(f"assignments[{index}].issue is invalid")
         if semantic_type not in type_map:
             raise TaxonomyError(f"assignments[{index}].type is unknown")
-        key = (repository, issue)
+        identity = repository.casefold()
+        prior = casing_by_identity.get(identity)
+        if prior is not None and prior != repository:
+            raise TaxonomyError(
+                f"repository casing collision: {prior} and {repository} identify the same GitHub repository"
+            )
+        casing_by_identity[identity] = repository
+        key = (identity, issue)
         if key in seen:
             raise TaxonomyError("assignments contain duplicate repository/issue targets")
         seen.add(key)
@@ -178,6 +186,30 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _select_repository_identities(
+    requested: list[str], assignments: list[dict[str, Any]]
+) -> set[str]:
+    """Canonicalize filters by case-insensitive GitHub repository identity."""
+
+    if not requested:
+        return set()
+    canonical_by_identity = {
+        assignment["repository"].casefold(): assignment["repository"]
+        for assignment in assignments
+    }
+    selected: set[str] = set()
+    unknown: list[str] = []
+    for candidate in requested:
+        identity = candidate.casefold()
+        if identity not in canonical_by_identity:
+            unknown.append(candidate)
+        else:
+            selected.add(identity)
+    if unknown:
+        raise TaxonomyError(f"undeclared repositories requested: {', '.join(sorted(unknown))}")
+    return selected
+
+
 def main() -> int:
     """Validate taxonomy and reconcile every independent assignment possible."""
 
@@ -188,14 +220,10 @@ def main() -> int:
     if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GH_TOKEN is required in apply mode")
 
-    declared_repositories = {item["repository"] for item in assignments}
-    unknown = sorted(set(args.repository) - declared_repositories)
-    if unknown:
-        raise TaxonomyError(f"undeclared repositories requested: {', '.join(unknown)}")
-    selected = set(args.repository)
+    selected = _select_repository_identities(args.repository, assignments)
     failures: list[str] = []
     for assignment in assignments:
-        if selected and assignment["repository"] not in selected:
+        if selected and assignment["repository"].casefold() not in selected:
             continue
         try:
             reconcile_assignment(assignment, type_map)
