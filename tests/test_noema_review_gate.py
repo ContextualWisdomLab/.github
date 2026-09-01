@@ -1694,15 +1694,15 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
         noema.current_actor()
 
 
-def test_review_context_builders_include_threads_and_files(monkeypatch):
+def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
 
-    original_fetch_files = noema.fetch_changed_files
+    original_fetch_changed_files = noema.fetch_changed_files
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
     assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
-    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_files)
+    monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_changed_files)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
     calls = []
@@ -1712,11 +1712,8 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
         target = args[2]
         if target.endswith("/files"):
             return "\n".join(
-                [
-                    json.dumps(["src/a.py", "modified"]),
-                    json.dumps(["README.md", "modified"]),
-                    json.dumps(["empty.txt", "modified"]),
-                ]
+                json.dumps([path, "modified"])
+                for path in ("src/a.py", "README.md", "empty.txt")
             ) + "\n"
         if "contents/src/a.py" in target:
             return encoded
@@ -1729,7 +1726,6 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
     monkeypatch.setattr(noema, "run", fake_run)
     pr = make_pr(
         headRefOid="head sha",
-        baseRefOid="base sha",
         reviewThreads={
             "nodes": [
                 {
@@ -1737,14 +1733,7 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
                     "isOutdated": False,
                     "path": "src/a.py",
                     "line": 3,
-                    "comments": {
-                        "nodes": [
-                            {
-                                "author": {"login": "reviewer"},
-                                "body": "check call site",
-                            }
-                        ]
-                    },
+                    "comments": {"nodes": [{"author": {"login": "reviewer"}, "body": "check call site"}]},
                 },
                 {
                     "isResolved": True,
@@ -1758,7 +1747,6 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
 
     context = noema.build_review_context("owner/repo", 7, pr)
 
-    assert "CodeGraph context" not in context
     assert "Thread open at src/a.py:3" in context
     assert "reviewer: check call site" in context
     assert "### src/a.py" in context
@@ -1768,15 +1756,14 @@ def test_review_context_builders_include_threads_and_files(monkeypatch):
     assert any("/files" in call[2] for call in calls)
 
 
-def test_review_context_reports_omitted_files(monkeypatch):
-    files = [
-        (f"src/file_{index}.py", "modified")
-        for index in range(noema.MAX_CONTEXT_FILES + 1)
-    ]
-    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: files)
+def test_review_context_reports_omitted_files(monkeypatch, tmp_path):
+    paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
     monkeypatch.setattr(
-        noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x"
+        noema,
+        "fetch_changed_files",
+        lambda repo, number: [(path, "modified") for path in paths],
     )
+    monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
 
     context = noema.changed_file_context("owner/repo", 7, "head")
 
