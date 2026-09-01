@@ -1,0 +1,200 @@
+name: One-shot PR1348 final queue revalidation repair
+
+on:
+  push:
+    branches:
+      - fix/queue-hygiene-live-ref-race
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr1348-final-revalidation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: fix/queue-hygiene-live-ref-race
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Replace snapshot-only cancellation with final live revalidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+
+          start = workflow.index('            queue_hygiene_ready=true\n            open_pr_heads_json="{}"\n')
+          end = workflow.index('            if ! current_default_sha="$(\n', start)
+          replacement = '''            queue_hygiene_ready=true
+            open_pr_heads_json="{}"
+            if open_pr_payload_json="$(
+              gh api \\
+                -H "Accept: application/vnd.github+json" \\
+                "/repos/${repo_full_name}/pulls?state=open&per_page=100" \\
+                --paginate \\
+                | jq -sc '[.[] | .[]]'
+            )"; then
+              if ! jq -e '
+                all(.[];
+                  (.head.repo.full_name | type) == "string" and (.head.repo.full_name | length) > 0 and
+                  (.head.ref | type) == "string" and (.head.ref | length) > 0 and
+                  (.head.sha | type) == "string" and (.head.sha | test("^[0-9a-fA-F]{40}$"))
+                )
+              ' <<<"$open_pr_payload_json" >/dev/null; then
+                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has malformed head metadata. No run will be cancelled from incomplete evidence."
+                queue_hygiene_ready=false
+              else
+                open_pr_heads_json="$(
+                  jq -c '
+                    reduce .[] as $pr ({};
+                      . + {(($pr.head.repo.full_name + ":" + $pr.head.ref)): $pr.head.sha}
+                    )
+                  ' <<<"$open_pr_payload_json"
+                )"
+              fi
+            else
+              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR heads could not be read safely. No run will be cancelled from incomplete evidence."
+              queue_hygiene_ready=false
+            fi
+'''
+          workflow = workflow[:start] + replacement + workflow[end:]
+
+          old_superseded = '''                while IFS= read -r run_id; do
+                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
+                  fi
+                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
+'''
+          new_superseded = '''                while IFS= read -r run_id; do
+                  scripts/ci/revalidate_queue_cancellation.sh \\
+                    "$repo_full_name" \\
+                    "$run_id" \\
+                    "$default_branch" \\
+                    "$current_default_sha" \\
+                    "$open_pr_heads_json" \\
+                    "superseded"
+                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
+'''
+          if workflow.count(old_superseded) != 1:
+              raise SystemExit('superseded cancellation anchor missing or duplicated')
+          workflow = workflow.replace(old_superseded, new_superseded, 1)
+
+          old_aged = '''                while IFS= read -r run_id; do
+                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
+                  fi
+                done < <(jq -r '.[].id' <<<"$stale_runs_json")
+'''
+          new_aged = '''                while IFS= read -r run_id; do
+                  scripts/ci/revalidate_queue_cancellation.sh \\
+                    "$repo_full_name" \\
+                    "$run_id" \\
+                    "$default_branch" \\
+                    "$current_default_sha" \\
+                    "$open_pr_heads_json" \\
+                    "aged-orphan"
+                done < <(jq -r '.[].id' <<<"$stale_runs_json")
+'''
+          if workflow.count(old_aged) != 1:
+              raise SystemExit('aged cancellation anchor missing or duplicated')
+          workflow = workflow.replace(old_aged, new_aged, 1)
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          tests_path = Path('tests/test_required_workflow_queue_contract.py')
+          tests = tests_path.read_text(encoding='utf-8')
+
+          def replace_function(text: str, name: str, replacement: str) -> str:
+              start = text.index(f'def {name}(')
+              next_def = text.find('\ndef ', start + 1)
+              if next_def < 0:
+                  raise SystemExit(f'no function boundary after {name}')
+              return text[:start] + replacement.rstrip() + '\n\n' + text[next_def + 1:]
+
+          tests = replace_function(
+              tests,
+              'test_org_queue_sweep_empty_pr_ref_list_skips_the_ref_loop',
+              '''def test_org_queue_sweep_malformed_pr_head_fails_closed_before_classification() -> None:
+    """Incomplete open-PR head evidence must disable destructive cancellation."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    classification = workflow.split('if open_pr_payload_json="$(\\n', 1)[1].split(
+        '            if ! current_default_sha="$(\\n', 1
+    )[0]
+
+    assert 'all(.[];' in classification
+    assert '.head.repo.full_name' in classification
+    assert '.head.ref' in classification
+    assert '.head.sha' in classification
+    assert 'test("^[0-9a-fA-F]{40}$")' in classification
+    assert 'queue_hygiene_ready=false' in classification
+''',
+          )
+          tests = replace_function(
+              tests,
+              'test_org_queue_sweep_bounds_live_ref_lookups_and_fails_closed',
+              '''def test_org_queue_sweep_avoids_snapshot_ref_fanout_and_revalidates_each_cancel() -> None:
+    """Classification is cheap; every destructive candidate gets a final live check."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    classification = workflow.split('if open_pr_payload_json="$(\\n', 1)[1].split(
+        '            if ! current_default_sha="$(\\n', 1
+    )[0]
+
+    assert '/git/ref/heads/' not in classification
+    assert 'ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS' not in classification
+    assert 'scripts/ci/revalidate_queue_cancellation.sh' in workflow
+    assert '"superseded"' in workflow
+    assert '"aged-orphan"' in workflow
+''',
+          )
+          tests = replace_function(
+              tests,
+              'test_org_queue_sweep_deduplicates_live_refs_before_counting',
+              '''def test_org_queue_sweep_uses_paginated_pr_snapshot_only_for_candidate_classification() -> None:
+    """Open-PR classification keeps full paginated coverage without a hand-authored cap."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    classification = workflow.split('if open_pr_payload_json="$(\\n', 1)[1].split(
+        '            if ! current_default_sha="$(\\n', 1
+    )[0]
+
+    assert '/pulls?state=open&per_page=100' in classification
+    assert '--paginate' in classification
+    assert "reduce .[] as $pr" in classification
+''',
+          )
+          tests_path.write_text(tests, encoding='utf-8')
+          PY
+
+          chmod +x scripts/ci/revalidate_queue_cancellation.sh
+          python -m pytest -q \
+            tests/test_queue_cancellation_revalidation.py \
+            tests/test_queue_cancellation_open_pr_revalidation.py \
+            tests/test_required_workflow_queue_contract.py
+          git diff --check
+
+      - name: Commit source repair and remove writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/_temp_pr1348_final_revalidation_repair.yml
+          git add \
+            .github/workflows/pr-review-merge-scheduler.yml \
+            scripts/ci/revalidate_queue_cancellation.sh \
+            tests/test_queue_cancellation_revalidation.py \
+            tests/test_queue_cancellation_open_pr_revalidation.py \
+            tests/test_required_workflow_queue_contract.py
+          git diff --cached --check
+          git commit -m 'fix(queue): revalidate live state immediately before cancellation'
+          git push origin HEAD:fix/queue-hygiene-live-ref-race
