@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   repair_scheduler_comments:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact writer head
