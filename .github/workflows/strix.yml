@@ -783,7 +783,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
-          export LLM_TIMEOUT=0
+          export LLM_TIMEOUT=300
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
           export STRIX_PROCESS_TIMEOUT_SECONDS=0
           export STRIX_TOTAL_TIMEOUT_SECONDS=0
