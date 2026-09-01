@@ -272,7 +272,7 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     current_topics = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")
     ).get("names", [])
-    if current_topics != desired["topics"]:
+    if set(current_topics) != set(desired["topics"]):
         _gh_api(
             "PUT",
             f"repos/{ORGANIZATION}/{repository}/topics",
@@ -322,7 +322,7 @@ def main() -> int:
         return 0
     if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GH_TOKEN is required in apply mode")
-    selected = args.repository or list(repositories)
+    selected = list(dict.fromkeys(args.repository)) if args.repository else list(repositories)
     unknown = sorted(set(selected) - set(repositories))
     if unknown:
         raise ManifestError(f"undeclared repositories requested: {', '.join(unknown)}")
