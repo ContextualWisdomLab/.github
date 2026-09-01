@@ -5,13 +5,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Dispatch exact-head terminal source-check failures directly to the bounded RCA
-  repair path, ahead of ordinary review feedback. The scheduler now completes
-  paginated check inventories, excludes review/control-plane failures, retains
-  workflow identity through REST fallback, and isolates one PR's metadata
-  failure without blocking other eligible repairs. The worker refetches the
-  live head and failed-check evidence before granting a sealed changed-path
-  scope, so stale or unsupported dispatches fail closed.
+- Avoid redundant merge-scheduler wakes when the trusted receipt predicate
+  already finds a substantive exact-head OpenCode verdict. Missing, stale, or
+  fallback-only evidence still dispatches review work, while receipt lookup or
+  parsing failures remain fail-closed. The shared predicate explicitly rejects
+  fallback markers even when a normal overview heading is present, and its
+  live Reviews API reader slurps and flattens every pagination page.
+- Grant the Strix stale-run cleanup job read-only pull-request access so its
+  job token can revalidate live heads in private repositories when optional
+  scheduler credentials are unavailable.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

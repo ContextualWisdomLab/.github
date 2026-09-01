@@ -209,52 +209,19 @@ def _expected_head_from_workflow_run_event(event: dict) -> str:
     )
 
 
-def test_workflow_run_expected_head_uses_pull_request_head_not_base_commit() -> None:
-    """EXPECTED_HEAD for a workflow_run completion must resolve the PR head, not the base.
-
-    Devin Review finding on PR #1507: ``github.event.workflow_run.head_sha``
-    is the base/trusted commit the completing ``pull_request_target``
-    workflow (Required OpenCode Review / Strix Security Scan) checked out —
-    not the PR head — so every workflow_run-triggered follow-up review used
-    to fail the stale-trigger gate. The fix reuses this same workflow's own
-    established pattern for ``PR_NUMBER`` (``pull_requests[0].number``) and
-    reads the actual PR head from ``pull_requests[0].head.sha`` instead.
-    """
+def test_standalone_noema_expected_head_uses_trusted_trigger_context() -> None:
+    """Standalone Noema binds review work to the PR or dispatch head."""
     workflow = workflow_text("noema-review.yml")
     assert (
-        "EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || "
-        "github.event.pull_request.head.sha || "
-        "github.event.workflow_run.pull_requests[0].head.sha || '' }}"
+        "EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || "
+        "github.event.client_payload.pr_head_sha || '' }}"
     ) in workflow
-    assert "EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || '' }}" not in workflow
-
-    base_sha = "b" * 40
-    pr_head_sha = "a" * 40
-    assert base_sha != pr_head_sha
-    workflow_run_event = {
-        "workflow_run": {
-            # The top-level head_sha on a workflow_run object completing a
-            # pull_request_target run is the base/trusted commit that run
-            # checked out (its own github.sha) -- not the PR's head.
-            "head_sha": base_sha,
-            "pull_requests": [
-                {"number": 42, "head": {"sha": pr_head_sha}, "base": {"sha": base_sha}}
-            ],
-        }
-    }
-    assert _expected_head_from_workflow_run_event(workflow_run_event) == pr_head_sha
-    assert _expected_head_from_workflow_run_event(workflow_run_event) != base_sha
+    assert "github.event.workflow_run" not in workflow
 
 
 def test_workflow_run_expected_head_fails_closed_when_pull_requests_is_empty() -> None:
-    """A fork-originated workflow_run (empty pull_requests[]) yields no expected head.
-
-    ``pull_requests`` is documented to come back empty for cross-fork PRs;
-    EXPECTED_HEAD must fall through to '' rather than fabricate a head, and
-    PR_NUMBER (already sourced from the same array) falls through the same
-    way, so the job's existing "Skip events without pull request context"
-    step still short-circuits the run before any stale-head comparison.
-    """
+    """The retired workflow_run trigger cannot fabricate Noema review context."""
+    assert "workflow_run:" not in workflow_text("noema-review.yml")
     workflow_run_event = {"workflow_run": {"head_sha": "c" * 40, "pull_requests": []}}
     assert _expected_head_from_workflow_run_event(workflow_run_event) == ""
 
@@ -281,7 +248,7 @@ def _run_stale_trigger_step(
         "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
         "TARGET_REPOSITORY": "ContextualWisdomLab/example",
         "PR_NUMBER": "7",
-        "EXPECTED_HEAD": expected_head,
+        "EXPECTED_HEAD_SHA": expected_head,
         "GH_TOKEN": "synthetic-token",
     }
     return subprocess.run(  # noqa: S603, S607

@@ -17,6 +17,7 @@ try:
         complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
         context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
         complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
         context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
@@ -54,6 +56,11 @@ FIX_MARKER_RE = re.compile(
 )
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPAIR_MODES = frozenset({"review", "rca", "conflict"})
+AUTOFIX_RUN_NAME_RE = re.compile(
+    r"^PR Review Autofix (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    r"#(?P<pr>[1-9][0-9]*)@(?P<head>[0-9a-fA-F]{40})$"
+)
+ACTIVE_RUN_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
     "mergestatestatus `dirty`",
@@ -102,6 +109,20 @@ FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 def run_json(args: list[str]) -> Any:
     """Run gh and decode JSON."""
     return json.loads(run(["gh", *args]) or "null")
+
+
+def live_head_matches(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether GitHub still reports the scheduler's exact PR head."""
+    payload = run_json(["api", f"repos/{repo}/pulls/{int(pr['number'])}"])
+    if not isinstance(payload, dict) or not isinstance(payload.get("head"), dict):
+        return False
+    live_head = payload["head"].get("sha")
+    expected_head = str(pr.get("headRefOid") or "")
+    return (
+        isinstance(live_head, str)
+        and len(live_head) == 40
+        and live_head.lower() == expected_head.lower()
+    )
 
 
 RATE_LIMIT_ERROR_MARKERS = ("api rate limit exceeded", "secondary rate limit")
@@ -385,7 +406,64 @@ def dispatch_autofix(
     if dry_run:
         print("DRY-RUN:", " ".join(args), json.dumps(payload, sort_keys=True))
         return
+    if not live_head_matches(repo, pr):
+        raise RuntimeError("pull request live head changed before autofix dispatch")
     run(args, stdin=json.dumps(payload))
+
+
+def prepare_autofix_slot(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str,
+    workflow_repository: str,
+    dry_run: bool,
+) -> bool | None:
+    """Cancel older-head workers; return ``None`` when this PR snapshot went stale."""
+    dispatch_repo = workflow_repository or repo
+    payload = run_json(
+        [
+            "api",
+            f"repos/{dispatch_repo}/actions/workflows/{workflow}/runs",
+            "-X",
+            "GET",
+            "-f",
+            "event=repository_dispatch",
+            "-f",
+            "per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    number = int(pr["number"])
+    head = str(pr["headRefOid"]).lower()
+    same_head = False
+    stale_ids: list[str] = []
+    pages = payload if isinstance(payload, list) else [payload]
+    for workflow_run in (
+        workflow_run
+        for page in pages
+        for workflow_run in page.get("workflow_runs", [])
+    ):
+        if str(workflow_run.get("status") or "") not in ACTIVE_RUN_STATUSES:
+            continue
+        match = AUTOFIX_RUN_NAME_RE.fullmatch(
+            str(workflow_run.get("display_title") or "")
+        )
+        if not match or match.group("repo") != repo or int(match.group("pr")) != number:
+            continue
+        if match.group("head").lower() == head:
+            same_head = True
+        else:
+            stale_ids.append(str(workflow_run["id"]))
+    if stale_ids:
+        if dry_run:
+            print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
+        elif not live_head_matches(repo, pr):
+            return None
+        else:
+            force_cancel_workflow_runs(dispatch_repo, stale_ids)
+    return same_head
 
 
 def _base_branch_matches(pr: dict[str, Any], expected: str) -> bool:
@@ -454,6 +532,18 @@ def inspect_pr(
         args.retry_hours * 3600,
     ):
         return "wait", ("recent autofix marker exists for this head",)
+
+    slot_state = prepare_autofix_slot(
+        repo,
+        pr,
+        workflow=args.autofix_workflow,
+        workflow_repository=args.autofix_repository,
+        dry_run=args.dry_run,
+    )
+    if slot_state is None:
+        return "wait", ("scheduler PR snapshot is stale; retry with the current live head",)
+    if slot_state:
+        return "wait", ("current-head autofix run is already queued or running",)
 
     dispatch_kwargs: dict[str, Any] = {
         "workflow": args.autofix_workflow,

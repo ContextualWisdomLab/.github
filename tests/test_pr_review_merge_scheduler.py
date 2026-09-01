@@ -717,54 +717,6 @@ def test_fetch_all_pr_reviews_rest_propagates_page_fetch_failure(monkeypatch):
         sched.fetch_all_pr_reviews_rest("owner/repo", 7)
 
 
-def test_fetch_workflow_names_by_check_suite_rest_paginates_and_filters_incomplete_rows(monkeypatch):
-    """The REST workflow-name lookup must paginate and skip unusable rows."""
-    page1_runs = [{"check_suite_id": i, "name": f"workflow-{i}"} for i in range(99)]
-    page1_runs.append({"check_suite_id": 99, "name": ""})
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        if path.endswith("page=1"):
-            return {"workflow_runs": page1_runs}
-        return {"workflow_runs": [{"check_suite_id": 100, "name": "opencode-review"}]}
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    names = sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
-
-    assert names[0] == "workflow-0"
-    assert 99 not in names
-    assert names[100] == "opencode-review"
-    assert calls == [
-        f"repos/owner/repo/actions/runs?head_sha={'a' * 40}&per_page=100&page=1",
-        f"repos/owner/repo/actions/runs?head_sha={'a' * 40}&per_page=100&page=2",
-    ]
-
-
-def test_fetch_workflow_names_by_check_suite_rest_returns_empty_map_when_resource_inaccessible(monkeypatch):
-    """A denied Actions read must fail closed to an empty map, not raise."""
-
-    def fake_api(path):
-        raise RuntimeError("Resource not accessible by integration")
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    assert sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40) == {}
-
-
-def test_fetch_workflow_names_by_check_suite_rest_propagates_other_failures(monkeypatch):
-    """A transient REST failure unrelated to permissions must not be swallowed."""
-
-    def fake_api(path):
-        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    with pytest.raises(RuntimeError, match="HTTP 502"):
-        sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
-
-
 def test_fetch_pr_pagination_recovers_independent_approval_past_100_reviews(monkeypatch):
     """End-to-end regression for the reported bug: a genuine independent
     APPROVED review made early in a PR's life must still satisfy

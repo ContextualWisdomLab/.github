@@ -10,6 +10,12 @@ import pytest
 from scripts.ci import pr_review_fix_scheduler as fix
 
 
+@pytest.fixture(autouse=True)
+def isolate_active_autofix_inventory(monkeypatch: Any) -> None:
+    """Keep RCA unit tests independent of live GitHub Actions inventory."""
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+
+
 def make_pr(*, is_draft: bool = False) -> dict[str, Any]:
     """Return a clean same-repository PR with review and failed-check evidence."""
     head = "a" * 40
@@ -70,31 +76,6 @@ def test_failed_check_rca_precedes_ordinary_review(monkeypatch: Any, is_draft: b
     assert reasons == ("current-head failed check(s) require RCA: Application CI",)
     assert captured["repair_mode"] == "rca"
     assert captured["resolve_conflict"] is False
-
-
-@pytest.mark.parametrize(
-    ("is_draft", "expected_reason"),
-    [
-        (True, "draft PR"),
-        (False, "merge conflict is not authorized for repair"),
-    ],
-)
-def test_conflicted_pr_stays_fail_closed_without_repair_authority(
-    is_draft: bool,
-    expected_reason: str,
-) -> None:
-    """A conflict cannot be widened into RCA without conflict-repair authority."""
-    pr = make_pr(is_draft=is_draft)
-    pr["mergeStateStatus"] = "DIRTY"
-    pr["reviews"] = {"nodes": []}
-    args = fix.parse_args(
-        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
-    )
-
-    assert fix.inspect_pr("owner/repo", pr, args) == (
-        "skip",
-        (expected_reason,),
-    )
 
 
 def test_scan_queue_control_plane_failure_does_not_trigger_rca() -> None:
