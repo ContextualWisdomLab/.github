@@ -91,6 +91,7 @@ fi
             'live_poll_failures=0',
             'review_poll_failures=0',
             'max_poll_transport_failures=3',
+            'poll_interval_seconds=60',
             "while :; do",
             _poll_loop(),
             "done",
@@ -132,7 +133,7 @@ def test_poll_revalidates_live_pr_before_every_reviews_api_read() -> None:
     )
     reviews_lookup = (
         'reviews="$(timeout 30s gh api --paginate '
-        '"repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"'
+        '"repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"'
     )
 
     assert live_lookup in loop
@@ -213,7 +214,7 @@ def test_poll_executes_live_state_read_before_current_head_review_read(
     assert result.returncode == 0, result.stderr
     assert calls == [
         "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
     ]
 
 
@@ -242,7 +243,7 @@ def test_poll_retries_transient_live_state_failure_before_reviews_read(
     assert calls == [
         "api repos/ContextualWisdomLab/example/pulls/42",
         "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
     ]
 
 
@@ -288,9 +289,9 @@ def test_poll_retries_transient_reviews_failure_after_revalidating_head(
     assert "Reviews API read failed while polling" in result.stdout
     assert calls == [
         "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
         "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
     ]
 
 
@@ -310,7 +311,7 @@ def test_poll_fails_closed_after_bounded_reviews_transport_failures(
     assert "Reviews API read failed 3 consecutive times" in result.stdout
     assert calls == [
         "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
     ] * 3
 
 
@@ -321,4 +322,5 @@ def test_self_retirement_does_not_replace_semantic_review_with_a_short_timeout()
     )[1].split("\n  cancel-superseded-opencode-review-runs:\n", 1)[0]
     assert "timeout-minutes:" not in target_job.split("    steps:\n", 1)[0]
     assert "while :; do" in target_job
-    assert "sleep 30" in target_job
+    assert "poll_interval_seconds=60" in target_job
+    assert 'sleep "$poll_interval_seconds"' in target_job
