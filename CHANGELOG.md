@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Avoid redundant merge-scheduler wakes when the trusted receipt predicate
+  already finds a substantive exact-head OpenCode verdict. Missing, stale, or
+  fallback-only evidence still dispatches review work, while receipt lookup or
+  parsing failures remain fail-closed.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.

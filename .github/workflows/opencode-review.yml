@@ -259,13 +259,50 @@ jobs:
       - name: Request current-head OpenCode review execution
         if: github.event.action != 'closed'
         env:
+          GH_TOKEN: ${{ github.token }}
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          helper="$(mktemp)"
+          trap 'rm -f "$helper"' EXIT
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$helper"
+          receipt_state="$(python3 - "$helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" "$PR_DRAFT" <<'PY'
+          import importlib.machinery
+          import importlib.util
+          import sys
+
+          helper_path, repository, number, head_sha, draft = sys.argv[1:]
+          loader = importlib.machinery.SourceFileLoader(
+              "trusted_opencode_receipt_gate", helper_path
+          )
+          spec = importlib.util.spec_from_loader(loader.name, loader)
+          if spec is None or spec.loader is None:
+              raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
+          gate = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(gate)
+          reviews = gate.fetch_reviews(repository, int(number))
+          receipt, _reason = gate.evaluate_receipts(
+              reviews, head_sha, is_draft=draft.lower() == "true"
+          )
+          print("present" if receipt is not None else "missing")
+          PY
+          )"
+          if [ "$receipt_state" = "present" ]; then
+            echo "Current-head substantive OpenCode verdict already exists; scheduler wake skipped."
+            exit 0
+          fi
+          if [ "$receipt_state" != "missing" ]; then
+            echo "::error::Trusted OpenCode receipt helper returned an invalid state."
+            exit 1
+          fi
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "::error::OpenCode review dispatch requires GitHub OIDC."
             exit 1
