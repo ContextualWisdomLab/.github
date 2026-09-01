@@ -5,6 +5,10 @@ on:
     branches:
       - fix/actions-queue-saturation-scheduler-cadence-20260902
 
+concurrency:
+  group: repair-pr1630-hourly-comments-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
