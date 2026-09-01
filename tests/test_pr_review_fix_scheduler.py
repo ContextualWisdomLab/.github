@@ -37,6 +37,83 @@ def test_recent_fix_marker_is_head_scoped():
     assert not fix.recent_fix_marker_exists([{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}], head, 24 * 3600)
 
 
+def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypatch):
+    """A long-running exact-head worker survives while its older sibling is cancelled."""
+    head = "a" * 40
+    stale = "b" * 40
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 1,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{head}",
+                },
+                {
+                    "id": 2,
+                    "status": "queued",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                },
+                {
+                    "id": 3,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#8@{stale}",
+                },
+                {"id": 4, "status": "in_progress", "display_title": "malformed"},
+            ]
+        },
+    )
+    cancelled = []
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda repo, ids: cancelled.append((repo, ids)),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(headRefOid=head),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    )
+    assert cancelled == [(fix.DEFAULT_AUTOFIX_REPOSITORY, ["2"])]
+
+
+def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys):
+    """Dry-run reports an older head without mutating Actions state."""
+    stale = "b" * 40
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "waiting",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("dry-run must not cancel"),
+    )
+
+    assert not fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=True,
+    )
+    assert "would force-cancel stale autofix runs 2" in capsys.readouterr().out
+
+
 def test_needs_autofix_uses_current_head_evidence():
     """Autofix starts from current-head OpenCode change requests."""
     head = "a" * 40

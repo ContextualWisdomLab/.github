@@ -16,6 +16,7 @@ try:
     from pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
@@ -27,6 +28,7 @@ except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
@@ -46,6 +48,11 @@ FIX_MARKER_RE = re.compile(
 )
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPAIR_MODES = frozenset({"review", "rca", "conflict"})
+AUTOFIX_RUN_NAME_RE = re.compile(
+    r"^PR Review Autofix (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    r"#(?P<pr>[1-9][0-9]*)@(?P<head>[0-9a-fA-F]{40})$"
+)
+ACTIVE_RUN_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
     "mergestatestatus `dirty`",
@@ -322,6 +329,52 @@ def dispatch_autofix(
     run(args, stdin=json.dumps(payload))
 
 
+def prepare_autofix_slot(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str,
+    workflow_repository: str,
+    dry_run: bool,
+) -> bool:
+    """Cancel older-head workers and report whether this exact head already owns the slot."""
+    dispatch_repo = workflow_repository or repo
+    payload = run_json(
+        [
+            "api",
+            f"repos/{dispatch_repo}/actions/workflows/{workflow}/runs",
+            "-X",
+            "GET",
+            "-f",
+            "event=repository_dispatch",
+            "-f",
+            "per_page=100",
+        ]
+    )
+    number = int(pr["number"])
+    head = str(pr["headRefOid"]).lower()
+    same_head = False
+    stale_ids: list[str] = []
+    for workflow_run in payload.get("workflow_runs", []):
+        if str(workflow_run.get("status") or "") not in ACTIVE_RUN_STATUSES:
+            continue
+        match = AUTOFIX_RUN_NAME_RE.fullmatch(
+            str(workflow_run.get("display_title") or "")
+        )
+        if not match or match.group("repo") != repo or int(match.group("pr")) != number:
+            continue
+        if match.group("head").lower() == head:
+            same_head = True
+        else:
+            stale_ids.append(str(workflow_run["id"]))
+    if stale_ids:
+        if dry_run:
+            print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
+        else:
+            force_cancel_workflow_runs(dispatch_repo, stale_ids)
+    return same_head
+
+
 def _base_branch_matches(pr: dict[str, Any], expected: str) -> bool:
     """Return whether a PR belongs to the configured base scope."""
     return expected == "*" or pr.get("baseRefName") == expected
@@ -379,6 +432,15 @@ def inspect_pr(
         args.retry_hours * 3600,
     ):
         return "wait", ("recent autofix marker exists for this head",)
+
+    if prepare_autofix_slot(
+        repo,
+        pr,
+        workflow=args.autofix_workflow,
+        workflow_repository=args.autofix_repository,
+        dry_run=args.dry_run,
+    ):
+        return "wait", ("current-head autofix run is already queued or running",)
 
     dispatch_kwargs: dict[str, Any] = {
         "workflow": args.autofix_workflow,
