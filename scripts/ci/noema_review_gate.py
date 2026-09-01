@@ -630,11 +630,6 @@ def call_llm(
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict."""
     if _response_deadline is None:
         _response_deadline = time.monotonic() + CALL_LLM_TIMEOUT_SECONDS
-        request_timeout = CALL_LLM_TIMEOUT_SECONDS
-    else:
-        request_timeout = _response_deadline - time.monotonic()
-        if request_timeout <= 0:
-            raise TimeoutError("Noema LLM response exceeded the shared response deadline")
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
     model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
@@ -704,6 +699,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
+    request_timeout = _response_deadline - time.monotonic()
+    if request_timeout <= 0:
+        raise TimeoutError("Noema LLM response exceeded the shared response deadline")
     with absolute_response_deadline(request_timeout):
         with opener.open(request, timeout=request_timeout) as response:  # nosec B310
             raw = response.read().decode("utf-8")

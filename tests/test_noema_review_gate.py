@@ -447,14 +447,14 @@ def test_call_llm_uses_the_enumerated_combined_worst_case_timeout(monkeypatch):
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener())
     noema.call_llm("owner/repo", 1, make_pr(), "diff", False)
-    assert seen["timeout"] == noema.CALL_LLM_TIMEOUT_SECONDS == 19800
+    assert 0 < seen["timeout"] <= noema.CALL_LLM_TIMEOUT_SECONDS == 19800
 
 
 def test_call_llm_correction_shares_the_original_response_deadline(monkeypatch):
     """A validator repair cannot restart the workflow's complete LLM budget."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-    monotonic = iter((100.0, 200.0))
+    monotonic = iter((100.0, 150.0, 200.0))
     timeouts = []
     validations = 0
 
@@ -475,7 +475,7 @@ def test_call_llm_correction_shares_the_original_response_deadline(monkeypatch):
 
     noema.call_llm("owner/repo", 1, make_pr(), "diff", False)
 
-    assert timeouts == [19800, 19700.0]
+    assert timeouts == [19750.0, 19700.0]
 
 
 def test_absolute_response_deadline_restores_signal_state(monkeypatch):
@@ -821,7 +821,7 @@ def test_call_llm_repairs_one_rejected_changed_line_verdict(monkeypatch):
 
     assert noema.call_llm("owner/repo", 7, make_pr(), diff, False)["decision"] == "approve"
     assert len(payloads) == 2
-    assert timeouts[0] == noema.CALL_LLM_TIMEOUT_SECONDS
+    assert 0 < timeouts[0] <= noema.CALL_LLM_TIMEOUT_SECONDS
     assert 0 < timeouts[1] < timeouts[0]
     assert "trusted validator" in payloads[1]["messages"][1]["content"]
 
