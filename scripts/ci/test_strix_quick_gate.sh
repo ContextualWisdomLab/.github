@@ -5420,6 +5420,34 @@ EOS
 		echo "scan ok with a baseline-unchanged-file report but no completed run record"
 		exit 0
 		;;
+	hollow-primary-recovers-via-completed-fallback)
+		# Devin review round 6 on #1563: STRIX_HOLLOW_SUCCESS_DETECTED must
+		# not become an unconditional "return 1" after the primary attempt
+		# -- that would also block the unrelated, legitimate
+		# fallback-to-a-distinct-model path when the hollow attempt's own
+		# failure looks retryable (is_model_retryable_error), even though
+		# the flag is attempt-scoped so a genuinely completed fallback
+		# cannot be tainted by an earlier hollow primary. Uses
+		# strix.ModelBehaviorError (retryable per is_model_retryable_error)
+		# rather than a rate-limit/timeout marker, since those are also
+		# infrastructure-error signals that run_strix_once() itself already
+		# fails closed on before ever reaching the hollow-run.json check.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/hollow-retryable-primary)
+			echo "strix.ModelBehaviorError: unexpected tool call shape"
+			echo "scan ok despite no completed run record"
+			exit 0
+			;;
+		vertex_ai/completed-fallback)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-completed-fallback"
+			cat >"$STRIX_REPORTS_DIR/fake-completed-fallback/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+			echo "scan ok via completed fallback"
+			exit 0
+			;;
+		esac
+		;;
 	pr-critical-changed)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities"
 		cat >"$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities/vuln-0001.md" <<'EOS'
@@ -6670,7 +6698,7 @@ run_filtered_gate_case_if_requested() {
 			"openai/gpt-4o-mini" \
 			"" \
 			"1" \
-			"produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt" \
+			"Strix quick scan failed with a non-recoverable error." \
 			"1" \
 			"openai/gpt-4o-mini" \
 			"https://example.invalid" \
@@ -6686,6 +6714,16 @@ run_filtered_gate_case_if_requested() {
 			"0" \
 			"pull_request" \
 			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		;;
+	hollow-primary-recovers-via-completed-fallback)
+		run_gate_case "hollow-primary-recovers-via-completed-fallback" \
+			"vertex_ai/hollow-retryable-primary" \
+			"vertex_ai/completed-fallback" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/completed-fallback' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/hollow-retryable-primary|vertex_ai/completed-fallback" \
+			"<unset>|<unset>"
 		;;
 	retry-hollow-second-attempt-fails-closed)
 		run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
@@ -12894,7 +12932,7 @@ run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt" \
+	"Strix quick scan failed with a non-recoverable error." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12910,6 +12948,20 @@ run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+# Devin review round 6 on #1563: a hollow rc=0 primary whose failure looks
+# retryable must still be able to reach a distinct, genuinely completed
+# fallback model -- STRIX_HOLLOW_SUCCESS_DETECTED only guards the two
+# alternate-success paths immediately after the primary attempt, not the
+# unrelated retryability/fallback-model logic further down.
+run_gate_case "hollow-primary-recovers-via-completed-fallback" \
+	"vertex_ai/hollow-retryable-primary" \
+	"vertex_ai/completed-fallback" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/completed-fallback' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/hollow-retryable-primary|vertex_ai/completed-fallback" \
+	"<unset>|<unset>"
 
 run_gate_case "pr-baseline-critical-absolute-target" \
 	"openai/gpt-4o-mini" \

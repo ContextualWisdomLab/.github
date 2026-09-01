@@ -77,6 +77,23 @@ Semantic Versioning where the repository publishes a release.
   `run_strix_once()` attempt instead, so it reflects only the
   most-recently-concluded attempt. New regression:
   `hollow-success-with-baseline-unchanged-report-fails-closed`.
+  A sixth round then found the fifth round's explicit fail-closed `return 1`
+  (added right after gating the `evaluate_pull_request_findings()` success
+  branch) was itself too broad: it also blocked the unrelated, legitimate
+  fallback-to-a-distinct-model path whenever a hollow primary attempt's
+  failure looked retryable, even though the flag is attempt-scoped so a
+  genuinely completed fallback attempt cannot be tainted by an earlier
+  hollow one. Removed that blanket return at both call sites (primary and
+  fallback), keeping only the two success-path gates already added -- a
+  hollow attempt not rescued by either alternate success path now falls
+  through to the same `case`/`fail_unmapped_threshold_report()`/
+  `is_model_retryable_error()`/fallback-model logic every other failed
+  attempt already goes through, unchanged. New regression:
+  `hollow-primary-recovers-via-completed-fallback` (a hollow primary whose
+  log carries a retryable `strix.ModelBehaviorError` -- deliberately not a
+  rate-limit/timeout marker, since those are infrastructure-error signals
+  `run_strix_once()` itself already fails closed on earlier -- reaches and
+  succeeds via a distinct, genuinely completed fallback model).
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat

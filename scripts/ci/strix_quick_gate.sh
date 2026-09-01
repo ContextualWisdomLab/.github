@@ -4672,10 +4672,17 @@ run_current_target_scan() {
 			return 0
 		fi
 	fi
-	if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
-		echo "Strix exited successfully but produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt." >&2
-		return 1
-	fi
+	# Deliberately no unconditional "return 1" here for
+	# STRIX_HOLLOW_SUCCESS_DETECTED: that would also block the unrelated,
+	# legitimate fallback-to-a-distinct-model path below when this
+	# attempt's own failure looks retryable, even though the flag is now
+	# attempt-scoped so a genuinely completed fallback attempt cannot be
+	# tainted by this hollow one (Devin Review on `#1563`, round 6). The
+	# flag only needs to gate the two alternate SUCCESS paths above and at
+	# the fallback call site below; a hollow attempt that isn't rescued by
+	# either one already falls through to the same
+	# case/fail_unmapped_threshold_report/retryability logic every other
+	# failed attempt does.
 
 	case "$PR_FINDINGS_DECISION" in
 	block_changed | block_unmapped | block_manifest_unverified)
@@ -4757,10 +4764,10 @@ run_current_target_scan() {
 				return 0
 			fi
 		fi
-		if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
-			echo "Strix exited successfully but produced no completed run record; a below-threshold or pull-request-baseline finding cannot rescue this attempt." >&2
-			return 1
-		fi
+		# See the matching comment at the primary call site above: no
+		# unconditional "return 1" here either, so a hollow fallback
+		# attempt can itself still fall through to a further distinct
+		# fallback model when retryable.
 
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)

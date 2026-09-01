@@ -2573,6 +2573,50 @@ scenarios still pass under the rescoped per-attempt flag); full pytest suite -- 
 21 subtests; `coverage run -m pytest tests && coverage report` -- 100% on `scripts/ci`; `interrogate` --
 100% docstrings.
 
+**Round 6 -- Devin Review found round 5's own fail-closed return was itself over-broad, still on
+`#1563`**: the explicit `if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then ... return 1; fi` added
+immediately after gating the `evaluate_pull_request_findings()` success branch (both the primary and
+fallback-model call sites) correctly stopped a hollow attempt from being rescued by either alternate
+success path -- but it ALSO unconditionally short-circuited execution before it could ever reach the
+existing, unrelated `case "$PR_FINDINGS_DECISION"` / `fail_unmapped_threshold_report()` /
+`is_model_retryable_error()` / fallback-model-loop logic further down in `run_current_target_scan()`.
+That logic is what decides whether a FAILED attempt (of any kind, hollow or otherwise) is eligible to
+retry with a distinct fallback model. Since `STRIX_HOLLOW_SUCCESS_DETECTED` had just been correctly
+rescoped to be attempt-scoped (round 5), a genuinely completed fallback attempt cannot be tainted by an
+earlier hollow primary's flag value -- so blocking the fallback path entirely for any hollow primary was
+unnecessary and regressive: a healthy, distinct fallback model could no longer recover the required
+security check for a hollow-but-otherwise-retryable primary failure.
+
+**Fix**: removed the blanket `return 1` at both call sites, keeping only the two success-path gates
+already added in round 5 (`... && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]` on each
+`evaluate_pull_request_findings()` branch). A hollow attempt that is not rescued by either alternate
+success path now falls through to exactly the same downstream logic every other failed attempt already
+goes through, unchanged -- including `is_model_retryable_error()`'s own gate on whether a fallback model
+is even attempted, and the fallback loop itself, whose own `has_only_below_threshold_vulnerabilities()`/
+`evaluate_pull_request_findings()` calls are independently guarded by the SAME (attempt-scoped) flag, so
+a hollow fallback attempt cannot rescue itself either -- only a genuinely non-hollow one can.
+
+**Regression**: new scenario `hollow-primary-recovers-via-completed-fallback` -- the primary model's fake
+Strix invocation exits `0`, writes no `run.json` (hollow), and its log carries a `strix.ModelBehaviorError`
+line (retryable per `is_model_retryable_error()`, and deliberately NOT a rate-limit/timeout marker, since
+those are infrastructure-error signals `run_strix_once()` itself already fails closed on earlier, before
+ever reaching the hollow-run.json check -- a different, already-covered code path); a configured distinct
+fallback model then exits `0` with a genuinely completed `run.json` and must succeed. Also updated the
+existing `hollow-success-with-baseline-unchanged-report-fails-closed` scenario's expected message: with
+the blanket return removed, that scenario (no fallback model configured) now falls through to
+`is_model_retryable_error()`'s own "non-recoverable error" message instead of the round-5-specific one,
+which no longer exists as a distinct code path -- the scenario's exit code and fail-closed outcome are
+unchanged, only which existing message reports it.
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-primary-recovers-via-completed-fallback bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); re-ran
+`hollow-success-with-baseline-unchanged-report-fails-closed`,
+`hollow-success-with-below-threshold-report-fails-closed`,
+`retry-hollow-second-attempt-fails-closed`, and `success-zero-report-artifacts` individually -- all PASS;
+full `test_strix_quick_gate.sh` harness -- PASS; full pytest suite -- 2268 passed, 1 skipped, 21
+subtests; `coverage run -m pytest tests && coverage report` -- 100% on `scripts/ci`; `interrogate` --
+100% docstrings.
+
 ## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 
 **Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
