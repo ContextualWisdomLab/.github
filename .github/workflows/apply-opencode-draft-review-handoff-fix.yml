@@ -1,0 +1,105 @@
+name: Apply OpenCode draft review handoff fix
+
+on:
+  push:
+    branches: [fix/opencode-draft-review-handoff-911]
+    paths: [.github/workflows/apply-opencode-draft-review-handoff-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/opencode-draft-review-handoff-911
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Establish RED and apply the causal repair
+        env:
+          PACKED_TEST: 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
+          PACKED_JOB: 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
+          PACKED_HANDOFF: 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
+        run: |
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          import subprocess
+          import sys
+          import zlib
+
+          def unpack(name: str) -> str:
+              return zlib.decompress(base64.b64decode(name)).decode("utf-8")
+
+          root = Path.cwd()
+          test_path = root / "tests/test_required_opencode_draft_review_dispatch.py"
+          test_path.write_text(unpack(__import__("os").environ["PACKED_TEST"]), encoding="utf-8")
+          red = subprocess.run(
+              [sys.executable, str(test_path)],
+              cwd=root,
+              text=True,
+              capture_output=True,
+              check=False,
+          )
+          print(red.stdout, end="")
+          print(red.stderr, end="", file=sys.stderr)
+          if red.returncode == 0:
+              raise SystemExit("regression test unexpectedly passed before repair")
+          print(f"Expected RED established with return code {red.returncode}.")
+
+          required_path = root / ".github/workflows/opencode-review.yml"
+          required = required_path.read_text(encoding="utf-8")
+          insert_before = "  opencode-review-target:\n"
+          if "  request-draft-opencode-review:\n" in required:
+              raise SystemExit("draft handoff job already exists")
+          if required.count(insert_before) != 1:
+              raise SystemExit("required workflow insertion marker is missing or ambiguous")
+          required_path.write_text(
+              required.replace(
+                  insert_before,
+                  unpack(__import__("os").environ["PACKED_JOB"]) + insert_before,
+                  1,
+              ),
+              encoding="utf-8",
+          )
+
+          handoff_path = root / ".github/workflows/required-opencode-review.yml"
+          if handoff_path.exists():
+              raise SystemExit("central draft handoff workflow already exists")
+          handoff_path.write_text(
+              unpack(__import__("os").environ["PACKED_HANDOFF"]),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Verify focused regression and unchanged adjacent contracts
+        run: |
+          set -euo pipefail
+          python3 tests/test_required_opencode_draft_review_dispatch.py
+          python3 -m compileall -q tests/test_required_opencode_draft_review_dispatch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          required = Path(".github/workflows/opencode-review.yml").read_text(encoding="utf-8")
+          assert required.count("  request-draft-opencode-review:") == 1
+          assert required.count("  opencode-review-target:") == 1
+          assert "a current-head OpenCode verdict is not required until it is marked ready for review" in required
+          central = Path(".github/workflows/required-opencode-review.yml").read_text(encoding="utf-8")
+          assert central.count('event_type: "merge-scheduler"') == 1
+          PY
+          git diff --check
+
+      - name: Commit tested production files and remove the temporary writer
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-opencode-draft-review-handoff-fix.yml
+          git add .github/workflows/opencode-review.yml             .github/workflows/required-opencode-review.yml             tests/test_required_opencode_draft_review_dispatch.py             .github/workflows/apply-opencode-draft-review-handoff-fix.yml
+          git config user.name "ContextualWisdomLab automation"
+          git config user.email "automation@users.noreply.github.com"
+          git commit -m "fix(opencode): dispatch substantive reviews for draft heads"
+          git push origin HEAD:fix/opencode-draft-review-handoff-911
