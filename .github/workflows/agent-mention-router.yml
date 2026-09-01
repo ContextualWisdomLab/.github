@@ -158,6 +158,7 @@ jobs:
         env:
           PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
           OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          AGENT_DISPATCH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ -n "$PR_REVIEW_MERGE_TOKEN" ]; then
@@ -171,7 +172,6 @@ jobs:
             TARGET_REPOSITORY_SOURCE="${TARGET_REPOSITORY_TOKEN:+installation}"
           fi
           export TARGET_REPOSITORY_TOKEN
-          export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"
           if [ -z "$TARGET_REPOSITORY_TOKEN" ] || [ -z "$TARGET_REPOSITORY_SOURCE" ]; then
             echo "::error::Agent mention sweep requires PR_REVIEW_MERGE_TOKEN, OPENCODE_APPROVE_TOKEN, or the OpenCode app token exchange."
             exit 1
