@@ -62,8 +62,22 @@ REPO_NAME="${REPO_ROOT##*/}"
 # LLM connection failure, mid-stream fallback, etc.), this flag stays 1 for
 # the rest of the run.  It prevents the "all findings below threshold" bypass
 # from masking scan incompleteness — a successful strix run (exit 0) ignores
-# this flag because the scan itself produced a complete result set.
+# this flag because the scan itself produced a complete result set, *unless*
+# STRIX_HOLLOW_SUCCESS_DETECTED below says otherwise.
 INFRA_ERROR_DETECTED=0
+# Sticky flag: set when an attempt's own Strix invocation exited 0 (claimed
+# success) but has_new_completed_strix_run() found no genuinely new completed
+# run.json for it (run_strix_once()'s own hollow-success fail-closed branch).
+# A rc=0 attempt can still leave behind a genuine below-threshold
+# vulnerabilities/*.md report from the same attempt -- has_new_strix_vulnerability_report_artifact()
+# is deliberately not completion-scoped, since it also has to accept a
+# nonzero-exit crash's partial-but-real findings (see that function's own
+# docstring). Without this flag, has_only_below_threshold_vulnerabilities()
+# cannot tell that below-threshold case apart from an rc=0 attempt Strix
+# itself already declared incomplete, and would let its below-threshold
+# bypass rescue exactly the hollow-success case run_strix_once() just failed
+# closed on (Devin review on `#1563`).
+STRIX_HOLLOW_SUCCESS_DETECTED=0
 ZERO_FINDINGS_REPORTED=0
 PR_FINDINGS_DECISION="not_applicable"
 CHANGED_FILES=()
@@ -2934,6 +2948,7 @@ PY
 
 	if [ "$rc" -eq 0 ]; then
 		if ! has_new_completed_strix_run; then
+			STRIX_HOLLOW_SUCCESS_DETECTED=1
 			echo "Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." >&2
 			return 1
 		fi
@@ -3739,6 +3754,21 @@ has_only_below_threshold_vulnerabilities() {
 	# every such partial-crash-with-real-findings case).
 	if ! has_new_strix_vulnerability_report_artifact; then
 		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		return 1
+	fi
+
+	# Guard against an rc=0 attempt Strix's own run_strix_once() already
+	# determined was hollow (exited 0 but never wrote a genuinely new
+	# completed run.json). That attempt can still leave behind a real
+	# below-threshold vulnerabilities/*.md report (the presence check just
+	# above intentionally accepts that, since it also has to accept a
+	# nonzero-exit crash's partial-but-real findings) -- but a "successful"
+	# exit with no completion evidence is exactly the hollow-success bug
+	# class this gate exists to fail closed on, and must not be rescued by
+	# the below-threshold bypass just because it happened to write a
+	# low-severity report before failing to record completion.
+	if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
+		echo "Below-threshold findings detected, but an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence." >&2
 		return 1
 	fi
 
@@ -4579,6 +4609,7 @@ is_model_retryable_error() {
 
 run_current_target_scan() {
 	INFRA_ERROR_DETECTED=0
+	STRIX_HOLLOW_SUCCESS_DETECTED=0
 	ZERO_FINDINGS_REPORTED=0
 
 	local primary_scan_rc=0

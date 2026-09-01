@@ -3543,6 +3543,24 @@ REPORT
 		echo "scan ok with zero report artifacts"
 		exit 0
 		;;
+	hollow-success-with-below-threshold-report-fails-closed)
+		# Devin review on #1563: an rc=0 attempt can write a genuine
+		# below-threshold (INFO) vulnerabilities/*.md report and STILL never
+		# write a completed run.json (e.g. a bug between the two writes, or
+		# a wrapper that reports success despite an incomplete
+		# _save_artifacts() pass). Before the STRIX_HOLLOW_SUCCESS_DETECTED
+		# guard, has_only_below_threshold_vulnerabilities() could not tell
+		# this apart from a genuine nonzero-exit crash's partial-but-real
+		# findings and would rescue it -- exactly the hollow-success bug
+		# class this gate exists to fail closed on. Deliberately never
+		# calls strix_fake_emit_default_success_evidence (no run.json).
+		mkdir -p "$STRIX_REPORTS_DIR/fake-hollow-below-threshold/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-hollow-below-threshold/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: INFO
+EOS
+		echo "scan ok with a below-threshold report but no completed run record"
+		exit 0
+		;;
 	success-clean-scan-zero-findings)
 		# Regression for Devin's review on `#1495`'s successor `#1563`,
 		# round 2: the pinned strix-agent only writes vulnerabilities/*.md
@@ -6614,6 +6632,16 @@ run_filtered_gate_case_if_requested() {
 			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
 			"1" \
 			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	hollow-success-with-below-threshold-report-fails-closed)
+		run_gate_case "hollow-success-with-below-threshold-report-fails-closed" \
+			"vertex_ai/hollow-below-threshold-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence" \
+			"1" \
+			"vertex_ai/hollow-below-threshold-primary" \
 			"<unset>"
 		;;
 	retry-hollow-second-attempt-fails-closed)
@@ -10613,6 +10641,20 @@ run_gate_case "success-zero-report-artifacts" \
 	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
 	"1" \
 	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Devin review on #1563: an rc=0 attempt that never wrote a completed
+# run.json must not be rescued by the below-threshold bypass just because it
+# also left behind a genuine below-threshold (INFO) vulnerabilities/*.md
+# report. STRIX_HOLLOW_SUCCESS_DETECTED must fail this closed even though
+# has_new_strix_vulnerability_report_artifact() finds real evidence.
+run_gate_case "hollow-success-with-below-threshold-report-fails-closed" \
+	"vertex_ai/hollow-below-threshold-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence" \
+	"1" \
+	"vertex_ai/hollow-below-threshold-primary" \
 	"<unset>"
 
 run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \

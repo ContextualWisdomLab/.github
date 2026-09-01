@@ -2492,6 +2492,38 @@ gracefully end-to-end, not just in the isolated python snippet).
 `test_strix_quick_gate.sh` harness: PASS; full pytest suite and coverage confirmed clean with the same
 pre-existing 99% repository-wide gap owned by `#1567`, unaffected by this change.
 
+**Round 4 -- Devin Review found a real gap in round 3's own fix, still on `#1563`**: round 3 restored
+`has_new_strix_vulnerability_report_artifact()` (attempt-scoped `vulnerabilities/*.md` presence) as
+`has_only_below_threshold_vulnerabilities()`'s guard specifically so a nonzero-exit crash's genuine
+partial findings are not lost. Devin correctly pointed out that guard is *too* permissive in one
+narrower case it was never meant to cover: an **rc=0** attempt that `run_strix_once()` itself already
+determined was hollow (no completed run record) can still be rescued by this same guard if that hollow
+attempt happened to also write a below-threshold report before failing to record completion. That is
+exactly the class of false-green this gate exists to prevent -- a "successful" scan accepted on
+incomplete evidence -- just reached through the below-threshold path instead of the direct rc=0
+acceptance path in `run_strix_once()`.
+
+**Fix**: added a sticky `STRIX_HOLLOW_SUCCESS_DETECTED` flag, set inside `run_strix_once()`'s existing
+rc=0-but-not-completed branch, reset once per `run_current_target_scan()` invocation alongside the
+existing `INFRA_ERROR_DETECTED`/`ZERO_FINDINGS_REPORTED` sticky flags (same scope: it must survive
+across the primary attempt and every fallback-model attempt within one target's scan, since
+`has_only_below_threshold_vulnerabilities()`'s severity scan is itself cumulative across all of them).
+`has_only_below_threshold_vulnerabilities()` now checks this flag immediately after its existing
+artifact-presence check and fails closed with a dedicated message, mirroring the existing
+`INFRA_ERROR_DETECTED` guard directly below it in the same function.
+
+**Regression**: new scenario `hollow-success-with-below-threshold-report-fails-closed` in
+`test_strix_quick_gate.sh` -- a fake Strix invocation exits `0`, writes a genuine below-threshold
+(INFO) `vulnerabilities/*.md` report, and deliberately never writes a `run.json`. Before the fix this
+passed the gate (`exit 0`) via the below-threshold bypass; after the fix it fails closed with the new
+`STRIX_HOLLOW_SUCCESS_DETECTED` message, distinct from `has_new_strix_vulnerability_report_artifact()`'s
+own "no report artifact" message (this scenario deliberately has one).
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-success-with-below-threshold-report-fails-closed bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); full `test_strix_quick_gate.sh` harness -- PASS;
+full pytest suite -- 2268 passed, 1 skipped, 21 subtests; `coverage run -m pytest tests && coverage
+report` -- 100% on `scripts/ci`; `interrogate` -- 100% docstrings.
+
 ## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 
 **Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an

@@ -45,6 +45,20 @@ Semantic Versioning where the repository publishes a release.
   untested success scenario) was replaced with an explicit helper each
   scenario that wants that evidence calls deliberately, removing the
   opt-out list this pattern previously needed.
+  A fourth round then found a related gap Devin flagged after round 3 shipped:
+  `has_only_below_threshold_vulnerabilities()`'s presence guard correctly uses
+  the attempt-scoped `vulnerabilities/*.md` check (not run.json completion) so
+  it can still accept genuine partial evidence from an attempt whose process
+  later crashed non-zero, but that same guard could also rescue an *rc=0*
+  attempt `run_strix_once()` had already determined was hollow (no completed
+  run record), as long as that same hollow attempt happened to also write a
+  below-threshold report before failing to record completion. Added a sticky
+  `STRIX_HOLLOW_SUCCESS_DETECTED` flag (set by `run_strix_once()`'s own
+  hollow-success branch, reset once per `run_current_target_scan()` call
+  alongside the existing `INFRA_ERROR_DETECTED`/`ZERO_FINDINGS_REPORTED`
+  flags) that `has_only_below_threshold_vulnerabilities()` now checks and
+  fails closed on, mirroring its existing `INFRA_ERROR_DETECTED` guard.
+  New regression: `hollow-success-with-below-threshold-report-fails-closed`.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
