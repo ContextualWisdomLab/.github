@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
-
 import pytest
 
 from scripts.ci import javascript_coverage_gate as js_gate

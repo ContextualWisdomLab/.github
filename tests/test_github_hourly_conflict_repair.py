@@ -62,6 +62,11 @@ def test_scheduler_dispatches_conflict_mode_for_unreviewed_head(
     monkeypatch.setattr(scheduler, "dispatch_autofix", capture_dispatch)
     monkeypatch.setattr(
         scheduler,
+        "prepare_autofix_slot",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        scheduler,
         "create_fix_marker",
         lambda *_args, **_kwargs: None,
     )

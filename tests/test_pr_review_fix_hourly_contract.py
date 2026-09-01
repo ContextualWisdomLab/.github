@@ -327,6 +327,7 @@ def test_rca_dispatch_carries_an_explicit_worker_mode(monkeypatch) -> None:
         return ""
 
     monkeypatch.setattr(scheduler, "run", fake_run)
+    monkeypatch.setattr(scheduler, "live_head_matches", lambda _repo, _pr: True)
     pr = _current_head_change_request("Failed check evidence reports Strix failed.")
 
     scheduler.dispatch_autofix(

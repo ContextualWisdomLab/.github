@@ -450,7 +450,7 @@ jobs:
           trap restore_workspace_config EXIT
           cd "$TARGET_WORKSPACE"
           env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-            timeout 18000 opencode run "$(cat "$prompt_file")" \
+            opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-autofix \
             --model "$MODEL" \
@@ -653,7 +653,7 @@ jobs:
             }
             trap restore_workspace_config EXIT
             env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-              timeout 18000 opencode run "$(cat "$prompt_file")" \
+              opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-autofix \
               --model "$MODEL" \

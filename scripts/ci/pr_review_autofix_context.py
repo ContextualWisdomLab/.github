@@ -13,6 +13,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from pr_review_fix_scheduler import current_head_failed_checks
+except ModuleNotFoundError:
+    from scripts.ci.pr_review_fix_scheduler import current_head_failed_checks
+
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -327,6 +332,7 @@ def write_context(
     reviews = current_reviews(repo, number, head_sha)
     threads = review_threads(repo, number)
     detected_rca_mode = review_requires_rca(reviews)
+    direct_rca_mode = bool(current_head_failed_checks(pr))
     if repair_mode is None:
         rca_mode = detected_rca_mode
     elif repair_mode == "conflict":
@@ -334,12 +340,14 @@ def write_context(
         # Failed-check reviews may coexist on the same head, but they must not
         # widen this approved conflict-only invocation to every changed path.
         rca_mode = False
-    elif (repair_mode == "rca") != detected_rca_mode:
+    elif repair_mode == "rca" and not (detected_rca_mode or direct_rca_mode):
         raise RuntimeError(
-            "requested repair mode does not match exact-head review evidence"
+            "requested RCA mode lacks exact-head review or failed-check evidence"
         )
+    elif repair_mode != "rca" and detected_rca_mode:
+        raise RuntimeError("requested repair mode does not match exact-head review evidence")
     else:
-        rca_mode = detected_rca_mode
+        rca_mode = repair_mode == "rca"
     if failed_check_evidence_path is not None and not rca_mode:
         raise RuntimeError(
             "failed-check evidence is accepted only for exact-head RCA repair"
