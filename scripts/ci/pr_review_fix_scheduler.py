@@ -83,6 +83,9 @@ RCA_IGNORED_CHECK_NAMES = frozenset(
         "scan-pr-queue",
     }
 )
+RCA_IGNORED_WORKFLOW_NAMES = frozenset(
+    {"OpenCode Review", "Required OpenCode Review", "OpenCode PR Review"}
+)
 FAILED_CHECK_CONCLUSIONS = frozenset(
     {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
 )
@@ -243,8 +246,21 @@ def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
     for node in latest_check_run_attempts(nodes):
         if node.get("__typename") == "CheckRun":
             name = str(node.get("name") or "").strip()
+            workflow_name = str(
+                (
+                    ((node.get("checkSuite") or {}).get("workflowRun") or {}).get(
+                        "workflow"
+                    )
+                    or {}
+                ).get("name")
+                or ""
+            ).strip()
             conclusion = str(node.get("conclusion") or "").upper()
-            if name not in RCA_IGNORED_CHECK_NAMES and conclusion in FAILED_CHECK_CONCLUSIONS:
+            if (
+                name not in RCA_IGNORED_CHECK_NAMES
+                and workflow_name not in RCA_IGNORED_WORKFLOW_NAMES
+                and conclusion in FAILED_CHECK_CONCLUSIONS
+            ):
                 failed.append(name or "unnamed check")
         else:
             name = str(node.get("context") or "").strip()
@@ -452,8 +468,16 @@ def process_queue(args: argparse.Namespace) -> int:
         if args.pr_number
         else fetch_open_prs(args.repo, args.max_prs)
     )
+    pagination_errors: set[int] = set()
     for pr in prs:
-        complete_paginated_pr_contexts(args.repo, pr)
+        if not _base_branch_matches(pr, args.base_branch):
+            continue
+        if not same_repository_head(args.repo, pr):
+            continue
+        try:
+            complete_paginated_pr_contexts(args.repo, pr)
+        except RuntimeError:
+            pagination_errors.add(int(pr["number"]))
 
     dispatched = 0
     inspected = 0
@@ -461,6 +485,8 @@ def process_queue(args: argparse.Namespace) -> int:
 
     prs_needing_comments = []
     for pr in prs:
+        if int(pr["number"]) in pagination_errors:
+            continue
         if not _base_branch_matches(pr, args.base_branch):
             continue
         if not same_repository_head(args.repo, pr):
@@ -517,6 +543,17 @@ def process_queue(args: argparse.Namespace) -> int:
 
     for pr in prs:
         inspected += 1
+        pr_number = int(pr["number"])
+        if pr_number in pagination_errors:
+            reasons = (
+                "status-context pagination failed; deferring this PR without "
+                "evaluating partial check evidence",
+            )
+            decisions.append(
+                {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
+            )
+            print(f"PR #{pr['number']}: wait: {reasons[0]}")
+            continue
         if dispatched >= args.max_dispatches:
             decisions.append(
                 {
@@ -526,7 +563,6 @@ def process_queue(args: argparse.Namespace) -> int:
                 }
             )
             continue
-        pr_number = int(pr["number"])
         if pr_number in comment_fetch_errors:
             decisions.append(
                 {

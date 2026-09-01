@@ -89,10 +89,35 @@ def test_scan_queue_control_plane_failure_does_not_trigger_rca() -> None:
     assert fix.needs_rca_repair(pr) == (False, ())
 
 
-def test_process_queue_completes_check_pages_before_rca_decision(
-    monkeypatch: Any, capsys: Any
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["OpenCode Review", "Required OpenCode Review", "OpenCode PR Review"],
+)
+def test_opencode_control_plane_workflow_failure_does_not_trigger_rca(
+    workflow_name: str,
 ) -> None:
-    """A failure beyond the first rollup page is loaded before repair mode is chosen."""
+    """Renamed jobs in categorically excluded review workflows stay excluded."""
+    pr = make_pr()
+    pr["reviews"] = {"nodes": []}
+    pr["statusCheckRollup"]["contexts"]["nodes"] = [
+        {
+            "__typename": "CheckRun",
+            "name": "renamed review job",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "checkSuite": {"workflowRun": {"workflow": {"name": workflow_name}}},
+        }
+    ]
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
+
+
+@pytest.mark.parametrize("single_pr", [False, True])
+def test_process_queue_completes_check_pages_before_rca_decision(
+    monkeypatch: Any, capsys: Any, single_pr: bool
+) -> None:
+    """Queue and single fetches load later failures before choosing repair mode."""
     pr = make_pr()
     pr["statusCheckRollup"]["contexts"] = {
         "pageInfo": {"hasNextPage": True, "endCursor": "page_1"},
@@ -126,13 +151,15 @@ def test_process_queue_completes_check_pages_before_rca_decision(
         captured.update(kwargs)
 
     monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_pr", lambda repo, number: [pr])
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
     monkeypatch.setattr(fix, "dispatch_autofix", dispatch)
     monkeypatch.setattr(fix, "create_fix_marker", lambda repo, candidate, dry_run: None)
-    args = fix.parse_args(
-        ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
-    )
+    argv = ["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]
+    if single_pr:
+        argv.extend(["--pr-number", "7"])
+    args = fix.parse_args(argv)
 
     assert fix.process_queue(args) == 0
 
