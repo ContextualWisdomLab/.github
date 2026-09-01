@@ -45,8 +45,52 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+      - name: Cancel queued and running Noema reviews for the closed pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -A seen=()
+          for pass in 1 2 3; do
+            pass_matches=0
+            for active_status in queued in_progress requested waiting pending; do
+              runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100"
+              if ! runs_json="$(gh api --paginate "$runs_url")"; then
+                echo "::warning::Noema close cleanup could not inspect ${TARGET_REPOSITORY}; leaving this status unchanged."
+                continue
+              fi
+              run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" \
+                --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
+                  .workflow_runs[]
+                  | select((.id | tostring) != $current)
+                  | select(.path == ".github/workflows/noema-review.yml")
+                  | select((.name // "") | startswith("Required Noema Review"))
+                  | select(
+                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                    )
+                  | .id
+                ' <<<"$runs_json")"
+              while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                [ -z "${seen[$run_id]:-}" ] || continue
+                seen[$run_id]=1
+                pass_matches=$((pass_matches + 1))
+                if ! gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  echo "::warning::Noema close cleanup could not cancel run ${run_id}."
+                fi
+              done <<<"$run_ids"
+            done
+            [ "$pass" -lt 2 ] || [ "$pass_matches" -gt 0 ] || break
+          done
 
   prepare:
     name: noema-review / prepare
@@ -72,6 +116,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha || github.event.workflow_run.pull_requests[0].head.sha || '' }}
     steps:
       - name: Skip events without pull request context
         if: env.PR_NUMBER == ''
@@ -146,6 +191,22 @@ jobs:
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
+
+      - name: Reject a stale trigger before credential or model setup
+        if: env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
+            exit 1
+          fi
+          live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "${live_head,,}" != "${EXPECTED_HEAD,,}" ]; then
+            echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD}, observed ${live_head}."
+            exit 1
+          fi
 
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''

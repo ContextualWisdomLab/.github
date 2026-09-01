@@ -918,11 +918,11 @@ def call_llm(
     pr: dict[str, Any],
     diff: str,
     truncated: bool,
-    expected_head: str,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
     repair_error: str = "",
     _response_deadline: float | None = None,
+    expected_head: str | None = None,
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
 
@@ -937,6 +937,8 @@ def call_llm(
     lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
     condition is reported distinctly to the caller.
     """
+    head_bound = expected_head is not None
+    expected_head = expected_head or str(pr.get("headRefOid") or "")
     if _response_deadline is None:
         _response_deadline = time.monotonic() + CALL_LLM_TIMEOUT_SECONDS
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
@@ -1045,7 +1047,7 @@ def call_llm(
     except RuntimeError as exc:
         if repair_error:
             raise
-        if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
+        if head_bound and str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."
             ) from exc
@@ -1055,11 +1057,11 @@ def call_llm(
             pr,
             diff,
             truncated,
-            expected_head,
             review_context,
             changed_paths,
             str(exc),
             _response_deadline,
+            expected_head,
         )
     return verdict
 
@@ -1144,7 +1146,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
 
 
-def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
+def inspect_and_review(repo: str, number: int, expected_head: str | None = None) -> int:
     """Inspect PR state and submit Noema's independent LLM review.
 
     ``expected_head`` is normalized defensively before the stale-head
@@ -1153,8 +1155,8 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     workflow require canonical lowercase SHA input so equivalent casing
     cannot split the workflow concurrency group.
     """
-    expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
+    expected_head = (expected_head or str(pr.get("headRefOid") or "")).strip().lower()
     if str(pr.get("headRefOid") or "").lower() != expected_head:
         print("Trigger head is stale; Noema review skipped before model work.")
         return 0
@@ -1176,7 +1178,16 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     changed_paths = fetch_changed_file_paths(repo, number)
     review_context = build_review_context(repo, number, pr)
     try:
-        verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
+        verdict = call_llm(
+            repo,
+            number,
+            pr,
+            diff,
+            truncated,
+            review_context,
+            changed_paths,
+            expected_head=expected_head,
+        )
     except StaleHeadDuringRepairRetryError:
         print("Pull request head changed during review; Noema review skipped before repair retry.")
         return 0
@@ -1301,10 +1312,8 @@ def main(argv: list[str]) -> int:
         return finalize_review(args.input, args.verdict)
     if args.mode != "review":
         raise SystemExit("selected mode requires its artifact path arguments")
-    if not args.expected_head or not re.fullmatch(r"[0-9a-f]{40}", args.expected_head):
-        raise SystemExit(
-            "--expected-head must be a canonical lowercase 40-character Git SHA"
-        )
+    if args.expected_head is None:
+        return inspect_and_review(args.repo, args.pr_number)
     return inspect_and_review(args.repo, args.pr_number, args.expected_head)
 
 
