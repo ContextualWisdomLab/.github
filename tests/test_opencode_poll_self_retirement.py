@@ -33,11 +33,11 @@ def _run_poll_loop(
     head_sha: str,
     live_pr: dict[str, object],
     reviews: list[dict[str, object]] | None = None,
-    fail_live_pr_once: bool = False,
+    fail_live_pr_attempts: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Execute the production poll body against a deterministic fake ``gh``."""
     call_log = tmp_path / "gh-calls.log"
-    fail_marker = tmp_path / "failed-live-pr-once"
+    fail_counter = tmp_path / "live-pr-failures"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         """#!/bin/sh
@@ -48,8 +48,13 @@ shift
 if [ "${1:-}" = "--paginate" ]; then
   printf '%s\\n' "$GH_REVIEWS"
 else
-  if [ "${GH_FAIL_LIVE_PR_ONCE:-false}" = "true" ] && [ ! -e "$GH_FAIL_MARKER" ]; then
-    : > "$GH_FAIL_MARKER"
+  count=0
+  if [ -e "$GH_FAIL_COUNTER" ]; then
+    count="$(cat "$GH_FAIL_COUNTER")"
+  fi
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$GH_FAIL_COUNTER"
+  if [ "$count" -le "${GH_FAIL_LIVE_PR_ATTEMPTS:-0}" ]; then
     exit 1
   fi
   printf '%s\\n' "$GH_LIVE_PR"
@@ -61,11 +66,19 @@ fi
     fake_sleep = tmp_path / "sleep"
     fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_sleep.chmod(0o755)
+    fake_timeout = tmp_path / "timeout"
+    fake_timeout.write_text(
+        "#!/bin/sh\nset -eu\nshift\nexec \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_timeout.chmod(0o755)
 
     script = "\n".join(
         (
             "set -euo pipefail",
             'verdict=""',
+            'live_poll_failures=0',
+            'max_live_poll_failures=3',
             "while :; do",
             _poll_loop(),
             "done",
@@ -79,8 +92,8 @@ fi
             "PR_NUMBER": "42",
             "HEAD_SHA": head_sha,
             "GH_CALL_LOG": str(call_log),
-            "GH_FAIL_LIVE_PR_ONCE": "true" if fail_live_pr_once else "false",
-            "GH_FAIL_MARKER": str(fail_marker),
+            "GH_FAIL_LIVE_PR_ATTEMPTS": str(fail_live_pr_attempts),
+            "GH_FAIL_COUNTER": str(fail_counter),
             "GH_LIVE_PR": json.dumps(live_pr),
             "GH_REVIEWS": json.dumps(reviews or []),
         }
@@ -100,7 +113,7 @@ def test_poll_revalidates_live_pr_before_every_reviews_api_read() -> None:
     """An occupied runner must retire itself when its PR head stops being live."""
     loop = _poll_loop()
     live_lookup = (
-        'live_poll_pr="$(gh api '
+        'live_poll_pr="$(timeout 30s gh api '
         '"repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"'
     )
     reviews_lookup = (
@@ -207,7 +220,7 @@ def test_poll_retries_transient_live_state_failure_before_reviews_read(
                 "body": "Source-backed current-head semantic review.",
             }
         ],
-        fail_live_pr_once=True,
+        fail_live_pr_attempts=1,
     )
 
     assert result.returncode == 0, result.stderr
@@ -217,6 +230,24 @@ def test_poll_retries_transient_live_state_failure_before_reviews_read(
         "api repos/ContextualWisdomLab/example/pulls/42",
         "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
     ]
+
+
+def test_poll_fails_closed_after_bounded_live_state_transport_failures(
+    tmp_path: Path,
+) -> None:
+    """Repeated transport failures release the runner without fabricating evidence."""
+    head_sha = "f" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        fail_live_pr_attempts=3,
+    )
+
+    assert result.returncode == 1
+    assert "failed 3 consecutive times" in result.stdout
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"] * 3
+    assert all("reviews" not in call for call in calls)
 
 
 def test_self_retirement_does_not_replace_semantic_review_with_a_short_timeout() -> None:
