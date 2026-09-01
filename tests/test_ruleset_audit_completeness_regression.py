@@ -110,13 +110,11 @@ def test_live_audit_collects_all_available_ruleset_drift_before_failing() -> Non
     assert 'if [[ "$audit_status" -ne 0 ]]; then' in workflow
 
 
-def test_focused_contract_pins_python_before_hash_verified_install() -> None:
-    """The disposable proof lane must not depend on the hosted default Python."""
-    workflow = (REPO_ROOT / ".github/workflows/solo-maintainer-ruleset-contract.yml").read_text(encoding="utf-8")
+def test_disposable_focused_contract_is_removed_after_terminal_proof() -> None:
+    """The temporary proof workflow must not survive its proven source-fix lifecycle."""
+    proof_workflow = REPO_ROOT / ".github/workflows/solo-maintainer-ruleset-contract.yml"
 
-    assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
-    assert 'python-version: "3.14"' in workflow
-    assert workflow.index("actions/setup-python@") < workflow.index("python -m pip install")
+    assert not proof_workflow.exists()
 
 
 def test_rollout_guide_declares_solo_maintainer_review_policy() -> None:
