@@ -122,5 +122,13 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "issue": 1,
             "type": "feature",
         },
+        {
+            "repository": "governance-risk-compliance",
+            "issue": 65,
+            "type": "documentation",
+        },
+        {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
+        {"repository": "life-os", "issue": 211, "type": "documentation"},
+        {"repository": "scopeweave", "issue": 650, "type": "documentation"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
