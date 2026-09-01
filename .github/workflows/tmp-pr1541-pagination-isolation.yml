@@ -1,0 +1,168 @@
+name: Temporary PR 1541 pagination isolation repair
+
+on:
+  push:
+    branches:
+      - fix/draft-governance-wait-and-direct-rca
+    paths:
+      - .github/workflows/tmp-pr1541-pagination-isolation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/draft-governance-wait-and-direct-rca
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Verify unchanged test-first parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "a18261df6485c35b5c28833a17739816e5246c2b"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Install hash-locked test tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Apply bounded production repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/pr_review_fix_scheduler.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_pagination = '''    for pr in prs:
+              complete_paginated_pr_contexts(args.repo, pr)
+
+          dispatched = 0
+          inspected = 0
+          decisions: list[dict[str, Any]] = []
+
+          prs_needing_comments = []
+          for pr in prs:
+              if not _base_branch_matches(pr, args.base_branch):
+                  continue
+              if not same_repository_head(args.repo, pr):
+                  continue
+              needs_fix, _ = needs_autofix(pr)
+          '''
+          new_pagination = '''    pagination_errors: dict[int, str] = {}
+          for pr in prs:
+              if not _base_branch_matches(pr, args.base_branch):
+                  continue
+              if not same_repository_head(args.repo, pr):
+                  continue
+              try:
+                  complete_paginated_pr_contexts(args.repo, pr)
+              except Exception as exc:
+                  pagination_errors[int(pr["number"])] = str(exc)
+
+          dispatched = 0
+          inspected = 0
+          decisions: list[dict[str, Any]] = []
+
+          prs_needing_comments = []
+          for pr in prs:
+              if not _base_branch_matches(pr, args.base_branch):
+                  continue
+              if not same_repository_head(args.repo, pr):
+                  continue
+              pr_number = int(pr["number"])
+              if pr_number in pagination_errors:
+                  continue
+              needs_fix, _ = needs_autofix(pr)
+          '''
+
+          old_decision = '''    for pr in prs:
+              inspected += 1
+              if dispatched >= args.max_dispatches:
+                  decisions.append(
+                      {
+                          "pr": pr["number"],
+                          "action": "skip",
+                          "reasons": ["autofix dispatch limit reached"],
+                      }
+                  )
+                  continue
+              pr_number = int(pr["number"])
+              if pr_number in comment_fetch_errors:
+          '''
+          new_decision = '''    for pr in prs:
+              inspected += 1
+              pr_number = int(pr["number"])
+              if pr_number in pagination_errors:
+                  reason = (
+                      "status-context pagination failed; refusing partial rollup and "
+                      "deferring only this PR: " + pagination_errors[pr_number]
+                  )
+                  decisions.append(
+                      {
+                          "pr": pr["number"],
+                          "action": "wait",
+                          "reasons": [reason],
+                      }
+                  )
+                  print(f"PR #{pr['number']}: wait: {reason}")
+                  continue
+              if dispatched >= args.max_dispatches:
+                  decisions.append(
+                      {
+                          "pr": pr["number"],
+                          "action": "skip",
+                          "reasons": ["autofix dispatch limit reached"],
+                      }
+                  )
+                  continue
+              if pr_number in comment_fetch_errors:
+          '''
+
+          if text.count(old_pagination) != 1:
+              raise SystemExit("pagination patch anchor is not unique")
+          if text.count(old_decision) != 1:
+              raise SystemExit("decision patch anchor is not unique")
+          text = text.replace(old_pagination, new_pagination)
+          text = text.replace(old_decision, new_decision)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify focused GREEN contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_pr_review_fix_scheduler_direct_rca_regressions.py \
+            tests/test_pr_review_fix_scheduler.py
+          python -m compileall -q scripts/ci/pr_review_fix_scheduler.py
+          git diff --check
+
+      - name: Commit repair and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-pr1541-pagination-isolation.yml
+          git config user.name "CWL guarded repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add scripts/ci/pr_review_fix_scheduler.py .github/workflows/tmp-pr1541-pagination-isolation.yml
+          git commit -m "fix(governance): isolate status pagination failures"
+          git push origin HEAD:fix/draft-governance-wait-and-direct-rca
