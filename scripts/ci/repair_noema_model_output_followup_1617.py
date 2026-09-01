@@ -23,16 +23,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def replace_exact_count(
-    text: str, old: str, new: str, expected_count: int, label: str
-) -> str:
-    """Replace a reviewed generated fragment only when its multiplicity is exact."""
-    count = text.count(old)
-    if count != expected_count:
-        raise RuntimeError(f"{label}: expected {expected_count} matches, found {count}")
-    return text.replace(old, new)
-
-
 def update_source() -> None:
     text = SOURCE.read_text(encoding="utf-8")
 
@@ -48,10 +38,31 @@ def update_source() -> None:
     """Raised when the corrective attempt exceeds its total wall-clock budget."""
 '''
     diagnostic_helper = deadline_class + '''\n\ndef _stable_failure_diagnostic(exc: BaseException) -> str:
-    """Return bounded diagnostics without reflecting model-controlled text."""
-    if isinstance(exc, NoemaModelOutputError):
-        return "model-output-contract-invalid"
-    return scrub_sensitive_data(str(exc)) or type(exc).__name__
+    """Return actionable trusted diagnostics without reflecting model values."""
+    message = scrub_sensitive_data(str(exc)) or type(exc).__name__
+    if not isinstance(exc, NoemaModelOutputError):
+        return message
+
+    # Model-output exceptions are raised only by deterministic parsing and
+    # validation code. Preserve those static/structural diagnostics because
+    # they tell the corrective model and operators exactly which contract was
+    # violated. The one validator that embeds an untrusted model value is the
+    # unsupported-decision check; redact that value. Unknown model-output
+    # exception text fails closed to a stable code rather than being reflected.
+    if message.startswith("Noema LLM returned unsupported decision:"):
+        return "Noema LLM returned unsupported decision"
+    trusted_prefixes = (
+        "Noema LLM response ",
+        "Noema formal verdict ",
+        "Noema reviewed line ",
+        "Noema adversarial validation ",
+        "Noema adversarial probe ",
+        "Noema approve ",
+        "Noema request_changes ",
+    )
+    if message.startswith(trusted_prefixes):
+        return message
+    return "model-output-contract-invalid"
 '''
     text = replace_once(
         text,
@@ -85,19 +96,6 @@ def update_source() -> None:
 
 def update_tests() -> None:
     text = TEST.read_text(encoding="utf-8")
-
-    # Three earlier one-shot transforms assert the model-controlled validator
-    # detail after call_llm().  The final contract intentionally exposes only a
-    # stable trusted code at that boundary; the direct validator regression at
-    # the top of the file keeps its detailed assertion.
-    text = replace_exact_count(
-        text,
-        '    assert "outcome must be falsified or confirmed" in message\n',
-        '    assert "model-output-contract-invalid" in message\n',
-        3,
-        "generated call_llm stable-diagnostic assertions",
-    )
-
     marker = "def test_unparseable_diff_remains_source_evidence"
     if marker in text:
         raise RuntimeError("follow-up #1617 regressions already present")
@@ -113,7 +111,7 @@ def test_unparseable_diff_remains_source_evidence() -> None:
 
 
 def test_model_sentinel_never_reaches_repair_prompt_or_final_diagnostic(monkeypatch) -> None:
-    """Model-controlled invalid values are replaced by a stable validator code."""
+    """Model-controlled invalid values are redacted while the defect class stays actionable."""
     import json
 
     sentinel = "MODEL_SENTINEL_DO_NOT_REFLECT"
@@ -156,17 +154,24 @@ def test_model_sentinel_never_reaches_repair_prompt_or_final_diagnostic(monkeypa
     assert len(requests) == 2
     repair_payload = requests[1].data.decode("utf-8")
     assert sentinel not in repair_payload
-    assert "model-output-contract-invalid" in repair_payload
+    assert "Noema LLM returned unsupported decision" in repair_payload
     assert sentinel not in str(exc_info.value)
-    assert "model-output-contract-invalid" in str(exc_info.value)
+    assert "Noema LLM returned unsupported decision" in str(exc_info.value)
     assert exc_info.value.__cause__ is None
 
 
-def test_stable_failure_diagnostic_keeps_transport_class_without_model_text() -> None:
-    """Trusted transport diagnostics remain useful while model text stays opaque."""
-    assert gate._stable_failure_diagnostic(gate.NoemaModelOutputError("secret-ish model text")) == (
-        "model-output-contract-invalid"
+def test_stable_failure_diagnostic_preserves_trusted_structure_and_redacts_values() -> None:
+    """Trusted validator detail stays actionable; arbitrary model text stays opaque."""
+    trusted = gate.NoemaModelOutputError(
+        "Noema adversarial probe 1 outcome must be falsified or confirmed"
     )
+    assert gate._stable_failure_diagnostic(trusted) == str(trusted)
+    assert gate._stable_failure_diagnostic(
+        gate.NoemaModelOutputError("Noema LLM returned unsupported decision: 'SECRET_VALUE'")
+    ) == "Noema LLM returned unsupported decision"
+    assert gate._stable_failure_diagnostic(
+        gate.NoemaModelOutputError("secret-ish model text")
+    ) == "model-output-contract-invalid"
     assert gate._stable_failure_diagnostic(TimeoutError()) == "TimeoutError"
 
 
@@ -213,28 +218,28 @@ def test_repair_deadline_requires_main_thread_signal_registration(monkeypatch) -
 
 
 def update_docs() -> None:
-    """Keep traceability aligned with the non-reflecting diagnostic contract."""
+    """Keep traceability aligned with the bounded actionable diagnostic contract."""
     replacements = {
         CHANGELOG: (
             "NoemaTransportError preserves the first validator diagnostic plus the later transport class/status without logging raw model output or secrets.",
-            "NoemaTransportError preserves the stable model-output contract code plus the later transport class/status without logging raw model output or secrets.",
+            "NoemaTransportError preserves the first trusted structural validator diagnostic plus the later transport class/status without reflecting model-controlled values or secrets.",
         ),
         ARCHITECTURE: (
             "transport error retains both the first trusted-validator diagnostic and the\nlater transport class/status while omitting raw model content and secrets.",
-            "transport error retains both the stable model-output contract code and the\nlater transport class/status while omitting raw model content and secrets.",
+            "transport error retains both the first trusted structural validator diagnostic and the\nlater transport class/status while redacting model-controlled values and omitting raw model content and secrets.",
         ),
         BASELINE: (
             "the final fail-closed diagnostic preserves the sanitized first validator error plus the later typed transport evidence.",
-            "the final fail-closed diagnostic preserves a stable model-output contract code plus the later typed transport evidence without reflecting model-controlled values.",
+            "the final fail-closed diagnostic preserves the first trusted structural validator error plus later typed transport evidence while redacting model-controlled values.",
         ),
         DOCTORING: (
             "A corrective transport failure is `NoemaTransportError` and carries the sanitized first validator diagnostic plus the later transport exception class/status.",
-            "A corrective transport failure is `NoemaTransportError` and carries a stable model-output contract code plus the later transport exception class/status; model-controlled validator values are not reflected into the retry prompt or public diagnostic.",
+            "A corrective transport failure is `NoemaTransportError` and carries the first trusted structural validator diagnostic plus the later transport exception class/status; model-controlled values are redacted rather than reflected into the retry prompt or public diagnostic.",
         ),
     }
     for path, (old, new) in replacements.items():
         text = path.read_text(encoding="utf-8")
-        text = replace_once(text, old, new, f"stable diagnostic docs: {path}")
+        text = replace_once(text, old, new, f"actionable diagnostic docs: {path}")
         path.write_text(text, encoding="utf-8")
 
 
