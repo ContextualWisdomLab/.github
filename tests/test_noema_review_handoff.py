@@ -6,11 +6,29 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from scripts.ci import noema_review_gate as gate
 from scripts.ci import noema_review_handoff as handoff
 
 
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
+
+
+def test_footer_marker_stays_synchronized_between_publisher_and_consumer():
+    """The publisher's and consumer's footer marker literals must be identical.
+
+    ``noema_review_gate.submit_review`` (the publisher) and
+    ``noema_review_handoff.noema_review_state`` (the consumer) each hardcode
+    their own copy of ``NOEMA_REVIEW_FOOTER_MARKER`` rather than sharing one
+    definition (Devin review finding on #1500). A one-sided future edit to
+    either copy would silently desynchronize the trust boundary: the
+    publisher would keep emitting its old marker, the consumer would keep
+    searching for its new one, and every future Noema verdict would fail the
+    handoff's exact-one-match check and time out closed with no direct
+    signal pointing at the actual cause. This contract test is the direct
+    signal instead.
+    """
+    assert gate.NOEMA_REVIEW_FOOTER_MARKER == handoff.NOEMA_REVIEW_FOOTER_MARKER
 
 
 def test_standalone_cli_starts_outside_repository_root(tmp_path):
