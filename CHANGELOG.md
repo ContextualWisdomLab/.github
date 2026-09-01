@@ -5,6 +5,17 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix two `tests/test_contextual_orchestrator_review_policy.py` tests left broken by merged
+  `#1587` ("separate free-pool admission from global discovery"), which intentionally excluded
+  `OPENAI_API_KEY` from `FREE_POOL_CREDENTIAL_NAMES` but did not update
+  `test_build_catalog_applies_account_cap` and `test_build_catalog_respects_limit`, both of which
+  still built discovery reports using `openai` rows and asserted they were admitted to the free
+  pool. Every full-suite/coverage-evidence run on protected `main` (and every PR rebasing onto it)
+  inherited these two failures regardless of its own diff. Swapped the `openai` rows in both tests
+  for `bytez` (also `is_free`-eligible but, unlike `openai`, still in `FREE_POOL_CREDENTIAL_NAMES`),
+  preserving each test's original intent — three distinct provider accounts each capped at 2, and a
+  single provider's rows truncated to the configured limit — without depending on the now-removed
+  OpenAI free-pool admission. No production code changed.
 - **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
   of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
   `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
