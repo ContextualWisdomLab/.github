@@ -238,7 +238,13 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
             )
         if parameters.get("required_review_thread_resolution") is not True:
             errors.append("review-thread resolution protection is disabled")
-        allowed_methods = set(parameters.get("allowed_merge_methods") or [])
+        raw_allowed_methods = parameters.get("allowed_merge_methods")
+        allowed_methods = (
+            set(raw_allowed_methods)
+            if isinstance(raw_allowed_methods, list)
+            and all(isinstance(method, str) for method in raw_allowed_methods)
+            else set()
+        )
         if allowed_methods != {"merge", "squash"}:
             errors.append("only merge and squash may be allowed merge methods")
 
@@ -364,7 +370,13 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
             errors.append(
                 "repository ruleset review-thread resolution protection is disabled"
             )
-        allowed_methods = set(parameters.get("allowed_merge_methods") or [])
+        raw_allowed_methods = parameters.get("allowed_merge_methods")
+        allowed_methods = (
+            set(raw_allowed_methods)
+            if isinstance(raw_allowed_methods, list)
+            and all(isinstance(method, str) for method in raw_allowed_methods)
+            else set()
+        )
         if allowed_methods != {"merge", "squash"}:
             errors.append("repository ruleset must allow only merge and squash")
 
