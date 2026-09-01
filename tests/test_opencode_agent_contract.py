@@ -2663,11 +2663,7 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
     assert '[ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")' in metadata_step
     assert '[ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")' in metadata_step
     assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")' in metadata_step
-    assert 'mismatches+=("head_sha")' not in metadata_step
-    assert (
-        'if [ -n "$SUPPLIED_HEAD_SHA" ] && [ "$SUPPLIED_HEAD_SHA" != "$live_head_sha" ]; then'
-    ) in metadata_step
-    assert "::warning::repository_dispatch head advanced since dispatch" in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")' in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in metadata_step
