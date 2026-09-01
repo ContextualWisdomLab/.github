@@ -5,21 +5,6 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Fix the merge scheduler misclassifying a `repository_dispatch` OpenCode/Strix
-  review as stale when its `validate-pr-metadata` step adopted a live PR head
-  that advanced after dispatch (Devin review on #1507, "Live-head reviews
-  retain stale identity" -- a direct consequence of #1533's warn-and-proceed
-  relaxation). `run-name`/`display_title` render once, at dispatch time, from
-  the *supplied* head and cannot be updated afterward, so a scheduler pass
-  comparing that stale title against the live PR head could force-cancel a
-  review that was correctly reviewing the live head and dispatch duplicate
-  work in its place. `active_review_run_refs` now only falls back to that
-  per-title-head comparison when two or more `repository_dispatch` runs match
-  the same target-repo/PR-number title prefix (a genuine overlap, most
-  plausibly the workflow's own `cancel-in-progress` concurrency group not
-  having finished cancelling an actually-superseded run yet); the sole match
-  is always treated as current, since the workflow's per-PR concurrency group
-  already guarantees there is no other run to prefer over it.
 - Reject excessively nested Noema LLM JSON responses with an explicit,
   string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
   checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of

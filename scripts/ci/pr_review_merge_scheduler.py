@@ -2720,10 +2720,6 @@ def active_review_run_refs(
     )
     current: list[tuple[str, str]] = []
     stale: list[tuple[str, str]] = []
-    # Repository-dispatch runs matching this exact target-repo/PR-number title
-    # prefix, collected before the current-vs-stale decision below. See the
-    # comment at that decision for why it cannot be made per-run in this loop.
-    dispatch_matches: list[tuple[tuple[str, str], str]] = []
 
     # Only the repository_dispatch receiver hosts the privileged review run.
     # When organization required workflows are materialized in a target
@@ -2751,7 +2747,7 @@ def active_review_run_refs(
                 dispatched_head = display_title.removeprefix(dispatch_title_prefix).lower()
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
-                dispatch_matches.append((run_ref, dispatched_head))
+                (current if dispatched_head == head else stale).append(run_ref)
                 continue
             if centralized_dispatch:
                 continue
@@ -2764,30 +2760,6 @@ def active_review_run_refs(
                 continue
             if workflow_run_mentions_pr(run_data, number):
                 stale.append(run_ref)
-
-    # The dispatch workflow's own per-target-repo/PR-number concurrency group
-    # (``cancel-in-progress: true``) guarantees at most one repository_dispatch
-    # run is normally active for a given PR at a time -- a fresh dispatch
-    # cancels whatever it superseded before this scheduler pass can observe
-    # both. So when exactly one dispatch run matches, there is no rival run to
-    # prefer over it, and its immutable run-name/``display_title`` (rendered
-    # once, at dispatch time, from the *supplied* head) is not reliable
-    # evidence that it is stale: ``validate-pr-metadata``'s warn-and-proceed
-    # path (opencode-review-dispatch.yml) deliberately lets that one run
-    # adopt and review a live head that advanced after dispatch, without
-    # creating a second run. Classifying it as stale from the title alone
-    # would let a scheduler pass cancel a review that is correctly reviewing
-    # the live head and dispatch duplicate work for no replacement run
-    # (Devin Review finding on PR #1507, "Live-head reviews retain stale
-    # identity"). Two or more matches, in contrast, are a genuine overlap --
-    # most plausibly the cancellation race window around a real new
-    # dispatch -- so the existing per-title-head disambiguation still
-    # decides which one is current and which are stale.
-    if len(dispatch_matches) == 1:
-        current.append(dispatch_matches[0][0])
-    else:
-        for run_ref, dispatched_head in dispatch_matches:
-            (current if dispatched_head == head else stale).append(run_ref)
     return current, stale
 
 
