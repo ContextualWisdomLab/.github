@@ -1,4 +1,4 @@
-"""Regression for aged PR-run cancellation after late PR association."""
+"""Regressions for aged PR-run cancellation after late PR association."""
 
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
 
 
-def test_aged_unassociated_pr_run_rechecks_open_pr_heads(tmp_path: Path) -> None:
-    """A PR that appears after classification must preserve its current-head run."""
+def _run_late_association_case(
+    tmp_path: Path, *, payload_sha: str, live_ref_sha: str, fail_ref: bool = False
+) -> tuple[subprocess.CompletedProcess[str], bool]:
     if shutil.which("jq") is None:
         pytest.skip("jq is required for the queue-cancellation regression")
 
@@ -35,6 +36,8 @@ def test_aged_unassociated_pr_run_rechecks_open_pr_heads(tmp_path: Path) -> None
         },
         separators=(",", ":"),
     )
+    # Deliberately include a payload SHA that may lag the authoritative branch
+    # ref. The helper must use this response only to discover repo/ref identity.
     open_prs = json.dumps(
         [
             {
@@ -42,7 +45,7 @@ def test_aged_unassociated_pr_run_rechecks_open_pr_heads(tmp_path: Path) -> None
                 "head": {
                     "repo": {"full_name": "ContextualWisdomLab/example"},
                     "ref": "feature/late-pr",
-                    "sha": current,
+                    "sha": payload_sha,
                 },
             }
         ],
@@ -63,6 +66,10 @@ if [[ "$args" == *"/actions/runs/77"* ]]; then
 fi
 if [[ "$args" == *"/pulls?state=open&per_page=100"* ]]; then
   printf '%s\\n' '{open_prs}'
+  exit 0
+fi
+if [[ "$args" == *"/git/ref/heads/feature/late-pr"* ]]; then
+  {'exit 74' if fail_ref else f"printf '%s\\n' '{live_ref_sha}'"}
   exit 0
 fi
 exit 79
@@ -88,7 +95,35 @@ exit 79
         env=env,
         check=False,
     )
+    return result, cancelled.exists()
+
+
+def test_aged_unassociated_pr_run_resolves_authoritative_live_ref(tmp_path: Path) -> None:
+    """A stale PR payload cannot authorize cancellation of the live current head."""
+    current = "b" * 40
+    stale_payload = "a" * 40
+    result, cancelled = _run_late_association_case(
+        tmp_path,
+        payload_sha=stale_payload,
+        live_ref_sha=current,
+    )
 
     assert result.returncode == 0, result.stderr
-    assert "became associated with an open PR" in result.stdout
+    assert "authoritative current head" in result.stdout
+    assert not cancelled
+
+
+def test_aged_unassociated_pr_run_fails_closed_when_live_ref_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A matching late PR with unreadable ref must preserve the queued run."""
+    result, cancelled = _run_late_association_case(
+        tmp_path,
+        payload_sha="a" * 40,
+        live_ref_sha="b" * 40,
+        fail_ref=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "could not be re-fetched" in result.stdout
     assert not cancelled

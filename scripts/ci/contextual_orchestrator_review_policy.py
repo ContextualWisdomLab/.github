@@ -1,9 +1,11 @@
 """Build governed contextual-orchestrator review catalogs from discovery evidence.
 
-``orchestrator/free`` remains strictly zero-priced. ``orchestrator/auto`` is
-free-first and then uses fully price-attested routes. Models without a complete
-price vector remain visible in audit counts but are never admitted to CI review.
-Partial, malformed, or contradictory price vectors fail closed.
+``orchestrator/free`` remains strictly zero-priced and admits only provider
+accounts explicitly authorized for that pool. ``orchestrator/auto`` may retain
+other globally discovered providers, including OpenAI, when their independent
+policy permits them. Models without a complete price vector remain visible in
+audit counts but are never admitted to CI review. Partial, malformed, or
+contradictory price vectors fail closed.
 """
 
 from __future__ import annotations
@@ -27,13 +29,22 @@ from scripts.ci.zdr_policy import (
     route_key,
 )
 
-PROVIDER_FAMILIES: Mapping[str, str] = {
-    "nvidia_nim": "nvidia_nim",
-    "nvidia_nim_sub": "nvidia_nim",
-}
-
 DEFAULT_CATALOG_LIMIT = 12
-DEFAULT_FAMILY_CAP = 4
+DEFAULT_ACCOUNT_CAP = 4
+
+FREE_POOL_CREDENTIAL_NAMES = frozenset(
+    {
+        "BYTEZ_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "NVIDIA_NIM_API_KEY_SUB",
+        "OPENROUTER_API_KEY",
+    }
+)
+"""Credential sources authorized to contribute to ``orchestrator/free``.
+
+``OPENAI_API_KEY`` is intentionally absent. It may still be present, registered,
+and globally discovered; only candidate admission to the free pool is denied.
+"""
 
 COST_FREE = "free"
 COST_PRICED = "priced"
@@ -51,9 +62,9 @@ class PolicyError(ValueError):
     """Raised when discovery evidence cannot produce a governed catalog."""
 
 
-def provider_family(provider_name: str) -> str:
-    """Return the outage-domain family for a provider."""
-    return PROVIDER_FAMILIES.get(provider_name, provider_name)
+def provider_account(provider_name: str) -> str:
+    """Return the independently credentialed provider account identity."""
+    return provider_name
 
 
 def _normalize_agent_id(candidate: str, provider_name: str) -> str:
@@ -152,6 +163,18 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 f"model {provider}/{model} lacks an explicit is_free marker"
             )
 
+        expected_credential_key = PROVIDER_CREDENTIAL_NAMES[provider]
+        supplied_credential_key = row.get("credential_key")
+        credential_key = (
+            expected_credential_key
+            if supplied_credential_key is None
+            else supplied_credential_key
+        )
+        if credential_key != expected_credential_key:
+            raise PolicyError(
+                f"model {provider}/{model} credential source does not match provider evidence"
+            )
+
         is_free = is_free_route(row.get("is_free"))
         route = f"{provider}/{model}"
         cost_evidence, prompt_price, completion_price, currency_code = (
@@ -175,8 +198,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "completion_price_per_1k": completion_price,
                 "currency_code": currency_code,
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
-                "credential_key": row.get("credential_key")
-                or PROVIDER_CREDENTIAL_NAMES[provider],
+                "credential_key": credential_key,
                 "auth_scheme": row.get("auth_scheme")
                 or PROVIDER_AUTH_SCHEMES[provider],
             }
@@ -194,25 +216,46 @@ def _cost_evidence(row: Mapping[str, Any]) -> str:
     return COST_FREE if row.get("is_free") is True else COST_UNKNOWN
 
 
+def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
+    """Return whether a normalized row has an authorized free-pool source."""
+    credential_key = row.get("credential_key")
+    return (
+        isinstance(credential_key, str)
+        and credential_key in FREE_POOL_CREDENTIAL_NAMES
+    )
+
+
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
     limit: int = DEFAULT_CATALOG_LIMIT,
-    family_cap: int = DEFAULT_FAMILY_CAP,
+    account_cap: int = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, provider-family-diverse catalog."""
+    """Select a free-first, ZDR-aware, credential-account-diverse catalog.
+
+    ``orchestrator/free`` first applies a source-identity invariant: only rows
+    whose credential source is in :data:`FREE_POOL_CREDENTIAL_NAMES` are free
+    candidates. This is independent from global credential discovery, so an
+    OpenAI model may remain visible to audit or ``orchestrator/auto`` while
+    contributing zero free-pool candidates.
+
+    Existing discovery-wide counters keep their historical meaning so runtime
+    enrichment cannot silently rewrite the contract. Additional
+    ``free_pool_*`` fields expose the narrower admitted subset explicitly.
+    """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
 
     all_rows = list(rows)
     all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
+    free_pool_rows = [row for row in all_free_rows if _free_pool_source_admitted(row)]
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
     candidate_rows = (
-        all_free_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
+        free_pool_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
     )
     eligible_rows = [
         row
@@ -239,13 +282,13 @@ def build_zdr_prioritized_catalog(
         )
     )
 
-    per_family: Counter[str] = Counter()
+    per_account: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
     for row in eligible_rows:
-        family = provider_family(str(row["provider"]))
-        if per_family[family] >= family_cap:
+        account = provider_account(str(row["provider"]))
+        if per_account[account] >= account_cap:
             continue
-        per_family[family] += 1
+        per_account[account] += 1
         picked.append(row)
         if len(picked) >= limit:
             break
@@ -292,6 +335,13 @@ def build_zdr_prioritized_catalog(
             }
         )
 
+    free_account_diversity = len(
+        {provider_account(str(row["provider"])) for row in all_free_rows}
+    )
+    free_pool_account_diversity = len(
+        {provider_account(str(row["provider"])) for row in free_pool_rows}
+    )
+
     selected_evidence = [_cost_evidence(row) for row in picked]
     return {
         "agents": catalog_rows,
@@ -299,6 +349,10 @@ def build_zdr_prioritized_catalog(
             "pool": f"orchestrator/{pool}",
             "total_routes": len(all_rows),
             "total_free_routes": len(all_free_rows),
+            "free_account_diversity": free_account_diversity,
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(all_free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": free_pool_account_diversity,
             "total_priced_routes": len(all_priced_rows),
             "total_unknown_routes": len(all_unknown_rows),
             "zdr_required": require_zdr,
@@ -358,7 +412,7 @@ def build_catalog_from_paths(
     out_path: str,
     report_path: str,
     limit: int = DEFAULT_CATALOG_LIMIT,
-    family_cap: int = DEFAULT_FAMILY_CAP,
+    account_cap: int = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
     pool: str = "free",
@@ -368,7 +422,7 @@ def build_catalog_from_paths(
     result = build_zdr_prioritized_catalog(
         parse_discovery_report(report),
         limit=limit,
-        family_cap=family_cap,
+        account_cap=account_cap,
         zdr_endpoints=_load_zdr_endpoints(zdr_endpoints_path),
         require_zdr=require_zdr,
         pool=pool,
@@ -395,7 +449,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", required=True, help="Path to write agents JSON")
     parser.add_argument("--report", required=True, help="Path to write audit JSON")
     parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
-    parser.add_argument("--family-cap", type=int, default=DEFAULT_FAMILY_CAP)
+    parser.add_argument("--account-cap", type=int, default=DEFAULT_ACCOUNT_CAP)
     parser.add_argument("--zdr-endpoints", default=None)
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
@@ -411,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path=args.out,
             report_path=args.report,
             limit=args.limit,
-            family_cap=args.family_cap,
+            account_cap=args.account_cap,
             zdr_endpoints_path=args.zdr_endpoints,
             require_zdr=args.require_zdr,
             pool=args.pool,

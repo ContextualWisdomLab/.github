@@ -26,6 +26,10 @@ warn_preserve() {
   exit 0
 }
 
+encode_ref_path() {
+  jq -rn --arg value "$1" '$value | split("/") | map(@uri) | join("/")'
+}
+
 if ! run_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/${repo_full_name}/actions/runs/${run_id}")"; then
   warn_preserve "live run metadata could not be re-fetched before cancellation."
 fi
@@ -52,11 +56,11 @@ case "$event" in
     pr_number="$(jq -r '.pull_requests[0].number // empty' <<<"$run_json")"
     if ! [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]; then
       if [ "$cancellation_mode" = "aged-orphan" ]; then
-        # Association metadata on an Actions run can lag the PR itself. The
-        # refreshed PR list is only discovery evidence for repository/ref
-        # identity: its head SHA can itself lag a synchronize event. Resolve
-        # the matching Git reference immediately before cancellation and make
-        # the destructive decision from that authoritative value instead.
+        # Association metadata on an Actions run can lag the PR itself. Re-read
+        # open PRs immediately before destructive cancellation, but use that
+        # payload only to discover the authoritative head repository/ref. The
+        # payload SHA itself can be stale, so resolve a matching branch through
+        # the Git reference endpoint before deciding whether the run is current.
         if [ -z "$run_head_repo" ] || [ -z "$run_branch" ]; then
           warn_preserve "unassociated PR run has no authoritative head repository/ref."
         fi
@@ -70,36 +74,35 @@ case "$event" in
                 ref: (.head.ref // null)
               }]'
         )"; then
-          warn_preserve "open PR refs could not be re-fetched for an unassociated PR run."
+          warn_preserve "open PR heads could not be re-fetched for an unassociated PR run."
         fi
         if ! jq -e '
-          all(.[ ];
+          all(.[];
             (.repo | type) == "string" and (.repo | length) > 0 and
             (.ref | type) == "string" and (.ref | length) > 0
           )
         ' <<<"$fresh_open_pr_refs_json" >/dev/null; then
-          warn_preserve "fresh open PR ref evidence is malformed."
+          warn_preserve "fresh open PR head evidence is malformed."
         fi
         if jq -e \
           --arg repo "$run_head_repo" \
           --arg ref "$run_branch" \
-          'any(.[ ]; .repo == $repo and .ref == $ref)' \
+          'any(.[]; .repo == $repo and .ref == $ref)' \
           <<<"$fresh_open_pr_refs_json" >/dev/null; then
-          encoded_run_ref="$(jq -rn --arg value "$run_branch" '$value | split("/") | map(@uri) | join("/")')"
-          if ! final_run_ref_sha="$(
+          encoded_run_ref="$(encode_ref_path "$run_branch")"
+          if ! final_ref_sha="$(
             gh api \
               -H "Accept: application/vnd.github+json" \
               "/repos/${run_head_repo}/git/ref/heads/${encoded_run_ref}" \
               --jq '.object.sha // empty'
           )"; then
-            warn_preserve "live ref for an unassociated PR run could not be re-fetched before cancellation."
+            warn_preserve "live ref for newly associated PR head could not be re-fetched before cancellation."
           fi
-          if ! [[ "$final_run_ref_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            warn_preserve "live ref for an unassociated PR run is malformed."
+          if ! [[ "$final_ref_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            warn_preserve "live ref for newly associated PR head is malformed."
           fi
-          if [ "$run_head" = "$final_run_ref_sha" ]; then
-            echo "Preserving run ${run_id} in ${repo_full_name}: authoritative current-head evidence for a newly associated open PR."
-            exit 0
+          if [ "$run_head" = "$final_ref_sha" ]; then
+            warn_preserve "run became associated with an open PR at its authoritative current head after queue classification."
           fi
         fi
       else
@@ -117,7 +120,7 @@ case "$event" in
         if [ -z "$live_head_repo" ] || [ -z "$live_head_ref" ] || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
           warn_preserve "live PR ${pr_number} head metadata is malformed."
         fi
-        encoded_head_ref="$(jq -rn --arg value "$live_head_ref" '$value | split("/") | map(@uri) | join("/")')"
+        encoded_head_ref="$(encode_ref_path "$live_head_ref")"
         if ! final_ref_sha="$(gh api -H "Accept: application/vnd.github+json" "/repos/${live_head_repo}/git/ref/heads/${encoded_head_ref}" --jq '.object.sha // empty')"; then
           warn_preserve "live ref for PR ${pr_number} could not be re-fetched before cancellation."
         fi
