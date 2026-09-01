@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-c107e3e52371993aa9c326fcc245e01c41fc3850}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-8cd99f139915131ba0239bce12a5d6a5fd85394e}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -61,40 +61,6 @@ if [ "$provider_secret_count" -lt 1 ]; then
   fail "at least one of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY / NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY is required"
 fi
 log "provider secrets present: $provider_secret_count of 5"
-
-# Temporary PR-only diagnostic: emit status codes, never response bodies or
-# credential metadata, to isolate Bytez's persistent authenticated HTTP 500.
-if [ "${PR_NUMBER:-}" = "1473" ] && [ -n "${BYTEZ_API_KEY:-}" ]; then
-  python3 - <<'PY'
-import os
-import urllib.error
-import urllib.request
-
-key = os.environ["BYTEZ_API_KEY"]
-cases = (
-    ("raw_task", key, "https://api.bytez.com/models/v2/list/models?task=chat"),
-    ("raw_all", key, "https://api.bytez.com/models/v2/list/models"),
-    ("bearer_task", f"Bearer {key}", "https://api.bytez.com/models/v2/list/models?task=chat"),
-    ("key_task", f"Key {key}", "https://api.bytez.com/models/v2/list/models?task=chat"),
-)
-for name, authorization, url in cases:
-    request = urllib.request.Request(
-        url,
-        headers={"authorization": authorization, "user-agent": "contextual-orchestrator/bytez-diagnostic"},
-    )
-    try:
-        response = urllib.request.urlopen(request, timeout=30)
-    except urllib.error.HTTPError as exc:
-        code = exc.code
-        exc.close()
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        code = type(exc).__name__
-    else:
-        code = response.status
-        response.close()
-    print(f"[contextual-orchestrator-sidecar] bytez diagnostic {name}={code}")
-PY
-fi
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in

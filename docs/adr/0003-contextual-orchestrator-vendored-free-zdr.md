@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`c107e3e52371993aa9c326fcc245e01c41fc3850` today) into `RUNNER_TEMP`. The
+   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -213,3 +213,21 @@ all five, and auto-optimize routing by cost.
   pool without the `orchestrator/auto` paid fallback (open PR #1437) should
   read `free_outage_domain_diversity`, not `free_account_diversity`, for that
   specific decision.
+- **2026-08-31 amendment: Noema reviews independently of OpenCode.** Noema no
+  longer waits for an OpenCode approval, review-thread state, or other check
+  conclusions before calling the gateway and submitting its current-head
+  review. A colliding OpenCode reviewer credential fails closed. The Noema LLM
+  response must bind every formal verdict to exact LEFT/RIGHT changed lines
+  and publish structured adversarial probes. Executable, test, and workflow
+  changes require at least two distinct probes; other diffs require one.
+  `approve` admits only falsified regression hypotheses, while
+  `request_changes` requires a confirmed probe at a published finding. A
+  generic no-issues summary can no longer synthesize a green review.
+- **2026-08-31 amendment: required OpenCode execution is initiated by the
+  required check.** The unprivileged `pull_request_target` bootstrap exchanges
+  GitHub OIDC for the repository-scoped OpenCode App token and requests the
+  existing central scheduler chain for the exact PR. That chain runs Strix
+  evidence first and then the privileged OpenCode dispatch; both model paths,
+  like Noema, provision the pinned contextual-orchestrator sidecar and use
+  `orchestrator/free`. The bootstrap still checks out no PR code and binds no
+  Actions secret.
