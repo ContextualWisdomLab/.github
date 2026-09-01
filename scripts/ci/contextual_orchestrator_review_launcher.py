@@ -695,6 +695,70 @@ def _catalog_account_cap(default: int) -> int:
     return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
 
 
+def _fallback_domain_aware_account_cap(
+    rows: list[dict[str, Any]],
+    *,
+    fallback_limit: int,
+    configured_cap: int,
+    outage_domain: Any,
+) -> int:
+    """Return the priced-fallback stage's per-domain admission cap.
+
+    Devin Review finding on `.github#1474` (verified directly, not trusted
+    from the finding text alone): with both defaults at 4
+    (``fallback_limit = ORCHESTRATOR_CATALOG_LIMIT - primary_count``, and
+    ``account_cap = DEFAULT_ACCOUNT_CAP``), a single outage domain with at
+    least ``fallback_limit`` priced rows exhausts the whole fallback
+    catalog before ``build_zdr_prioritized_catalog``'s greedy admission
+    loop ever reaches a different, genuinely independent domain's row --
+    the per-domain cap provides no diversity protection for this
+    specific stage precisely because it coincidentally equals the stage's
+    own overall route limit.
+
+    This does not affect the *primary* catalog stage: there,
+    ``ORCHESTRATOR_CATALOG_LIMIT`` (12 by default) comfortably exceeds
+    ``account_cap`` (4), so several domains are always structurally able to
+    contribute before the primary limit is reached.
+
+    Shrinking the configured cap to ``fallback_limit // domain_count``
+    (floor, minimum 1) whenever more than one domain is actually competing
+    for this stage's rows guarantees every domain gets at least one turn
+    before any domain can claim a second: with ``domain_count`` domains
+    each capped at ``cap = fallback_limit // domain_count``, the greedy
+    loop's own ``len(picked) >= limit`` cutoff (``cap * domain_count <=
+    fallback_limit``) can never trigger before every domain with at least
+    one admissible row has already contributed one. When only one domain is
+    present, this returns exactly ``min(configured_cap, fallback_limit)`` --
+    the same value the unmodified cap already produced, so the common,
+    already-tested single-domain-fallback case is unchanged.
+
+    Args:
+        rows: The priced rows eligible for this fallback stage (before
+            ``build_zdr_prioritized_catalog``'s own cost/ZDR/limit
+            filtering -- domain membership does not depend on that).
+        fallback_limit: The stage's own overall route budget, from
+            :func:`_bounded_fallback_catalog_limit`.
+        configured_cap: The operator-configured per-domain cap, from
+            :func:`_catalog_account_cap`.
+        outage_domain: ``contextual_orchestrator_review_policy._outage_domain``,
+            injected so this module never imports the policy module's
+            private helper at module scope (matching this file's existing
+            dependency-injection convention for ``outage_domain``/
+            ``provider_account``, e.g. in :func:`_with_discovery_counts`).
+
+    Returns:
+        The per-domain cap to pass to this stage's
+        ``build_zdr_prioritized_catalog`` call as ``account_cap``.
+    """
+    if fallback_limit < 1:
+        return configured_cap
+    domain_count = len({outage_domain(row) for row in rows})
+    if domain_count <= 1:
+        return min(configured_cap, fallback_limit)
+    fair_share_cap = max(1, fallback_limit // domain_count)
+    return min(configured_cap, fair_share_cap)
+
+
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -923,7 +987,12 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = build_zdr_prioritized_catalog(
                 admitted_priced_rows,
                 limit=fallback_limit,
-                account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
+                account_cap=_fallback_domain_aware_account_cap(
+                    admitted_priced_rows,
+                    fallback_limit=fallback_limit,
+                    configured_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
+                    outage_domain=_outage_domain,
+                ),
                 zdr_endpoints=zdr_endpoints,
                 require_zdr=args.require_zdr,
                 pool="auto",
