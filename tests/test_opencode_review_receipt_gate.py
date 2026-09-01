@@ -237,13 +237,14 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
 
     def fake_run(args, **kwargs):
         assert args[0] == "gh"
+        assert args[-2:] == ["--paginate", "--slurp"]
         return type(
             "Completed",
             (),
             {
                 "returncode": 0,
                 "stdout": json.dumps(
-                    [review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]
+                    [[review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]]
                 ),
                 "stderr": "",
             },

@@ -179,6 +179,7 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
             "api",
             f"repos/{repo}/pulls/{number}/reviews",
             "--paginate",
+            "--slurp",
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -190,8 +191,8 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
         detail = (completed.stderr or completed.stdout or "gh reviews lookup failed").strip()
         raise ReceiptGateError(f"formal review receipt lookup failed: {detail}")
     loaded = json.loads(completed.stdout or "[]")
-    if isinstance(loaded, list):
-        return [item for item in loaded if isinstance(item, Mapping)]
+    if isinstance(loaded, list) and all(isinstance(page, list) for page in loaded):
+        return [item for page in loaded for item in page if isinstance(item, Mapping)]
     raise ReceiptGateError("formal review receipt lookup returned malformed JSON")
 
 
