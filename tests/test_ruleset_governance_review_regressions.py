@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -20,24 +21,32 @@ sys.modules[SPEC.name] = module
 SPEC.loader.exec_module(module)
 
 
-def test_stale_main_revision_fails_before_any_ruleset_mutation(monkeypatch) -> None:
-    """A resumed owner-plane run cannot apply policy from an obsolete main SHA."""
+def _target():
+    """Return the reviewed repository ruleset target used by race tests."""
 
-    target = module.RulesetTarget(
+    return module.RulesetTarget(
         "repository",
         "ContextualWisdomLab",
         ".github",
         17921150,
         "Lock default branch",
     )
-    live = {
+
+
+def _live() -> dict[str, object]:
+    """Return one live ruleset with only the reviewed merge-method drift."""
+
+    target = _target()
+    return {
         "id": target.ruleset_id,
         "name": target.name,
         "target": "branch",
         "source_type": target.source_type,
         "source": target.source,
         "enforcement": "active",
-        "bypass_actors": [{"actor_id": None, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}],
+        "bypass_actors": [
+            {"actor_id": None, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}
+        ],
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
         "rules": [
             {"type": "deletion"},
@@ -57,18 +66,131 @@ def test_stale_main_revision_fails_before_any_ruleset_mutation(monkeypatch) -> N
             },
         ],
     }
-    calls: list[str] = []
 
-    monkeypatch.setattr(module, "_gh_api", lambda method, endpoint, **kwargs: calls.append(method) or live)
+
+def _manifest(tmp_path: Path) -> Path:
+    """Write the exact two-target manifest accepted by the production parser."""
+
+    path = tmp_path / "manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "organization": "ContextualWisdomLab",
+                "targets": [
+                    {
+                        "scope": "repository",
+                        "owner": "ContextualWisdomLab",
+                        "repository": ".github",
+                        "ruleset_id": 17921150,
+                        "name": "Lock default branch",
+                    },
+                    {
+                        "scope": "organization",
+                        "owner": "ContextualWisdomLab",
+                        "repository": None,
+                        "ruleset_id": 18156473,
+                        "name": "CWL Central required workflows",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_stale_main_revision_fails_before_any_ruleset_mutation(monkeypatch) -> None:
+    """A resumed owner-plane run cannot apply policy from an obsolete main SHA."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, endpoint, **kwargs: calls.append(method) or _live(),
+    )
     monkeypatch.setattr(module, "_current_main_sha", lambda: "b" * 40)
 
     with pytest.raises(module.RulesetGovernanceError, match="protected main advanced"):
         module._reconcile_target(
-            target,
+            _target(),
             verify_only=False,
             expected_main_sha="a" * 40,
         )
     assert calls == ["GET"]
+
+
+def test_current_main_guard_covers_live_success_and_malformed_evidence(monkeypatch) -> None:
+    """The live ref reader accepts one exact SHA and rejects malformed ref evidence."""
+
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda *_args, **_kwargs: {"object": {"sha": "A" * 40}},
+    )
+    assert module._current_main_sha() == "a" * 40
+    module._assert_current_main("a" * 40)
+
+    with pytest.raises(module.RulesetGovernanceError, match="expected protected main SHA"):
+        module._assert_current_main("BAD")
+
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda *_args, **_kwargs: {"object": {"sha": "not-a-sha"}},
+    )
+    with pytest.raises(module.RulesetGovernanceError, match="malformed SHA"):
+        module._current_main_sha()
+
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: {"object": []})
+    with pytest.raises(module.RulesetGovernanceError, match="main ref object"):
+        module._current_main_sha()
+
+
+def test_current_main_is_rechecked_around_put_and_after_convergence(monkeypatch) -> None:
+    """Stable protected main is checked before final read, PUT, and completion."""
+
+    first = _live()
+    desired = module._desired_payload(first, _target())
+    converged = {**first, **desired}
+    replies = iter([first, first, {}, converged])
+    checks: list[str] = []
+    monkeypatch.setattr(module, "_gh_api", lambda *args, **kwargs: next(replies))
+    monkeypatch.setattr(
+        module,
+        "_current_main_sha",
+        lambda: checks.append("main") or "a" * 40,
+    )
+
+    assert module._reconcile_target(
+        _target(),
+        verify_only=False,
+        expected_main_sha="a" * 40,
+    ) is True
+    assert checks == ["main", "main", "main"]
+
+
+def test_actions_apply_requires_and_forwards_expected_main_sha(tmp_path, monkeypatch) -> None:
+    """The privileged Actions CLI path cannot silently omit its protected-main identity."""
+
+    manifest = _manifest(tmp_path)
+    monkeypatch.setenv("GH_TOKEN", "protected")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with pytest.raises(module.RulesetGovernanceError, match="expected protected main SHA"):
+        module.main(["--manifest", str(manifest)])
+
+    seen: list[tuple[bool, str | None]] = []
+
+    def fake_reconcile(targets, *, verify_only, expected_main_sha=None):
+        assert len(targets) == 2
+        seen.append((verify_only, expected_main_sha))
+        return 0
+
+    monkeypatch.setattr(module, "reconcile", fake_reconcile)
+    assert module.main(
+        ["--manifest", str(manifest), "--expected-main-sha", "a" * 40]
+    ) == 0
+    assert seen == [(False, "a" * 40)]
 
 
 def test_owner_plane_workflow_supersedes_stale_runs_and_quotes_main_sha() -> None:
