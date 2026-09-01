@@ -1,6 +1,11 @@
 """Regression contract for solo-maintainer protected-branch governance."""
 
+from pathlib import Path
+
 from scripts.ci import audit_central_required_workflows as audit
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FOCUSED_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/solo-maintainer-ruleset-contract.yml"
 
 
 def _central_ruleset_payload() -> dict:
@@ -118,3 +123,14 @@ def test_repository_ruleset_rejects_synthetic_required_reviewer() -> None:
     assert audit.audit_repository_ruleset(payload) == [
         "repository solo-maintainer ruleset must not configure required reviewers"
     ]
+
+
+def test_focused_workflow_executes_main_ruleset_regressions() -> None:
+    """The temporary proof workflow must execute, not merely parse, both suites."""
+    workflow = " ".join(FOCUSED_WORKFLOW_PATH.read_text(encoding="utf-8").split())
+
+    assert (
+        "python -m pytest -q tests/test_central_required_workflow_ruleset_audit.py "
+        "tests/test_solo_maintainer_ruleset_policy.py"
+    ) in workflow
+    assert "compile(regression_path.read_text" not in workflow
