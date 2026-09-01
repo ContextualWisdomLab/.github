@@ -1367,6 +1367,44 @@ def test_material_changed_file_scope_rejects_false_documentation_typo_reason(
     assert check_structural_approval(path) == 4
 
 
+def test_label_section_bounded_search_matches_reference() -> None:
+    """Bounded candidate scans preserve the prior section-selection semantics."""
+    text = (
+        "coverage: first docstring coverage: 100% performance: fast "
+        "coverage: final security/privacy: clean"
+    )
+
+    def reference(label: str) -> str:
+        starts = [
+            index
+            for index in range(len(text))
+            if text.startswith(label, index)
+            and not (
+                label == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            )
+        ]
+        if not starts:
+            return ""
+        start = starts[-1] + len(label)
+        boundaries = [
+            index
+            for candidate in norm.APPROVAL_VERIFICATION_LABELS
+            if candidate != label
+            for index in range(start, len(text))
+            if text.startswith(candidate, index)
+            and not (
+                candidate == "coverage:"
+                and text[max(0, index - 10) : index] == "docstring "
+            )
+        ]
+        end = min(boundaries) if boundaries else len(text)
+        return text[start:end]
+
+    for label in norm.APPROVAL_VERIFICATION_LABELS:
+        assert norm.label_section(text, label) == reference(label)
+
+
 def test_label_and_full_coverage_detection(tmp_path, monkeypatch):
     combined = FULL_SUMMARY.casefold()
     assert "100%" in norm.label_section(combined, "coverage:")

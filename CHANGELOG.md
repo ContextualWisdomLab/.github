@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Bound each verification-label search to the earliest section boundary found
+  so long review summaries are not repeatedly scanned past an already-known
+  endpoint, while preserving duplicate-label and `docstring coverage:` suffix
+  handling.
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
