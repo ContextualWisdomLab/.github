@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Repair same-repository credential contract and remove helper
+      - name: Reconstruct intended delta from live protected main and remove helper
         shell: bash
         env:
           EXPECTED_REF: fix/current-main-remove-opencode-dispatch-bootstrap-20260902
@@ -33,30 +33,40 @@ jobs:
           test "${GITHUB_REF_NAME}" = "${EXPECTED_REF}"
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
+          git fetch origin main "${EXPECTED_REF}"
+          test "$(git rev-parse FETCH_HEAD)" = "${GITHUB_SHA}"
+          main_sha="$(git rev-parse origin/main)"
+          test -n "$main_sha"
+
+          # Reconstruct the three durable files from current protected main, then
+          # reapply only PR #1619's still-valid semantic delta. This intentionally
+          # discards the stale same-repository credential regression while
+          # preserving every unrelated current-main change in these files.
+          git checkout origin/main -- \
+            .github/workflows/opencode-review-dispatch.yml \
+            tests/test_opencode_agent_contract.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py
+
           python - <<'PY'
           from pathlib import Path
 
-          expr = '$' + '{{'
           workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
           workflow = workflow_path.read_text(encoding='utf-8')
-          old_token = f"GH_TOKEN: {expr} secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}}}"
-          new_token = f"GH_TOKEN: {expr} needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}}}"
-          old_source = f"OPENCODE_STATUS_TOKEN_SOURCE: {expr} secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}}}"
-          new_source = f"OPENCODE_STATUS_TOKEN_SOURCE: {expr} needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}}}"
-          if workflow.count(old_token) != 1 or workflow.count(old_source) != 1:
-              raise SystemExit('unexpected dispatch workflow credential shape; refusing mutation')
-          workflow = workflow.replace(old_token, new_token, 1).replace(old_source, new_source, 1)
+          bootstrap = '''  required-workflow-bootstrap:\n    name: required-workflow-bootstrap\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo "OpenCode repository-dispatch review run materialized."\n\n'''
+          if workflow.count(bootstrap) != 1:
+              raise SystemExit('current main bootstrap shape changed; refusing lossy mutation')
+          workflow = workflow.replace(bootstrap, '', 1)
           if 'required-workflow-bootstrap:' in workflow:
-              raise SystemExit('orphaned dispatch bootstrap unexpectedly present')
+              raise SystemExit('orphaned dispatch bootstrap still present')
           workflow_path.write_text(workflow, encoding='utf-8')
 
           test_path = Path('tests/test_opencode_agent_contract.py')
           test_text = test_path.read_text(encoding='utf-8')
-          old_assert = '''    assert (\n        "GH_TOKEN: __OPEN__ secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step\n'''.replace('__OPEN__', expr)
-          new_assert = '''    assert (\n        "GH_TOKEN: __OPEN__ needs.validate-pr-metadata.outputs.target_repository == "\n        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert (\n        "OPENCODE_STATUS_TOKEN_SOURCE: __OPEN__ "\n        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "\n        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && "\n        "'PR_REVIEW_MERGE_TOKEN'"\n    ) in status_step\n'''.replace('__OPEN__', expr)
-          if test_text.count(old_assert) != 1:
-              raise SystemExit('unexpected OpenCode contract assertion shape; refusing mutation')
-          test_path.write_text(test_text.replace(old_assert, new_assert, 1), encoding='utf-8')
+          old = '''    assert "required-workflow-bootstrap:" in workflow\n    assert "OpenCode repository-dispatch review run materialized." in workflow\n    bootstrap_start = workflow.index("  required-workflow-bootstrap:\\n")\n    bootstrap_end = workflow.index("\\n  validate-pr-metadata:", bootstrap_start)\n    bootstrap_job = workflow[bootstrap_start:bootstrap_end]\n    assert "\\n    if:" not in bootstrap_job\n'''
+          new = '''    # This repository_dispatch-only workflow is not the org-required\n    # pull_request_target entrypoint, so an unconditional bootstrap job here only\n    # consumes Actions capacity without providing authoritative review evidence.\n    assert "required-workflow-bootstrap:" not in workflow\n'''
+          if test_text.count(old) != 1:
+              raise SystemExit('current main bootstrap contract test shape changed; refusing mutation')
+          test_path.write_text(test_text.replace(old, new, 1), encoding='utf-8')
           PY
 
           workflow_blob="$(git hash-object .github/workflows/opencode-review-dispatch.yml)"
@@ -94,7 +104,7 @@ jobs:
             tests/test_opencode_agent_contract.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py \
             .github/workflows/tmp-pr1619-causal-repair.yml
-          git commit -m 'fix(opencode): preserve same-repo status authority'
+          git commit -m 'fix(opencode): reconstruct bootstrap removal from current main'
           git fetch origin "${EXPECTED_REF}"
           test "$(git rev-parse FETCH_HEAD)" = "${GITHUB_SHA}"
           git push origin "HEAD:${EXPECTED_REF}"
