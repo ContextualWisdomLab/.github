@@ -43,7 +43,8 @@ Semantic Versioning where the repository publishes a release.
 - Prevent a cancelled upstream `workflow_run` notification from cancelling a
   live same-head Noema review and then skipping its own Noema job. The shared
   head-specific group remains serialized, but cancelled upstream completions
-  no longer receive `cancel-in-progress` authority.
+  no longer receive `cancel-in-progress` authority and use a run-unique group,
+  so GitHub cannot evict an already-pending actionable review either.
 - Replace the required OpenCode workflow's two chained 325-minute polling jobs
   with event-driven continuation. The required run dispatches the authenticated
   multi-hour review, checks once, and fails closed without retaining a hosted

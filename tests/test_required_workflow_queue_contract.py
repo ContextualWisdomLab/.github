@@ -266,7 +266,11 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event.workflow_run.pull_requests[0].head.sha" in concurrency_contract
             assert "github.event.workflow_run.head_sha" not in concurrency_contract
             assert "github.event.client_payload.pr_head_sha" in concurrency_contract
-            assert "github.event_name }}" not in concurrency_contract
+            assert "github.event.workflow_run.conclusion == 'cancelled'" in (
+                concurrency_contract
+            )
+            assert "format('cancelled-{0}', github.run_id)" in concurrency_contract
+            assert "'actionable'" in concurrency_contract
             procedure = (
                 REPO_ROOT / "docs" / "pr-review-and-merge-procedure.md"
             ).read_text(encoding="utf-8")
@@ -523,7 +527,9 @@ def test_noema_triggers_serialize_one_review_per_pull_request() -> None:
 
     assert "github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "github.event_name }}" not in concurrency_contract
+    assert "github.event.workflow_run.conclusion == 'cancelled'" in concurrency_contract
+    assert "format('cancelled-{0}', github.run_id)" in concurrency_contract
+    assert "'actionable'" in concurrency_contract
 
 
 def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
