@@ -45,7 +45,7 @@ def test_disabled_pages_is_noop_when_site_is_absent():
     assert reconciler.plan_operations("CalendarWeave", live, desired) == []
 
 
-def test_pages_delete_uses_github_pages_delete_endpoint():
+def test_pages_delete_uses_github_pages_delete_endpoint_without_body():
     api = FakeApi([{}])
     reconciler.apply_operations(
         api,
@@ -54,7 +54,7 @@ def test_pages_delete_uses_github_pages_delete_endpoint():
         [("pages_delete", {})],
     )
     assert api.calls == [
-        ("DELETE", "/repos/ContextualWisdomLab/CalendarWeave/pages", {}, ())
+        ("DELETE", "/repos/ContextualWisdomLab/CalendarWeave/pages", None, ())
     ]
 
 
@@ -86,4 +86,11 @@ def test_deepwiki_audit_reports_missing_readme_or_wrong_target():
     ])
     assert reconciler.deepwiki_badge_present(
         wrong, "ContextualWisdomLab", "CalendarWeave"
+    ) is False
+
+
+def test_deepwiki_audit_fails_closed_on_malformed_readme_payload():
+    malformed = FakeApi([{"content": "%%%not-base64%%%"}])
+    assert reconciler.deepwiki_badge_present(
+        malformed, "ContextualWisdomLab", "CalendarWeave"
     ) is False
