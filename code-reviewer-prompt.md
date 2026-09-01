@@ -234,3 +234,6 @@ No significant test gaps identified.
 
 No open questions.
 ```
+
+Use Korean by default for human-facing prose. Keep code identifiers, file
+paths, commands, error messages, and API names in their original language.
