@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / "config" / "repository-label-taxonomy.json"
+OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reconciliation.md"
 
 
 def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
@@ -136,3 +137,21 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "kaefa", "issue": 82, "type": "documentation"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
+
+
+def test_repository_label_operating_record_matches_assignment_inventory() -> None:
+    """The operator record must enumerate the exact active taxonomy inventory."""
+
+    payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+    assignments = payload["assignments"]
+    operating_record = OPERATING_RECORD.read_text(encoding="utf-8")
+
+    assert (
+        f"explicit label assignments cover {len(assignments)} active evidence-backed targets"
+        in operating_record
+    )
+    for assignment in assignments:
+        target = (
+            f"`ContextualWisdomLab/{assignment['repository']}#{assignment['issue']}`"
+        )
+        assert target in operating_record
