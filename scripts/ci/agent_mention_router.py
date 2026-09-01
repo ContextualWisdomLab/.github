@@ -20,14 +20,26 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # (https://open-code.ai/en/docs/github), and this repo's dispatch pipeline
 # accepts them as aliases of the same @opencode-agent request rather than
 # forcing commenters to learn a locally-invented mention instead.
+#
+# None of the three alternatives below may be preceded by a bare "/": a
+# preceding slash almost always means the match is embedded in a URL path
+# (e.g. https://opencode.ai/docs, https://youtube.com/@opencode-agent) or an
+# ordinary path segment (docs/@opencode-agent), not a deliberate trigger. The
+# one deliberate exception is a maintainer separating both supported agent
+# requests with a bare slash and no space (@cwl-noema-review/@opencode-agent);
+# that is recognized only when the slash is immediately preceded by the
+# other pattern's exact literal mention text, not by an arbitrary word.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
-        r"(?:(?<![A-Za-z0-9_-])@opencode-agent|(?<![A-Za-z0-9_/-])(?:/opencode|/oc))"
-        r"(?![A-Za-z0-9_-])",
+        r"(?:"
+        r"(?<![A-Za-z0-9_/-])@opencode-agent"
+        r"|(?<=@cwl-noema-review)/@opencode-agent"
+        r"|(?<![A-Za-z0-9_/-])(?:/opencode|/oc)"
+        r")(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
 }

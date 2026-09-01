@@ -130,14 +130,19 @@ def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
 def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
     """A slash used to separate two agent requests must not swallow the @mention.
 
-    Devin review regression on #1537: excluding a preceding ``/`` from the
-    lookbehind to reject documentation-link false positives (see
-    ``test_exact_mentions_rejects_slash_opencode_substrings``) was originally
-    applied to the whole ``@opencode-agent|/opencode|/oc`` alternation, so a
-    maintainer separating both requested agents with a bare slash and no
-    space (``@cwl-noema-review/@opencode-agent``) silently lost the OpenCode
-    request. The slash exclusion must apply only to the bare ``/opencode``
-    and ``/oc`` forms, not to the ``@`` form.
+    Devin review regression on #1537, in two rounds: excluding a preceding
+    ``/`` from the lookbehind to reject documentation-link false positives
+    (see ``test_exact_mentions_rejects_slash_opencode_substrings``) was
+    originally applied to the whole ``@opencode-agent|/opencode|/oc``
+    alternation, so a maintainer separating both requested agents with a
+    bare slash and no space (``@cwl-noema-review/@opencode-agent``) silently
+    lost the OpenCode request. Simply exempting the ``@`` form from the
+    slash exclusion reopened the same false-positive class for
+    ``/@opencode-agent`` embedded in an arbitrary URL or path segment (a
+    second Devin finding). The final pattern instead recognizes
+    ``/@opencode-agent`` only when the slash is immediately preceded by the
+    other pattern's exact literal mention text (``@cwl-noema-review``), not
+    by an arbitrary preceding word.
     """
 
     module = load_module()
@@ -155,6 +160,8 @@ def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
         "see /opencode-docs for the guide",
         "check out https://opencode.ai/docs for more info",
         "see http://open-code.ai/en/docs/github",
+        "share this: https://youtube.com/@opencode-agent",
+        "see docs/@opencode-agent for the config file",
     ],
 )
 def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
@@ -164,7 +171,13 @@ def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
     after the scheme's own ``//`` (Devin review finding on #1537): the prior
     lookbehind excluded a preceding letter/digit/underscore/hyphen but not a
     preceding ``/``, so a documentation link like ``https://opencode.ai``
-    satisfied it and could launch an unintended review.
+    satisfied it and could launch an unintended review. Also includes a
+    second-round Devin finding on the same PR: restoring plain recognition of
+    ``@opencode-agent`` after a bare slash (so a maintainer could write
+    ``@cwl-noema-review/@opencode-agent`` with no space) reopened the same
+    class of false positive for ``/@opencode-agent`` embedded in an arbitrary
+    URL or path segment, since both share the exact same "word char, then
+    slash, then the mention" shape as the deliberate separator case.
     """
 
     module = load_module()
