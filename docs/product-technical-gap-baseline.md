@@ -2386,8 +2386,28 @@ regression pair (`test_call_llm_repairs_once_after_a_transport_error_then_succee
 `test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds` /
 `test_call_llm_fails_closed_after_a_repeated_socket_timeout` for a raw `TimeoutError` reaching
 `opener.open()` directly) -- each verified genuinely RED against the pre-fix boundary before being
-folded in, never transferred from an earlier case as substitute proof. Full suite: 2250 passed, 1
+folded in, never transferred from an earlier case as substitute proof. Full suite: 2252 passed, 1
 skipped, 21 subtests; `noema_review_gate.py` at 100% line/branch coverage; 100% docstring coverage.
+
+**Fix, round 3 (Devin Review again, same `#1566`)**: a fourth, distinct bug in the fix itself --
+gating the retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is this the
+second attempt" with "does the caught exception have display text". Several transport exceptions
+(a bare `OSError()`/`TimeoutError()`, or an `http.client.HTTPException` raised with no message) all
+stringify to `''`, so an empty-message failure on the *first* attempt would leave `repair_error`
+falsy on the recursive call too -- the retry-state signal was lost, and `call_llm` would retry
+unboundedly (each recursive call itself another live-gateway request) rather than failing closed
+after one attempt, eventually crashing on an uncaught `RecursionError` once the interpreter's call
+stack was exhausted. Added an explicit `is_retry: bool = False` parameter to track retry state
+independently of the exception's text; it (not `repair_error`) now gates both the prompt-injection
+branch (falling back to a generic message when `repair_error` is empty) and the except clause's
+retry-vs-fail-closed decision, and is threaded through as `is_retry=True` on the recursive call.
+Verified genuine RED with a bounded-recursion regression test
+(`test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error`, which raises a
+diagnostic `AssertionError` if `call_llm` retries more than once instead of letting it recurse to
+CPython's own limit) before this fourth fix, GREEN after -- paired with
+`test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds` for the
+happy-path case. Full suite: 2254 passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at
+100% line/branch coverage, 100% docstring coverage.
 
 **Owner**: this repo (`ContextualWisdomLab/.github`), `scripts/ci/noema_review_gate.py`.
 **Status**: fixed on `ContextualWisdomLab/.github#1566` (branch `fix/noema-review-transport-error-retry`),

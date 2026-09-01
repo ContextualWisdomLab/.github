@@ -1576,6 +1576,84 @@ def test_call_llm_fails_closed_after_a_repeated_socket_timeout(monkeypatch):
     assert len(open_calls) == 2
 
 
+def test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds(monkeypatch):
+    """A transport exception whose ``str()`` is empty (a bare ``OSError()``/
+    ``TimeoutError()``, or an ``http.client.HTTPException`` raised with no
+    message -- all of these stringify to ``''`` in practice) must still get
+    exactly one repair retry, the same as any other transport failure.
+
+    Devin Review on #1566: gating the retry-vs-fail-closed decision on
+    ``repair_error``'s truthiness conflated "is this the second attempt"
+    with "does the caught exception have display text" -- an empty-message
+    failure on the first attempt would keep ``repair_error`` falsy on the
+    recursive call too, so the retry state was lost. ``is_retry`` now tracks
+    that state explicitly and independently of the exception's text."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise OSError()
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error(monkeypatch):
+    """Two consecutive empty-message transport failures must still fail
+    closed after exactly one repair retry, never retry unboundedly.
+
+    Bounds the fixture at 6 open() calls so a regression that reintroduces
+    unbounded recursion fails this test fast with a clear AssertionError
+    instead of recursing until CPython's own recursion limit."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        if len(open_calls) > 5:
+            raise AssertionError("call_llm retried more than once on an empty-message transport error")
+        raise OSError()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
 @pytest.mark.parametrize("choices", [{"a": 1}, 5])
 def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choices):
     """A malformed (non-list) choices field surfaces through call_llm's

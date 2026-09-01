@@ -43,6 +43,22 @@ Semantic Versioning where the repository publishes a release.
   line/branch coverage. (A separate, pre-existing SIGPIPE flake in
   `tests/test_opencode_required_verdict_regression.py`, unrelated to this
   file, was also reproduced and fixed in its own PR during this verification.)
+  Devin Review then found a fourth, distinct bug in the fix itself: gating the
+  retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is
+  this the second attempt" with "does the caught exception have display
+  text" — several transport exceptions (a bare `OSError()`/`TimeoutError()`,
+  or an `http.client.HTTPException` raised with no message) stringify to an
+  empty string, so an empty-message failure on the first attempt would keep
+  `repair_error` falsy on the recursive call too and retry unboundedly instead
+  of failing closed after one attempt. Added an explicit `is_retry: bool`
+  parameter to track retry state independently of the exception's text, used
+  it (not `repair_error`) as the sole gate in both the prompt-injection branch
+  and the except clause, and threaded it through the recursive call. Verified
+  genuine RED with a bounded-recursion regression test (an `AssertionError`
+  fires if `call_llm` retries more than once, rather than letting it recurse
+  to CPython's own limit) before this fourth fix, GREEN after. Full suite 2254
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at 100%
+  line/branch coverage, 100% docstrings.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
