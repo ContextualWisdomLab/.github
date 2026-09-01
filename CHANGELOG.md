@@ -5,30 +5,60 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Fix `opencode-review.yml`'s required `opencode-review-target` check hanging
-  for an ordinary draft PR until the job's own ~360-minute runtime ceiling
-  kills it. `#1546`'s receipt-gate redesign added `PR_DRAFT` to the
-  `Request current-head OpenCode review execution` dispatch step, but that
-  value only narrows which reviews `opencode_review_receipt_gate.py`'s
-  `evaluate_receipts` accepts (`is_draft and state == "APPROVED"` is
-  rejected) -- it never exempts a draft PR from needing a receipt at all,
-  and `pr_review_merge_scheduler.py`'s own draft path skips dispatching a
-  review for an ordinary draft with no `@opencode-agent` mention. With no
-  draft exemption in the `Fail closed without a current-head OpenCode
-  verdict` step, its `while :; do ... sleep 30; done` loop then polls
-  forever for a verdict OpenCode will never post. That step now also reads
-  `PR_DRAFT` and exits early (mirroring its pre-existing `closed` exit) when
-  the PR is a draft. This restores the equivalent of `#1443`'s draft-gate
-  fix -- closed unmerged as superseded by this redesign, on the (partially
-  incorrect) premise that the redesign already exempted drafts -- reproduced
-  and fixed fresh against current `main` per that closure's own guidance,
-  rather than reviving the superseded branch. A second Devin Review finding
-  on the same PR then showed the exemption above was unreachable for a PR
-  converted to draft mid-poll: `on.pull_request_target.types` never listed
-  `converted_to_draft`, so no fresh run ever fired to cancel the stale
-  non-draft poll via the workflow's PR-scoped `cancel-in-progress: true`
-  concurrency group. `converted_to_draft` is now in the trigger list, so
-  that conversion fires a fresh run that reaches the same draft exemption.
+- **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
+  of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
+  `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
+  outside the surrounding `try`/`except`, which only guarded the JSON-decode and
+  validation steps after a successful response. A genuine `HTTP Error 502: Bad
+  Gateway` from the completion request therefore crashed the whole required
+  check with an unhandled traceback instead of getting the same one-time
+  repair-retry the malformed-verdict path already has. Widened the `try` to
+  also cover the request itself and added `urllib.error.URLError` alongside
+  `RuntimeError` to the existing repair-retry `except` clause — a transient
+  transport failure now gets one retry, then fails closed with a clean
+  `RuntimeError` on a second failure, exactly like a malformed verdict already
+  does. Verified genuine RED (the exact `HTTPError: Bad Gateway` reproduced
+  uncaught) before the fix, GREEN after; full suite 2248 passed, 1 skipped, 21
+  subtests. (Repo-wide coverage independently confirmed at 99% both before and
+  after this change — a pre-existing gap in
+  `pr_review_fix_scheduler.py`/`pr_review_merge_scheduler.py` unrelated to this
+  diff.) Devin Review then found the transport-error boundary still missed a
+  mid-response failure: `response.read()` can raise `http.client
+  .IncompleteRead` (or another `http.client.HTTPException`/raw `OSError`) when
+  the server closes the connection before delivering the full
+  `Content-Length` body, and none of those are `RuntimeError` or
+  `urllib.error.URLError`. Widened the `except` clause to
+  `(RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError)`
+  and simplified the repair-retry re-raise to "re-raise as-is only when it's
+  already our own `RuntimeError`; otherwise wrap in a clean `RuntimeError`" so
+  the fail-closed behavior generalizes to any transport exception type rather
+  than needing another isinstance check added per exception class. Verified
+  genuine RED (`IncompleteRead` reproduced uncaught) before this second fix,
+  GREEN after. A third distinct exception path (a raw `TimeoutError` reaching
+  `opener.open()` directly, never wrapped as `URLError`) was added per the
+  repo owner's explicit request on `#1566` for at least one timeout/disconnect
+  family exercising a genuinely different branch than the HTTPError/URLError
+  and IncompleteRead cases above — also RED→GREEN verified. Full suite 2252
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` itself at 100%
+  line/branch coverage. (A separate, pre-existing SIGPIPE flake in
+  `tests/test_opencode_required_verdict_regression.py`, unrelated to this
+  file, was also reproduced and fixed in its own PR during this verification.)
+  Devin Review then found a fourth, distinct bug in the fix itself: gating the
+  retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is
+  this the second attempt" with "does the caught exception have display
+  text" — several transport exceptions (a bare `OSError()`/`TimeoutError()`,
+  or an `http.client.HTTPException` raised with no message) stringify to an
+  empty string, so an empty-message failure on the first attempt would keep
+  `repair_error` falsy on the recursive call too and retry unboundedly instead
+  of failing closed after one attempt. Added an explicit `is_retry: bool`
+  parameter to track retry state independently of the exception's text, used
+  it (not `repair_error`) as the sole gate in both the prompt-injection branch
+  and the except clause, and threaded it through the recursive call. Verified
+  genuine RED with a bounded-recursion regression test (an `AssertionError`
+  fires if `call_llm` retries more than once, rather than letting it recurse
+  to CPython's own limit) before this fourth fix, GREEN after. Full suite 2254
+  passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at 100%
+  line/branch coverage, 100% docstrings.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

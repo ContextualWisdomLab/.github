@@ -2344,59 +2344,83 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
-## 2026-09-01 opencode-review.yml draft-gate poll: `#1546`'s receipt gate narrows, never exempts
+## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 
-**Context**: an earlier PR (`#1443`) fixed a required `opencode-review-target` check hanging
-forever on a draft PR, against the pre-`#1546` design. `#1546` then redesigned this same
-workflow around `scripts/ci/opencode_review_receipt_gate.py` (a shared receipt predicate) and
-`#1443` was closed unmerged as superseded, on the stated premise that the new design already
-handles drafts via `pr_review_merge_scheduler.py`'s `dispatch_draft_review_only` path and the
-receipt gate's `is_draft` parameter.
+**Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
+unhandled `urllib.error.HTTPError: HTTP Error 502: Bad Gateway`. Root cause: `call_llm` in
+`scripts/ci/noema_review_gate.py` had `with opener.open(request) as response:` sitting outside the
+`try`/`except` that only guarded the JSON-decode/validation steps *after* a successful response --
+identical in shape to, but a distinct bug from, the malformed-verdict crash fixed in `#1507`
+(2026-08-31 entries above). Confirmed via direct fetch that `#1546`'s own `call_llm` (main tip at the
+time, `5686de41`) carried the same unguarded line, so this crash is orthogonal to, and survives
+regardless of, the `#1438`/`#1546` wall-clock-deadline policy question -- `#1438` was closed by the
+repo owner as a stale mixed branch unrelated to this specific bug.
 
-**That premise was only half right — reproduced against `main@5686de41`**: `evaluate_receipts`'s
-`is_draft` only narrows what counts as a valid receipt (`if is_draft and state == "APPROVED":
-return False, "draft must never receive bot APPROVE"`); it never returns "no receipt needed for
-a draft." `pr_review_merge_scheduler.py`'s own draft path (`inspect_pr`'s `if pr.get("isDraft")`)
-skips dispatching a review entirely for an ordinary draft with no `@opencode-agent` mention
-(`active_draft_review_request` is documented as "the sole automatic gate for draft review
-dispatch"). Net effect: for an ordinary draft PR, nothing ever posts a verdict, and the
-`Fail closed without a current-head OpenCode verdict` step's `while :; do ... sleep 30; done`
-loop had no draft check at all — it polls until the job's own ~360-minute runtime ceiling kills
-it. `#1443`'s underlying bug still reproduces on current `main`.
+**Fix, round 1**: widened the `try` to cover the request itself and added `urllib.error.URLError`
+alongside `RuntimeError` to the existing repair-retry `except` clause -- one retry on a transient
+transport failure, then a clean `RuntimeError` on a second failure, matching the malformed-verdict
+path's contract. RED (`HTTPError: Bad Gateway` reproduced uncaught) confirmed before, GREEN after.
 
-**Fix**: per the closure's own guidance ("any residual draft-queue issue must be reproduced
-against current main and fixed in the current receipt/scheduler boundary rather than reviving
-this stale branch"), fixed fresh on a new branch from current `main` rather than reviving
-`#1443`: the `Fail closed` step now also reads `PR_DRAFT: ${{ github.event.pull_request.draft
-}}` (matching the sibling dispatch step's existing sourcing convention exactly, not the live
-`gh api` refetch `#1443`'s branch had introduced) and exits early, mirroring its pre-existing
-`closed` exit. Minimal, scoped to the one missing exemption; the receipt-gate/scheduler
-architecture itself is otherwise untouched.
+**Fix, round 2 (Devin Review, then owner confirmation, on `#1566` itself)**: Devin correctly found that
+`response.read()` can raise `http.client.IncompleteRead` -- and, more generally, any
+`http.client.HTTPException` or raw `OSError` (a bare socket timeout/disconnect reaching `opener.open()`
+before urllib gets a chance to wrap it as `URLError`) -- none of which are `RuntimeError` or
+`urllib.error.URLError`, so they still escaped the round-1 boundary. The owner's review comment and
+follow-up issue comment on `#1566` confirmed this independently and specified the exact contract: widen
+to the bounded transport/read exception families without swallowing JSON/validator/programming errors,
+add RED->GREEN regressions for a truncated-body success-after-retry and a repeated-failure case, and at
+least one timeout/disconnect family exercising a distinct exception path -- while preserving `#1546`'s
+unbounded inference semantics (no fixed inference timeout, no direct-provider fallback, no bypass).
 
-**Round 2 -- Devin Review caught the trigger-level gap in that fix, on `#1543`'s successor
-`#1568`**: the `Fail closed` step's `PR_DRAFT` exemption above is correct step-body logic, but
-`on.pull_request_target.types` (`[opened, synchronize, reopened, ready_for_review, closed]`)
-never listed `converted_to_draft`. A PR converted to draft *while* an earlier event's poll was
-already in flight (e.g. a `synchronize` push, or `ready_for_review` reverted) never fired a fresh
-workflow run for that PR, so the stale non-draft poll -- started before the conversion, unaware
-of it -- kept calling the Reviews API every 30s toward the job's own runtime ceiling, exactly the
-hang this whole fix line exists to prevent, just reached from the opposite direction (ready
-&#8594; draft instead of always-draft).
+Widened the `except` clause to `(RuntimeError, urllib.error.URLError, http.client.HTTPException,
+OSError)` and simplified the repair-retry re-raise from an `isinstance(exc, urllib.error.URLError)`
+check to `isinstance(exc, RuntimeError)`: re-raise as-is only when the second failure is already this
+module's own `RuntimeError` (a malformed verdict, an invalid finding, etc.); otherwise wrap in a clean
+`RuntimeError`. This generalizes the fail-closed contract to any transport exception type without
+needing another `isinstance` branch added per exception class encountered. Three genuinely distinct
+exception paths are now each covered by their own RED->GREEN success-after-retry and repeated-failure
+regression pair (`test_call_llm_repairs_once_after_a_transport_error_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_transport_error` for `HTTPError`/`URLError`;
+`test_call_llm_repairs_once_after_a_truncated_response_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_truncated_response` for `http.client.IncompleteRead`;
+`test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds` /
+`test_call_llm_fails_closed_after_a_repeated_socket_timeout` for a raw `TimeoutError` reaching
+`opener.open()` directly) -- each verified genuinely RED against the pre-fix boundary before being
+folded in, never transferred from an earlier case as substitute proof. Full suite: 2252 passed, 1
+skipped, 21 subtests; `noema_review_gate.py` at 100% line/branch coverage; 100% docstring coverage.
 
-**Fix**: added `converted_to_draft` to `on.pull_request_target.types`. The workflow's existing
-PR-scoped `concurrency` group (`cancel-in-progress: true`, keyed on PR number) then cancels the
-stale in-flight non-draft poll for that PR the moment the fresh `converted_to_draft` run starts,
-and that fresh run reaches the same pre-existing `PR_DRAFT` exemption above, exiting before ever
-calling the Reviews API. No step-body logic changed -- the gap was purely that the trigger never
-fired for this event.
+**Fix, round 3 (Devin Review again, same `#1566`)**: a fourth, distinct bug in the fix itself --
+gating the retry-vs-fail-closed decision on `repair_error`'s truthiness conflated "is this the
+second attempt" with "does the caught exception have display text". Several transport exceptions
+(a bare `OSError()`/`TimeoutError()`, or an `http.client.HTTPException` raised with no message) all
+stringify to `''`, so an empty-message failure on the *first* attempt would leave `repair_error`
+falsy on the recursive call too -- the retry-state signal was lost, and `call_llm` would retry
+unboundedly (each recursive call itself another live-gateway request) rather than failing closed
+after one attempt, eventually crashing on an uncaught `RecursionError` once the interpreter's call
+stack was exhausted. Added an explicit `is_retry: bool = False` parameter to track retry state
+independently of the exception's text; it (not `repair_error`) now gates both the prompt-injection
+branch (falling back to a generic message when `repair_error` is empty) and the except clause's
+retry-vs-fail-closed decision, and is threaded through as `is_retry=True` on the recursive call.
+Verified genuine RED with a bounded-recursion regression test
+(`test_call_llm_fails_closed_after_a_repeated_empty_message_transport_error`, which raises a
+diagnostic `AssertionError` if `call_llm` retries more than once instead of letting it recurse to
+CPython's own limit) before this fourth fix, GREEN after -- paired with
+`test_call_llm_repairs_once_after_an_empty_message_transport_error_then_succeeds` for the
+happy-path case. Full suite: 2254 passed, 1 skipped, 21 subtests; `noema_review_gate.py` still at
+100% line/branch coverage, 100% docstring coverage.
 
-**Regression**: `test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll` proves the step
-body exits closed for the exact `PR_ACTION=converted_to_draft` value GitHub sends for this event.
-`test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion` pins that `converted_to_draft`
-is actually present in the workflow's own trigger block (a step-level test alone cannot prove the
-fix is reachable in production -- GitHub only re-invokes the workflow for listed event types).
-Both existing literal trigger-type contract pins (`tests/test_required_workflow_queue_contract.py`,
-`scripts/ci/test_strix_quick_gate.sh`) were updated to the new six-element list.
+**Owner**: this repo (`ContextualWisdomLab/.github`), `scripts/ci/noema_review_gate.py`.
+**Status**: fixed on `ContextualWisdomLab/.github#1566` (branch `fix/noema-review-transport-error-retry`),
+pending required checks and final review.
+
+While verifying this fix's full-suite run, an unrelated, pre-existing SIGPIPE (exit 141) flake was also
+found and root-caused in `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`:
+its fake `gh` fixture never drains the JSON piped into it via `--input -` for the dispatch call, so under
+`set -euo pipefail` the pipeline's writer (`jq`) can be killed by `SIGPIPE` if the fake reader exits
+first -- reproduced locally at roughly a 60% failure rate over 15 runs in complete isolation (not merely
+under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/null`) before the fixture
+writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
+that PR for its own evidence.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
