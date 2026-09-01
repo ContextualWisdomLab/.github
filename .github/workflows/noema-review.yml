@@ -430,6 +430,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.prepare.outputs.require_zdr }}
+          REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS: "600"
         run: bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh" --single-candidate-attempt
       - name: Run first candidate
         id: review

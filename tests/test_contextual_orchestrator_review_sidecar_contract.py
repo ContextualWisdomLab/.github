@@ -79,6 +79,16 @@ def test_single_candidate_attempt_is_explicit_and_preserves_normal_defaults() ->
     assert "realtime_judge = False" not in launcher
 
 
+def test_gateway_preflight_timeout_is_bounded_and_caller_configurable() -> None:
+    """A hung smoke request cannot consume the caller's real model budget."""
+    sidecar = _read(SIDECAR)
+
+    assert 'REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS="${REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS:-1200}"' in sidecar
+    assert '--max-time "$REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS"' in sidecar
+    assert "--max-time 3600" not in sidecar
+    assert "must be a positive integer" in sidecar
+
+
 def test_sidecar_adr_names_the_current_vendored_revision() -> None:
     """The accepted decision record must not advertise a stale runtime SHA."""
     assert ORCH_PIN_SHA in _read(SIDECAR_ADR)

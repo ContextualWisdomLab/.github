@@ -174,6 +174,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "finalize:" in workflow
     assert workflow.count("timeout-minutes: 335") == 2
     assert workflow.count("timeout-minutes: 350") == 2
+    assert 'REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS: "600"' in workflow
     assert workflow.count(
         "contextual_orchestrator_review_sidecar.sh\" --single-candidate-attempt"
     ) == 2

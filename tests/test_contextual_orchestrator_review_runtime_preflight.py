@@ -470,14 +470,16 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
-def test_gateway_preflight_uses_hour_bound_instead_of_120_seconds() -> None:
-    """Each attempt must permit reasoning latency without defeating retries."""
+def test_gateway_preflight_uses_caller_bound_instead_of_120_seconds() -> None:
+    """Each attempt permits reasoning latency without starving real work."""
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
     command = re.search(r"curl -sS .*?\n\s*-o \"\$gateway_preflight_response\"", sidecar)
     assert command
     assert "--connect-timeout 10" in command.group(0)
-    assert "--max-time 3600" in command.group(0)
+    assert '--max-time "$REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS"' in command.group(0)
+    assert 'REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS:-1200' in sidecar
+    assert "--max-time 3600" not in command.group(0)
     assert "--max-time 120" not in command.group(0)
     assert 'launcher_attempt_args[*]:-}" = "--single-candidate-attempt"' in sidecar
     assert 'REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-1' in sidecar

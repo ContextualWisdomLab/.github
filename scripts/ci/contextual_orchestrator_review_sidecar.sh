@@ -592,10 +592,10 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # decision layered on top of it.
 printf '{"model":"%s","orchestration":"route","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
-# Do not impose a curl total-time ceiling on a real reasoning completion. The
-# former 120s limit produced a synthetic transport failure for healthy routes.
-# Connection establishment remains bounded; the candidate job's 335-minute
-# timeout is the fail-closed execution ceiling and advances to the next job.
+# Keep each virtual-pool smoke attempt long enough for reasoning models, but
+# bounded so all attempts plus the caller's real workload fit its job ceiling.
+# The shared default is 20 minutes; callers with tighter startup reservations
+# (notably Noema's 15-minute provision window) pass a smaller explicit value.
 #
 # ADR-0005 Trigger A: this request goes to the virtual pool, not one pinned
 # candidate, so a transport failure or non-2xx status here (unreachable
@@ -641,11 +641,18 @@ case "$REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" in
   ?????*)
     fail "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS must be at most 9999" ;;
 esac
+REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS="${REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS:-1200}"
+case "$REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS" in
+  ''|*[!0-9]*|0)
+    fail "REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS must be a positive integer" ;;
+  ???????*)
+    fail "REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS must be at most 999999" ;;
+esac
 gateway_attempt=1
 gateway_http_status=""
 while :; do
   if gateway_http_status="$(
-    curl -sS --connect-timeout 10 --max-time 3600 \
+    curl -sS --connect-timeout 10 --max-time "$REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS" \
       -o "$gateway_preflight_response" \
       -w '%{http_code}' \
       -X POST \

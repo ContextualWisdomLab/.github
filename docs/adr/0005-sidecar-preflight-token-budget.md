@@ -177,7 +177,9 @@ correctly caught in an earlier revision of this text):**
     treats it as Trigger A: retried up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` times against a
     candidate the gateway is, by the same reasoning as the Trigger-B/route-diversity note below, more
     likely to repeat than diversify away from. **This does not change Layer 2's stated worst case**
-    (`REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS × 3600s` — this failure still consumes attempts from the
+    (`REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS × REVIEW_PREFLIGHT_GATEWAY_MAX_TIME_SECONDS`;
+    the shared default is 1,200s and Noema supplies 600s for its single-attempt
+    15-minute provisioning window — this failure still consumes attempts from the
     same shared Trigger-A budget, not an additional one), but it does mean this specific failure
     typically consumes the *entire* retry budget before failing closed, rather than failing fast the
     way a correctly-classified Trigger B would (one attempt, up to one hour). A correct fix requires a
@@ -338,7 +340,7 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   below) shows a specific, evidenced bias worth correcting.
 - **Layer 2** (bounded by the caller job's ceiling, per the org's stated "accuracy over
   speed" policy already reasoned in this file — *not* by the 180s Layer 1 budget, which has already
-  completed by the time Layer 2 runs): use a one-hour total-time timeout plus a 10-second connection
+  completed by the time Layer 2 runs): use a caller-bounded total-time timeout plus a 10-second connection
   timeout. Keep the existing **`4096` budget, unchanged throughout — Layer 2 never
   escalates** (already proven working on a real hosted run, `contextual-orchestrator#921`; see Decision
   §1 for why an escalation tier was considered and dropped here). Allow up to
@@ -348,9 +350,15 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   reasoning-without-content signature) is not retried at Layer 2 at all (Decision §1). The job timeout
   and per-attempt timeouts are fail-closed wall-clock bounds; a pinned candidate failure advances to
   the next job instead of reporting curl's former synthetic 120-second transport failure.
-- **Initial values are derived or reused, not guesses** (Devin Review's fourth finding): the one-hour
-  attempt bound follows from the six-hour caller ceiling: three attempts plus the 170-minute Strix
-  workload consume 350 minutes and preserve ten minutes for cleanup. Other numbers are either already
+- **Initial values are derived or reused, not guesses** (Devin Review's fourth finding): the shared
+  1,200-second attempt bound satisfies `330s + 3 × 1,200s = 3,930s`; combined with OpenCode's
+  205-minute model step it stays below the 305-minute job ceiling, while combined with Strix's
+  170-minute scan it stays below the 360-minute job ceiling. Noema explicitly uses one 600-second
+  attempt, so `330s + 600s <= 900s` preserves its 15-minute provisioning reservation before the
+  separate 335-minute review step. That review still owns one shared 19,800-second response deadline,
+  leaving five minutes for verdict sealing and handoff inside the step. Autofix inherits the bounded
+  3,930-second admission under the platform six-hour job ceiling. These admission-smoke limits do not
+  shorten serving-client timeouts: configured two-hour-or-longer model calls remain supported. Other numbers are either already
   deployed in this exact codebase today (`10s`, `4096`, `12`)
   or has direct external documentation backing it (`16` — the pre-#1436 value this codebase already
   ran with, and separately the floor OpenRouter's own schema documents: *"some providers enforce a
