@@ -167,7 +167,7 @@ def test_current_main_is_rechecked_around_put_and_after_convergence(monkeypatch)
     monkeypatch.setattr(
         module,
         "_verify_ruleset_history_transition",
-        lambda _target, _baseline, _desired: None,
+        lambda _target, _baseline, _desired, **_kwargs: None,
     )
 
     assert module._reconcile_target(
