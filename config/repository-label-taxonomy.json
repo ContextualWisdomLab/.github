@@ -12,6 +12,21 @@
       "type": "feature"
     },
     {
+      "repository": ".github",
+      "issue": 1622,
+      "type": "feature"
+    },
+    {
+      "repository": ".github",
+      "issue": 1625,
+      "type": "bug"
+    },
+    {
+      "repository": ".github",
+      "issue": 1634,
+      "type": "documentation"
+    },
+    {
       "repository": "CalendarWeave",
       "issue": 1,
       "type": "documentation"
