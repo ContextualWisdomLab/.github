@@ -81,7 +81,11 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #   the "100%/oc" percentage case above, where the percent sign is preceded
 #   by a digit. Both use a fixed-width two-character lookaround instead of
 #   widening the single-character sets above, which would have reopened
-#   one of the two cases each pair is meant to distinguish.
+#   one of the two cases each pair is meant to distinguish. The trailing
+#   colon lookaround excludes a following word character OR "/", not just
+#   a word character: a colon followed by a slash (/oc:/config, /oc://foo)
+#   is exactly as much a path/URI structure as a colon followed directly
+#   by a word, and checking only for a word character left this open.
 # - "@cwl-noema-review" on its own additionally excludes a preceding "/"
 #   (closing the same URL/path-embedding class as "@opencode-agent" above)
 #   but deliberately NOT a trailing "/": that would break recognition of
@@ -96,7 +100,7 @@ MENTION_PATTERNS = {
         r"(?:"
         r"(?<![\w/-])@opencode-agent(?![\w/-])"
         r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
-        r"|(?<![\w./?=#:-])(?<!/%)(?:/opencode|/oc)(?![\w./?=#%-])(?!:\w)"
+        r"|(?<![\w./?=#:-])(?<!/%)(?:/opencode|/oc)(?![\w./?=#%-])(?!:[\w/])"
         r")",
         re.IGNORECASE,
     ),

@@ -455,6 +455,35 @@ def test_exact_mentions_rejects_path_segments_beside_the_same_punctuation(
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:/config",
+        "/opencode:/config",
+        "/oc://foo",
+        "/opencode://foo",
+    ],
+)
+def test_exact_mentions_rejects_colon_slash_path_continuation(body: str) -> None:
+    """A colon followed by a slash is a path/URI structure, not punctuation.
+
+    Thirteenth-round finding on #1537's successor PR (Devin): the
+    twelfth-round fix's trailing colon lookaround, ``(?!:\\w)``, only
+    rejected a colon immediately followed by a word character
+    (``/oc:config``), so a colon immediately followed by a slash
+    (``/oc:/config``, ``/oc://foo``) still matched — exactly as much a
+    path/URI structure as the word-character case, just missed because the
+    lookaround checked for a word character specifically instead of "word
+    character or slash". The fix widens that lookaround to
+    ``(?!:[\\w/])``, still leaving the true accept cases (``/oc:`` at end
+    of string, or followed by a space or other non-word/non-slash text)
+    untouched.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
