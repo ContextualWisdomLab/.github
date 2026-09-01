@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Callable, Mapping, Sequence
@@ -38,7 +39,11 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
-BINARY_DOCUMENT_SUFFIXES = frozenset({".pdf"})
+BINARY_DOCUMENT_MAGIC = {
+    ".pdf": (b"%PDF-",),
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+}
+PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -171,7 +176,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     """Return whether *path* is prose, license text, or scanner source fixture.
 
     Textual suffixes only: a ``.pdf`` is handled separately by
-    ``_is_binary_documentation_pdf`` and gated on GitHub reporting no diff
+    ``_is_binary_documentation_asset`` and gated on GitHub reporting no diff
     ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
     (one GitHub *can* diff, meaning it could carry inspectable content) is
     never exempted here.
@@ -206,15 +211,15 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     return False
 
 
-def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
-    """Return whether *changed* is a plausibly binary documentation PDF.
+def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
+    """Return whether *changed* is a plausibly binary documentation asset.
 
     This is only the cheap, patch-presence pre-filter: GitHub's changed-files
     API never returns a diff ``patch`` for a true binary file, so a missing
     ``patch`` is *necessary* but not *sufficient* evidence -- GitHub also
     omits one for a textual diff that merely exceeds its own rendering
     limit. A caller with network access (``evaluate_pull_request``) must
-    still confirm this with ``_pdf_evidence_confirms_binary`` before
+    still confirm this with ``_binary_documentation_evidence_confirms`` before
     trusting it; a caller without one (this module's own unit tests calling
     this function directly) is only checking the necessary condition.
     """
@@ -223,8 +228,9 @@ def _is_binary_documentation_pdf(changed: ChangedFile) -> bool:
         return False
     pure = PurePosixPath(changed.path)
     return (
-        pure.suffix.lower() in BINARY_DOCUMENT_SUFFIXES
+        pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
         and _is_known_documentation_path(pure)
+        and _runtime_path_rule(changed.path) is None
     )
 
 
@@ -414,10 +420,7 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
 
 
-_PDF_MAGIC_PREFIX = b"%PDF-"
-
-
-def _pdf_evidence_confirms_binary(
+def _binary_documentation_evidence_confirms(
     changed: ChangedFile,
     *,
     api_url: str,
@@ -426,17 +429,18 @@ def _pdf_evidence_confirms_binary(
     token: str,
     opener: OpenJson,
 ) -> bool:
-    """Return whether a claimed binary documentation PDF is genuinely binary.
+    """Return whether a claimed binary documentation asset is genuine.
 
     A missing diff ``patch`` alone is not proof of binary content: GitHub
     also omits a patch for a textual diff that exceeds its own rendering
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
-    verifies the real ``%PDF-`` magic prefix instead of trusting
+    verifies the declared format's magic prefix instead of trusting
     patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_pdf``
+    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
     exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention; every other content-evidence failure (a
+    path+suffix convention for oversized PDFs only; every other
+    content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
     same as for any other file that needs scanning.
@@ -445,22 +449,169 @@ def _pdf_evidence_confirms_binary(
     try:
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     except ContentSizeExceededError:
-        return True
-    return raw.startswith(_PDF_MAGIC_PREFIX)
+        return PurePosixPath(changed.path).suffix.lower() == ".pdf"
+    suffix = PurePosixPath(changed.path).suffix.lower()
+    if suffix == ".png":
+        return _is_complete_png(raw)
+    return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+
+
+def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int) -> bytes:
+    """Reconstruct one PNG scanline for bounded indexed-pixel validation."""
+
+    reconstructed = bytearray(len(filtered))
+    for index, value in enumerate(filtered):
+        left = reconstructed[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+        above = previous[index] if previous else 0
+        upper_left = previous[index - bytes_per_pixel] if previous and index >= bytes_per_pixel else 0
+        if filter_type == 0:
+            predictor = 0
+        elif filter_type == 1:
+            predictor = left
+        elif filter_type == 2:
+            predictor = above
+        elif filter_type == 3:
+            predictor = (left + above) // 2
+        else:
+            estimate = left + above - upper_left
+            distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+            predictor = (left, above, upper_left)[distances.index(min(distances))]
+        reconstructed[index] = (value + predictor) & 0xFF
+    return bytes(reconstructed)
+
+
+def _is_complete_png(raw: bytes) -> bool:
+    """Validate one bounded PNG including its null- or Adam7-interlaced stream."""
+
+    if not raw.startswith(PNG_SIGNATURE):
+        return False
+    offset = len(PNG_SIGNATURE)
+    header: tuple[int, int, int, int, int] | None = None
+    palette_entries = 0
+    image_data: list[bytes] = []
+    image_data_closed = False
+    while offset + 12 <= len(raw):
+        length = int.from_bytes(raw[offset : offset + 4], "big")
+        chunk_end = offset + 12 + length
+        if chunk_end > len(raw):
+            return False
+        chunk_type = raw[offset + 4 : offset + 8]
+        chunk_data = raw[offset + 8 : offset + 8 + length]
+        expected_crc = int.from_bytes(raw[offset + 8 + length : chunk_end], "big")
+        if (
+            any(not (65 <= byte <= 90 or 97 <= byte <= 122) for byte in chunk_type)
+            or chunk_type[2] & 0x20
+            or zlib.crc32(chunk_type + chunk_data) != expected_crc
+        ):
+            return False
+        if header is None:
+            if chunk_type != b"IHDR" or length != 13 or offset != len(PNG_SIGNATURE):
+                return False
+            width = int.from_bytes(chunk_data[0:4], "big")
+            height = int.from_bytes(chunk_data[4:8], "big")
+            bit_depth, color_type, compression, filtering, interlace = chunk_data[8:13]
+            allowed_depths = {
+                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
+                4: {8, 16}, 6: {8, 16},
+            }
+            if (
+                width == 0 or height == 0
+                or bit_depth not in allowed_depths.get(color_type, set())
+                or compression != 0 or filtering != 0 or interlace not in {0, 1}
+            ):
+                return False
+            header = (width, height, bit_depth, color_type, interlace)
+        elif chunk_type == b"IHDR":
+            return False
+        elif chunk_type == b"PLTE":
+            if palette_entries or image_data or length == 0 or length > 768 or length % 3:
+                return False
+            _width, _height, bit_depth, color_type, _interlace = header
+            if color_type == 3 and length // 3 > 1 << bit_depth:
+                return False
+            palette_entries = length // 3
+        elif chunk_type == b"IDAT":
+            if image_data_closed:
+                return False
+            image_data.append(chunk_data)
+        elif chunk_type == b"IEND":
+            if length != 0 or not image_data or chunk_end != len(raw):
+                return False
+            width, height, bit_depth, color_type, interlace = header
+            if (color_type == 3 and not palette_entries) or (
+                color_type in {0, 4} and palette_entries
+            ):
+                return False
+            channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+            passes = (
+                ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+                 (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+                if interlace else ((0, 0, 1, 1),)
+            )
+            scanlines: list[tuple[int, int, int]] = []
+            expected_size = 0
+            for x_start, y_start, x_step, y_step in passes:
+                if width <= x_start or height <= y_start:
+                    continue
+                pass_width = (width - x_start + x_step - 1) // x_step
+                pass_height = (height - y_start + y_step - 1) // y_step
+                row_bytes = (pass_width * channels * bit_depth + 7) // 8
+                expected_size += pass_height * (row_bytes + 1)
+                if expected_size > MAX_RESPONSE_BYTES:
+                    return False
+                scanlines.append((pass_height, row_bytes, pass_width))
+            decoder = zlib.decompressobj()
+            try:
+                decoded = decoder.decompress(b"".join(image_data), expected_size + 1)
+            except zlib.error:
+                return False
+            if (
+                len(decoded) != expected_size or not decoder.eof
+                or decoder.unused_data or decoder.unconsumed_tail
+            ):
+                return False
+            decoded_offset = 0
+            for row_count, row_bytes, pass_width in scanlines:
+                previous = b""
+                for _ in range(row_count):
+                    filter_type = decoded[decoded_offset]
+                    if filter_type > 4:
+                        return False
+                    filtered = decoded[decoded_offset + 1 : decoded_offset + row_bytes + 1]
+                    if color_type == 3:
+                        reconstructed = _png_unfilter_row(filtered, previous, filter_type, 1)
+                        mask = (1 << bit_depth) - 1
+                        for pixel in range(pass_width):
+                            bit_offset = pixel * bit_depth
+                            palette_index = (
+                                reconstructed[bit_offset // 8]
+                                >> (8 - bit_depth - bit_offset % 8)
+                            ) & mask
+                            if palette_index >= palette_entries:
+                                return False
+                        previous = reconstructed
+                    decoded_offset += row_bytes + 1
+            return decoded_offset == len(decoded)
+        elif chunk_type[0] & 0x20 == 0:
+            return False
+        elif image_data:
+            image_data_closed = True
+        offset = chunk_end
+    return False
 
 
 def _needs_content_scan(changed: ChangedFile) -> bool:
     """Return whether a changed final file can carry an active edge runtime.
 
-    A claimed binary documentation PDF (``_is_binary_documentation_pdf``)
+    A claimed binary documentation asset (``_is_binary_documentation_asset``)
     exempts here on the cheap, offline pre-filter alone; ``evaluate_pull_request``
-    never actually relies on that -- it runs ``_pdf_evidence_confirms_binary``
+    never actually relies on that -- it runs ``_binary_documentation_evidence_confirms``
     for that case before this function is even consulted.
     """
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
-    if _is_binary_documentation_pdf(changed):
+    if _is_binary_documentation_asset(changed):
         return False
     if not changed.patch_available:
         return True
@@ -499,17 +650,17 @@ def evaluate_pull_request(
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
-        # A claimed binary documentation PDF gets its own network-verified
+        # A claimed binary documentation asset gets its own network-verified
         # check ahead of _needs_content_scan's patch-presence-only signal:
         # a missing patch does not by itself prove binary content (GitHub
         # also omits one for an oversized textual diff), so this confirms
-        # the real %PDF- magic prefix whenever the bytes can be fetched at
+        # the format's magic prefix whenever the bytes can be fetched at
         # all, falling back to the path+suffix convention only when the
         # content genuinely exceeds the Contents API's size ceiling. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
-        if changed.status != "removed" and _is_binary_documentation_pdf(changed):
-            if _pdf_evidence_confirms_binary(
+        if changed.status != "removed" and _is_binary_documentation_asset(changed):
+            if _binary_documentation_evidence_confirms(
                 changed,
                 api_url=api_url.rstrip("/"),
                 repository=repository,
