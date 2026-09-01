@@ -12,6 +12,7 @@ on:
       - "tests/test_solo_maintainer_ruleset_policy.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
       - "tests/test_pr_governance_audit_contract.py"
+  workflow_dispatch:
 
 permissions:
   contents: read
