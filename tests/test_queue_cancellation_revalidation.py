@@ -160,6 +160,91 @@ exit 79
     return result, cancelled.exists()
 
 
+def _run_unassociated_pr_aged_orphan_case(
+    tmp_path: Path,
+    *,
+    listed_sha: str,
+    ref_sha: str,
+    run_sha: str,
+    fail_ref_lookup: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run an unassociated aged PR run against stale listing and live-ref evidence."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required for the queue-cancellation regression")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    cancelled = tmp_path / "cancelled"
+    run_payload = json.dumps(
+        {
+            "event": "pull_request",
+            "status": "queued",
+            "head_sha": run_sha,
+            "head_branch": "feature/race",
+            "head_repository": {"full_name": "ContextualWisdomLab/example"},
+            "pull_requests": [],
+        },
+        separators=(",", ":"),
+    )
+    open_pr_payload = json.dumps(
+        [
+            {
+                "head": {
+                    "repo": {"full_name": "ContextualWisdomLab/example"},
+                    "ref": "feature/race",
+                    "sha": listed_sha,
+                }
+            }
+        ],
+        separators=(",", ":"),
+    )
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/actions/runs/77/cancel"* ]]; then
+  : > {cancelled!s}
+  exit 0
+fi
+if [[ "$args" == *"/actions/runs/77"* ]]; then
+  printf '%s\\n' '{run_payload}'
+  exit 0
+fi
+if [[ "$args" == *"/pulls?state=open&per_page=100"* ]]; then
+  printf '%s\\n' '{open_pr_payload}'
+  exit 0
+fi
+if [[ "$args" == *"/git/ref/heads/feature/race"* ]]; then
+  {'exit 74' if fail_ref_lookup else f"printf '%s\\n' '{ref_sha}'"}
+  exit 0
+fi
+exit 79
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "ContextualWisdomLab/example",
+            "77",
+            "main",
+            "d" * 40,
+            "{}",
+            "aged-orphan",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    return result, cancelled.exists()
+
+
 def test_post_classification_head_movement_fails_closed(tmp_path: Path) -> None:
     """A new exact head arriving after classification must never be cancelled."""
     old = "a" * 40
@@ -222,6 +307,40 @@ def test_proven_predecessor_is_cancelled(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert cancelled
+
+
+def test_unassociated_aged_pr_uses_live_ref_not_stale_listing_sha(
+    tmp_path: Path,
+) -> None:
+    """A stale PR payload cannot authorize cancelling the live branch head."""
+    listed = "a" * 40
+    current = "b" * 40
+    result, cancelled = _run_unassociated_pr_aged_orphan_case(
+        tmp_path,
+        listed_sha=listed,
+        ref_sha=current,
+        run_sha=current,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "authoritative current-head evidence" in result.stdout
+    assert not cancelled
+
+
+def test_unassociated_aged_pr_live_ref_lookup_failure_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Missing final ref evidence must preserve an unassociated PR candidate."""
+    result, cancelled = _run_unassociated_pr_aged_orphan_case(
+        tmp_path,
+        listed_sha="a" * 40,
+        ref_sha="b" * 40,
+        run_sha="b" * 40,
+        fail_ref_lookup=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "live ref" in result.stdout
+    assert "could not be re-fetched" in result.stdout
+    assert not cancelled
 
 
 @pytest.mark.parametrize(
