@@ -52,6 +52,8 @@ def test_noema_codegraph_helper_is_real_shell_and_keeps_pr_source_data_only() ->
         "EXPECTED_HEAD_SHA",
         "PR_BASE_SHA",
         "unset GH_TOKEN",
+        "CONTEXTUAL_ORCHESTRATOR_TOKEN",
+        "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE",
         "codegraph-package/package-lock.json",
         "codegraph-package/package.json",
         '"$CODEGRAPH_BIN" init -i',
@@ -115,6 +117,7 @@ def _loader_environment(tmp_path: Path, *, observed_head: str) -> tuple[dict[str
         helper_dir / "noema_codegraph_context.sh",
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        "test -z \"${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}\"\n"
         "printf '# Trusted CodeGraph current-head evidence\\n\\n- Head SHA: `%s`\\n- Base SHA: `%s`\\n' \"$EXPECTED_HEAD_SHA\" \"$PR_BASE_SHA\" >\"$NOEMA_CODEGRAPH_CONTEXT_PATH\"\n"
         "printf '%s' \"$PR_BASE_SHA\" >\"$RUNNER_TEMP/base-seen\"\n",
     )
@@ -136,12 +139,13 @@ def _loader_environment(tmp_path: Path, *, observed_head: str) -> tuple[dict[str
     return env, runner_temp
 
 
-def test_token_loader_materializes_codegraph_for_the_same_live_head(tmp_path: Path) -> None:
-    """The sourced production seam must bind base/head identity and publish required context."""
+def test_token_loader_materializes_codegraph_before_loading_sidecar_secret(tmp_path: Path) -> None:
+    """Untrusted source analysis must finish before the model-side bearer enters the environment."""
     env, runner_temp = _loader_environment(tmp_path, observed_head="a" * 40)
     command = (
         "set -euo pipefail; "
         f"source {TOKEN_LOADER!s}; "
+        'test "$CONTEXTUAL_ORCHESTRATOR_TOKEN" = sidecar-secret; '
         'test "$NOEMA_REQUIRE_CODEGRAPH_CONTEXT" = 1; '
         'test "$NOEMA_CODEGRAPH_CONTEXT_PATH" = "$RUNNER_TEMP/noema-codegraph-evidence.md"; '
         'test -s "$NOEMA_CODEGRAPH_CONTEXT_PATH"'
@@ -214,8 +218,8 @@ def _diverged_pr_remote(tmp_path: Path) -> tuple[Path, str, str]:
     return remote, head_sha, base_sha
 
 
-def test_codegraph_helper_scopes_diverged_pr_from_merge_base(tmp_path: Path) -> None:
-    """Base-only changes must never enter CodeGraph's pull-request changed scope."""
+def test_codegraph_helper_scopes_diverged_pr_without_model_side_secrets(tmp_path: Path) -> None:
+    """CodeGraph must see PR scope but neither the sidecar bearer nor its readable file path."""
     real_git = shutil.which("git")
     assert real_git is not None
     remote, head_sha, base_sha = _diverged_pr_remote(tmp_path)
@@ -231,6 +235,9 @@ def test_codegraph_helper_scopes_diverged_pr_from_merge_base(tmp_path: Path) -> 
         '{"packages":{"node_modules/picomatch":{"version":"4.0.4"}}}\n',
         encoding="utf-8",
     )
+    sidecar_token_file = tmp_path / "sidecar-token-for-codegraph"
+    sidecar_token_file.write_text("must-not-reach-codegraph", encoding="utf-8")
+    sidecar_token_file.chmod(0o600)
 
     _write_executable(
         bin_dir / "git",
@@ -256,6 +263,8 @@ def test_codegraph_helper_scopes_diverged_pr_from_merge_base(tmp_path: Path) -> 
         "    cat >node_modules/.bin/codegraph <<'CODEGRAPH'\n"
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        "test -z \"${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}\"\n"
+        "test -z \"${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}\"\n"
         "case \"${1:-}\" in\n"
         "  init) exit 0 ;;\n"
         "  status) printf '%s\\n' 'index ready' ;;\n"
@@ -297,6 +306,8 @@ def test_codegraph_helper_scopes_diverged_pr_from_merge_base(tmp_path: Path) -> 
             "PR_BASE_SHA": base_sha,
             "NOEMA_CODEGRAPH_CONTEXT_PATH": str(evidence),
             "GH_TOKEN": "fixture-token",
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN": "model-side-secret",
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(sidecar_token_file),
             "RUNNER_TEMP": str(runner_temp),
             "GITHUB_WORKSPACE": str(workspace),
         }
