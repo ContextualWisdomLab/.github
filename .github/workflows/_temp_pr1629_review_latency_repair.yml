@@ -6,7 +6,7 @@ on:
       - fix/no-heuristic-review-admission-current-main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
