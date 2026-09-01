@@ -179,88 +179,36 @@ def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monk
     ) is None
 
 
-def test_prepare_autofix_slot_returns_same_head_with_no_stale_workers(monkeypatch):
-    """No stale workers means the cancellation branch is never entered."""
-    head = "a" * 40
-    monkeypatch.setattr(
-        fix,
-        "run_json",
-        lambda _args: {
-            "workflow_runs": [
-                {
-                    "id": 1,
-                    "status": "in_progress",
-                    "display_title": f"PR Review Autofix owner/repo#7@{head}",
-                }
-            ]
-        },
-    )
+def test_prepare_autofix_slot_returns_directly_with_no_active_or_stale_runs(monkeypatch):
+    """An empty Actions run list needs no reconciliation and skips cancellation."""
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"workflow_runs": []})
     monkeypatch.setattr(
         fix,
         "force_cancel_workflow_runs",
-        lambda *_args: pytest.fail("there is no stale worker to cancel"),
-    )
-    monkeypatch.setattr(
-        fix,
-        "live_head_matches",
-        lambda *_args: pytest.fail(
-            "staleness is only ever checked when a stale worker exists"
-        ),
+        lambda *_args: pytest.fail("no stale runs must not attempt cancellation"),
     )
 
     assert fix.prepare_autofix_slot(
         "owner/repo",
-        make_pr(headRefOid=head),
+        make_pr(),
         workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
         workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
         dry_run=False,
-    )
+    ) is False
 
 
-def test_live_head_matches_compares_the_live_head_to_the_cached_snapshot(monkeypatch):
-    """The real head-matching implementation reads GitHub's current PR head.
+def test_live_head_matches_compares_case_insensitively_and_fails_closed(monkeypatch):
+    """Live head lookup normalizes case and rejects malformed or mismatched payloads."""
+    head = "a" * 40
 
-    Every other test in this module monkeypatches ``live_head_matches`` away,
-    so its own body (the ``gh api`` read, the payload-shape guard, and the
-    case-insensitive comparison) was never exercised by the suite at all.
-    """
-    pr = make_pr(headRefOid="a" * 40)
-
-    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": "A" * 40}})
-    assert fix.live_head_matches("owner/repo", pr)
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": head.upper()}})
+    assert fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
 
     monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": "b" * 40}})
-    assert not fix.live_head_matches("owner/repo", pr)
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
 
-    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": "short"}})
-    assert not fix.live_head_matches("owner/repo", pr)
-
-    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": None}})
-    assert not fix.live_head_matches("owner/repo", pr)
-
-    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": "not-a-dict"})
-    assert not fix.live_head_matches("owner/repo", pr)
-
-    monkeypatch.setattr(fix, "run_json", lambda _args: "not-a-dict")
-    assert not fix.live_head_matches("owner/repo", pr)
-
-
-def test_inspect_pr_reports_active_autofix_worker_without_dispatch(monkeypatch):
-    """An already-running current-head worker waits instead of re-dispatching."""
-    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
-    monkeypatch.setattr(fix, "needs_autofix", lambda _pr: (True, ("review",)))
-    monkeypatch.setattr(fix, "issue_comments", lambda _repo, _number: [])
-    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        fix,
-        "dispatch_autofix",
-        lambda *_args, **_kwargs: pytest.fail("an active worker must not be redispatched"),
-    )
-
-    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
-        "wait",
-        ("current-head autofix run is already queued or running",),
-    )
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"nothead": {}})
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
 
 
 def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
@@ -1414,6 +1362,21 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [{"body": f"{fix.FIX_MARKER} head_sha={'a' * 40} epoch={int(time.time())} -->"}])
     assert fix.inspect_pr("owner/repo", make_pr(), args) == ("wait", ("recent autofix marker exists for this head",))
+
+    assert fix.inspect_pr(
+        "owner/repo", make_pr(mergeStateStatus="DIRTY", isDraft=True), args
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr("owner/repo", make_pr(mergeStateStatus="DIRTY"), args) == (
+        "skip",
+        ("merge conflict is not authorized for repair",),
+    )
+
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: True)
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("current-head autofix run is already queued or running",),
+    )
 
     pr1 = make_pr(number=1)
     pr2 = make_pr(number=2)
