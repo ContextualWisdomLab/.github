@@ -173,6 +173,7 @@ if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
+  cat >/dev/null
   printf 'dispatch\n' >>"$DISPATCH_CALLS"
 fi
 """,
