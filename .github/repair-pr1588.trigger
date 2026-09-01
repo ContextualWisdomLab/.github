@@ -1,2 +1,2 @@
 repair PR1588 current-main live-state admission contract
-retry=current-main-reconcile-20260901T2217+0900
+retry=escaped-current-main-reconcile-20260901T2221+0900
