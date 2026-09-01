@@ -1,11 +1,13 @@
 """Build governed contextual-orchestrator review catalogs from discovery evidence.
 
-``orchestrator/free`` remains strictly zero-priced and admits only provider
-accounts explicitly authorized for that pool. ``orchestrator/auto`` may retain
-other globally discovered providers, including OpenAI, when their independent
-policy permits them. Models without a complete price vector remain visible in
-audit counts but are never admitted to CI review. Partial, malformed, or
-contradictory price vectors fail closed.
+This module performs evidence-based admission only. It does not rank eligible
+models, manufacture provider diversity, cap accounts, cap route counts, or
+encode an informal fallback order. ``orchestrator/free`` remains strictly
+zero-priced and admits only provider accounts explicitly authorized for that
+pool. ``orchestrator/auto`` may retain other globally discovered providers,
+including OpenAI, when their independent policy permits them. Models without a
+complete price vector remain visible in audit counts but are never admitted to
+CI review. Partial, malformed, or contradictory price vectors fail closed.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ import json
 import math
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -28,9 +29,6 @@ from scripts.ci.zdr_policy import (
     provider_zdr_scope,
     route_key,
 )
-
-DEFAULT_CATALOG_LIMIT = 12
-DEFAULT_ACCOUNT_CAP = 4
 
 FREE_POOL_CREDENTIAL_NAMES = frozenset(
     {
@@ -49,11 +47,7 @@ and globally discovered; only candidate admission to the free pool is denied.
 COST_FREE = "free"
 COST_PRICED = "priced"
 COST_UNKNOWN = "unknown"
-_COST_EVIDENCE_RANK: Mapping[str, int] = {
-    COST_FREE: 0,
-    COST_PRICED: 1,
-    COST_UNKNOWN: 2,
-}
+_VALID_COST_EVIDENCE = frozenset({COST_FREE, COST_PRICED, COST_UNKNOWN})
 
 _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9]*_[a-z0-9]+(?:_[a-z0-9]+)*$")
 
@@ -209,10 +203,11 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _cost_evidence(row: Mapping[str, Any]) -> str:
     """Return a validated cost-evidence tier from a normalized row."""
     evidence = row.get("cost_evidence")
-    if evidence in _COST_EVIDENCE_RANK:
+    if evidence in _VALID_COST_EVIDENCE:
         return str(evidence)
     # Backward compatibility for callers that build normalized-like rows by
-    # hand rather than using parse_discovery_report().
+    # hand rather than using parse_discovery_report(). This fallback affects
+    # evidence classification only; it never introduces a route rank.
     return COST_FREE if row.get("is_free") is True else COST_UNKNOWN
 
 
@@ -228,36 +223,55 @@ def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: int | None = None,
+    account_cap: int | None = None,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, credential-account-diverse catalog.
+    """Admit evidence-eligible routes without heuristic ranking or truncation.
 
-    ``orchestrator/free`` first applies a source-identity invariant: only rows
-    whose credential source is in :data:`FREE_POOL_CREDENTIAL_NAMES` are free
-    candidates. This is independent from global credential discovery, so an
-    OpenAI model may remain visible to audit or ``orchestrator/auto`` while
-    contributing zero free-pool candidates.
+    The historical function name is retained for caller compatibility, but the
+    implementation no longer "prioritizes" ZDR routes. ZDR evidence is a hard
+    eligibility condition only when ``require_zdr`` is true. The function also
+    no longer applies route-count limits, per-account caps, free-first sorting,
+    provider/model tie-breaks, or generated priority ranks. Those mechanisms
+    affected which provider could receive a review request without a validated
+    statistical/research contract.
 
-    Existing discovery-wide counters keep their historical meaning so runtime
-    enrichment cannot silently rewrite the contract. Additional
-    ``free_pool_*`` fields expose the narrower admitted subset explicitly.
+    ``orchestrator/free`` applies a source-identity invariant: only rows whose
+    credential source is in :data:`FREE_POOL_CREDENTIAL_NAMES` and whose price
+    evidence is explicitly zero are candidates. ``orchestrator/auto`` admits
+    free or priced rows with complete cost evidence, but this admission layer
+    does not decide which admitted route should win.
+
+    ``limit`` and ``account_cap`` remain keyword parameters only to fail closed
+    for stale callers. Any non-``None`` value is rejected rather than silently
+    restoring the removed heuristic decision rule.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
+    if limit is not None or account_cap is not None:
+        raise PolicyError(
+            "heuristic catalog caps are unsupported; admit evidence-eligible routes instead"
+        )
 
     all_rows = list(rows)
     all_free_rows = [row for row in all_rows if _cost_evidence(row) == COST_FREE]
     free_pool_rows = [row for row in all_free_rows if _free_pool_source_admitted(row)]
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
-    candidate_rows = (
-        free_pool_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
-    )
-    eligible_rows = [
+
+    if pool == "free":
+        candidate_rows = free_pool_rows
+    else:
+        candidate_rows = [
+            row
+            for row in all_rows
+            if _cost_evidence(row) in {COST_FREE, COST_PRICED}
+        ]
+
+    admitted_rows = [
         row
         for row in candidate_rows
         if not require_zdr
@@ -267,33 +281,8 @@ def build_zdr_prioritized_catalog(
             zdr_endpoints=zdr_endpoints,
         )
     ]
-    eligible_rows.sort(
-        key=lambda row: (
-            _COST_EVIDENCE_RANK[_cost_evidence(row)],
-            0
-            if is_zdr_model(
-                str(row["provider"]),
-                model=str(row["model"]),
-                zdr_endpoints=zdr_endpoints,
-            )
-            else 1,
-            str(row["provider"]),
-            str(row["model"]),
-        )
-    )
 
-    per_account: Counter[str] = Counter()
-    picked: list[Mapping[str, Any]] = []
-    for row in eligible_rows:
-        account = provider_account(str(row["provider"]))
-        if per_account[account] >= account_cap:
-            continue
-        per_account[account] += 1
-        picked.append(row)
-        if len(picked) >= limit:
-            break
-
-    if not picked:
+    if not admitted_rows:
         route_kind = "attested ZDR" if require_zdr else pool
         raise PolicyError(
             f"no {route_kind} model route is available with the ZDR policy; "
@@ -302,13 +291,11 @@ def build_zdr_prioritized_catalog(
 
     catalog_rows: list[dict[str, Any]] = []
     zdr_count = 0
-    for rank, row in enumerate(picked):
+    for row in admitted_rows:
         provider = str(row["provider"])
         model = str(row["model"])
         evidence = _cost_evidence(row)
-        zdr = is_zdr_model(
-            provider, model=model, zdr_endpoints=zdr_endpoints
-        )
+        zdr = is_zdr_model(provider, model=model, zdr_endpoints=zdr_endpoints)
         if zdr:
             zdr_count += 1
         catalog_rows.append(
@@ -323,7 +310,7 @@ def build_zdr_prioritized_catalog(
                     f"cost:{evidence}",
                     "zdr" if zdr else "non-zdr",
                 ],
-                "priority": -rank,
+                "priority": 0,
                 "disabled": False,
                 "provider_name": provider,
                 "provider_exclusions": [],
@@ -341,12 +328,13 @@ def build_zdr_prioritized_catalog(
     free_pool_account_diversity = len(
         {provider_account(str(row["provider"])) for row in free_pool_rows}
     )
-
-    selected_evidence = [_cost_evidence(row) for row in picked]
+    selected_evidence = [_cost_evidence(row) for row in admitted_rows]
     return {
         "agents": catalog_rows,
         "report": {
             "pool": f"orchestrator/{pool}",
+            "selection_contract": "evidence-admission-only-v1",
+            "heuristic_ranking": False,
             "total_routes": len(all_rows),
             "total_free_routes": len(all_free_rows),
             "free_account_diversity": free_account_diversity,
@@ -364,7 +352,7 @@ def build_zdr_prioritized_catalog(
             "zdr_sources": sorted(
                 {
                     provider_zdr_scope(str(row["provider"])).source
-                    for row in picked
+                    for row in admitted_rows
                     if is_zdr_model(
                         str(row["provider"]),
                         model=str(row["model"]),
@@ -385,7 +373,7 @@ def build_zdr_prioritized_catalog(
                         zdr_endpoints=zdr_endpoints,
                     ),
                 }
-                for row, entry in zip(picked, catalog_rows)
+                for row, entry in zip(admitted_rows, catalog_rows)
             ],
         },
     }
@@ -411,8 +399,8 @@ def build_catalog_from_paths(
     *,
     out_path: str,
     report_path: str,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: int | None = None,
+    account_cap: int | None = None,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
     pool: str = "free",
@@ -448,8 +436,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", required=True, help="Path to write agents JSON")
     parser.add_argument("--report", required=True, help="Path to write audit JSON")
-    parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
-    parser.add_argument("--account-cap", type=int, default=DEFAULT_ACCOUNT_CAP)
     parser.add_argument("--zdr-endpoints", default=None)
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
@@ -464,8 +450,6 @@ def main(argv: list[str] | None = None) -> int:
             args.discovery_report,
             out_path=args.out,
             report_path=args.report,
-            limit=args.limit,
-            account_cap=args.account_cap,
             zdr_endpoints_path=args.zdr_endpoints,
             require_zdr=args.require_zdr,
             pool=args.pool,
