@@ -6,8 +6,10 @@ from pathlib import Path
 REUSABLE = Path(".github/workflows/pr-review-fix-scheduler.yml")
 CLEARFOLIO = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
 DISKSAGE = Path(".github/workflows/disksage-hourly-review-repair.yml")
-QUALITY = Path(".github/workflows/contextual-orchestrator-review-repair-quality.yml")
-LEGACY_QUALITY = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+QUALITY = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+REPLACEMENT_QUALITY = Path(
+    ".github/workflows/contextual-orchestrator-review-repair-quality.yml"
+)
 
 
 def _read(path: Path) -> str:
@@ -49,14 +51,16 @@ def test_quality_gate_tracks_runtime_budget_contract() -> None:
 
 
 def test_review_repair_quality_workflow_has_truthful_identity() -> None:
-    """Keep contract CI distinct from the hourly writer and retired direct-NIM design."""
+    """Keep the stable workflow ID while retiring its direct-NIM identity."""
     assert QUALITY.is_file()
-    assert not LEGACY_QUALITY.exists()
+    assert not REPLACEMENT_QUALITY.exists()
 
     quality = _read(QUALITY)
     assert quality.startswith("name: Contextual Orchestrator Review Repair Quality CI\n")
     assert "schedule:" not in quality
     assert "name: Hourly NVIDIA NIM Review Repair" not in quality
     assert "Hourly cadence, immutable source, NIM credential, and conflict scope" not in quality
+    assert "existing GitHub Actions workflow registry identity" in quality
     assert ".github/workflows/pr-review-autofix.yml" in quality
+    assert "contextual-orchestrator/orchestrator/free" in quality
     assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in quality
