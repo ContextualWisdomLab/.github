@@ -2344,6 +2344,51 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 strix_quick_gate.sh: pipeline-scoped artifact presence let a hollow rc=0 attempt ride on an earlier attempt's evidence
+
+**Context**: `#1495` fixed `strix_quick_gate.sh`'s "hollow path" bug -- Strix exiting `0` (success) with
+zero `vulnerabilities/*.md` report artifacts anywhere was previously treated as a clean scan. The fix,
+`has_any_strix_vulnerability_report_artifact()`, required at least one artifact to exist anywhere
+under `ACTIVE_REPORTS_DIR` (excluding only directories that predated the whole gate run), used by both
+`run_strix_once()`'s own `rc==0` acceptance and `has_only_below_threshold_vulnerabilities()`'s guard.
+
+**Devin Review caught a real gap in that fix, on `#1495`'s successor `#1563`**: the guard was
+*pipeline*-scoped, not *attempt*-scoped. `ACTIVE_REPORTS_DIR` intentionally accumulates report
+directories across same-model transient retries and cross-model fallback attempts (for audit and
+vulnerability-blocking). So a genuinely hollow attempt -- one whose own Strix invocation exited `0`
+and wrote *nothing* -- could still pass, because an *earlier*, already-superseded attempt (same model,
+retried after a transient error, or a different model tried before it) had left a report artifact
+sitting in that same accumulated directory. A "successful" attempt validated entirely by a stale
+predecessor's leftover evidence is exactly as hollow as the original zero-artifact bug: it proves
+nothing about what *this* attempt's own scan actually did.
+
+**Fix**: added `capture_attempt_start_vulnerability_files()`, called at the top of every
+`run_strix_once()` invocation (immediately before it launches Strix), snapshotting every
+`vulnerabilities/*.md` path already present at that moment -- including artifacts an earlier attempt
+within the same gate run already wrote. `has_new_strix_vulnerability_report_artifact()` replaces the
+old pipeline-wide check for both call sites: it only accepts an artifact that is *not* in that
+snapshot, i.e. one this specific attempt itself contributed. The old
+`has_any_strix_vulnerability_report_artifact()` is deleted (no longer needed by either caller).
+Deliberately **not** attempt-scoped: `has_only_below_threshold_vulnerabilities()`'s severity-scanning
+loop, which still walks every non-preexisting report cumulatively -- a blocking (HIGH/CRITICAL)
+finding from an earlier attempt must never be silently dropped just because a later attempt didn't
+reproduce it. Provider-failure fail-closed behavior and finding thresholds are unchanged.
+
+**Regression**: `retry-hollow-second-attempt-fails-closed` in `test_strix_quick_gate.sh` -- attempt one
+(same model) writes a genuine below-threshold report then fails with a transient rate-limit error
+(retried); attempt two exits `0` with no new artifact. Before the fix this passed (validated by attempt
+one's leftover report); after the fix it fails closed with the same "produced no report artifacts"
+message. Exercising this also surfaced a second, harness-only bug: the shared fake-`strix` stub's
+"backstop" `EXIT` trap (which writes a default report on any untested `rc==0` success path) reused the
+*same file path* when reusing an existing run directory (deliberate, to avoid shadowing
+`latest_strix_report_dir()`'s mtime selection with a brand-new "latest" directory) -- overwriting that
+path is invisible to path-keyed attempt-scoped tracking. Four pre-existing GitHub-Models-fallback
+scenarios (`github-models-fallback-provider-signal-tries-next` and its siblings) broke under the new
+production behavior until the trap was updated to pick an unused path (`vuln-0002.md`, etc.) within the
+reused directory when its default `vuln-0001.md` is already attempt-preexisting. Full suite: pytest
+2246 passed / 1 skipped / 21 subtests (repository-wide 99% coverage shortfall is the pre-existing,
+unrelated gap independently owned by `#1567`); `test_strix_quick_gate.sh` full harness: PASS.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.

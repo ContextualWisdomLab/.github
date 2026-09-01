@@ -3375,14 +3375,48 @@ STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 # though the process never got there. Track real signal delivery explicitly
 # so the backstop is only written for a genuine zero exit status, never for a
 # sleep interrupted mid-flight.
+#
+# Production's own artifact-presence guard became attempt-scoped (a "success"
+# rc=0 Strix invocation must not be validated by a leftover report an
+# earlier, already-superseded attempt or model left behind -- Devin review
+# on `#1495`'s successor `#1563`), so this backstop must match: it snapshots
+# which vulnerabilities/*.md files already existed before this specific
+# invocation started (a fresh process per attempt, so a plain array survives
+# for its whole lifetime) and only treats the run as already covered when a
+# file *not* in that snapshot exists -- i.e. this attempt (or an earlier one
+# reused via the same latest-directory selection just below) itself
+# contributed genuine evidence, not merely inherited it.
 strix_fake_signaled=0
 trap 'strix_fake_signaled=1' TERM INT
+strix_fake_preexisting_vuln_files=()
+for strix_fake_preexisting_run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
+	if [ ! -d "$strix_fake_preexisting_run_dir" ]; then
+		continue
+	fi
+	for strix_fake_preexisting_vuln_file in "$strix_fake_preexisting_run_dir"/*.md; do
+		if [ -f "$strix_fake_preexisting_vuln_file" ]; then
+			strix_fake_preexisting_vuln_files+=("$strix_fake_preexisting_vuln_file")
+		fi
+	done
+done
+strix_fake_is_preexisting_vuln_file() {
+	local candidate="$1"
+	local existing
+	for existing in "${strix_fake_preexisting_vuln_files[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
 strix_fake_backstop_vuln_report_on_success() {
 	local rc=$?
 	if [ "$strix_fake_signaled" -eq 1 ]; then
 		return
 	fi
-	if [ "$rc" -ne 0 ] || [ "${FAKE_STRIX_SCENARIO:-}" = "success-zero-report-artifacts" ]; then
+	if [ "$rc" -ne 0 ] ||
+		[ "${FAKE_STRIX_SCENARIO:-}" = "success-zero-report-artifacts" ] ||
+		[ "${FAKE_STRIX_SCENARIO:-}" = "retry-hollow-second-attempt-fails-closed" ]; then
 		return
 	fi
 	local run_dir vuln_file
@@ -3391,7 +3425,7 @@ strix_fake_backstop_vuln_report_on_success() {
 			continue
 		fi
 		for vuln_file in "$run_dir"/*.md; do
-			if [ -f "$vuln_file" ]; then
+			if [ -f "$vuln_file" ] && ! strix_fake_is_preexisting_vuln_file "$vuln_file"; then
 				return
 			fi
 		done
@@ -3414,7 +3448,18 @@ strix_fake_backstop_vuln_report_on_success() {
 		target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop"
 	fi
 	mkdir -p "$target_run_dir/vulnerabilities"
-	cat >"$target_run_dir/vulnerabilities/vuln-0001.md" <<'REPORT'
+	# A reused directory (the common case -- see above) can already hold a
+	# vuln-0001.md from an earlier attempt; overwriting that same path
+	# would not register as new evidence under production's attempt-scoped
+	# tracking (keyed on path, not content or mtime), so pick a path that
+	# is not already in this attempt's preexisting snapshot.
+	local backstop_index=1
+	local backstop_file="$target_run_dir/vulnerabilities/vuln-0001.md"
+	while strix_fake_is_preexisting_vuln_file "$backstop_file"; do
+		backstop_index=$((backstop_index + 1))
+		backstop_file="$target_run_dir/vulnerabilities/vuln-$(printf '%04d' "$backstop_index").md"
+	done
+	cat >"$backstop_file" <<'REPORT'
 # Vulnerability Report
 
 - Severity: INFO
@@ -3857,6 +3902,48 @@ REPORT
 			;;
 		*)
 			echo "Error: rate-limit fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	retry-hollow-second-attempt-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`:
+		# has_any_strix_vulnerability_report_artifact() (now
+		# has_new_strix_vulnerability_report_artifact()) must not validate a
+		# later hollow rc=0 attempt using an earlier, already-superseded
+		# attempt's leftover report. Attempt one writes a genuine
+		# below-threshold report and then fails with a transient rate-limit
+		# error (so run_strix_with_transient_retry retries the same model);
+		# attempt two exits 0 with no new artifact anywhere. The overall gate
+		# must fail closed, not silently accept attempt one's stale evidence.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/retry-hollow-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				mkdir -p "$STRIX_REPORTS_DIR/attempt-one/vulnerabilities"
+				cat >"$STRIX_REPORTS_DIR/attempt-one/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			echo "scan ok with zero new report artifacts on retry"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for retry-hollow-second-attempt-fails-closed scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: retry-hollow fallback path unexpected (${STRIX_LLM:-})" >&2
 			exit 31
 			;;
 		esac
@@ -6250,6 +6337,20 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	retry-hollow-second-attempt-fails-closed)
+		run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
+			"vertex_ai/retry-hollow-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"2" \
+			"vertex_ai/retry-hollow-primary|vertex_ai/retry-hollow-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
 		;;
 	contextual-orchestrator-missing-api-base-fails-closed)
 		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
@@ -10804,6 +10905,27 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-retry-same-model-s
 	"scan ok after same-model rate-limit retry" \
 	"2" \
 	"vertex_ai/retry-ratelimit-primary|vertex_ai/retry-ratelimit-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`: attempt one
+# writes a genuine below-threshold report then fails transiently (retried);
+# attempt two exits 0 with no new artifact. The gate must fail closed
+# overall -- has_new_strix_vulnerability_report_artifact() must not let
+# attempt two's hollow success ride on attempt one's leftover evidence, and
+# has_only_below_threshold_vulnerabilities()'s presence guard (reached after
+# the retry sequence exhausts) must not accept that same stale evidence
+# either.
+run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
+	"vertex_ai/retry-hollow-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"2" \
+	"vertex_ai/retry-hollow-primary|vertex_ai/retry-hollow-primary" \
 	"<unset>|<unset>" \
 	"vertex_ai" \
 	"__DEFAULT__" \

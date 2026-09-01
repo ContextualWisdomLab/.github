@@ -5,6 +5,19 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `strix_quick_gate.sh` failing to fail closed when Strix exits `0` with
+  zero `vulnerabilities/*.md` report artifacts (log-only "success" is not
+  evidence of a clean scan). Devin review on the successor PR then caught a
+  gap in that fix: the artifact-presence check was scoped to the whole gate
+  run's accumulated reports, so a genuinely hollow attempt (its own Strix
+  invocation exited `0` and wrote nothing) could still pass by riding on an
+  *earlier*, already-superseded attempt's leftover report (same-model retry
+  or a different fallback model tried first). The check is now attempt-scoped
+  -- each `run_strix_once()` invocation snapshots which report artifacts
+  already existed immediately before it launches Strix, and only accepts one
+  that is new since that snapshot -- while severity scanning for blocking
+  (HIGH/CRITICAL) findings stays cumulative across every attempt, so a real
+  finding from an earlier attempt is never silently dropped.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or

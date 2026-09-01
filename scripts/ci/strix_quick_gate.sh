@@ -52,6 +52,7 @@ RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
 PREEXISTING_REPORT_DIRS=()
+ATTEMPT_START_VULNERABILITY_FILES=()
 REPO_NAME="${REPO_ROOT##*/}"
 # shellcheck source=scripts/ci/strix_model_utils.sh
 # shellcheck disable=SC1091  # source path is repo-local; local lint may omit -x
@@ -2671,6 +2672,7 @@ run_strix_once() {
 			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
 		fi
 	fi
+	capture_attempt_start_vulnerability_files
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
@@ -2929,7 +2931,7 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if ! has_any_strix_vulnerability_report_artifact; then
+		if ! has_new_strix_vulnerability_report_artifact; then
 			echo "Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." >&2
 			return 1
 		fi
@@ -3445,16 +3447,65 @@ latest_strix_report_dir() {
 	echo "$latest"
 }
 
-# Return success (0) only when at least one Strix vulnerabilities/*.md report
-# artifact exists in the current run's reports directory, ignoring
-# pre-existing (stale, prior-run) report directories. A "successful" Strix
-# invocation that produced zero report artifacts is not evidence of a clean
-# scan -- it is indistinguishable from Strix silently failing to actually
-# scan anything -- so callers on both the primary success path
-# (run_strix_once) and the below-threshold fallback path
-# (has_only_below_threshold_vulnerabilities) must treat "no artifact" as
-# failing closed, not as an implicit pass.
-has_any_strix_vulnerability_report_artifact() {
+# Snapshot every vulnerabilities/*.md path already present under
+# STRIX_REPORTS_DIR, regardless of preexisting-directory status. Called at
+# the top of run_strix_once() before each individual attempt launches
+# Strix, so ATTEMPT_START_VULNERABILITY_FILES always reflects exactly what
+# existed before *this* attempt -- including artifacts an earlier attempt
+# within the same gate run already wrote, which ACTIVE_REPORTS_DIR
+# deliberately accumulates across retries and fallback models for audit and
+# vulnerability-blocking purposes (see has_only_below_threshold_vulnerabilities,
+# which intentionally still considers that cumulative evidence).
+capture_attempt_start_vulnerability_files() {
+	ATTEMPT_START_VULNERABILITY_FILES=()
+	local run_dir vulnerabilities_dir vuln_file
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			ATTEMPT_START_VULNERABILITY_FILES+=("$vuln_file")
+		done
+	done
+}
+
+is_attempt_start_vulnerability_file() {
+	local candidate="$1"
+	local existing
+
+	for existing in "${ATTEMPT_START_VULNERABILITY_FILES[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+# Return success (0) only when the most recent Strix invocation produced at
+# least one vulnerabilities/*.md artifact that did not already exist before
+# that attempt launched (per capture_attempt_start_vulnerability_files(),
+# called at the top of every run_strix_once() attempt). A "successful" rc=0
+# Strix invocation that wrote nothing new must not be validated by a
+# leftover report an earlier, already-superseded attempt or model left
+# behind (Devin review on `#1495`'s successor `#1563`) -- that is exactly as
+# hollow as producing no report at all. Used for run_strix_once()'s own
+# rc=0 acceptance and for has_only_below_threshold_vulnerabilities()'s
+# presence guard -- but never for that function's severity scan below the
+# guard, which deliberately stays cumulative across every accumulated,
+# non-preexisting report: a blocking finding from an earlier attempt must
+# never be silently missed just because a later attempt did not reproduce
+# it.
+has_new_strix_vulnerability_report_artifact() {
 	local run_dir vulnerabilities_dir vuln_file
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
@@ -3472,6 +3523,9 @@ has_any_strix_vulnerability_report_artifact() {
 
 		for vuln_file in "$vulnerabilities_dir"/*.md; do
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			if is_attempt_start_vulnerability_file "$vuln_file"; then
 				continue
 			fi
 			return 0
@@ -3514,7 +3568,14 @@ has_only_below_threshold_vulnerabilities() {
 		done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
 	}
 
-	if ! has_any_strix_vulnerability_report_artifact; then
+	# Presence is attempt-scoped (did the just-concluded, terminal attempt for
+	# this model contribute genuine new evidence -- not a leftover report an
+	# earlier, already-superseded attempt left behind, per Devin review on
+	# `#1495`'s successor `#1563`), but severity scanning below stays
+	# cumulative across every accumulated, non-preexisting report: a
+	# blocking finding from an earlier attempt must never be silently missed
+	# just because a later attempt did not reproduce it.
+	if ! has_new_strix_vulnerability_report_artifact; then
 		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
 		return 1
 	fi
