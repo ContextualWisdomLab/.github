@@ -5,6 +5,8 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Harden #1617 corrective diagnostics against model-value reflection.** The repair prompt and final fail-closed error preserve deterministic structural validator evidence needed to correct a malformed verdict, while model-controlled values (including an unsupported decision value) are redacted and an unknown model-output diagnostic collapses to a stable code.
+- **Classify and bound Noema malformed-verdict repair failures (#1611/#1617).** A schema-invalid model verdict now raises typed `NoemaModelOutputError` evidence instead of an undifferentiated runtime failure. The one corrective attempt has a 15-minute absolute wall-clock deadline across open/read/decode/validation while the primary contextual-orchestrator review remains under its no-fixed-inference-timeout contract; unlike a urllib socket timeout, trickling response activity cannot renew that budget. If the repair then fails at transport, `NoemaTransportError` preserves the first validator diagnostic plus the later transport class/status without logging raw model output or secrets.
 - Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
   `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
   `noema_review_handoff.py`'s `noema_review_state()` can never recognize such a review as a

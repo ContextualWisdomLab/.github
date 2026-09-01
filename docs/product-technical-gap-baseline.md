@@ -2562,3 +2562,14 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+## 2026-09-01 Noema malformed-verdict retry classification and wall-clock bound (#1611/#1617)
+
+- **Diagnostic hardening:** #1617 corrective prompts preserve only trusted structural validator detail; model-controlled values are redacted, unknown model-output text becomes a stable defect code, and repeated invalid-model exceptions do not retain the raw model exception as a cause.
+
+- **Observed consumer evidence:** `ContextualWisdomLab/naruon#1505@7da2a242e463f59d4580cb38e7591f1ba4b4049e`, Required Noema run `33460498090` / job `99742587317`. The first response reached the trusted semantic validator but used an out-of-domain adversarial-probe `outcome`; the generic repair attempt later ended as HTTP 502 after roughly 88 minutes.
+- **Root cause:** model-output/schema rejection, repair transport exhaustion, and consumer-source findings shared an undifferentiated `RuntimeError` boundary. The corrective HTTP request also had no client-side repair-specific ceiling, so a malformed first verdict could initiate another effectively full-duration request.
+- **Repair:** model-output/schema rejection is typed as `NoemaModelOutputError`; the one corrective attempt has a 900-second absolute wall-clock deadline across open/read/decode/validation (not a renewable socket timeout); repair transport exhaustion is typed as `NoemaTransportError`; and the final fail-closed diagnostic preserves the sanitized first validator error plus the later typed transport evidence. Primary review inference remains governed by contextual-orchestrator `orchestrator/free` and is not given a new fixed model-inference timeout.
+- **Security/operability invariant:** raw model content, credentials, and provider secrets are never included in the combined diagnostic. Exact-head revalidation still occurs before retry and before publication. No direct-provider fallback or GitHub authority change is introduced.
+- **Verification contract:** deterministic tests cover the original invalid `outcome`, malformed-then-502 evidence preservation and the repair-only timeout, and repeated malformed model output remaining typed and non-passing. The affected Naruon head must be re-run after protected integration; predecessor review/check evidence does not transfer.
