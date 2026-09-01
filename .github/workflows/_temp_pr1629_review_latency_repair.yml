@@ -16,11 +16,11 @@ jobs:
   repair:
     runs-on: ubuntu-slim
     steps:
-      - name: Checkout exact writer head
+      - name: Checkout exact writer head without persisted credential
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}
-          persist-credentials: true
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Guard exact live head
@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           expected="${GITHUB_SHA}"
           actual="$(git rev-parse HEAD)"
-          live="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+          live="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
           test "$actual" = "$expected"
           test "$live" = "$expected"
           printf '%s\n' "$expected" > /tmp/pr1629_expected_head
@@ -88,11 +88,27 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix(ci): finish evidence-only review admission repair"
 
-      - name: Push only if writer head is unchanged
+      - name: Push only if writer head is unchanged and successor workflows can start
         shell: bash
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
           expected="$(cat /tmp/pr1629_expected_head)"
-          live="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+          live="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
           test "$live" = "$expected"
+          if [ -n "${PR_REVIEW_MERGE_TOKEN:-}" ]; then
+            push_token="$PR_REVIEW_MERGE_TOKEN"
+            push_source='PR_REVIEW_MERGE_TOKEN'
+          elif [ -n "${OPENCODE_APPROVE_TOKEN:-}" ]; then
+            push_token="$OPENCODE_APPROVE_TOKEN"
+            push_source='OPENCODE_APPROVE_TOKEN'
+          else
+            echo '::error::No workflow-starting branch-mutation credential is configured. Refusing a github.token push because successor-head required workflows would be suppressed.'
+            exit 78
+          fi
+          echo "Using workflow-starting mutation credential source: $push_source"
+          git config core.hooksPath /dev/null
+          git remote set-url origin "https://x-access-token:${push_token}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:${GITHUB_REF_NAME}"
