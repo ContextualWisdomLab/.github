@@ -1030,9 +1030,9 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request) as response:  # nosec B310
-        raw_bytes = response.read()
     try:
+        with opener.open(request) as response:  # nosec B310
+            raw_bytes = response.read()
         raw = decode_llm_response_body(raw_bytes)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
@@ -1060,8 +1060,10 @@ def call_llm(
         if decision == "request_changes" and not findings:
             raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except RuntimeError as exc:
+    except (RuntimeError, urllib.error.URLError) as exc:
         if repair_error:
+            if isinstance(exc, urllib.error.URLError):
+                raise RuntimeError(str(exc)) from exc
             raise
         if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(

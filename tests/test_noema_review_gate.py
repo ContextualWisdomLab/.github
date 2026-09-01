@@ -1338,6 +1338,79 @@ def test_call_llm_fails_closed_after_repeated_invalid_utf8_response(monkeypatch)
     assert "prior verdict was rejected" in json.loads(open_calls[1].data)["messages"][1]["content"]
 
 
+def test_call_llm_repairs_once_after_a_transport_error_then_succeeds(monkeypatch):
+    """A transport-level failure (e.g. a genuine HTTP 502 from the gateway)
+    must not crash the job with an unhandled traceback.
+
+    Live incident (ContextualWisdomLab/naruon#1486): ``opener.open(request)``
+    sat outside the surrounding try/except, which only guarded the
+    JSON-decode/validation step after a successful response. Any transport
+    exception (HTTPError, URLError) from the request itself propagated as an
+    unhandled traceback instead of getting the same one-time repair-retry the
+    malformed-verdict path already has. Widening the try to also cover the
+    request itself, and catching ``urllib.error.URLError`` alongside
+    ``RuntimeError``, integrates it with that existing boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    attempts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "comment", "summary": "Recovered", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    verdict = noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    assert verdict["summary"] == "Recovered"
+    assert len(attempts) == 2
+
+
+def test_call_llm_fails_closed_after_a_repeated_transport_error(monkeypatch):
+    """Two consecutive transport errors must produce a single clean
+    RuntimeError diagnostic, never an unhandled traceback -- the first still
+    gets a repair-retry request like any other recoverable failure would."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
+    open_calls = []
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        raise noema.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+
+    with pytest.raises(RuntimeError, match="Bad Gateway"):
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+    assert len(open_calls) == 2
+
+
 @pytest.mark.parametrize("choices", [{"a": 1}, 5])
 def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choices):
     """A malformed (non-list) choices field surfaces through call_llm's

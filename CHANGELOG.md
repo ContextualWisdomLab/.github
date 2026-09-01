@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix a live crash: `noema-review` failed with an unhandled `HTTPError` instead
+  of failing closed.** Live incident on `ContextualWisdomLab/naruon#1486`:
+  `scripts/ci/noema_review_gate.py::call_llm`'s `opener.open(request)` call sat
+  outside the surrounding `try`/`except`, which only guarded the JSON-decode and
+  validation steps after a successful response. A genuine `HTTP Error 502: Bad
+  Gateway` from the completion request therefore crashed the whole required
+  check with an unhandled traceback instead of getting the same one-time
+  repair-retry the malformed-verdict path already has. Widened the `try` to
+  also cover the request itself and added `urllib.error.URLError` alongside
+  `RuntimeError` to the existing repair-retry `except` clause — a transient
+  transport failure now gets one retry, then fails closed with a clean
+  `RuntimeError` on a second failure, exactly like a malformed verdict already
+  does. Verified genuine RED (the exact `HTTPError: Bad Gateway` reproduced
+  uncaught) before the fix, GREEN after; full suite 2248 passed, 1 skipped, 21
+  subtests. (Repo-wide coverage independently confirmed at 99% both before and
+  after this change — a pre-existing gap in
+  `pr_review_fix_scheduler.py`/`pr_review_merge_scheduler.py` unrelated to this
+  diff.)
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
