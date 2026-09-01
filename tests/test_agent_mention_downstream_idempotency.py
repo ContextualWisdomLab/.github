@@ -12,15 +12,15 @@ UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
 def test_router_can_read_durable_central_artifacts() -> None:
-    """Both local routing and sibling sweeping receive actions read access."""
+    """Target reads and central dispatch keep distinct least-privilege authorities."""
 
     text = ROUTER_WORKFLOW.read_text(encoding="utf-8")
     local, sweep = text.split("\n  sweep-organization-agent-mentions:\n", 1)
     assert "permissions:\n      actions: read" in local
     assert "permissions:\n      actions: read" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in local
-    assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" not in sweep
-    assert 'export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"' in sweep
+    assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
+    assert 'export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"' not in sweep
 
 
 def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
