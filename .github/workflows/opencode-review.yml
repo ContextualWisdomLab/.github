@@ -329,7 +329,17 @@ jobs:
           fi
 
       - name: Request current-head OpenCode review execution
-        if: github.event.action != 'closed' && !github.event.pull_request.draft && steps.verdict.outputs.verdict == ''
+        # steps.verdict.outputs.verdict alone is the live, authoritative
+        # signal now: the verdict step resolves closed/draft from a live
+        # gh api call, not this event's own stored payload, so it is already
+        # empty only when a real dispatch is actually needed. The former
+        # extra github.event.action/github.event.pull_request.draft conjuncts
+        # were themselves stale-payload reads -- a manual re-run of an old
+        # closed/draft-era job could still suppress this dispatch on a since-
+        # reopened/ready PR even after the verdict step's own fix, leaving the
+        # required check red with no review ever requested (Devin review on
+        # #1443).
+        if: steps.verdict.outputs.verdict == ''
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai

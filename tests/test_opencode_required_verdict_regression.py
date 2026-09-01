@@ -145,17 +145,18 @@ def test_required_workflow_reruns_on_draft_reconversion() -> None:
 
 
 def test_request_review_execution_step_is_also_gated_on_draft() -> None:
-    """The dispatch step must not run for drafts either.
+    """The dispatch step's own gate must be the live verdict alone.
 
-    ``Fail closed without a current-head OpenCode verdict`` exempts drafts,
-    but the earlier ``Request current-head OpenCode review execution`` step
-    performs its own OIDC token exchange, OpenCode app-token exchange, and
-    ``repository_dispatch`` call under ``set -euo pipefail``, any of which
-    can fail on infrastructure trouble unrelated to draft status. Without a
-    matching draft guard on this step's own ``if:``, that failure happens
-    before the later exemption ever gets a chance to run, keeping the
-    required check red on every draft PR whenever OIDC or the dispatch API
-    has trouble.
+    ``Fail closed without a current-head OpenCode verdict`` exempts drafts
+    and closed PRs via ``steps.verdict.outputs.verdict``, which the verdict
+    step now resolves from the pull request's *live* state. The earlier
+    ``Request current-head OpenCode review execution`` step must gate on
+    that same live signal alone -- gating it (also) on
+    ``github.event.action``/``github.event.pull_request.draft`` would let a
+    manual re-run of an old closed/draft-era job suppress the dispatch for a
+    since-reopened/ready PR at the same head SHA using those stale payload
+    fields, even though the verdict step's own live-state fix means a real
+    dispatch is exactly what's needed then (Devin review on #1443).
     """
     workflow = WORKFLOW.read_text(encoding="utf-8")
     lines = workflow.splitlines()
@@ -169,11 +170,7 @@ def test_request_review_execution_step_is_also_gated_on_draft() -> None:
         for line in lines[step_index + 1 :]
         if line.strip().startswith("if:")
     )
-    assert (
-        if_line
-        == "if: github.event.action != 'closed' && !github.event.pull_request.draft "
-        "&& steps.verdict.outputs.verdict == ''"
-    )
+    assert if_line == "if: steps.verdict.outputs.verdict == ''"
 
 
 def _extract_run_block(workflow_text: str, step_name: str) -> str:

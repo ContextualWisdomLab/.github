@@ -43,6 +43,18 @@ Semantic Versioning where the repository publishes a release.
   repos/.../pulls/<number>`) and decides closed/draft from that instead,
   failing closed if the lookup itself fails; the two payload-derived `env:`
   vars (`PR_ACTION`/`PR_DRAFT`) are removed entirely from this step.
+- Fix a second review-flagged gap in the same lineage (Devin review on
+  `#1443`): the `Request current-head OpenCode review execution` dispatch
+  step's own `if:` still gated on `github.event.action`/
+  `github.event.pull_request.draft` alongside `steps.verdict.outputs.verdict
+  == ''`. Once the verdict step above was fixed to resolve closed/draft from
+  live state, that made the dispatch step's stale-payload conjuncts a
+  liability rather than a safety net: a manual re-run of an old closed/draft
+  job could still suppress the dispatch for a since-reopened/ready PR at the
+  same head SHA, leaving the required check red with no review ever
+  requested. The dispatch step now gates purely on
+  `steps.verdict.outputs.verdict == ''`, the one live-computed signal that
+  already means "a real dispatch is needed."
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
