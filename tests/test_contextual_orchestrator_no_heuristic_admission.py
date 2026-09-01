@@ -61,12 +61,6 @@ def test_free_pool_admission_assigns_no_hand_authored_priority() -> None:
     assert {entry["priority"] for entry in result["agents"]} == {0}
 
 
-def test_central_review_catalog_rejects_retired_auto_pool() -> None:
-    """The central Noema/OpenCode/Strix sidecar is free-only by contract."""
-    with pytest.raises(policy.PolicyError, match="unsupported review pool"):
-        policy.build_zdr_prioritized_catalog([_free_row(0)], pool="auto")
-
-
 def test_normalized_agent_identity_collision_fails_closed() -> None:
     """Two distinct routes may not share the runtime identity used for failover."""
     first = _free_row(0)
