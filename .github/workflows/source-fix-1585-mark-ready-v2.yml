@@ -1,0 +1,31 @@
+name: One-shot PR 1585 ready transition
+
+on:
+  push:
+    branches:
+      - fix/strix-control-plane-supersession-20260901
+    paths:
+      - .github/workflows/source-fix-1585-mark-ready-v2.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mark-ready:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      PR_NUMBER: "1585"
+    steps:
+      - name: Transition exact owner PR from Draft to Ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$live_head" != "$GITHUB_SHA" ]; then
+            echo "::error::PR head moved before Ready transition: expected $GITHUB_SHA, live $live_head"
+            exit 1
+          fi
+          gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
