@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ACTION = ROOT / ".github" / "actions" / "development-agent-toolchain" / "action.yml"
 INSTALLER = ROOT / ".github" / "actions" / "development-agent-toolchain" / "install.sh"
+QUALITY_WORKFLOW = ROOT / ".github" / "workflows" / "development-agent-toolchain-quality.yml"
 
 UPSTREAM_COMMITS = {
     "superpowers": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
@@ -77,3 +78,15 @@ def test_development_toolchain_installs_guidance_without_loading_plugins() -> No
     assert "public-skills/SKILL.md" in installer
     assert "superpowers@git+" not in installer
     assert "@dietrichgebert/ponytail" not in installer
+
+
+def test_development_toolchain_quality_workflow_executes_real_install() -> None:
+    """The quality gate must exercise the composite action, indexes, and clean diff boundary."""
+    workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "uses: ./.github/actions/development-agent-toolchain" in workflow
+    assert "test_development_agent_toolchain.py" in workflow
+    assert "git diff --exit-code" in workflow
+    assert "git status --porcelain --untracked-files=all" in workflow
+    assert "code-review-graph" in workflow
+    assert "codegraph" in workflow
