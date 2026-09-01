@@ -6,7 +6,14 @@ import pytest
 PROMPTS = (
     Path("ci-review-prompt.md"),
     Path("code-reviewer-prompt.md"),
+    Path("scripts/ci/opencode_review_prompt_template.md"),
 )
+
+ADVERSARIAL_PREFIXES = {
+    Path("ci-review-prompt.md"): "Perform an explicit adversarial phase before every verdict.",
+    Path("code-reviewer-prompt.md"): "Run a dedicated adversarial phase before the verdict.",
+    Path("scripts/ci/opencode_review_prompt_template.md"): "Adversarial validation is mandatory before every verdict.",
+}
 
 
 def paragraph_starting(prompt: str, prefix: str) -> str:
@@ -33,9 +40,7 @@ def test_review_prompts_do_not_turn_identifier_shape_into_blocking_authority(
     )
     adversarial_policy = paragraph_starting(
         prompt,
-        "Perform an explicit adversarial phase before every verdict."
-        if prompt_path.name == "ci-review-prompt.md"
-        else "Run a dedicated adversarial phase before the verdict.",
+        ADVERSARIAL_PREFIXES[prompt_path],
     )
 
     assert "signal, not automatic proof of IDOR" in identifier_policy
