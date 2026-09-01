@@ -8,10 +8,10 @@ on:
       - .github/workflows/repair-pr1630-hourly-comments.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
+  repair_scheduler_comments:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact writer head
@@ -19,6 +19,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 2
+          token: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
 
       - name: Repair comments, verify contract, and retire helper
         shell: bash
@@ -55,10 +56,10 @@ jobs:
           python3 - <<'PY'
           import runpy
           scope = runpy.run_path('tests/test_actions_queue_saturation_scheduler_cadence.py')
-          for name, value in sorted(scope.items()):
-              if name.startswith('test_') and callable(value):
-                  value()
-                  print(f'PASS {name}')
+          for test_name, contract_test in sorted(scope.items()):
+              if test_name.startswith('test_') and callable(contract_test):
+                  contract_test()
+                  print(f'PASS {test_name}')
           PY
           git diff --check
 
