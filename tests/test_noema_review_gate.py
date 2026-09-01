@@ -1378,7 +1378,7 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
         noema.current_actor()
 
 
-def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch, tmp_path):
+def test_review_context_builders_include_threads_and_files(monkeypatch):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
     assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
@@ -1405,9 +1405,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
         raise AssertionError(args)
 
     monkeypatch.setattr(noema, "run", fake_run)
-    codegraph_path = tmp_path / "codegraph.md"
-    codegraph_path.write_text("call graph: src/a.py -> tests", encoding="utf-8")
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(codegraph_path))
     pr = make_pr(
         headRefOid="head sha",
         reviewThreads={
@@ -1431,8 +1428,6 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
 
     context = noema.build_review_context("owner/repo", 7, pr)
 
-    assert "## CodeGraph context" in context
-    assert "call graph: src/a.py -> tests" in context
     assert "Thread open at src/a.py:3" in context
     assert "reviewer: check call site" in context
     assert "### src/a.py" in context
@@ -1442,13 +1437,7 @@ def test_review_context_builders_include_codegraph_threads_and_files(monkeypatch
     assert any("/files" in call[2] for call in calls)
 
 
-def test_review_context_reports_omitted_files_and_missing_codegraph(monkeypatch, tmp_path):
-    monkeypatch.delenv("NOEMA_CODEGRAPH_CONTEXT_PATH", raising=False)
-    assert noema.load_codegraph_context() == ""
-
-    monkeypatch.setenv("NOEMA_CODEGRAPH_CONTEXT_PATH", str(tmp_path / "missing.md"))
-    assert "CodeGraph context unavailable" in noema.load_codegraph_context()
-
+def test_review_context_reports_omitted_files(monkeypatch):
     paths = [f"src/file_{index}.py" for index in range(noema.MAX_CONTEXT_FILES + 1)]
     monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: paths)
     monkeypatch.setattr(noema, "fetch_head_file_content", lambda repo, path, head_sha: "x")

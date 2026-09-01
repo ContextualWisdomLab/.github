@@ -474,24 +474,9 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def load_codegraph_context() -> str:
-    """Load optional precomputed CodeGraph context for structural review evidence."""
-    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
-    except OSError as exc:
-        return f"CodeGraph context unavailable: {exc}"
-
-
 def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
     """Build bounded non-diff context for the Noema reviewer."""
     sections: list[str] = []
-    codegraph = load_codegraph_context()
-    if codegraph:
-        sections.append("## CodeGraph context\n" + codegraph)
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
@@ -958,7 +943,7 @@ def call_llm(
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
+                "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
                 json.dumps(
                     {
