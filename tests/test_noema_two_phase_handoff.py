@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / ".github" / "actions" / "noema-review" / "two_phase.py"
 HEAD = "a" * 40
+BASE = "b" * 40
 
 
 def _load_module() -> ModuleType:
@@ -24,7 +25,15 @@ def _load_module() -> ModuleType:
 
 
 def _patch_live_gate(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> None:
-    monkeypatch.setattr(module.gate, "fetch_pr", lambda _repo, _number: {"isDraft": False})
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": False,
+            "headRefOid": HEAD,
+            "baseRefOid": BASE,
+        },
+    )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
     monkeypatch.setattr(module.gate, "current_actor", lambda: "cwl-noema-review[bot]")
     monkeypatch.setattr(module.gate, "PRIMARY_REVIEW_AUTHORS", frozenset({"seonghobae"}))
@@ -44,11 +53,13 @@ def test_prepare_seals_validated_verdict_without_publishing(tmp_path: Path, monk
     envelope = tmp_path / "verdict.json"
 
     assert module.prepare_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
-    assert module._read_envelope(envelope)["verdict"] == verdict
+    payload = module._read_envelope(envelope)
+    assert payload["verdict"] == verdict
+    assert payload["expected_base"] == BASE
 
 
-def test_publish_refetches_exact_head_with_fresh_actor_and_removes_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Publication rebinds repository/head/actor and consumes the private handoff."""
+def test_publish_refetches_exact_head_and_base_with_fresh_actor_and_removes_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Publication rebinds repository/head/base/actor and consumes the private handoff."""
     module = _load_module()
     _patch_live_gate(monkeypatch, module)
     envelope = tmp_path / "verdict.json"
@@ -58,6 +69,7 @@ def test_publish_refetches_exact_head_with_fresh_actor_and_removes_envelope(tmp_
         "repository": "ContextualWisdomLab/example",
         "pull_request_number": 7,
         "expected_head": HEAD,
+        "expected_base": BASE,
         "verdict": verdict,
     })
     submitted: list[tuple[object, ...]] = []
@@ -74,9 +86,19 @@ def test_publish_refetches_exact_head_with_fresh_actor_and_removes_envelope(tmp_
 def test_publish_rejects_stale_head_and_never_submits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A moved head invalidates predecessor model evidence before publication."""
     module = _load_module()
-    monkeypatch.setattr(module.gate, "fetch_pr", lambda _repo, _number: {"isDraft": False})
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": False,
+            "headRefOid": "c" * 40,
+            "baseRefOid": BASE,
+        },
+    )
+
     def stale(_pr: object, _head: str) -> None:
         raise RuntimeError("stale")
+
     monkeypatch.setattr(module.gate, "require_expected_head", stale)
     monkeypatch.setattr(module.gate, "submit_review", lambda *_args: pytest.fail("stale evidence must not publish"))
     envelope = tmp_path / "verdict.json"
@@ -85,8 +107,37 @@ def test_publish_rejects_stale_head_and_never_submits(tmp_path: Path, monkeypatc
         "repository": "ContextualWisdomLab/example",
         "pull_request_number": 7,
         "expected_head": HEAD,
+        "expected_base": BASE,
         "verdict": {"decision": "approve"},
     })
+
+    assert module.publish_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
+    assert not envelope.exists()
+
+
+def test_publish_rejects_base_drift_with_unchanged_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A moved base invalidates the prepared diff/context even when the head is unchanged."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": False,
+            "headRefOid": HEAD,
+            "baseRefOid": "c" * 40,
+        },
+    )
+    envelope = tmp_path / "verdict.json"
+    module._write_envelope(envelope, {
+        "schema_version": module.ENVELOPE_SCHEMA_VERSION,
+        "repository": "ContextualWisdomLab/example",
+        "pull_request_number": 7,
+        "expected_head": HEAD,
+        "expected_base": BASE,
+        "verdict": {"decision": "approve", "summary": "stale base"},
+    })
+    monkeypatch.setattr(module.gate, "submit_review", lambda *_args: pytest.fail("base-drifted evidence must not publish"))
 
     assert module.publish_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
     assert not envelope.exists()
@@ -95,7 +146,15 @@ def test_publish_rejects_stale_head_and_never_submits(tmp_path: Path, monkeypatc
 def test_prepare_skip_creates_no_publishable_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Draft skip semantics stay non-failing and cannot fabricate evidence."""
     module = _load_module()
-    monkeypatch.setattr(module.gate, "fetch_pr", lambda _repo, _number: {"isDraft": True})
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": True,
+            "headRefOid": HEAD,
+            "baseRefOid": BASE,
+        },
+    )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
     monkeypatch.setattr(module.gate, "current_actor", lambda: "cwl-noema-review[bot]")
     monkeypatch.setattr(module.gate, "PRIMARY_REVIEW_AUTHORS", frozenset({"seonghobae"}))
