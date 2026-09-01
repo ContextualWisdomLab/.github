@@ -50,37 +50,6 @@ jobs:
               end = workflow.index('  strix:\n', start)
               workflow = workflow[:start] + workflow[end:]
 
-          workflow = workflow.replace(
-              '    # includes the PR number and head SHA for status grouping, while the\n'
-              '    # concurrency group is scoped per repository and event class to prevent\n'
-              '    # shared-provider key rate-limit storms. Strix runs intentionally do not\n'
-              '    # cancel in progress because a pre-job cancellation leaves no scanner log to\n'
-              '    # review. GitHub keeps one active and one pending run per group; the merge\n'
-              '    # scheduler re-dispatches exact-head evidence when a pending run is\n'
-              '    # superseded. For PRs the merge scheduler manages, same-head Strix evidence\n'
-              '    # is still forced at merge time via repository_dispatch (which paths-ignore\n'
-              '    # does not affect), so merged code never loses evidence.\n',
-              '    # includes the PR number and head SHA for status grouping. Expensive Strix\n'
-              '    # work remains serialized per repository/event class. A separate cleanup\n'
-              '    # runner is deliberately not part of this workflow: stale PR/head state is\n'
-              '    # revalidated before setup, before provider execution, and before evidence\n'
-              '    # publication, while the central queue sweep retires predecessor runs.\n'
-              '    # Same-head evidence can still be forced through repository_dispatch.\n',
-          )
-          workflow = workflow.replace(
-              '      # Keep provider-backed scans serial per repository and event class while\n'
-              '      # allowing the trusted cleanup job above to retire an obsolete head now.\n',
-              '      # Keep provider-backed scans serial per repository and event class.\n'
-              '      # Stale PR/head work fails closed at explicit live-state boundaries below.\n',
-          )
-          workflow = workflow.replace(
-              '      # Keep provider-backed scans serial per repository and event class. Same-PR\n'
-              '      # predecessor/closed runs are retired by the trusted merge scheduler only\n'
-              '      # after live PR/head validation, so delayed events cannot cancel newer work.\n',
-              '      # Keep provider-backed scans serial per repository and event class.\n'
-              '      # Stale PR/head work fails closed at explicit live-state boundaries below.\n',
-          )
-
           permissions_anchor = '      models: read\n      statuses: write\n'
           strix_header = workflow.split('  strix:\n', 1)[1].split('    env:\n', 1)[0]
           if permissions_anchor in workflow and '      pull-requests: read\n' not in strix_header:
@@ -161,19 +130,16 @@ jobs:
               upload_block = upload_block.replace(collect_old, collect_new, 1)
               workflow = workflow[:upload_start] + upload_block + workflow[next_step:]
 
-          if 'export LLM_TIMEOUT=300' in workflow:
-              workflow = workflow.replace('export LLM_TIMEOUT=300', 'export LLM_TIMEOUT=0', 1)
-          if 'export LLM_TIMEOUT=0' not in workflow:
-              raise SystemExit('Strix model inference timeout was not disabled')
-          if 'export LLM_TIMEOUT=300' in workflow:
-              raise SystemExit('stale fixed Strix model inference timeout remains')
+          if 'export LLM_TIMEOUT=300' not in workflow:
+              raise SystemExit('Strix bounded model inference timeout is missing')
+          if 'export LLM_TIMEOUT=0' in workflow:
+              raise SystemExit('Strix model inference timeout must not be disabled')
           if 'cancel-superseded-pr-runs:' in workflow:
               raise SystemExit('runner-backed Strix cleanup job remains')
           workflow_path.write_text(workflow, encoding='utf-8')
 
           test_path = Path('tests/test_strix_control_plane_supersession.py')
           tests = test_path.read_text(encoding='utf-8')
-          tests = tests.replace('    assert "export LLM_TIMEOUT=300" in workflow\n', '    assert "export LLM_TIMEOUT=0" in workflow\n')
           publication_anchor = '    recheck = _step(workflow, "Revalidate live pull request before evidence publication")\n\n'
           output_contract = "steps.live_publication.outputs.current == 'true'"
           extra = (
@@ -185,21 +151,14 @@ jobs:
               if publication_anchor not in tests:
                   raise SystemExit('missing publication regression anchor')
               tests = tests.replace(publication_anchor, publication_anchor + extra, 1)
+          if '    assert "export LLM_TIMEOUT=300" in workflow\n' not in tests:
+              raise SystemExit('Strix supersession regression does not preserve bounded timeout')
           test_path.write_text(tests, encoding='utf-8')
 
           timeout_contract_path = Path('tests/test_strix_llm_timeout_contract.py')
           timeout_contract = timeout_contract_path.read_text(encoding='utf-8')
-          stale_timeout_assertion = '    assert "export LLM_TIMEOUT=300" in workflow\n'
-          current_timeout_assertion = '    assert "export LLM_TIMEOUT=0" in workflow\n'
-          if stale_timeout_assertion in timeout_contract:
-              timeout_contract = timeout_contract.replace(
-                  stale_timeout_assertion,
-                  current_timeout_assertion,
-                  1,
-              )
-          if current_timeout_assertion not in timeout_contract:
-              raise SystemExit('merged Strix timeout regression does not encode zero inference timeout')
-          timeout_contract_path.write_text(timeout_contract, encoding='utf-8')
+          if '    assert "export LLM_TIMEOUT=300" in workflow\n' not in timeout_contract:
+              raise SystemExit('merged Strix timeout regression does not preserve bounded timeout')
 
           quick_gate_path = Path('scripts/ci/test_strix_quick_gate.sh')
           quick_gate = quick_gate_path.read_text(encoding='utf-8')
@@ -211,13 +170,15 @@ jobs:
           fresh_recovery = '\tassert_file_contains "$workflow_file" "central queue sweep retires predecessor runs" "strix workflow documents trusted current-head queue recovery"\n'
           if stale_recovery in quick_gate:
               quick_gate = quick_gate.replace(stale_recovery, fresh_recovery, 1)
-          stale_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
-          fresh_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=0\' "strix disables the model client inference timeout"\n'
-          if stale_timeout in quick_gate:
-              quick_gate = quick_gate.replace(stale_timeout, fresh_timeout, 1)
-          for forbidden in (stale_cleanup.rstrip('\n'), stale_recovery.rstrip('\n'), stale_timeout.rstrip('\n')):
+          bad_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=0\' "strix disables the model client inference timeout"\n'
+          good_timeout = '\tassert_file_contains "$workflow_file" \'export LLM_TIMEOUT=300\' "strix preserves the current-main bounded model preflight timeout"\n'
+          if bad_timeout in quick_gate:
+              quick_gate = quick_gate.replace(bad_timeout, good_timeout, 1)
+          for forbidden in (stale_cleanup.rstrip('\n'), stale_recovery.rstrip('\n'), bad_timeout.rstrip('\n')):
               if forbidden in quick_gate:
                   raise SystemExit(f'stale Strix quick-gate assertion remains: {forbidden}')
+          if good_timeout.rstrip('\n') not in quick_gate:
+              raise SystemExit('Strix quick gate does not preserve bounded timeout contract')
           quick_gate_path.write_text(quick_gate, encoding='utf-8')
           PY
 
