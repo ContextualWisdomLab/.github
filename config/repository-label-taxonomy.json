@@ -85,6 +85,16 @@
       "repository": "semantic-data-portal",
       "issue": 72,
       "type": "documentation"
+    },
+    {
+      "repository": "Orgmetra",
+      "issue": 160,
+      "type": "documentation"
+    },
+    {
+      "repository": "noema",
+      "issue": 530,
+      "type": "feature"
     }
   ]
 }
