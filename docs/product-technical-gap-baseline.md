@@ -1755,13 +1755,28 @@ the retry cascade above.
 - `ContextualWisdomLab/.github#1415` is the companion change to
   `scripts/ci/contextual_orchestrator_review_launcher.py`'s serving-client construction (bounding
   `ModelClient`'s serving timeout/retries and `TaskOrchestrator`'s `tool_retry_attempts`).
-  **Correction (owner direction, 2026-08-31, on this entry's own PR #1530):** a small 130-150s margin
-  on `noema_review_gate.py`'s socket timeout, as originally proposed here, is too tight — raise it to
-  a 3-hour budget instead. This matches the standing directive's own accepted tolerance (§8: "중앙
-  OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다") for central review taking
-  multiple hours per model, and gives the free-tier failover path (still bounded per-agent by #974's
-  `deadline_seconds` once wired through) room to actually converge on a working candidate instead of
-  racing a budget sized for a single fast attempt.
+- **Correction 1 (owner direction, 2026-08-31, on this entry's own PR #1530):** a small 130-150s margin
+  on `noema_review_gate.py`'s socket timeout, as originally proposed above, is too tight — raise it to
+  a 3-hour budget instead, matching the standing directive's own accepted tolerance (§8) for central
+  review taking multiple hours per model.
+- **Correction 2 (supersedes Correction 1, same day):** the repo owner's fuller cross-PR architectural
+  contract, posted on `contextual-orchestrator#979`, states the principle more precisely: *"Do not
+  impose fixed wall-clock deadlines on inference, initial ping, readiness/health, provider discovery,
+  or OpenRouter ZDR-list retrieval; use explicit cancellation and evidence-backed transport failure
+  instead."* Not "a longer fixed number" but no fixed client-side deadline at all. `.github#1508`
+  ("fix(noema): preserve long-running substantive reviews", open, in flight) already implements exactly
+  this for `noema_review_gate.py`: its diff changes
+  `opener.open(request, timeout=120)` → `opener.open(request)` (the timeout argument dropped entirely,
+  not raised) and the same PR's earlier `curl -sS --max-time 120 ...` gateway-preflight probe drops
+  `--max-time 120` the same way, so the review runs "for the enclosing GitHub job lifetime" (bounded
+  only by the workflow's own `timeout-minutes`) instead of racing any client-imposed number, 120s or
+  10800s alike. `#1415`'s own serving-timeout work on the same file should reconcile with `#1508`
+  rather than reintroduce a bounded number — flagged as a comment on both PRs; not resolved here.
+  `contextual-orchestrator#974`'s opt-in `deadline_seconds` bound is under the same tension: it is a
+  fixed wall-clock deadline mechanism, which `#971` ("fix(routing): select concrete free model groups",
+  open, in flight) addresses instead by *removing* fixed wall-clock deadlines from inference, initial
+  completion probes, and equivalent-endpoint races and by keying routing identity on `model_group`
+  rather than provider grouping — also flagged as a comment on `#974`, not resolved here.
 - A secondary, unrelated diagnosability gap noted alongside this fix (not yet fixed): `main()`'s
   top-level handler in `noema_review_gate.py` only catches `RuntimeError`; `TimeoutError` is an
   `OSError` subtype, so this failure surfaces as a raw uncaught Python traceback instead of the gate's
