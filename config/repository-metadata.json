@@ -34,6 +34,23 @@
       "pages": {
         "enabled": false
       }
+    },
+    "learning-content-studio": {
+      "description": "Author, review, version, and publish accessible learning content across interoperable learning standards.",
+      "topics": [
+        "learning-content",
+        "lcms",
+        "authoring",
+        "scorm",
+        "cmi5",
+        "accessibility",
+        "education",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": {
+        "enabled": false
+      }
     }
   }
 }
