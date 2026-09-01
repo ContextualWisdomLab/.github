@@ -49,6 +49,19 @@ jobs:
             echo "::error::Expected assertion-level RED (pytest exit 1), observed exit $status."
             exit 1
           fi
+      - name: Align one-shot transform with exact current-main schema-repair prompt
+        run: |
+          set -euo pipefail
+          "$REVIEW_PYTHON" - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/ci/_temporary_apply_opencode_observed_corpus.py")
+          text = path.read_text(encoding="utf-8")
+          old = "generic source-inspection claims, implementation restatements, or a digest borrowed from another line remain invalid."
+          new = "generic source-inspection or coverage-verification claims are invalid."
+          if text.count(old) != 2:
+              raise SystemExit(f"expected two transform-side schema-repair phrases, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
       - name: Apply smallest causal GREEN repair
         run: "$REVIEW_PYTHON scripts/ci/_temporary_apply_opencode_observed_corpus.py"
       - name: Remove temporary mutation machinery before verification
@@ -76,10 +89,11 @@ jobs:
       - name: Verify final diff contains no temporary writer machinery
         run: |
           set -euo pipefail
+          git fetch --no-tags origin main
           test ! -e .github/workflows/_temporary-opencode-observed-corpus-writer.yml
           test ! -e scripts/ci/_temporary_apply_opencode_observed_corpus.py
-          if git diff --name-only "${GITHUB_SHA}^" | grep -E '(^|/)_temporary|_tmp_' ; then
-            echo "::error::Temporary writer machinery remains in final diff."
+          if git diff --name-only origin/main -- | grep -E '(^|/)_temporary|_tmp_' ; then
+            echo "::error::Temporary writer machinery remains in final PR diff."
             exit 1
           fi
       - name: Commit exact GREEN tree and push if writer head stayed unchanged
