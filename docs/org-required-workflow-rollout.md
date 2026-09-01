@@ -4,7 +4,11 @@ Updated: 2026-09-01 KST
 
 ## Purpose
 
-This document is the operator-facing current-state contract for organization-wide pull-request admission. Historical rollout experiments, exact transient PR heads, runner IDs, and superseded review-count policies remain available in Git history and the linked governance issues; they are intentionally not repeated here because stale operational snapshots can recreate a closed governance defect.
+This document is the operator-facing current-state contract for organization-wide pull-request admission. Historical rollout experiments, exact transient PR heads, runner IDs, and superseded review-count policies remain available in Git history and the linked governance issues; they are intentionally not presented as current operator instructions because stale operational snapshots can recreate a closed governance defect.
+
+## Historical regression fixtures (non-normative)
+
+The following closed or historical observations are retained only because executable regression tests use them as fixtures for central-governance coverage. They are evidence history, not present-day operating policy: the rollout inventory that established central coverage comprised **17 public non-fork repositories**, including `kaefa` and `waf-ids-ai-soc`. For `aFIPC`, PR `#78` is no longer a target-coverage gap. During that historical rollout, current PR #60 lacked central check runs; PR #6 merged after central workflow proof; and PR #8 is now the open current-head runtime proof fixture for the recorded case. Any live decision must still use fresh exact-head checks, reviews, rulesets, and current repository state rather than these fixtures.
 
 ## Canonical organization ruleset
 
