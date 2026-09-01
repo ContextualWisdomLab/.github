@@ -177,6 +177,40 @@ def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monk
         workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
         dry_run=False,
     ) is None
+
+
+def test_prepare_autofix_slot_returns_directly_with_no_active_or_stale_runs(monkeypatch):
+    """An empty Actions run list needs no reconciliation and skips cancellation."""
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"workflow_runs": []})
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("no stale runs must not attempt cancellation"),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    ) is False
+
+
+def test_live_head_matches_compares_case_insensitively_and_fails_closed(monkeypatch):
+    """Live head lookup normalizes case and rejects malformed or mismatched payloads."""
+    head = "a" * 40
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": head.upper()}})
+    assert fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": "b" * 40}})
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"nothead": {}})
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+
 def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
     """Exact-head check evidence can start RCA without a circular review prerequisite."""
     pr = make_pr(
@@ -1335,6 +1369,21 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [{"body": f"{fix.FIX_MARKER} head_sha={'a' * 40} epoch={int(time.time())} -->"}])
     assert fix.inspect_pr("owner/repo", make_pr(), args) == ("wait", ("recent autofix marker exists for this head",))
+
+    assert fix.inspect_pr(
+        "owner/repo", make_pr(mergeStateStatus="DIRTY", isDraft=True), args
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr("owner/repo", make_pr(mergeStateStatus="DIRTY"), args) == (
+        "skip",
+        ("merge conflict is not authorized for repair",),
+    )
+
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: True)
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("current-head autofix run is already queued or running",),
+    )
 
     pr1 = make_pr(number=1)
     pr2 = make_pr(number=2)
