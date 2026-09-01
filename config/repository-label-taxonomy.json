@@ -92,6 +92,11 @@
       "type": "documentation"
     },
     {
+      "repository": "learning-interoperability-contracts",
+      "issue": 1,
+      "type": "feature"
+    },
+    {
       "repository": "noema",
       "issue": 530,
       "type": "feature"
