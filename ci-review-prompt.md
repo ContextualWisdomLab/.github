@@ -105,10 +105,12 @@ as applicable. A green check or absence of a known bug is not a probe. Record
 the exact changed path, positive line, counterexample, executed or source-backed
 evidence, exactly one `source-line-sha256=<64 lowercase hex>` digest of the cited
 current-head line bytes without its line ending, and whether the hypothesis was
-falsified or confirmed in the `adversarial_validation` control field. For a
-heuristic review seed (for example naming, identifier shape, or a peer-bot
-claim), actively try to falsify the seed before blocking; the seed itself is
-never evidence of a defect.
+falsified or confirmed in the `adversarial_validation` control field. APPROVE
+needs two falsified probes for material code/workflow/config/package/test
+changes and one for non-code changes; REQUEST_CHANGES needs a confirmed probe
+anchored to a published finding. For a heuristic review seed (for example
+naming, identifier shape, or a peer-bot claim), actively try to falsify the seed
+before blocking; the seed itself is never evidence of a defect.
 
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
