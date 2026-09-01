@@ -83,14 +83,14 @@ def _openai_text(content: str) -> dict[str, object]:
 
 
 def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
-    """Evidence-only rows (e.g. OpenRouter) must never enter live selection."""
+    """Evidence-only rows for a non-OpenRouter provider never enter live selection."""
     namespace = _load_launcher()
     routable = namespace.get("_routable_discovered_models")
     assert callable(routable), "launcher must expose an evidence-only discovery filter"
 
     evidence_only_model = SimpleNamespace(
-        id="openrouter_evidence_only",
-        provider_name="openrouter",
+        id="nvidia_evidence_only",
+        provider_name="nvidia_nim",
         model_id="some/model",
         evidence_only=True,
     )
@@ -110,6 +110,291 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
     ]
     assert routable(None) == []
     assert routable([]) == []
+
+
+def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_evidence_only() -> None:
+    """OpenRouter rows are exempt from evidence_only while every row still shows it.
+
+    Regression for a confirmed bug, fixed upstream at
+    ``ContextualWisdomLab/contextual-orchestrator#949`` (merged, not yet
+    pinned in this repo as of this writing -- see
+    ``ContextualWisdomLab/.github#1477``): ``contextual-orchestrator``'s
+    OpenRouter ``ProviderModelSource`` currently hardcodes
+    ``evidence_only=True`` for every discovered model unconditionally (not
+    computed per model from real evidence) -- so today's real signature is
+    that *every* discovered OpenRouter row carries ``evidence_only=True``,
+    with no exceptions, even genuinely servable ones. If this filter
+    applied to OpenRouter like every other provider while that bug is
+    live, it would strip every OpenRouter row, including genuinely
+    servable ones, before ``zdr_policy.is_zdr_model()``'s purpose-built
+    per-route OpenRouter ZDR-feed check ever runs on them. Both OpenRouter
+    rows here carry ``evidence_only=True`` (today's real bug shape) and
+    both must still pass through; a same-shaped row from a different
+    provider must not.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_evidence_only_a = SimpleNamespace(
+        id="openrouter_evidence_only_a",
+        provider_name="openrouter",
+        model_id="some/model",
+        evidence_only=True,
+    )
+    openrouter_evidence_only_b = SimpleNamespace(
+        id="openrouter_evidence_only_b",
+        provider_name="openrouter",
+        model_id="ready/free",
+        evidence_only=True,
+    )
+    nvidia_evidence_only = SimpleNamespace(
+        id="nvidia_evidence_only",
+        provider_name="nvidia_nim",
+        model_id="some/model",
+        evidence_only=True,
+    )
+
+    assert routable(
+        [openrouter_evidence_only_a, openrouter_evidence_only_b, nvidia_evidence_only]
+    ) == [openrouter_evidence_only_a, openrouter_evidence_only_b]
+
+
+def test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence() -> None:
+    """The historical exemption turns off the moment per-model evidence appears.
+
+    Once ``ContextualWisdomLab/.github#1477`` lands the
+    ``ContextualWisdomLab/contextual-orchestrator#949`` pin bump, OpenRouter starts reporting real
+    per-model ``evidence_only`` (at minimum ``False`` for its genuinely
+    ZDR-attested free models). This is the post-fix signature: a run whose
+    OpenRouter rows are no longer uniformly ``True`` must go back through
+    the same ``evidence_only`` contract every other provider's rows
+    already get -- an attested row still passes (it always would have, on
+    its own merit), but an unattested OpenRouter row is now excluded here
+    exactly like a same-shaped row from any other provider, with no pin
+    bump or manual code edit required to reach this behavior.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_attested = SimpleNamespace(
+        id="openrouter_attested",
+        provider_name="openrouter",
+        model_id="attested/free",
+        evidence_only=False,
+    )
+    openrouter_unattested = SimpleNamespace(
+        id="openrouter_unattested",
+        provider_name="openrouter",
+        model_id="unattested/model",
+        evidence_only=True,
+    )
+
+    assert routable([openrouter_attested, openrouter_unattested]) == [openrouter_attested]
+
+
+def test_routable_discovered_models_excludes_spend_blocked_rows() -> None:
+    """A ``spend_admitted=False`` row is excluded the same way as ``evidence_only=True``.
+
+    ``contextual-orchestrator#949`` added ``DiscoveredModel.spend_admitted``
+    (default ``True``): a priced OpenRouter row becomes ``False`` when
+    ``openrouter_paid_inference_available()`` cannot confirm usable credit.
+    The vendored library's own ``is_routable_discovered_model()`` already
+    refuses to activate such a row as an agent; this launcher must refuse it
+    too, with the same ``getattr(..., True)`` default so a vendored pin that
+    predates ``#949`` (and so has no ``spend_admitted`` attribute at all)
+    keeps behaving exactly as it did before this filter existed.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    spend_blocked = SimpleNamespace(
+        id="openrouter_spend_blocked",
+        provider_name="openrouter",
+        model_id="provider/paid",
+        evidence_only=False,
+        spend_admitted=False,
+    )
+    spend_admitted_row = SimpleNamespace(
+        id="openrouter_spend_admitted",
+        provider_name="openrouter",
+        model_id="provider/paid-ok",
+        evidence_only=False,
+        spend_admitted=True,
+    )
+    no_spend_attribute = SimpleNamespace(
+        id="nvidia_untagged",
+        provider_name="nvidia_nim",
+        model_id="untagged/model",
+        evidence_only=False,
+    )
+
+    assert routable([spend_blocked, spend_admitted_row, no_spend_attribute]) == [
+        spend_admitted_row,
+        no_spend_attribute,
+    ]
+
+
+def test_routable_discovered_models_excludes_spend_blocked_openrouter_row_even_while_evidence_only_exempt() -> None:
+    """The ``spend_admitted`` exclusion applies independently of the ``evidence_only`` exemption.
+
+    A spend-blocked OpenRouter row that also still carries today's blanket
+    ``evidence_only=True`` bug signature -- so the OpenRouter ``evidence_
+    only`` exemption would otherwise let it through -- must still be
+    excluded: the two filters are independent conditions, and neither
+    exemption weakens the other.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+
+    openrouter_blanket_and_spend_blocked = SimpleNamespace(
+        id="openrouter_blanket_spend_blocked",
+        provider_name="openrouter",
+        model_id="provider/paid",
+        evidence_only=True,
+        spend_admitted=False,
+    )
+    openrouter_blanket_and_admitted = SimpleNamespace(
+        id="openrouter_blanket_admitted",
+        provider_name="openrouter",
+        model_id="provider/free",
+        evidence_only=True,
+        spend_admitted=True,
+    )
+
+    assert routable(
+        [openrouter_blanket_and_spend_blocked, openrouter_blanket_and_admitted]
+    ) == [openrouter_blanket_and_admitted]
+
+
+def test_pool_auto_never_admits_a_spend_blocked_priced_openrouter_row() -> None:
+    """A credit-exhausted paid OpenRouter row must never reach ``orchestrator/auto``.
+
+    Regression for the real, latent gap found while investigating whether
+    this repo's pipeline needs to respect ``spend_admitted``:
+    ``orchestrator/free`` never considers priced rows at all (its
+    ``selected_models`` loop in ``main()`` drops anything outside
+    ``free_route_identities`` before it becomes a report row), so it was
+    never exposed to a spend-blocked row. ``--pool auto`` is real, tested,
+    reachable code (``CONTEXTUAL_ORCHESTRATOR_POOL=auto``, no other change
+    needed) whose candidate rows explicitly include priced ones
+    (``build_zdr_prioritized_catalog``'s ``[*all_free_rows,
+    *all_priced_rows]`` for ``pool="auto"``, plus ``main()``'s explicit
+    priced-fallback stage) -- so without the ``spend_admitted`` filter in
+    ``_routable_discovered_models``, a spend-blocked row could have reached
+    a served ``auto`` catalog exactly as if it were servable. This composes
+    the real pipeline: ``_routable_discovered_models`` -> ``_report_rows``
+    -> ``parse_discovery_report`` -> ``build_zdr_prioritized_catalog``.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+    report_rows = namespace["_report_rows"]
+    route_identity = namespace["_route_identity"]
+
+    free_model = SimpleNamespace(
+        provider_name="nvidia_nim",
+        model_id="free/model",
+        agent_id="nvidia_nim_free_model",
+        evidence_only=False,
+        spend_admitted=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    spend_blocked_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        agent_id="openrouter_provider_paid",
+        evidence_only=False,
+        spend_admitted=False,
+        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="OPENROUTER_API_KEY",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=0.1,
+        completion_price_per_1k=0.1,
+        currency_code="USD",
+    )
+    discovered = [free_model, spend_blocked_model]
+
+    routable_discovered = routable(discovered)
+    assert routable_discovered == [free_model]
+
+    free_route_identities = frozenset({route_identity(free_model)})
+    rows = report_rows(routable_discovered, free_route_identities)
+    normalized_rows = policy.parse_discovery_report({"models": rows})
+
+    result = policy.build_zdr_prioritized_catalog(normalized_rows, pool="auto")
+
+    assert {entry["model"] for entry in result["agents"]} == {"free/model"}
+
+
+def test_require_zdr_still_excludes_non_zdr_openrouter_route_despite_evidence_only_exemption() -> None:
+    """The ``evidence_only`` exemption never weakens the real ZDR admission gate.
+
+    Devin Review flagged (``ContextualWisdomLab/.github#1476``, discussion
+    ``r3891875749``, 🟥) that ``_routable_discovered_models`` converting
+    every OpenRouter row into a serving candidate while every row still
+    carries the vendored ``evidence_only=True`` bug signature could let
+    "private review content reach third-party routes the vendored ZDR
+    contract forbids serving." Traced end to end, this is a false alarm:
+    becoming a *candidate* that survives ``_routable_discovered_models`` is
+    not the same as being *admitted* to a ``--require-zdr`` (private)
+    target's served catalog. The real, independent admission gate for that
+    path is ``is_zdr_model()`` (``scripts/ci/zdr_policy.py``), which
+    ``build_zdr_prioritized_catalog`` -- the function that actually builds
+    the served ``agents`` catalog -- re-applies as its own ``eligible_rows``
+    filter whenever ``require_zdr=True``, completely independent of
+    ``evidence_only``. This reproduces the real pipeline
+    (``_routable_discovered_models`` -> ``_report_rows`` ->
+    ``parse_discovery_report`` -> ``build_zdr_prioritized_catalog(...,
+    require_zdr=True)``) with two free OpenRouter rows that BOTH still
+    report ``evidence_only=True`` (today's exact bug signature, so the
+    exemption is active for both) -- only the one genuinely present in the
+    live OpenRouter ZDR feed is ever admitted to the catalog.
+    """
+    namespace = _load_launcher()
+    routable = namespace["_routable_discovered_models"]
+    report_rows = namespace["_report_rows"]
+    route_identity = namespace["_route_identity"]
+
+    zdr_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="zdr/free-model",
+        agent_id="openrouter_zdr_free_model",
+        evidence_only=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    non_zdr_model = SimpleNamespace(
+        provider_name="openrouter",
+        model_id="forbidden/free-model",
+        agent_id="openrouter_forbidden_free_model",
+        evidence_only=True,
+        prompt_price_per_1k=0.0,
+        completion_price_per_1k=0.0,
+        currency_code="USD",
+    )
+    discovered = [zdr_model, non_zdr_model]
+
+    routable_discovered = routable(discovered)
+    # Both rows survive the still-blanket-marked exemption: exactly the
+    # shape the Devin finding is concerned about.
+    assert routable_discovered == discovered
+
+    free_route_identities = frozenset(route_identity(model) for model in discovered)
+    rows = report_rows(discovered, free_route_identities)
+    normalized_rows = policy.parse_discovery_report({"models": rows})
+
+    result = policy.build_zdr_prioritized_catalog(
+        normalized_rows,
+        zdr_endpoints=frozenset({"openrouter/zdr/free-model"}),
+        require_zdr=True,
+        pool="free",
+    )
+
+    selected_models = {entry["model"] for entry in result["agents"]}
+    assert selected_models == {"zdr/free-model"}
+    assert "forbidden/free-model" not in selected_models
 
 
 def test_log_discovery_errors_prints_one_bounded_line_per_provider_failure(
@@ -430,8 +715,8 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
-def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
-    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+def test_gateway_preflight_has_no_inference_timeout() -> None:
+    """The end-to-end gateway check must not cap real completion latency.
 
     Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
     evidence reproduction (Strix run 33306775025 on
@@ -440,22 +725,51 @@ def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> No
     identical gateway request against that same healthy route being cut off
     at exactly curl's configured bound -- "gateway preflight request could
     not reach the local sidecar" was that timeout, not a real connectivity
-    failure. This asserts the bound is generous enough to tolerate a real
-    reasoning generation (well above the routing probe's own 10s
-    per-candidate budget) rather than the previous 30s, which rejected a
-    route the routing probe had just proven healthy.
+    failure. The request therefore has no wall-clock bound.
     """
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
-    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
-    gateway_preflight_timeout_seconds = int(match.group(1))
+    request_block = sidecar.rsplit("curl -sS", 1)[1].split(
+        '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"', 1
+    )[0]
+    assert "--max-time" not in request_block
 
-    assert gateway_preflight_timeout_seconds >= 120, (
-        "gateway preflight curl --max-time "
-        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
-        "completion latency; 30s was observed cutting off a route the routing probe "
-        "had just proven ready"
+
+def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    lines = sidecar.splitlines()
+
+    def curl_command(url: str) -> tuple[str, int]:
+        index = next(index for index, line in enumerate(lines) if url in line)
+        start = index
+        while start and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        command = " ".join(line.strip().removesuffix("\\") for line in lines[start : end + 1])
+        assert re.search(r"\bcurl\b", command)
+        return command, end
+
+    timeout_option = re.compile(
+        r"(?:^|\s)(?:-m(?:\s|$)|--[a-z-]*(?:time|timeout)[a-z-]*(?:=|\s|$))"
+    )
+    zdr_command, _ = curl_command("https://openrouter.ai/api/v1/endpoints/zdr")
+    health_command, health_command_end = curl_command(
+        'http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz'
+    )
+    for command in (zdr_command, health_command):
+        assert timeout_option.search(command) is None
+        assert re.search(r"(?:^|\s)timeout(?:\s|$)", command) is None
+
+    health_loop = "\n".join(lines[health_command_end + 1 :]).split("\ndone", 1)[0]
+    assert 'kill -0 "$sidecar_pid"' in health_loop
+    assert health_loop.count("fail ") == 1
+    assert health_loop.index('kill -0 "$sidecar_pid"') < health_loop.index("fail ")
+    assert not re.search(
+        r"\b(?:break|exit|timeout)\b|\s-(?:ge|gt|le|lt)\s|\bif\s+\(\(",
+        health_loop,
     )
 
 
@@ -1402,7 +1716,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
     max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    timeout_seconds = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
     primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
     total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
     fallback_limit = total_route_limit - primary_limit
@@ -1430,12 +1743,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    worst_case_seconds = total_attempts * timeout_seconds
-    assert worst_case_seconds <= 160, (
-        f"worst-case preflight time ({worst_case_seconds}s across "
-        f"{total_attempts} attempts) must stay within the 160s the ADR "
-        "computes and the 180s healthz-readiness watchdog allows"
-    )
     # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
     # candidate across both stages) + 4 escalations (the shared cap) = 16.
     assert total_attempts == total_route_limit + max_escalations
@@ -1663,14 +1970,13 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
     assert not path.exists()
 
 
-def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
-    """Sequential route probes must fit inside the sidecar startup budget."""
+def test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
     assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
     assert "REVIEW_TEMPERATURE = 1.0" in launcher
-    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10" in launcher
-    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
+    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
+    assert "ModelClient(\n        timeout=" not in launcher
     assert "max_retries=0" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 

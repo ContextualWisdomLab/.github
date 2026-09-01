@@ -31,7 +31,7 @@ ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
 STRIX_SCAN_WORKING_DIR="$STRIX_RUNTIME_DIR/scan-cwd"
 STRIX_SCAN_OUTPUT_DIR="$STRIX_SCAN_WORKING_DIR/strix_runs"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
-STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
+STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-0}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
 STRIX_DISABLE_PR_SCOPING="${STRIX_DISABLE_PR_SCOPING:-1}"
 # shellcheck disable=SC2034  # consumed by sourced normalize_model helper
@@ -1676,7 +1676,7 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
-			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+			fuzz/fuzz_opencode_review_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
 				include_opencode_normalizer=1
 				;;
 			esac

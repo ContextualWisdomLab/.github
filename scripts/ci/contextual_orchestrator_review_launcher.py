@@ -40,10 +40,6 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-# A selected route that cannot answer within ten seconds is not reliable enough
-# for a required CI gate. With at most twelve sequential candidates, startup is
-# bounded below the sidecar's three-minute readiness deadline.
-REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
@@ -62,27 +58,7 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's PROBING worst case stays computed and
-# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
-# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
-#
-# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
-# discover_all_models() call that runs before it inside the SAME 180s
-# watchdog. Verified directly against the vendored contextual-orchestrator
-# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
-# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
-# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
-# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
-# own 160s even starts. Combined real worst case is therefore up to ~265s,
-# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
-# shared monotonic deadline, scaled-down probing, or an evidence-justified
-# watchdog extension) and #1454 for the related, separately-tracked gap that
-# a base-probe *success* never confirms the candidate at the real serving
-# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
-# findings; both are architecturally significant enough to need their own
-# design pass rather than a guessed patch here.
+# escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
@@ -138,17 +114,186 @@ def _log_discovery_errors(errors: list[object]) -> None:
     print(_DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL, file=sys.stderr, flush=True)
 
 
+def _openrouter_reports_per_model_evidence(discovered: list[object]) -> bool:
+    """Return whether this run's OpenRouter rows show real per-model evidence.
+
+    ``contextual-orchestrator``'s OpenRouter ``ProviderModelSource`` had a
+    confirmed bug in the vendored copy pinned as of this writing: it
+    hardcodes ``evidence_only=True`` for *every* discovered OpenRouter
+    model unconditionally, at the provider-source level, regardless of that
+    specific model's own evidence -- so today's real, observable signature
+    is that literally every discovered OpenRouter row carries
+    ``evidence_only=True``, with zero exceptions, even for genuinely
+    servable, ZDR-attested models. ``ContextualWisdomLab/contextual-
+    orchestrator#949`` ("fix(discovery): route OpenRouter by model
+    evidence", merged at ``8cd99f139915131ba0239bce12a5d6a5fd85394e``) fixes
+    this by removing the hardcode entirely rather than computing a
+    per-model value: once a run's vendored pin includes the fix,
+    ``evidence_only`` falls back to its ``False`` dataclass default for
+    *every* discovered OpenRouter row, unconditionally -- ZDR attestation
+    for OpenRouter rows is carried separately, on the ``zdr_capable`` field
+    (already computed per model from OpenRouter's own
+    ``/api/v1/endpoints/zdr`` feed match both before and after #949), not on
+    ``evidence_only``.
+
+    This function is this run's *observed-behavior* signal for which of
+    those two shapes is currently vendored, used by
+    ``_routable_discovered_models`` in place of tracking
+    ``ORCHESTRATOR_PIN_SHA`` (the sidecar's vendored-commit pin, defined in
+    ``scripts/ci/contextual_orchestrator_review_sidecar.sh``) directly. A
+    pin-ancestry check (``git merge-base --is-ancestor <fix's merge commit>
+    "$ORCHESTRATOR_PIN_SHA"``) was considered and is technically reachable
+    -- the sidecar's vendored clone at ``$ORCHESTRATOR_SOURCE`` keeps full
+    commit history (only blob content is filtered) -- but at the time this
+    was written neither candidate upstream fix had merged yet, so no fix
+    commit SHA existed to compare against, and wiring one in would have
+    needed a new CLI argument/env var carrying ``$ORCHESTRATOR_SOURCE`` (or
+    the pin itself) into this launcher, a ``subprocess`` git call, and
+    matching sidecar-script/contract-test changes -- real plumbing built
+    against a threshold value that did not exist yet. This observed-behavior
+    check needs none of that: it reads the same ``discovered`` rows this
+    function already receives, requires no new plumbing, and -- unlike a
+    pin comparison -- keeps working even if a fix is ever backported to the
+    vendored fork without a matching ``ORCHESTRATOR_PIN_SHA`` bump, since it
+    looks at what the vendored code actually returned this run rather than
+    which commit is nominally pinned. See ``ContextualWisdomLab/.github#1476``
+    (this change) and ``ContextualWisdomLab/contextual-orchestrator#949``
+    (the merged upstream fix; pinned by ``ContextualWisdomLab/.github#1477``)
+    for the full history; once ``#1477`` merges, no further change is
+    required here -- this check starts reporting ``True`` as soon as the
+    vendored pin actually includes the fix and OpenRouter has discovered at
+    least one model that run (``#949`` makes ``evidence_only=False``
+    unconditional for OpenRouter, not contingent on that model being
+    ZDR-attested).
+
+    KNOWN, ACCEPTED LIMITATION: a genuinely-fixed vendored copy that
+    happens to report ``evidence_only=True`` for *every* OpenRouter row in
+    one particular run -- e.g. OpenRouter discovery itself failing entirely
+    that run, so ``discovered`` carries no OpenRouter rows to observe real
+    evidence from at all -- is indistinguishable from the still-buggy
+    blanket signature by this check alone, and the historical exemption
+    stays active for that one run. This mirrors the fail-open-on-ambiguity
+    reasoning already used elsewhere in this module (e.g. the KNOWN GAP
+    entries above) rather than inventing a new policy; a false-negative
+    here only widens which OpenRouter rows reach the same downstream,
+    provider-agnostic chat-capability check every other provider's rows
+    already pass through (``is_general_chat_agent_model_id`` +
+    ``_has_text_output``, in ``main()``) -- it does not bypass the
+    separate, ``evidence_only``-independent ZDR admission gate
+    (``is_zdr_model()`` / ``_zdr_admitted_rows()``, and the equivalent
+    filter re-applied inside ``build_zdr_prioritized_catalog()``) that
+    guards private, ``--require-zdr`` targets -- traced end to end and
+    confirmed still intact in the 2026-08-31 correction entry of
+    ``docs/product-technical-gap-baseline.md`` in response to a second
+    Devin Review finding that raised exactly this question.
+
+    Args:
+        discovered: The full discovery-wide row set for this run (already
+            filtered to nothing upstream -- this must see every row,
+            including non-OpenRouter ones, though only OpenRouter rows are
+            inspected).
+
+    Returns:
+        ``True`` once at least one discovered OpenRouter row reports
+        ``evidence_only=False`` (real per-model evidence observed this
+        run); ``False`` when there are no OpenRouter rows at all, or every
+        OpenRouter row is ``evidence_only=True`` (today's confirmed bug
+        signature, or an indistinguishable run where OpenRouter discovery
+        itself produced no rows).
+    """
+    return any(
+        getattr(model, "provider_name", None) == "openrouter"
+        and not getattr(model, "evidence_only", False)
+        for model in discovered
+    )
+
+
 def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
     """Drop evidence-only discovery rows before any live-serving selection.
 
-    Evidence-only rows (e.g. the OpenRouter catalog) exist solely to supply
-    ZDR evidence for other providers' models; contextual_orchestrator's own
-    ``agent_from_discovered()`` refuses to turn one into a serving agent.
-    Filtering here keeps that same invariant in this sidecar's selection path,
-    which builds its catalog independently rather than calling
-    ``agent_from_discovered()`` directly.
+    Evidence-only rows (e.g. a provider's pure price/policy-scraping stub)
+    exist solely to supply metadata for other providers' models;
+    contextual_orchestrator's own ``agent_from_discovered()`` refuses to
+    turn one into a serving agent. Filtering here keeps that same invariant
+    in this sidecar's selection path, which builds its catalog independently
+    rather than calling ``agent_from_discovered()`` directly.
+
+    OpenRouter rows are conditionally exempt from this exclusion --
+    see ``_openrouter_reports_per_model_evidence`` for the full rationale
+    and its documented limitation. In short: ``contextual-orchestrator``'s
+    OpenRouter ``ProviderModelSource`` currently hardcodes
+    ``evidence_only=True`` for every discovered model unconditionally (a
+    confirmed bug, fixed upstream at
+    ``ContextualWisdomLab/contextual-orchestrator#949``, merged at
+    ``8cd99f139915131ba0239bce12a5d6a5fd85394e`` -- not yet pinned in this
+    repo as of this writing; see ``ContextualWisdomLab/.github#1477``) --
+    not computed per model from real evidence, even though
+    genuine per-model ZDR evidence is fetched and parsed for OpenRouter in
+    that same module. Applying this filter to OpenRouter verbatim while
+    that bug is live would strip every OpenRouter row, including genuinely
+    servable, chat-capable ones, before ``zdr_policy.is_zdr_model()``'s
+    purpose-built, per-route OpenRouter ZDR-feed check (``openrouter_
+    endpoints_feed``) ever gets a chance to evaluate them -- making that
+    already-correct, already-wired mechanism dead code for OpenRouter
+    specifically. So the exemption applies only while this run's own
+    OpenRouter rows still match that exact blanket-``True`` bug signature;
+    the moment any OpenRouter row in a run reports real per-model evidence
+    (``evidence_only=False``), OpenRouter rows go back through the same
+    ``evidence_only`` contract every other provider already gets --
+    automatically, with no pin bump or manual edit needed here. A
+    genuinely non-servable OpenRouter row is still excluded downstream by
+    the same provider-agnostic chat-capability check every other provider's
+    rows already go through (``is_general_chat_agent_model_id`` +
+    ``_has_text_output``, in ``main()``) regardless of which branch this
+    function takes.
+
+    This exemption is expected to have real, live effect once merged (not
+    only once ``contextual-orchestrator``'s own per-model ``evidence_only``
+    fix and a matching ``ORCHESTRATOR_PIN_SHA`` bump land): OpenRouter
+    discovery already runs in this sidecar today, so genuinely chat-capable
+    OpenRouter rows -- currently blocked here regardless of what
+    ``contextual-orchestrator`` reports -- start reaching selection
+    immediately. What remains genuinely blocked on the upstream fix is
+    OpenRouter rows being correctly excluded from ``evidence_only`` on a
+    real per-model basis (e.g. a non-chat listing); until
+    ``ContextualWisdomLab/.github#1477`` lands the ``#949`` pin bump and a
+    run observes real per-model variation, this function's remaining
+    protection against those is the same downstream chat-capability check,
+    not ``evidence_only``.
+
+    A row is also excluded whenever ``getattr(model, "spend_admitted",
+    True) is False`` -- the same treatment as ``evidence_only=True``, with
+    no self-correcting exemption (there is no equivalent blanket-bug shape
+    to work around: ``spend_admitted`` was never wrongly ``False`` for
+    every OpenRouter row). ``contextual-orchestrator#949`` added this field
+    to ``DiscoveredModel`` (default ``True``) and sets it ``False`` only for
+    a *priced* OpenRouter row when ``openrouter_paid_inference_available()``
+    does not affirmatively confirm usable credit; a free OpenRouter row is
+    always ``spend_admitted=True`` regardless of credit status. The
+    vendored library's own ``is_routable_discovered_model()`` already
+    refuses to activate such a row as an agent; this mirrors that refusal
+    here so a spend-blocked row can never reach ``orchestrator/auto``'s
+    priced-fallback path either (``orchestrator/free`` never considers
+    priced rows at all, so it was never exposed to this). The
+    ``getattr(..., True)`` default keeps this correct against a vendored
+    pin that predates ``#949`` and has no ``spend_admitted`` attribute at
+    all. See the 2026-08-31 correction entry in
+    ``docs/product-technical-gap-baseline.md`` for the full investigation.
     """
-    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
+    discovered = list(discovered or [])
+    openrouter_still_blanket_marked = not _openrouter_reports_per_model_evidence(discovered)
+    return [
+        model
+        for model in discovered
+        if (
+            not getattr(model, "evidence_only", False)
+            or (
+                openrouter_still_blanket_marked
+                and getattr(model, "provider_name", None) == "openrouter"
+            )
+        )
+        and getattr(model, "spend_admitted", True) is not False
+    ]
 
 
 def _route_identity(model: object) -> tuple[str, str]:
@@ -555,8 +700,8 @@ def _preflight_with_fallback(
     stage's ending ``escalations_used`` is passed as the fallback stage's
     starting point, so a run that rejects all 8 primary routes and then
     probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
-    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    base attempts + 4 escalations). This bounds request count, not individual
+    model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its
@@ -949,7 +1094,6 @@ def main(argv: list[str] | None = None) -> int:
                 loader=load_agents,
             )
     client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
         max_retries=0,
         temperature=REVIEW_TEMPERATURE,
