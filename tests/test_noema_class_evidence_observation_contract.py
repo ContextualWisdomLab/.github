@@ -37,7 +37,9 @@ def _class_evidence(
             if repeated:
                 witness["observation"] = "same generic observation"
             elif generic_but_different:
-                witness["observation"] = f"Different generic concern number {index} appears in this area."
+                witness["observation"] = (
+                    f"Generic {field.replace('_', ' ')} concern appears in this area."
+                )
             else:
                 witness["observation"] = (
                     f"The `new` assignment preserves runtime relationship {index} relevant to {field}."
