@@ -327,12 +327,21 @@ def _cancel_run(repo: str, run_id: int) -> None:
 
 
 def _associated_prs(
-    repo: str, runs: Sequence[Mapping[str, Any]], current_pr_number: int
+    repo: str,
+    runs: Sequence[Mapping[str, Any]],
+    current_pr_number: int,
+    *,
+    repository: str,
+    branch: str,
+    head_sha: str,
 ) -> dict[int, dict[str, Any]]:
-    """Fetch non-current PR associations needed to prove closed-predecessor safety."""
+    """Fetch only same-head non-current PR associations needed for predecessor proof."""
     numbers = {
         number
         for run_data in runs
+        if _run_matches_head_identity(
+            run_data, repository=repository, branch=branch, head_sha=head_sha
+        )
         for association in _pull_request_associations(run_data)
         if (number := _association_number(association)) is not None
         and number != current_pr_number
@@ -371,7 +380,14 @@ def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expe
         try:
             current_pr = _fetch_pr(repo, number)
             active = _active_runs(repo, expected_head)
-            association_map = _associated_prs(repo, active, number)
+            association_map = _associated_prs(
+                repo,
+                active,
+                number,
+                repository=expected_repo,
+                branch=expected_ref,
+                head_sha=expected_head,
+            )
             current_pr = _fetch_pr(repo, number)
             candidate = _fetch_run(repo, run_id)
             validate_candidate_against_live_state(
