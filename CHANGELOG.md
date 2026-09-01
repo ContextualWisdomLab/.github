@@ -5,6 +5,14 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Recover Noema from provider-truncated structured review completions (`#1596`).**
+  The review client now retains bounded `finish_reason`, model, and token-usage
+  metadata from the OpenAI-compatible envelope, requests JSON mode with an
+  explicit 4,096-token output budget through Contextual Orchestrator, and
+  constrains verdict cardinality and field lengths. A provider-declared
+  `finish_reason=length` receives one compact exact-head repair request; a
+  repeated length stop fails closed as `truncated_after_retry`, distinct from
+  `invalid_json_after_retry`. Raw model output remains absent from public logs.
 - **Fix `opencode-review.yml` admission gaps around stale/out-of-order events (`#1568`).**
   Building on the draft-poll exemption's live PR/head validation, Devin Review found two
   further defects. (1) The concurrency group was keyed only by repository and PR number, so

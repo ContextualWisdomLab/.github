@@ -340,21 +340,33 @@ def test_build_catalog_applies_account_cap() -> None:
     """An account cap keeps one credential from absorbing the pool."""
     report = {
         "models": [
-                {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
+            {
+                "provider": "nvidia_nim",
+                "model": f"m{i}",
+                "agent_id": f"nim_a{i}",
+                "is_free": True,
+                **FREE_PRICE,
+            }
             for i in range(6)
         ]
         + [
             {
                 "provider": "nvidia_nim_sub",
                 "model": f"s{i}",
-                    "agent_id": f"nim_b{i}",
-                    "is_free": True,
-                    **FREE_PRICE,
+                "agent_id": f"nim_b{i}",
+                "is_free": True,
+                **FREE_PRICE,
             }
             for i in range(6)
         ]
         + [
-                {"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+            {
+                "provider": "bytez",
+                "model": f"o{i}",
+                "agent_id": f"bytez_{i}",
+                "is_free": True,
+                **FREE_PRICE,
+            }
             for i in range(3)
         ]
     }
@@ -367,14 +379,20 @@ def test_build_catalog_applies_account_cap() -> None:
         account_counts[account] = account_counts.get(account, 0) + 1
     assert account_counts["nvidia_nim"] == 2
     assert account_counts["nvidia_nim_sub"] == 2
-    assert account_counts["openai"] == 2
+    assert account_counts["bytez"] == 2
 
 
 def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {
         "models": [
-                {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+            {
+                "provider": "bytez",
+                "model": f"m{i}",
+                "agent_id": f"bytez_{i}",
+                "is_free": True,
+                **FREE_PRICE,
+            }
             for i in range(20)
         ]
     }
