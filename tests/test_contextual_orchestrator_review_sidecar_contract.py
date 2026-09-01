@@ -289,13 +289,9 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
-    assert "not _has_text_output(model)" in text
-    assert 'model_id = getattr(model, "model_id", "")' in text
-    # Output modality alone is not enough: a vision/audio/video-input-only model can still
-    # declare a text output modality (e.g. NVIDIA NIM's meta/llama-3.2-90b-vision-instruct),
-    # so the catalog must separately exclude any model whose *input* modality evidence is
-    # non-text-only -- the exact recurrence this closes is ContextualWisdomLab/.github#1415.
-    assert 'requires_non_text_input(getattr(model, "input_modalities", ()) or ())' in text
+    assert "_is_text_review_candidate(" in text
+    assert 'input_modalities = getattr(model, "input_modalities", ()) or ()' in text
+    assert "not requires_non_text_input(input_modalities)" in text
 
     launcher = runpy.run_path(str(LAUNCHER))
     has_text_output = launcher["_has_text_output"]
@@ -328,6 +324,61 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text
+
+
+def test_launcher_admits_only_plain_text_review_candidates() -> None:
+    """Review discovery keeps text protocols while excluding multimodal rows."""
+    launcher = runpy.run_path(str(LAUNCHER))
+    is_candidate = launcher["_is_text_review_candidate"]
+
+    def general_chat(model_id: str) -> bool:
+        return model_id.startswith("chat-")
+
+    def needs_non_text(modalities: object) -> bool:
+        return any(str(value).casefold() != "text" for value in modalities)
+
+    compatible = SimpleNamespace(
+        model_id="chat-structured",
+        input_modalities=("text",),
+        output_modalities=("text",),
+        capabilities=("chat", "response_format"),
+    )
+    unknown_input = SimpleNamespace(
+        model_id="chat-undocumented",
+        input_modalities=(),
+        output_modalities=("text",),
+    )
+    multimodal = SimpleNamespace(
+        model_id="chat-multimodal",
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+    )
+    media_output = SimpleNamespace(
+        model_id="chat-media-output",
+        input_modalities=("text",),
+        output_modalities=("image",),
+    )
+
+    assert is_candidate(
+        compatible,
+        is_general_chat_agent_model_id=general_chat,
+        requires_non_text_input=needs_non_text,
+    )
+    assert is_candidate(
+        unknown_input,
+        is_general_chat_agent_model_id=general_chat,
+        requires_non_text_input=needs_non_text,
+    )
+    assert not is_candidate(
+        multimodal,
+        is_general_chat_agent_model_id=general_chat,
+        requires_non_text_input=needs_non_text,
+    )
+    assert not is_candidate(
+        media_output,
+        is_general_chat_agent_model_id=general_chat,
+        requires_non_text_input=needs_non_text,
+    )
 
 
 def test_launcher_wraps_catalog_for_vendored_load_agents() -> None:

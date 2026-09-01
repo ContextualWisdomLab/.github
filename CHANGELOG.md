@@ -5,21 +5,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- Exclude non-text-input (vision/audio/video) models from the review sidecar's
-  plain-text catalog: `contextual_orchestrator_review_launcher.py`'s model
-  loop checked only output modality (`_has_text_output`), so a model whose
-  *input* modality evidence declares e.g. `image` (NVIDIA NIM's
-  `meta/llama-3.2-90b-vision-instruct`) could still be selected for Strix's
-  plain-text security-review prompts, which the provider then rejects with a
-  non-retryable HTTP 400 — burning the full multi-hour Strix job budget
-  before failing closed (#1415). `contextual-orchestrator` itself already
-  fixed the equivalent gap in its own runtime selection path (its
-  `chat_capability.requires_non_text_input`, cited there against this exact
-  incident class), but this repo's independently vendored catalog-builder
-  never called it and its emitted agent rows carry no `input:` tag for that
-  runtime gate to catch either. Now calls
-  `chat_capability.requires_non_text_input(model.input_modalities)`
-  alongside the existing output-modality check.
+- Exclude models with declared non-text input requirements from the Contextual
+  Orchestrator review catalog before cost, privacy, and account selection.
+  Plain-text Chat Completions, Responses, and structured-output review paths
+  remain eligible, while the existing multi-hour per-model review budgets are
+  unchanged (#1415).
 - Fail closed when the first top-level Noema JSON candidate is malformed,
   preventing a later approval object from overriding malformed preface data;
   multiple-object output remains supported when its first object is valid.
