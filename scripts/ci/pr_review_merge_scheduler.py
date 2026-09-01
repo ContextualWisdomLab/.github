@@ -1363,7 +1363,8 @@ def is_strix_context(node: dict[str, Any]) -> bool:
         )
         workflow_name = workflow.get("name")
         return workflow_name in {"Strix Security Scan", "Strix"} or (
-            node.get("name") == "strix" and workflow_name is None
+            node.get("name") == "strix"
+            and workflow_name in {None, REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW}
         )
     return (node.get("context") or "") in {"strix", "Strix Security Scan"}
 
