@@ -17,17 +17,27 @@ import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 ORGANIZATION = "ContextualWisdomLab"
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
+PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"
 
 
 class ManifestError(ValueError):
     """Raised when desired repository metadata is malformed or unsafe."""
+
+
+class _NoPagesRedirects(HTTPRedirectHandler):
+    """Refuse redirects so Pages verification cannot be redirected off GitHub Pages."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return no follow-up request for any redirect."""
+
+        return None
 
 
 def _require_exact_dict(value: Any, *, field: str) -> dict[str, Any]:
@@ -186,20 +196,29 @@ def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -
     )
 
 
+def _pages_url_is_expected(url: Any) -> bool:
+    """Return whether a URL is confined to the organization-owned Pages origin."""
+
+    return type(url) is str and (
+        url == PAGES_BASE_URL or url.startswith(f"{PAGES_BASE_URL}/")
+    )
+
+
 def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
     """Require a built Pages site whose published HTTPS URL is actually reachable."""
 
     if current.get("status") != "built":
         raise RuntimeError(f"GitHub Pages is not built for {repository}")
     html_url = current.get("html_url")
-    if type(html_url) is not str or not html_url.startswith("https://"):
+    if not _pages_url_is_expected(html_url):
         raise RuntimeError(f"GitHub Pages URL is invalid for {repository}")
     request = Request(
         html_url,
         headers={"User-Agent": "ContextualWisdomLab-repository-metadata-reconcile"},
     )
+    opener = build_opener(_NoPagesRedirects())
     try:
-        with urlopen(request, timeout=10) as response:
+        with opener.open(request, timeout=10) as response:
             if not response.read(1):
                 raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
