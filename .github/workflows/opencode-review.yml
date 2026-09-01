@@ -419,8 +419,21 @@ jobs:
             echo "Event draft snapshot is stale; continuing verdict polling for the live ready PR."
           fi
           verdict=""
+          live_poll_failures=0
+          review_poll_failures=0
+          max_poll_transport_failures=3
           while :; do
-            live_poll_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+            if ! live_poll_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+              live_poll_failures=$((live_poll_failures + 1))
+              if [ "$live_poll_failures" -ge "$max_poll_transport_failures" ]; then
+                echo "::error::Live pull request read failed ${live_poll_failures} consecutive times while polling; failing closed and releasing the runner."
+                exit 1
+              fi
+              echo "::warning::Live pull request read failed while polling (${live_poll_failures}/${max_poll_transport_failures}); retrying after revalidation delay."
+              sleep 30
+              continue
+            fi
+            live_poll_failures=0
             live_poll_head="$(printf '%s' "$live_poll_pr" | jq -r '.head.sha // empty')"
             live_poll_draft="$(printf '%s' "$live_poll_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
             live_poll_state="$(printf '%s' "$live_poll_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
@@ -444,7 +457,17 @@ jobs:
               echo "PR became draft while waiting for the current-head OpenCode verdict; the poll is no longer required until it is marked ready for review."
               exit 0
             fi
-            reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+            if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"; then
+              review_poll_failures=$((review_poll_failures + 1))
+              if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
+                echo "::error::Reviews API read failed ${review_poll_failures} consecutive times while polling; failing closed and releasing the runner."
+                exit 1
+              fi
+              echo "::warning::Reviews API read failed while polling (${review_poll_failures}/${max_poll_transport_failures}); revalidating live PR state before retry."
+              sleep 30
+              continue
+            fi
+            review_poll_failures=0
             verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
