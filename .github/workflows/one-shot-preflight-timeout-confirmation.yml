@@ -10,11 +10,11 @@ permissions:
 
 concurrency:
   group: one-shot-preflight-timeout-confirmation-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   repair:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - name: Checkout repair branch
