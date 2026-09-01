@@ -34,6 +34,15 @@ jobs:
           test "$live" = "$expected"
           printf '%s\n' "$expected" > /tmp/pr1629_expected_head
 
+      - name: Bridge renamed ADR path for the one-shot driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs/adr/0005-sidecar-preflight-token-budget.md
+          test ! -e docs/adr/0005-contextual-orchestrator-review-preflight-budget.md
+          ln -s 0005-sidecar-preflight-token-budget.md \
+            docs/adr/0005-contextual-orchestrator-review-preflight-budget.md
+
       - name: Apply evidence-driven source repair
         shell: bash
         run: |
@@ -74,9 +83,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -f \
+            docs/adr/0005-contextual-orchestrator-review-preflight-budget.md \
             .github/_temp_pr1629_trigger.txt \
             .github/workflows/_temp_pr1629_review_latency_repair.yml \
             scripts/ci/_temp_pr1629_review_latency_repair.py
+          test ! -e docs/adr/0005-contextual-orchestrator-review-preflight-budget.md
           git diff --check
           git status --short
           git add -A
