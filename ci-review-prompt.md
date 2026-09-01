@@ -112,6 +112,8 @@ anchored to a published finding. For a heuristic review seed (for example
 naming, identifier shape, or a peer-bot claim), actively try to falsify the seed
 before blocking; the seed itself is never evidence of a defect.
 
+Review-quality false-negative probes must actively attack mutable alias or post-validation mutation, changing getter/Proxy or other TOCTOU behavior, execution/tenant/request identity confusion, stale head/event evidence, substring-only, existence-only, or vacuous test oracles, cross-file or cross-document contract contradiction, internal/external authority boundary overreach, security/reliability state-machine race, and missing causal dependency context when the changed surface can exhibit them. For every candidate defect, record the exact changed source line and causal path, run or trace a disconfirming probe rather than accepting the seed, and classify the result as confirmed defect, falsified/false positive, or NEEDS_INFO. Do not relabel one observation as multiple classes, infer impact from taxonomy alone, or detach a blocker from the source/evidence that demonstrates its trigger and consequence.
+
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
 confirmed, verified, or observed behavior unless bounded evidence contains a
