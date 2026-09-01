@@ -9,7 +9,7 @@
 # are registered into the process-local KV by the launcher in the SAME process
 # that performs live model discovery and serves requests — never read back at
 # request time. The in-process free-priced discovery evidence is turned into a
-# ZDR-prioritized, credential-account-diverse agents catalog by
+# evidence-admitted agents catalog by
 # scripts/ci/contextual_orchestrator_review_policy.py for the `orchestrator/free`
 # (fail-closed zero-cost) pool.
 set -euo pipefail
@@ -35,12 +35,6 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # finishes, letting the shell script wait for a deterministic marker instead
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
-CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
-# Each KV credential is an independent account, including two credentials for
-# the same vendor or endpoint. The account cap prevents one credential from
-# consuming the bounded twelve-route preflight catalog without inventing a
-# provider-family equivalence relation.
-CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"
 
@@ -279,8 +273,6 @@ esac
 
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
-export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
-export ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"
 # Stream stdout/stderr through the redacting sanitizer as two named, awaitable
 # processes (not bare `> >(...)` substitutions, whose PIDs bash never exposes)
 # so a failure handler can wait for the sanitizer to finish flushing before it

@@ -1105,37 +1105,6 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     assert report["escalations_used"] == 1
 
 
-def test_escalation_budget_is_shared_and_bounded_across_candidates() -> None:
-    """Once ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` is spent, a further candidate
-    that would otherwise qualify is rejected immediately, without a second
-    call -- the shared budget is per-run, not per-candidate.
-    """
-    namespace = _load_launcher()
-    preflight = namespace["_preflight_review_agents"]
-    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-
-    length_response = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
-    agents = [
-        SimpleNamespace(id=f"budget_user_{index}", provider_name="openrouter", model="x/free")
-        for index in range(max_escalations)
-    ]
-    exhausted = SimpleNamespace(
-        id="budget_exhausted", provider_name="openrouter", model="x/free"
-    )
-    client = _ProbeClient(
-        {agent.id: dict(length_response) for agent in agents}
-        | {exhausted.id: dict(length_response)}
-    )
-
-    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
-        preflight([*agents, exhausted], client=client)
-
-    exhausted_row = failure.value.report["routes"][-1]
-    assert exhausted_row["attempts"] == 1
-    assert exhausted_row["error_type"] == "escalation_budget_exhausted"
-    assert failure.value.report["escalations_used"] == max_escalations
-    assert len(client.calls) == max_escalations * 2 + 1
-
 
 @pytest.mark.parametrize(
     ("http_status", "exception_type_name"),
@@ -1409,122 +1378,101 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
 
 
-def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case() -> None:
-    """Regression for Devin Review's fallback-retries-exceed-startup-deadline
-    finding: ``_preflight_review_agents`` used to start ``escalations_used``
-    fresh on every call, so ``_preflight_with_fallback`` calling it twice (up
-    to 8 primary routes, then up to 4 fallback routes) could spend the full
-    ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` budget in EACH stage -- up to 8
-    escalations total, 200s worst case (12 base attempts + 8 escalations x
-    10s), blowing past Layer 1's 180s healthz-readiness watchdog and
-    contradicting the ADR's own claimed 160s worst case.
-
-    This drives all 8 primary routes and all 4 fallback routes (the exact
-    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
-    always qualifies for escalation and never resolves, so every one of the
-    12 candidates *would* escalate if the budget were not shared. Asserts
-    the run spends at most ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations
-    in total (not per stage), and that the resulting worst-case attempt count
-    keeps total elapsed time at or under 160s -- both stages' escalation
-    counts are visible in the returned evidence.
-    """
+def test_fallback_escalation_is_independent_of_primary_catalog_order() -> None:
+    """Primary starvation cannot consume a fallback candidate's own retry."""
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
-    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
-    total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-    fallback_limit = total_route_limit - primary_limit
-
-    budget_starved_response = {
-        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
-    }
     primary_agents = [
         SimpleNamespace(id=f"primary_{index}", provider_name="openrouter", model="x/free")
-        for index in range(primary_limit)
+        for index in range(6)
     ]
     fallback_agents = [
         SimpleNamespace(id=f"fallback_{index}", provider_name="openrouter", model="y/priced")
-        for index in range(fallback_limit)
+        for index in range(3)
     ]
-    client = _ProbeClient(
-        {agent.id: dict(budget_starved_response) for agent in [*primary_agents, *fallback_agents]}
-    )
+    starved = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+    client = _ProbeClient({agent.id: dict(starved) for agent in [*primary_agents, *fallback_agents]})
 
     with pytest.raises(namespace["ReviewPreflightError"]) as failure:
         preflight(primary_agents, fallback_agents, client=client)
 
-    report = failure.value.report
-    assert report["escalations_used"] == max_escalations
-    assert report["primary_attempt"]["escalations_used"] == max_escalations
-
-    total_attempts = len(client.calls)
-    # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
-    # candidate across both stages) + 4 escalations (the shared cap) = 16.
-    assert total_attempts == total_route_limit + max_escalations
-
-
-def test_preflight_stage_limits_share_one_startup_budget() -> None:
-    """Free-first and priced-fallback probes share one bounded route budget."""
-    namespace = _load_launcher()
-    primary = namespace["_bounded_primary_catalog_limit"](
-        99, pool="auto", has_free_rows=True
+    assert failure.value.report["escalations_used"] == len(fallback_agents)
+    assert failure.value.report["primary_attempt"]["escalations_used"] == len(primary_agents)
+    assert len(client.calls) == 2 * (len(primary_agents) + len(fallback_agents))
+    assert all(
+        row.get("error_type") != "escalation_budget_exhausted"
+        for report in (failure.value.report["primary_attempt"], failure.value.report)
+        for row in report["routes"]
     )
-    fallback = namespace["_bounded_fallback_catalog_limit"](
-        99, primary_count=primary
+
+
+
+def test_every_budget_starved_route_gets_its_own_escalation() -> None:
+    """Catalog order cannot deny a candidate its own evidence-bearing retry."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents = [
+        SimpleNamespace(
+            id=f"starved_{index}", provider_name="openrouter", model=f"starved/{index}"
+        )
+        for index in range(6)
+    ]
+    starved = {
+        "choices": [{"finish_reason": "length", "message": {"content": ""}}]
+    }
+    client = _ProbeClient({agent.id: dict(starved) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    rows = failure.value.report["routes"]
+    assert [row["attempts"] for row in rows] == [2] * len(agents)
+    assert all(row.get("error_type") != "escalation_budget_exhausted" for row in rows)
+    assert failure.value.report["escalations_used"] == len(agents)
+    assert len(client.calls) == 2 * len(agents)
+
+
+def test_preflight_keeps_more_than_twelve_admitted_primary_routes() -> None:
+    """Admission cardinality cannot crash or truncate runtime preflight."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_with_fallback"]
+    agents = [
+        SimpleNamespace(id=f"ready_{index}", provider_name="openrouter", model=f"model/{index}")
+        for index in range(13)
+    ]
+    client = _ProbeClient({agent.id: _openai_text("OK") for agent in agents})
+
+    viable, report, fallback_used = preflight(agents, [], client=client)
+
+    assert viable == agents
+    assert report["ready_count"] == len(agents)
+    assert fallback_used is False
+    assert [call[0] for call in client.calls] == agents
+
+
+def test_auto_fallback_keeps_all_admitted_routes_after_primary_failure() -> None:
+    """Auto-pool fallback is evidence-triggered, not cardinality-truncated."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_with_fallback"]
+    primary = [
+        SimpleNamespace(id=f"free_{index}", provider_name="openrouter", model=f"free/{index}")
+        for index in range(9)
+    ]
+    fallback = [
+        SimpleNamespace(id=f"priced_{index}", provider_name="openrouter", model=f"priced/{index}")
+        for index in range(5)
+    ]
+    client = _ProbeClient(
+        {agent.id: TimeoutError("unavailable") for agent in primary}
+        | {agent.id: _openai_text("OK") for agent in fallback}
     )
-    assert (primary, fallback) == (8, 4)
-    assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
+    viable, report, fallback_used = preflight(primary, fallback, client=client)
 
-def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The per-account cap falls back to ``policy.DEFAULT_ACCOUNT_CAP``, not the total budget.
-
-    Regression for a real, observed failure mode
-    (ContextualWisdomLab/.github#1415, reported as "빈 깡통 경로 너무 많다"): a
-    sibling helper (``_catalog_family_cap()``) fell back to
-    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the *total* preflight budget --
-    instead of the intended per-account cap whenever its env var was unset.
-    That silently disabled per-account diversification: in a live production
-    run, two NVIDIA NIM credentials sharing one rate-limited upstream jointly
-    consumed all 12 preflight slots, of which 10 (83%) were then rejected via
-    429/404/timeout. This module's own equivalent helper must never resolve
-    to the same value as the total-routes budget when given the real
-    ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly smaller.
-    """
-    namespace = _load_launcher()
-    monkeypatch.delenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", raising=False)
-    cap = namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP)
-    assert cap == policy.DEFAULT_ACCOUNT_CAP
-    assert cap != namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-    assert cap < namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-
-
-def test_catalog_account_cap_honors_an_explicit_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still takes effect."""
-    namespace = _load_launcher()
-    monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
-    assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
-
-
-def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:
-    """``main()`` must wire the cap default from ``policy.DEFAULT_ACCOUNT_CAP``.
-
-    A hand-typed literal (or, worse, a total-routes-scale constant) can
-    silently drift out of sync with ``policy.DEFAULT_ACCOUNT_CAP`` with no
-    test catching it -- the exact drift that produced
-    ContextualWisdomLab/.github#1415's real preflight-budget waste. This
-    source-level contract test pins both ``build_zdr_prioritized_catalog``
-    call sites in ``main()`` to the single source of truth and forbids the
-    total-routes constant from ever reappearing as the account-cap fallback.
-    """
-    source = _LAUNCHER.read_text(encoding="utf-8")
-    assert source.count("account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP)") == 2
-    assert "ORCHESTRATOR_CATALOG_FAMILY_CAP" not in source
-    assert 'os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")' not in source
+    assert viable == fallback
+    assert fallback_used is True
+    assert report["fallback_reason"] == "primary_routes_unavailable"
+    assert [call[0] for call in client.calls] == [*primary, *fallback]
 
 
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
@@ -1768,3 +1716,17 @@ def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
         assert main() == 0
 
     assert output.getvalue() == "client_disconnected\n"
+
+
+def test_launcher_has_no_legacy_catalog_admission_caps() -> None:
+    """Runtime bootstrap must not restore retired catalog admission authority."""
+    namespace = _load_launcher()
+    source = _LAUNCHER.read_text(encoding="utf-8")
+
+    assert "_bounded_primary_catalog_limit" not in namespace
+    assert "_bounded_fallback_catalog_limit" not in namespace
+    assert "_catalog_account_cap" not in namespace
+    assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES" not in source
+    assert "REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT" not in source
+    assert "ORCHESTRATOR_CATALOG_LIMIT" not in source
+    assert "ORCHESTRATOR_CATALOG_ACCOUNT_CAP" not in source
