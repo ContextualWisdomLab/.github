@@ -40,6 +40,10 @@ Semantic Versioning where the repository publishes a release.
   unrelated to the review itself. Treat "cannot verify" the same as
   "verified stale": stop cancelling further runs, but exit 0 so the job --
   and the actual review later in it -- proceeds.
+- Prevent a cancelled upstream `workflow_run` notification from cancelling a
+  live same-head Noema review and then skipping its own Noema job. The shared
+  head-specific group remains serialized, but cancelled upstream completions
+  no longer receive `cancel-in-progress` authority.
 - Replace the required OpenCode workflow's two chained 325-minute polling jobs
   with event-driven continuation. The required run dispatches the authenticated
   multi-hour review, checks once, and fails closed without retaining a hosted

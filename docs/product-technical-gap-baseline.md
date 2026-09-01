@@ -2234,6 +2234,14 @@ directional condition prevents an older cleanup racing a push from cancelling
 the newer run and closes the stale-compute gap without weakening exact-head
 review publication.
 
+Cancelled upstream review runs exposed a separate same-head race: their
+`workflow_run` notifications entered this concurrency group, cancelled a live
+native Noema review, and then skipped because the upstream conclusion was
+`cancelled`. The group remains shared and head-specific, but its
+`cancel-in-progress` expression now denies cancellation authority to exactly
+those skipped notifications. Successful or failed upstream completions still
+serialize and trigger the intended current-head review.
+
 ## 2026-08-31 noema-review-gate: the live-head re-check added to close the above gap was itself an unguarded API call
 
 Auditing the directional cancellation guard immediately above (run IDs smaller than the current run, plus
