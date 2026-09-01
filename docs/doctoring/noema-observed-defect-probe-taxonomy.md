@@ -56,3 +56,8 @@ GitHub. (2026). *About pull request reviews*. GitHub Docs. https://docs.github.c
 National Institute of Standards and Technology. (2022). *Secure Software Development Framework (SSDF) Version 1.1: Recommendations for mitigating the risk of software vulnerabilities* (NIST SP 800-218). https://doi.org/10.6028/NIST.SP.800-218
 
 OWASP Foundation. (2021). *OWASP Code Review Guide, version 2.0*. https://owasp.org/www-project-code-review-guide/
+
+
+### Source-bound class witnesses
+
+A probe class is not admitted from prose. Every class-specific witness field must now be the exact `{path, line, side}` reference of the probe's changed-side source location. The validator rejects free-form boilerplate and rejects borrowing another changed line, so class diversity cannot be manufactured by relabeling generic text. The class name remains an audit taxonomy; the machine-enforced evidence is the exact source binding plus the existing concrete hypothesis, counterexample, outcome, and changed-line checks.

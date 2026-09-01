@@ -2480,3 +2480,6 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+- Noema observed-defect probe admission now binds every class-specific witness field to the probe's exact changed-side `{path,line,side}` location. Free-form boilerplate and evidence borrowed from another changed line fail closed; distinct class labels no longer manufacture source evidence.

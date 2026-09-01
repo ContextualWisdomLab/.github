@@ -20,8 +20,8 @@ DIFF = """diff --git a/tool.py b/tool.py
 """
 
 
-def _source_ref(line: int, excerpt: str) -> dict[str, object]:
-    return {"path": "tool.py", "line": line, "side": "RIGHT", "source_excerpt": excerpt}
+def _source_ref(line: int) -> dict[str, object]:
+    return {"path": "tool.py", "line": line, "side": "RIGHT"}
 
 
 def _verdict(first_evidence: dict, second_evidence: dict) -> dict:
@@ -85,14 +85,14 @@ def test_generic_boilerplate_witnesses_do_not_authorize_probe_classes() -> None:
 def test_exact_changed_source_refs_can_back_distinct_probe_classes() -> None:
     """Every class witness must resolve to the exact changed-side source line it claims."""
     first = {
-        "alias_origin": _source_ref(1, "candidate = source.value"),
-        "mutation_attempt": _source_ref(1, "candidate = source.value"),
-        "post_validation_observation": _source_ref(1, "candidate = source.value"),
+        "alias_origin": _source_ref(1),
+        "mutation_attempt": _source_ref(1),
+        "post_validation_observation": _source_ref(1),
     }
     second = {
-        "incoming_identity": _source_ref(10, "guard = current_id"),
-        "retained_identity": _source_ref(10, "guard = current_id"),
-        "mismatch_guard": _source_ref(10, "guard = current_id"),
+        "incoming_identity": _source_ref(10),
+        "retained_identity": _source_ref(10),
+        "mismatch_guard": _source_ref(10),
     }
     gate.validate_substantive_verdict(_verdict(first, second), DIFF, ["tool.py"])
 
@@ -100,14 +100,14 @@ def test_exact_changed_source_refs_can_back_distinct_probe_classes() -> None:
 def test_probe_class_witness_cannot_point_at_an_unrelated_changed_line() -> None:
     """A class cannot borrow another probe's line merely because that line also changed."""
     first = {
-        "alias_origin": _source_ref(10, "guard = current_id"),
-        "mutation_attempt": _source_ref(10, "guard = current_id"),
-        "post_validation_observation": _source_ref(10, "guard = current_id"),
+        "alias_origin": _source_ref(10),
+        "mutation_attempt": _source_ref(10),
+        "post_validation_observation": _source_ref(10),
     }
     second = {
-        "incoming_identity": _source_ref(10, "guard = current_id"),
-        "retained_identity": _source_ref(10, "guard = current_id"),
-        "mismatch_guard": _source_ref(10, "guard = current_id"),
+        "incoming_identity": _source_ref(10),
+        "retained_identity": _source_ref(10),
+        "mismatch_guard": _source_ref(10),
     }
     with pytest.raises(RuntimeError, match="probe location"):
         gate.validate_substantive_verdict(_verdict(first, second), DIFF, ["tool.py"])

@@ -339,9 +339,9 @@ def parse_diff_path(raw: str, prefix: str) -> str:
 
 
 def _validate_observed_probe_class_evidence(
-    probe: dict[str, Any], probe_kind: str, index: int
+    probe: dict[str, Any], probe_kind: str, index: int, location: tuple[Any, ...]
 ) -> None:
-    """Require the exact deterministic witness schema for a claimed defect class."""
+    """Require every defect-class witness to bind to the probe's exact changed line."""
     class_evidence = probe.get("class_evidence")
     required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
     if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
@@ -350,12 +350,18 @@ def _validate_observed_probe_class_evidence(
             f"Noema adversarial probe {index} class_evidence for {probe_kind} "
             f"must contain exactly: {expected}"
         )
+    expected_ref = {"path": location[0], "line": location[1], "side": location[2]}
     for field in required_fields:
-        value = class_evidence.get(field)
-        if not isinstance(value, str) or not value.strip():
+        source_ref = class_evidence.get(field)
+        if not isinstance(source_ref, dict) or set(source_ref) != {"path", "line", "side"}:
             raise RuntimeError(
-                f"Noema adversarial probe {index} class_evidence.{field} "
-                "requires source-traced witness text"
+                f"Noema adversarial probe {index} class_evidence.{field} requires a "
+                "source-bound changed-line reference"
+            )
+        if source_ref != expected_ref:
+            raise RuntimeError(
+                f"Noema adversarial probe {index} class_evidence.{field} must bind to "
+                "the probe location"
             )
 
 def validate_substantive_verdict(
@@ -409,11 +415,11 @@ def validate_substantive_verdict(
             raise RuntimeError(
                 f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
             )
-        _validate_observed_probe_class_evidence(probe, probe_kind, index)
-        probe_kinds.add(probe_kind)
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
             raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+        _validate_observed_probe_class_evidence(probe, probe_kind, index, location)
+        probe_kinds.add(probe_kind)
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
@@ -1024,7 +1030,7 @@ def call_llm(
                                 {
                                     **location_example,
                                     "probe_kind": "mutable_alias|time_of_check_time_of_use|execution_identity|coercion_boundary|test_oracle|cross_contract|authority_boundary|dependency_context|state_machine_race",
-                                    "class_evidence": {"exact_fields_for_selected_probe_kind": "source-traced witness text"},
+                                    "class_evidence": {"exact_fields_for_selected_probe_kind": {**location_example}},
                                     "hypothesis": "...",
                                     "attack_or_counterexample": "...",
                                     "evidence": "observed or source-traced result",
@@ -1046,7 +1052,7 @@ def call_llm(
                 ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Classify every adversarial probe with one observed defect class and use distinct classes when multiple probes are required: mutable_alias, time_of_check_time_of_use, execution_identity, coercion_boundary, test_oracle, cross_contract, authority_boundary, dependency_context, state_machine_race.",
-                "A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific source-traced witness fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ".",
+                "A probe_kind label is not evidence by itself. class_evidence must use exactly the class-specific fields in this schema: " + json.dumps(OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS, separators=(",", ":")) + ". Every field value must be the exact {path,line,side} changed-line reference of that probe; free-form witness prose or another changed line does not count toward class diversity.",
                 "Actively attack caller-owned mutable aliases and readonly illusions; changing getters or Proxies between validation and use; execution/tenant/request identity confusion; JavaScript or serialization coercion at enum, key, digest, and identity boundaries; weak substring or vacuous test oracles; contradictions across PRD/ADR/architecture/changelog/contracts; component-vs-host authority overreach; omitted causal dependency context; and cancellation/retry/publication state-machine races.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(

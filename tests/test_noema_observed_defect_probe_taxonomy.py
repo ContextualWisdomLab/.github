@@ -32,12 +32,10 @@ CLASS_EVIDENCE_FIELDS = {
 }
 
 
-def _class_evidence(probe_kind: str) -> dict[str, str]:
-    """Build the exact class-specific witness schema expected for one probe kind."""
-    return {
-        field: f"source-traced {field.replace('_', ' ')} witness"
-        for field in CLASS_EVIDENCE_FIELDS[probe_kind]
-    }
+def _class_evidence(probe_kind: str) -> dict[str, dict[str, object]]:
+    """Bind every class-specific witness field to the exact changed probe line."""
+    source_ref = {"path": "tool.py", "line": 1, "side": "RIGHT"}
+    return {field: dict(source_ref) for field in CLASS_EVIDENCE_FIELDS[probe_kind]}
 
 
 def _verdict(*, first_kind: Any, second_kind: Any) -> dict:
