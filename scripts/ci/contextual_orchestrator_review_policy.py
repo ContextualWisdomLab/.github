@@ -3,9 +3,11 @@
 ``orchestrator/free`` remains strictly zero-priced and admits only provider
 accounts explicitly authorized for that pool. ``orchestrator/auto`` may retain
 other globally discovered providers, including OpenAI, when their independent
-policy permits them. Models without a complete price vector remain visible in
-audit counts but are never admitted to CI review. Partial, malformed, or
-contradictory price vectors fail closed.
+policy permits them. Models without complete price evidence remain visible in
+audit counts but are never admitted to CI review. Token-priced routes require a
+complete prompt/completion vector; Bytez may instead carry the exact-zero
+provider-meter attestation represented by contextual-orchestrator's ``is_free``
+result. Partial, malformed, or contradictory price evidence fails closed.
 """
 
 from __future__ import annotations
@@ -104,21 +106,43 @@ def _validated_price(value: object, *, route: str, field: str) -> float:
 
 def _normalize_cost_evidence(
     *,
+    provider: str,
     route: str,
     is_free: bool,
     prompt_price: object,
     completion_price: object,
     currency_code: object,
-) -> tuple[str, float | None, float | None, str | None]:
-    """Classify complete free, priced, or wholly unavailable price evidence.
+) -> tuple[
+    str,
+    float | None,
+    float | None,
+    str | None,
+    dict[str, object] | None,
+]:
+    """Classify token-price or exact-zero provider-meter cost evidence.
 
-    A provider that publishes neither price component is retained for audit but
-    is not eligible for review routing. A partial vector is ambiguous and
-    rejected. Free markers remain authoritative only when any accompanying
-    published vector is complete, valid, and zero-priced.
+    Token-priced providers must publish both price components and a currency.
+    Bytez is different: the pinned contextual-orchestrator adapter derives its
+    ``is_free`` route identity from exact-zero ``meterPrice`` evidence while
+    intentionally leaving per-token fields unset because the provider bills by
+    its own meter. Preserve that attestation as a separate non-token vector
+    instead of fabricating token prices. A Bytez row lacking that upstream free
+    identity remains unknown and therefore cannot enter ``orchestrator/free``.
     """
     if prompt_price is None and completion_price is None:
-        return (COST_UNKNOWN, None, None, None)
+        if provider == "bytez" and is_free:
+            return (
+                COST_FREE,
+                None,
+                None,
+                None,
+                {
+                    "source": "bytez.meterPrice",
+                    "price": 0.0,
+                    "unit": "provider_meter_unit",
+                },
+            )
+        return (COST_UNKNOWN, None, None, None, None)
 
     normalized_prompt = _validated_price(
         prompt_price, route=route, field="prompt_price_per_1k"
@@ -135,6 +159,7 @@ def _normalize_cost_evidence(
         normalized_prompt,
         normalized_completion,
         currency_code.strip().upper(),
+        None,
     )
 
 
@@ -177,14 +202,19 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
 
         is_free = is_free_route(row.get("is_free"))
         route = f"{provider}/{model}"
-        cost_evidence, prompt_price, completion_price, currency_code = (
-            _normalize_cost_evidence(
-                route=route,
-                is_free=is_free,
-                prompt_price=row.get("prompt_price_per_1k"),
-                completion_price=row.get("completion_price_per_1k"),
-                currency_code=row.get("currency_code"),
-            )
+        (
+            cost_evidence,
+            prompt_price,
+            completion_price,
+            currency_code,
+            non_token_price_evidence,
+        ) = _normalize_cost_evidence(
+            provider=provider,
+            route=route,
+            is_free=is_free,
+            prompt_price=row.get("prompt_price_per_1k"),
+            completion_price=row.get("completion_price_per_1k"),
+            currency_code=row.get("currency_code"),
         )
         candidate_id = row.get("agent_id") or f"{provider}_{model}"
         normalized.append(
@@ -197,6 +227,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "prompt_price_per_1k": prompt_price,
                 "completion_price_per_1k": completion_price,
                 "currency_code": currency_code,
+                "non_token_price_evidence": non_token_price_evidence,
                 "base_url": row.get("base_url") or PROVIDER_BASE_URLS[provider],
                 "credential_key": credential_key,
                 "auth_scheme": row.get("auth_scheme")
@@ -379,6 +410,7 @@ def build_zdr_prioritized_catalog(
                     "model": row["model"],
                     "agent_id": entry["id"],
                     "cost_evidence": _cost_evidence(row),
+                    "non_token_price_evidence": row.get("non_token_price_evidence"),
                     "zdr": is_zdr_model(
                         str(row["provider"]),
                         model=str(row["model"]),
