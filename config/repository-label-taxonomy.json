@@ -225,6 +225,21 @@
       "repository": "scopeweave",
       "issue": 650,
       "type": "documentation"
+    },
+    {
+      "repository": "newsdom-api",
+      "issue": 782,
+      "type": "documentation"
+    },
+    {
+      "repository": "kaefa",
+      "issue": 81,
+      "type": "documentation"
+    },
+    {
+      "repository": "kaefa",
+      "issue": 82,
+      "type": "documentation"
     }
   ]
 }
