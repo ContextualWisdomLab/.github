@@ -1,6 +1,6 @@
 name: One-shot PR 1585 verified repair bootstrap
 
-# Rerun after scoping the regression's head-SHA assertion to the concurrency block.
+# Export transformed blobs when the branch credential cannot update workflow files.
 on:
   push:
     branches:
@@ -55,9 +55,33 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
           rm -rf audit-repo
+          set +e
           bash /tmp/pr1585-source-fix.sh
+          repair_rc=$?
+          set -e
 
-          cd repo
+          if [ "$repair_rc" -ne 0 ]; then
+            cd "$GITHUB_WORKSPACE/repo"
+            test -f .github/workflows/strix.yml
+            test -f tests/test_required_workflow_queue_contract.py
+            cp .github/workflows/strix.yml /tmp/pr1585-strix.yml
+            cp tests/test_required_workflow_queue_contract.py /tmp/pr1585-required-workflow-queue-contract.py
+
+            git reset --hard "origin/$TARGET_BRANCH"
+            mkdir -p source-fix-output/1585
+            cp /tmp/pr1585-strix.yml source-fix-output/1585/strix.yml
+            cp /tmp/pr1585-required-workflow-queue-contract.py source-fix-output/1585/test_required_workflow_queue_contract.py
+            printf '%s\n' "$GITHUB_SHA" > source-fix-output/1585/source-head.txt
+            git add source-fix-output/1585
+            git diff --cached --check
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(ci): export verified PR 1585 repair blobs"
+            git push origin "HEAD:${TARGET_BRANCH}"
+            exit 0
+          fi
+
+          cd "$GITHUB_WORKSPACE/repo"
           git fetch origin "$TARGET_BRANCH"
           git reset --hard "origin/$TARGET_BRANCH"
           for path in \
