@@ -1,0 +1,94 @@
+name: One-shot PR 1589 probe evidence repair v4
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/source-fix-1589-probe-evidence-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Apply GREEN, remove temporary writers, then verify full suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path(".github/workflows/source-fix-1589-probe-evidence-v3.yml").read_text(encoding="utf-8")
+          marker = "        run: |\n"
+          if workflow.count(marker) != 1:
+              raise SystemExit("v3 repair run block changed unexpectedly")
+          script = textwrap.dedent(workflow.split(marker, 1)[1])
+          setup_end = "python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt\n\n"
+          if setup_end not in script:
+              raise SystemExit("v3 setup marker changed unexpectedly")
+          script = "set -euo pipefail\n" + script.split(setup_end, 1)[1]
+          script = script.replace(
+              "  tests/test_required_workflow_queue_contract.py\n",
+              "",
+              1,
+          )
+          full_suite = "PYTHONPATH=. python3 -m pytest -q tests\n"
+          if script.count(full_suite) != 1:
+              raise SystemExit("v3 full-suite marker changed unexpectedly")
+          script = script.replace(full_suite, "echo 'full suite deferred until temporary writers are removed'\n", 1)
+          final_marker = "git rm \\\n"
+          if script.count(final_marker) != 1:
+              raise SystemExit("v3 finalization marker changed unexpectedly")
+          script = script.split(final_marker, 1)[0]
+          Path("/tmp/apply-v3-green.sh").write_text(script, encoding="utf-8")
+          PY
+          bash /tmp/apply-v3-green.sh
+
+          git rm \
+            .github/workflows/source-fix-1589-probe-evidence.yml \
+            .github/workflows/source-fix-1589-probe-evidence-v2.yml \
+            .github/workflows/source-fix-1589-probe-evidence-v3.yml \
+            .github/workflows/source-fix-1589-probe-evidence-v4.yml
+
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_observed_probe_doctoring.py \
+            tests/test_noema_review_gate.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py \
+            tests/test_required_workflow_queue_contract.py
+          PYTHONPATH=. python3 -m pytest -q tests
+          interrogate --fail-under=100 scripts/ci/noema_review_gate.py
+          python3 -m compileall -q scripts/ci tests
+          git diff --check
+
+          git add \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_observed_defect_probe_taxonomy.py \
+            tests/test_noema_review_gate.py \
+            tests/test_repository_branch_coverage_javascript_and_noema.py \
+            tests/test_repository_branch_coverage_reporting_edges.py \
+            .github/workflows/noema-observed-probe-quality-ci.yml \
+            docs/doctoring/noema-observed-defect-probe-taxonomy.md \
+            docs/product-technical-gap-baseline.md \
+            CHANGELOG.md
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(noema): bind probe classes to structured evidence"
+          git push origin "HEAD:${TARGET_BRANCH}"
