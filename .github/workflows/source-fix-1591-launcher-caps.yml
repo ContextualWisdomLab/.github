@@ -15,12 +15,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - name: Run RED-GREEN repair driver and self-remove
+      - name: Resume RED-GREEN repair and self-remove
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/no-heuristic-free-review-admission
           TEMP_WORKFLOW: .github/workflows/source-fix-1591-launcher-caps.yml
           TEMP_DRIVER: scripts/ci/source_fix_1591_launcher_caps.py
+          RESUME_DRIVER: scripts/ci/source_fix_1591_resume.py
         shell: bash
         run: |
           set -euo pipefail
@@ -32,9 +33,9 @@ jobs:
           branch_head="$(git rev-parse HEAD)"
 
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-          PYTHONPATH=. python3 "$TEMP_DRIVER"
+          PYTHONPATH=. python3 "$RESUME_DRIVER"
 
-          git rm "$TEMP_WORKFLOW" "$TEMP_DRIVER"
+          git rm "$TEMP_WORKFLOW" "$TEMP_DRIVER" "$RESUME_DRIVER"
           git add scripts/ci/contextual_orchestrator_review_policy.py
           git add scripts/ci/contextual_orchestrator_review_launcher.py
           git add scripts/ci/contextual_orchestrator_review_sidecar.sh
@@ -44,6 +45,7 @@ jobs:
           git diff --cached --check
           test ! -e "$TEMP_WORKFLOW"
           test ! -e "$TEMP_DRIVER"
+          test ! -e "$RESUME_DRIVER"
 
           remote_branch="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
           test "$remote_branch" = "$branch_head"
