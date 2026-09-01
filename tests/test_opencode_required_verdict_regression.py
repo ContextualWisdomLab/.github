@@ -16,6 +16,19 @@ HEAD = "a" * 40
 WORKFLOW = Path(".github/workflows/opencode-review.yml")
 DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 STATUS_HELPER = Path("scripts/ci/opencode_dispatch_status.py")
+RECEIPT_HELPER = Path("scripts/ci/opencode_review_receipt_gate.py")
+
+
+def request_review_script() -> str:
+    """Extract the production scheduler-wake run block."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Request current-head OpenCode review execution\n", 1
+    )[1]
+    block = step.split("        run: |\n", 1)[1].split(
+        "\n      - name: Fail closed", 1
+    )[0]
+    return textwrap.dedent(block)
 
 
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
@@ -108,16 +121,23 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Reject untrusted fork review resource consumption" in workflow
     assert "github.event.pull_request.head.repo.full_name" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
-    assert "timeout-minutes: 5" in target_job.split("    steps:\n", 1)[0]
-    assert "for attempt in" not in workflow
-    assert "opencode-review-wait-window-one" not in workflow
+    assert "timeout-minutes:" not in target_job.split("    steps:\n", 1)[0]
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert "steps.verdict.outputs.verdict == ''" in target_job
-    assert 'event_type:"opencode-review"' in workflow
-    assert 'sleep "$remaining_seconds"' not in workflow
-    assert workflow.count("timeout 25 gh api --paginate") == 1
-    assert workflow.count('if ! reviews="$(timeout 25 gh api') == 1
-    assert workflow.count('reviews="[]"') == 1
+    assert 'event_type:"merge-scheduler"' in workflow
+    assert "trigger_reviews:true" in workflow
+    dispatch_step = target_job.split(
+        "      - name: Request current-head OpenCode review execution", 1
+    )[1].split("      - name: Fail closed", 1)[0]
+    assert "scripts/ci/opencode_review_receipt_gate.py" in dispatch_step
+    assert "github.workflow_sha" in dispatch_step
+    assert "evaluate_receipts" in dispatch_step
+    assert dispatch_step.index("evaluate_receipts") < dispatch_step.index(
+        "exchange_github_app_token"
+    )
+    assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
+    assert "while :; do" in target_job
+    assert "sleep 30" in target_job
+    assert "enable_auto_merge:false" in workflow
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
@@ -127,14 +147,80 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     )
 
 
-def test_formal_receipt_reruns_failed_required_job_without_runner_polling() -> None:
-    """A formal receipt wakes the failed required run instead of polling for hours."""
+@pytest.mark.parametrize(
+    ("reviews", "dispatches"),
+    (
+        ([{"id": 7, **review(state="APPROVED", body="## Verdict\nApprove")}], 0),
+        ([{"id": 8, **review(state="CHANGES_REQUESTED", body="## Verdict\nRequest changes")}], 0),
+        ([], 1),
+        ([{"id": 9, **review(state="APPROVED", commit_id="b" * 40, body="## Verdict\nApprove")}], 1),
+        ([{"id": 10, **review(state="APPROVED", body="## Pull request overview\n\ndeterministic fallback approval")}], 1),
+    ),
+)
+def test_scheduler_wake_reuses_trusted_receipt_predicate(
+    tmp_path: Path, reviews: list[dict[str, object]], dispatches: int
+) -> None:
+    """Only missing, stale, or fallback-only evidence wakes the scheduler."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "dispatches"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
+  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
+elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
+  printf '[%s]' "$FAKE_REVIEWS"
+elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
+  cat >/dev/null
+  printf 'dispatch\n' >>"$DISPATCH_CALLS"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/usr/bin/env bash
+[[ "$*" == *"exchange_github_app_token"* ]] && printf '{"token":"app"}' || printf '{"value":"oidc"}'
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "REAL_RECEIPT_HELPER": str(RECEIPT_HELPER.resolve()),
+        "FAKE_REVIEWS": json.dumps(reviews),
+        "DISPATCH_CALLS": str(calls),
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://api.opencode.ai",
+        "TARGET_REPOSITORY": "owner/repo",
+        "PR_NUMBER": "7",
+        "HEAD_SHA": HEAD,
+        "PR_DRAFT": "false",
+        "BASE_BRANCH": "main",
+        "WORKFLOW_SHA": "c" * 40,
+        "GH_TOKEN": "token",
+    }
+    result = subprocess.run(
+        ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr
+    actual = calls.read_text(encoding="utf-8").count("dispatch") if calls.exists() else 0
+    assert actual == dispatches
+
+
+def test_formal_receipt_wake_remains_available_without_bounding_runner_polling() -> None:
+    """The receipt wake path coexists with the unbounded required review wait."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "for attempt in" not in required
+    assert "while :; do" in required
     assert "rerun-failed-jobs" in dispatched
-    assert '--argjson required_run_id "$GITHUB_RUN_ID"' in required
-    assert "required_run_id:$required_run_id" in required
     assert "id: formal_review_receipt" in dispatched
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
     assert "github.event.client_payload.required_run_id != ''" in dispatched
