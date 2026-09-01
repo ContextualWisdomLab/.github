@@ -230,6 +230,10 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
             errors.append(
                 "central solo-maintainer ruleset must not configure required reviewers"
             )
+        if parameters.get("require_code_owner_review") is not False:
+            errors.append(
+                "central solo-maintainer ruleset must not require code-owner review"
+            )
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("stale-review dismissal on push is disabled")
         if parameters.get("require_last_push_approval") is not False:
@@ -359,6 +363,10 @@ def audit_repository_ruleset(payload: dict[str, Any]) -> list[str]:
         if parameters.get("required_reviewers") not in (None, []):
             errors.append(
                 "repository solo-maintainer ruleset must not configure required reviewers"
+            )
+        if parameters.get("require_code_owner_review") is not False:
+            errors.append(
+                "repository solo-maintainer ruleset must not require code-owner review"
             )
         if parameters.get("dismiss_stale_reviews_on_push") is not True:
             errors.append("repository ruleset stale-review dismissal on push is disabled")
