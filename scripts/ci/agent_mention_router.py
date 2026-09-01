@@ -15,13 +15,18 @@ from typing import Any, Sequence
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# "opencode-agent" also accepts /opencode and /oc: upstream OpenCode's own
+# GitHub Action documents those as its trigger phrases
+# (https://open-code.ai/en/docs/github), and this repo's dispatch pipeline
+# accepts them as aliases of the same @opencode-agent request rather than
+# forcing commenters to learn a locally-invented mention instead.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
         r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
-        r"(?<![A-Za-z0-9_-])@opencode-agent(?![A-Za-z0-9_-])",
+        r"(?<![A-Za-z0-9_-])(?:@opencode-agent|/opencode|/oc)(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     ),
 }

@@ -111,6 +111,38 @@ def test_exact_mentions_and_parse_event() -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/opencode please re-review",
+        "/oc please re-review",
+        "kicking off /oc",
+        "/OC",
+        "/OpenCode",
+    ],
+)
+def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
+    """Upstream OpenCode's own /opencode and /oc trigger phrases also dispatch."""
+
+    module = load_module()
+    assert module.exact_mentions(body) == ("opencode-agent",)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "the /occupied seat",
+        "visit /oceanography for more",
+        "see /opencode-docs for the guide",
+    ],
+)
+def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
+    """A longer token merely starting with /oc or /opencode is not a mention."""
+
+    module = load_module()
+    assert module.exact_mentions(body) == ()
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
