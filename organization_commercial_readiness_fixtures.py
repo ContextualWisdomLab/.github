@@ -74,10 +74,18 @@ def manual_workflow(*, workflow_id: int = 9) -> WorkflowRecord:
         path=".github/workflows/commercial-product-development.yml",
         content=(
             "# cwl-org-commercial-entrypoint: v1\n"
+            "# cwl-ddd-architecture-audit: required\n"
             "on:\n  workflow_dispatch:\n"
             "concurrency:\n  group: product-development\n"
             "permissions:\n  contents: write\n"
             "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}\n"
+            "prompt: |\n"
+            "  Apply Domain-Driven Design before and during every increment.\n"
+            "  Classify core, supporting, and generic subdomains; define each Bounded Context, Context Map, and Ubiquitous Language.\n"
+            "  Keep Aggregate, Entity, Value Object, Domain Service, Repository, Domain Event, and Invariant names aligned across code, API, database, and tests.\n"
+            "  Isolate external systems behind an Anti-Corruption Layer and keep the Shared Kernel minimal.\n"
+            "  Audit and correct misleading directory paths with imports, packaging, callers, tests, and architecture documents in the same bounded change.\n"
+            "  Update docs/product-technical-gap-baseline.md with detected and repaired architecture drift.\n"
         ),
     )
 

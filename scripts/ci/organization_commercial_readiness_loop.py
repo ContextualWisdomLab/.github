@@ -28,6 +28,25 @@ from urllib.parse import quote
 DEFAULT_ORGANIZATION = "ContextualWisdomLab"
 ORGANIZATION_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ENTRYPOINT_MARKER = "# cwl-org-commercial-entrypoint: v1"
+DDD_ENTRYPOINT_MARKER = "# cwl-ddd-architecture-audit: required"
+DDD_CONTRACT_TERMS = (
+    "Domain-Driven Design",
+    "core, supporting, and generic subdomains",
+    "Bounded Context",
+    "Context Map",
+    "Ubiquitous Language",
+    "Aggregate",
+    "Entity",
+    "Value Object",
+    "Domain Service",
+    "Repository",
+    "Domain Event",
+    "Invariant",
+    "Anti-Corruption Layer",
+    "Shared Kernel",
+    "directory paths",
+    "docs/product-technical-gap-baseline.md",
+)
 CENTRAL_REPOSITORY = f"{DEFAULT_ORGANIZATION}/.github"
 CENTRAL_REPAIR_EVENT = "pr-review-fix-scheduler"
 ACTIVE_RUN_STATES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
@@ -540,14 +559,22 @@ def is_live_writer_run(run: RunRecord) -> bool:
     return run.status in ACTIVE_RUN_STATES and _writer_signal(run.name, run.path)
 
 
+def has_domain_driven_development_contract(source: str) -> bool:
+    """Return whether one entrypoint accepts the complete DDD repair contract."""
+    return DDD_ENTRYPOINT_MARKER in source and all(
+        term in source for term in DDD_CONTRACT_TERMS
+    )
+
+
 def is_manual_product_entrypoint(workflow: WorkflowRecord) -> bool:
-    """Return whether a workflow explicitly opts in to central product dispatch."""
+    """Return whether a workflow safely opts in to central product development."""
     source = workflow.content
     if workflow.state != "active" or source is None:
         return False
     return all(
         (
             ENTRYPOINT_MARKER in source,
+            has_domain_driven_development_contract(source),
             bool(WORKFLOW_DISPATCH_RE.search(source)),
             not bool(SCHEDULE_RE.search(source)),
             "NVIDIA_NIM_API_KEY" in source,

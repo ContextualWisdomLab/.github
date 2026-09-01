@@ -10,7 +10,7 @@ The coordinator may dispatch at most one review-repair workflow and one product-
 
 A single workflow cannot safely write every repository merely because it runs in the organization `.github` repository. GitHub's default `GITHUB_TOKEN` is scoped to the repository containing the workflow; cross-repository Actions dispatch therefore requires an explicitly provisioned user or GitHub App credential with the required repository and Actions permissions. This control does not make every repository directly writable. It only considers repositories the live API reports as organization-owned, non-fork, enabled, non-archived, default-branch-bearing, and writable by the authenticated installation.
 
-The central job therefore refuses both repository-scoped and reviewer-scoped token fallbacks. It requires the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is not accepted for cross-repository coordination. The maintainer token is exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
+The central job therefore refuses repository-scoped and reviewer-scoped token fallbacks. It prefers the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; when that credential is absent, the scheduled default-branch job may exchange its job-bound GitHub OIDC identity for the existing short-lived OpenCode App installation token. Both exchange calls have bounded connection and total timeouts, both returned tokens are masked before reuse, and malformed or empty responses fail closed. `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is never accepted for cross-repository coordination. The resulting maintainer credential is exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
 
 ## Dynamic repository-writer lease
 
@@ -34,13 +34,20 @@ Product development is dispatched only when a repository has zero open pull requ
 
 ```yaml
 # cwl-org-commercial-entrypoint: v1
+# cwl-ddd-architecture-audit: required
 on:
   workflow_dispatch:
 ```
 
-The entrypoint must contain an explicit `concurrency` contract, use `NVIDIA_NIM_API_KEY`, omit `COPILOT_GITHUB_TOKEN`, have no schedule of its own, and carry a commercial/product-development identity. This opt-in prevents the central coordinator from guessing that an unrelated manual workflow can safely modify product source. Repositories with an existing schedule keep their own lease and are never double-dispatched.
+The entrypoint must contain an explicit `concurrency` contract, use `NVIDIA_NIM_API_KEY`, omit `COPILOT_GITHUB_TOKEN`, have no schedule of its own, and carry a commercial/product-development identity. It must also embed the complete Domain-Driven Design repair contract rather than merely mention DDD. The machine-checked contract requires core, supporting, and generic subdomains; Bounded Context; Context Map; Ubiquitous Language; Aggregate; Entity; Value Object; Domain Service; Repository; Domain Event; Invariant; Anti-Corruption Layer; Shared Kernel; directory paths; and `docs/product-technical-gap-baseline.md`.
 
-The repository-local entrypoint remains responsible for its own bounded editable paths, tests, 100% production statement and branch coverage, public docstrings, package and security verification, exact-head publication, and pull-request creation. A missing compliant entrypoint is a deliberate no-op, not permission to inject a generic writer into that repository.
+Each hourly product increment must identify the owning product responsibility before selecting a repository, then compare the live directory tree, module/package names, API, database objects, tests, and documentation with that responsibility. Misleading directory paths, generic `utils`/`common` dumping grounds that own domain behavior, infrastructure imports inside the domain model, cross-context database access, obsolete product names, or customer-visible implementation boundaries are architecture defects, not cosmetic debt. When one can be corrected safely in the bounded increment, the agent moves the code and updates imports, package manifests, call sites, migrations, tests, ADRs, diagrams, and compatibility adapters in the same pull request.
+
+The contract does not impose one universal folder template. A move is justified by domain ownership and dependency direction, not by directory aesthetics. Aggregate boundaries remain the smallest consistency boundary; external and legacy systems are isolated behind an Anti-Corruption Layer; the Shared Kernel remains minimal; and cross-context integration uses explicit versioned contracts. If a coherent move exceeds the current pull request's safe scope, the agent must record the exact owner, callers, target context, migration sequence, and acceptance evidence in `docs/product-technical-gap-baseline.md` and select it as the next bounded architecture increment rather than silently leaving the drift unresolved.
+
+This opt-in prevents the central coordinator from guessing that an unrelated manual workflow can safely modify product source. Repositories with an existing hourly or more frequent dedicated writer keep their own lease and are never double-dispatched; those schedules may share the same DDD contract and should adopt it without adding another cron.
+
+The repository-local entrypoint remains responsible for bounded editable paths, tests, 100% production statement and branch coverage, public docstrings, package and security verification, exact-head publication, and pull-request creation. A missing compliant entrypoint is a deliberate no-op, not permission to inject a generic writer into that repository.
 
 ## Failure, evidence, and operations
 
@@ -55,6 +62,12 @@ No queued, pending, skipped-required, cancelled, absent, stale-head, predecessor
 Rollback is removal or disabling of `.github/workflows/organization-commercial-readiness-loop.yml`. Repository-local dedicated loops and the existing 15-minute merge scheduler remain independently operational.
 
 ## APA 7 references
+
+Evans, E. (2004). *Domain-driven design: Tackling complexity in the heart of software*. Addison-Wesley.
+
+Evans, E. (2015). *Domain-driven design reference: Definitions and pattern summaries*. Domain Language. https://www.domainlanguage.com/ddd/reference/
+
+International Organization for Standardization, International Electrotechnical Commission, & Institute of Electrical and Electronics Engineers. (2022). *Software, systems and enterprise—Architecture description* (ISO/IEC/IEEE Standard 42010:2022). https://www.iso.org/standard/74393.html
 
 GitHub. (n.d.). *Automatic token authentication*. GitHub Docs. Retrieved August 8, 2026, from https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication
 
