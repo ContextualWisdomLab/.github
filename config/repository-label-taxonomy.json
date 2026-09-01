@@ -40,6 +40,11 @@
       "repository": "EgressWeave",
       "issue": 231,
       "type": "documentation"
+    },
+    {
+      "repository": "psychometrics-commons",
+      "issue": 442,
+      "type": "documentation"
     }
   ]
 }
