@@ -30,16 +30,41 @@ The existing organization merge scheduler continues to own review dispatch, bran
 
 ## Product-development boundary
 
-Product development is dispatched only when a repository has zero open pull requests and exposes one active, manual-only, explicitly marked workflow:
+Product development is dispatched only when a repository has zero open pull requests and exposes one active, manual-only, explicitly marked workflow. The repository owns the human-readable prompt, which may use any language. Eligibility depends on a versioned machine-readable capability set and an executable binding rather than copied English prose.
 
 ```yaml
 # cwl-org-commercial-entrypoint: v1
 # cwl-ddd-architecture-audit: required
 on:
   workflow_dispatch:
+
+concurrency:
+  group: product-development
+
+env:
+  NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+  CWL_DDD_CONTRACT_VERSION: "1"
+  CWL_DDD_CONTRACT_CAPABILITIES: >-
+    aggregate anti_corruption_layer bounded_context context_map
+    directory_ownership domain_event domain_service entity invariant
+    minimal_shared_kernel product_gap_baseline repository
+    subdomain_classification ubiquitous_language value_object
+  CWL_PRODUCT_AGENT_PROMPT: |
+    Deliver one buyer-visible increment through the repository-owned product agent.
+
+jobs:
+  develop:
+    steps:
+      - run: |
+          # cwl-ddd-prompt-binding: v1
+          product-agent \
+            --prompt-env CWL_PRODUCT_AGENT_PROMPT \
+            --architecture-contract-env CWL_DDD_CONTRACT_CAPABILITIES
 ```
 
-The entrypoint must contain an explicit `concurrency` contract, use `NVIDIA_NIM_API_KEY`, omit `COPILOT_GITHUB_TOKEN`, have no schedule of its own, and carry a commercial/product-development identity. It must also embed the complete Domain-Driven Design repair contract rather than merely mention DDD. The machine-checked contract requires core, supporting, and generic subdomains; Bounded Context; Context Map; Ubiquitous Language; Aggregate; Entity; Value Object; Domain Service; Repository; Domain Event; Invariant; Anti-Corruption Layer; Shared Kernel; directory paths; and `docs/product-technical-gap-baseline.md`.
+The root workflow `env` mapping must contain exactly one non-empty `CWL_PRODUCT_AGENT_PROMPT`, one exact version-one capability block, and one version value. The capability set is closed for version one; missing, misspelled, duplicated, or unversioned values fail closed. The prompt and capability environment names must reach the same non-comment shell command under the binding marker. Comments, unrelated YAML, nested or duplicate environment scopes, inert block scalars, shell built-ins, malformed quoting, dangling continuations, and flags split across commands do not satisfy the contract.
+
+The capability IDs cover the strategic and tactical Domain-Driven Design obligations required by the organization: core/supporting/generic subdomain classification, Bounded Context, Context Map, Ubiquitous Language, Aggregate, Entity, Value Object, Domain Service, Repository, Domain Event, Invariant, Anti-Corruption Layer, minimal Shared Kernel, directory ownership, and product-gap baseline traceability. Human-readable instructions can evolve independently as long as the repository product-agent adapter consumes both bound inputs and implements the declared version.
 
 Each hourly product increment must identify the owning product responsibility before selecting a repository, then compare the live directory tree, module/package names, API, database objects, tests, and documentation with that responsibility. Misleading directory paths, generic `utils`/`common` dumping grounds that own domain behavior, infrastructure imports inside the domain model, cross-context database access, obsolete product names, or customer-visible implementation boundaries are architecture defects, not cosmetic debt. When one can be corrected safely in the bounded increment, the agent moves the code and updates imports, package manifests, call sites, migrations, tests, ADRs, diagrams, and compatibility adapters in the same pull request.
 
