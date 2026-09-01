@@ -5,6 +5,10 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Restore the exact-head dispatch contract after the default-branch rollback:
+  queued requests whose supplied head no longer matches the live pull request
+  fail before model work, and the workflow security assertions and reviewed
+  blob pin now enforce that behavior.
 - Reject excessively nested Noema LLM JSON responses with an explicit,
   string-literal-aware bracket-depth bound (`MAX_JSON_NESTING_DEPTH = 100`),
   checked before `json.JSONDecoder.raw_decode` is ever attempted, instead of
