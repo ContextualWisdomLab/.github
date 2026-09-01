@@ -1,0 +1,37 @@
+name: Current Head Run Coalescer
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  coalesce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted control-plane source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Retire redundant queued exact-head runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 scripts/ci/current_head_run_coalescer.py
+          --repo "${{ github.repository }}"
+          --pr-number "${{ github.event.pull_request.number }}"
+          --expected-head-repo "${{ github.event.pull_request.head.repo.full_name }}"
+          --expected-head-ref "${{ github.event.pull_request.head.ref }}"
+          --expected-head "${{ github.event.pull_request.head.sha }}"
