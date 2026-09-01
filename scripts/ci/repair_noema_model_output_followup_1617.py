@@ -53,6 +53,7 @@ def update_source() -> None:
         return "Noema LLM returned unsupported decision"
     trusted_prefixes = (
         "Noema LLM response ",
+        "Noema LLM request_changes ",
         "Noema formal verdict ",
         "Noema reviewed line ",
         "Noema adversarial validation ",
@@ -166,6 +167,10 @@ def test_stable_failure_diagnostic_preserves_trusted_structure_and_redacts_value
         "Noema adversarial probe 1 outcome must be falsified or confirmed"
     )
     assert gate._stable_failure_diagnostic(trusted) == str(trusted)
+    request_changes = gate.NoemaModelOutputError(
+        "Noema LLM request_changes response did not contain a substantive finding"
+    )
+    assert gate._stable_failure_diagnostic(request_changes) == str(request_changes)
     assert gate._stable_failure_diagnostic(
         gate.NoemaModelOutputError("Noema LLM returned unsupported decision: 'SECRET_VALUE'")
     ) == "Noema LLM returned unsupported decision"
