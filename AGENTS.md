@@ -22,11 +22,13 @@ provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
 OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
-`orchestrator/free`. Strix uses the zero-cost `orchestrator/free` pool by
-explicit 2026-08-30 owner decision, superseding the prior `orchestrator/auto`
-(provider-diverse, non-free-admitting) default; private targets still require
-ZDR-compliant routes under
-[`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
-See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
-and its 2026-08-30 amendment.
+`orchestrator/free`. Strix was switched onto `orchestrator/free` on
+2026-08-30, superseding the prior `orchestrator/auto` (provider-diverse,
+non-free-admitting) default; private targets still require ZDR-compliant
+routes under [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py). That
+switch was made by an autonomous agent session, not per any owner decision —
+see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)'s
+2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
+false claim of explicit owner direction and records the resulting
+availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
