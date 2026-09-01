@@ -1,0 +1,61 @@
+name: One-shot PR 1584 Strix rerun selector repair
+
+on:
+  push:
+    branches:
+      - fix/strix-rerun-select-scan-20260901
+    paths:
+      - .github/workflows/source-fix-1584-strix-rerun-selection.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Apply focused repair, verify, and retire workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/strix-rerun-select-scan-20260901
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/pr_review_merge_scheduler.py")
+          text = path.read_text(encoding="utf-8")
+          old = "    job_id = matching_actions_job_id(pr, is_strix_context)\n"
+          new = (
+              "    job_id = matching_actions_job_id(\n"
+              "        pr, lambda node: node.get(\"name\") == \"strix\" and is_strix_context(node)\n"
+              "    )\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one Strix rerun selector, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          python3 -m pytest -q \
+            tests/test_strix_rerun_job_selection.py \
+            tests/test_pr_review_merge_scheduler.py
+          python3 scripts/ci/pr_review_merge_scheduler.py --self-test
+          git diff --check
+
+          git rm .github/workflows/source-fix-1584-strix-rerun-selection.yml
+          git add scripts/ci/pr_review_merge_scheduler.py tests/test_strix_rerun_job_selection.py
+          git diff --cached --check
+          git status --short
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(scheduler): rerun authoritative Strix scan job"
+          git push origin "HEAD:${TARGET_BRANCH}"
