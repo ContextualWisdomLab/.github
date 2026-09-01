@@ -967,7 +967,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. The sweep runs
-    every 15 minutes so an approval that lands after a PR's last event is
+    hourly so an approval that lands after a PR's last event is
     auto-updated/merged promptly instead of idling indefinitely. Its cron has a
     distinct concurrency key from the separate 30-minute scan, and the job has
     enough runtime headroom to finish a complete organization walk.
@@ -975,9 +975,9 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "*/15 * * * *"' in workflow
+    assert '- cron: "0 * * * *"' in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '*/15 * * * *'" in workflow
+    assert "github.event.schedule == '0 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
     assert (
         "github.event_name == 'schedule' && format('schedule-{0}', "
@@ -994,7 +994,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     ):
         assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
     # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '*/15 * * * *'" in workflow
+    assert "github.event.schedule != '0 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
@@ -1494,7 +1494,7 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     automation can never resolve, so those repositories are reported as skipped,
     non-fatal "unavailable" repositories rather than hard failures — otherwise a
     handful of un-enrolled repositories keeps the scheduled sweep (the
-    ``*/15 * * * *`` cron) permanently red and masks a genuinely new repository
+    ``0 * * * *`` cron) permanently red and masks a genuinely new repository
     that starts failing.
 
     The sweep stays fail-closed two ways: any non-403 scheduler failure still
