@@ -1,4 +1,4 @@
-"""Regressions for dependency-review immutable identity validation."""
+"""Regressions for dependency-review immutable identity validation and A/B canary."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _support_probe_script() -> str:
-    """Return the executable shell body of the dependency-review support probe."""
-    workflow = (REPO_ROOT / ".github" / "workflows" / "security-scan.yml").read_text(
-        encoding="utf-8"
-    )
-    step = "      - name: Check dependency review support\n"
+    """Return the executable shell body of the dependency-review A/B canary."""
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "dependency-review-ab-canary.yml"
+    ).read_text(encoding="utf-8")
+    step = "      - name: Run dependency review A/B canary\n"
     start = workflow.index(step)
     end = workflow.index("\n      - name:", start + len(step))
     block = workflow[start:end]
@@ -34,7 +34,7 @@ def _run_probe(
     anonymous_status: str = "200",
     token_status: str = "200",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Execute the probe with a fake curl and return process plus evidence paths."""
+    """Execute the canary with a fake curl and return process plus evidence paths."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     curl_marker = tmp_path / "curl-called"
@@ -84,7 +84,7 @@ def _run_probe(
 
 
 def test_dependency_review_rejects_dot_path_components_before_curl(tmp_path: Path) -> None:
-    """Reject dot-segment repository identities before any authenticated request."""
+    """Reject dot-segment repository identities before either diagnostic request."""
     for index, repository in enumerate(
         ("../.github", "ContextualWisdomLab/..", "ContextualWisdomLab/.", "./.github")
     ):
@@ -130,7 +130,7 @@ def test_dependency_review_allows_dotgithub_product_repository(tmp_path: Path) -
     """Keep the organization .github product name valid while rejecting sentinels."""
     result, curl_marker, output = _run_probe(tmp_path, "ContextualWisdomLab/.github")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert curl_marker.exists()
+    assert curl_marker.read_text(encoding="utf-8") == "anonymous\ntoken\n"
     assert output.read_text(encoding="utf-8") == "supported=true\n"
 
 
