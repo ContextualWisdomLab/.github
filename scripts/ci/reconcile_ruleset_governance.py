@@ -8,7 +8,8 @@ semantics for this endpoint, so the second live read is a drift detector rather
 than a compare-and-swap guarantee. Privileged mutation is additionally bound to
 the exact protected-main revision, serialized owner-plane execution, and the
 immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
-overwritten, the reconciler restores the immediate predecessor before failing.
+overwritten, the reconciler restores the newest displaced administrator state
+before failing; recovery re-checks immutable history after every restore write.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ ORGANIZATION = "ContextualWisdomLab"
 CONTROL_REPOSITORY = "ContextualWisdomLab/.github"
 DESIRED_MERGE_METHODS = ["merge", "squash"]
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+COLLISION_RECOVERY_LIMIT = 8
 
 
 class RulesetGovernanceError(RuntimeError):
@@ -244,26 +246,36 @@ def _latest_history_version(target: RulesetTarget) -> int:
     return _history_version_id(history[0])
 
 
+def _assert_target_provenance(live: dict[str, Any], target: RulesetTarget) -> None:
+    """Require immutable target provenance while allowing editable history fields."""
+
+    expected = {
+        "id": target.ruleset_id,
+        "target": "branch",
+        "source_type": target.source_type,
+        "source": target.source,
+    }
+    mismatches = [key for key, value in expected.items() if live.get(key) != value]
+    if mismatches:
+        raise RulesetGovernanceError(
+            f"{target.scope} ruleset identity drift: {', '.join(sorted(mismatches))}"
+        )
+
+
 def _history_version_state(target: RulesetTarget, version_id: int) -> dict[str, Any]:
-    """Return the exact ruleset state stored at one immutable history version."""
+    """Return one historical state after proving it belongs to the exact target."""
 
     payload = _gh_api("GET", target.history_version_endpoint(version_id))
     state = _plain_dict(payload.get("state"), field="ruleset history version state")
-    _assert_identity(state, target)
+    _assert_target_provenance(state, target)
     return state
 
 
 def _assert_identity(live: dict[str, Any], target: RulesetTarget) -> None:
-    """Require the live ruleset to be the exact reviewed object before mutation."""
+    """Require current live state to retain the reviewed editable identity too."""
 
-    expected = {
-        "id": target.ruleset_id,
-        "name": target.name,
-        "target": "branch",
-        "source_type": target.source_type,
-        "source": target.source,
-        "enforcement": "active",
-    }
+    _assert_target_provenance(live, target)
+    expected = {"name": target.name, "enforcement": "active"}
     mismatches = [key for key, value in expected.items() if live.get(key) != value]
     if mismatches:
         raise RulesetGovernanceError(
@@ -332,20 +344,75 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
     return desired
 
 
+def _recover_displaced_history_state(
+    target: RulesetTarget,
+    *,
+    current_version: int,
+    current_payload: dict[str, Any],
+    displaced_version: int,
+) -> None:
+    """Restore the newest state displaced by our unsafe PUT without hiding races.
+
+    GitHub offers no conditional ruleset PUT. Each recovery write therefore
+    verifies immutable history immediately afterward. If an administrator write
+    slipped between the recovery GET and PUT, that displaced history version
+    becomes the next recovery target. A newer live state observed before a
+    recovery write is never overwritten. The loop is bounded and fails closed.
+    """
+
+    for _attempt in range(COLLISION_RECOVERY_LIMIT):
+        displaced_state = _history_version_state(target, displaced_version)
+        displaced_payload = _editable_projection(displaced_state)
+        live = _gh_api("GET", target.endpoint)
+        _assert_target_provenance(live, target)
+        if _editable_projection(live) != current_payload:
+            raise RulesetGovernanceError(
+                "concurrent ruleset history detected but live state advanced again; refusing recovery"
+            )
+
+        _gh_api("PUT", target.endpoint, body=displaced_payload)
+        history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
+        if len(history) < 2:
+            raise RulesetGovernanceError(
+                "ruleset collision recovery history did not expose a predecessor"
+            )
+        recovery_version = _history_version_id(history[0])
+        recovery_predecessor = _history_version_id(history[1])
+        recovery_state = _history_version_state(target, recovery_version)
+        if _editable_projection(recovery_state) != displaced_payload:
+            raise RulesetGovernanceError(
+                "ruleset collision recovery latest history does not match restore write"
+            )
+
+        restored = _gh_api("GET", target.endpoint)
+        _assert_target_provenance(restored, target)
+        if _editable_projection(restored) != displaced_payload:
+            raise RulesetGovernanceError(
+                "concurrent ruleset collision rollback did not converge"
+            )
+        if recovery_predecessor == current_version:
+            return
+
+        current_version = recovery_version
+        current_payload = displaced_payload
+        displaced_version = recovery_predecessor
+
+    raise RulesetGovernanceError(
+        "ruleset collision recovery exceeded bounded attempts under concurrent writes"
+    )
+
+
 def _verify_ruleset_history_transition(
     target: RulesetTarget,
     baseline_version: int,
     desired: dict[str, Any],
 ) -> None:
-    """Detect hidden pre-PUT edits and restore their immediate predecessor state.
+    """Detect hidden pre-PUT edits and restore the newest displaced state safely.
 
-    GitHub records immutable ruleset versions but does not offer conditional
-    unsafe updates. After a successful PUT, the newest history state must equal
-    our reviewed body and its immediate predecessor must be the version sampled
-    before the final live read. If another version intervened, our write
-    overwrote a concurrent administrator edit. In that case the immediate
-    predecessor is restored only while live state still equals our own write;
-    otherwise a newer administrator state is preserved untouched.
+    The newest history state must equal our reviewed body and its immediate
+    predecessor must be the version sampled before the final live read. If a
+    version intervened, recovery follows immutable history and verifies every
+    restore write so a second administrator edit cannot be silently overwritten.
     """
 
     history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=3")
@@ -362,22 +429,14 @@ def _verify_ruleset_history_transition(
     if predecessor_id == baseline_version:
         return
 
-    predecessor_state = _history_version_state(target, predecessor_id)
-    predecessor_payload = _editable_projection(predecessor_state)
-    current = _gh_api("GET", target.endpoint)
-    _assert_identity(current, target)
-    if _editable_projection(current) != desired:
-        raise RulesetGovernanceError(
-            "concurrent ruleset history detected but live state advanced again; refusing rollback"
-        )
-
-    _gh_api("PUT", target.endpoint, body=predecessor_payload)
-    restored = _gh_api("GET", target.endpoint)
-    _assert_identity(restored, target)
-    if _editable_projection(restored) != predecessor_payload:
-        raise RulesetGovernanceError("concurrent ruleset collision rollback did not converge")
+    _recover_displaced_history_state(
+        target,
+        current_version=newest_id,
+        current_payload=desired,
+        displaced_version=predecessor_id,
+    )
     raise RulesetGovernanceError(
-        "concurrent ruleset history detected; restored preceding administrator state"
+        "concurrent ruleset history detected; restored newest displaced administrator state"
     )
 
 
