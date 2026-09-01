@@ -31,6 +31,8 @@ def _run_probe(
     *,
     base_sha: str = "a" * 40,
     head_sha: str = "b" * 40,
+    anonymous_status: str = "200",
+    token_status: str = "200",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the probe with a fake curl and return process plus evidence paths."""
     fake_bin = tmp_path / "bin"
@@ -40,8 +42,16 @@ def _run_probe(
     fake_curl.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        "printf 'called\\n' >\"${CURL_MARKER}\"\n"
-        "printf '200'\n",
+        "mode=anonymous\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$arg\" == Authorization:* ]]; then mode=token; fi\n"
+        "done\n"
+        "printf '%s\\n' \"$mode\" >>\"${CURL_MARKER}\"\n"
+        "if [ \"$mode\" = token ]; then\n"
+        "  printf '%s' \"${TOKEN_STATUS:-200}\"\n"
+        "else\n"
+        "  printf '%s' \"${ANONYMOUS_STATUS:-200}\"\n"
+        "fi\n",
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
@@ -58,6 +68,8 @@ def _run_probe(
             "GITHUB_API_URL": "https://api.github.invalid",
             "GITHUB_OUTPUT": str(output),
             "CURL_MARKER": str(curl_marker),
+            "ANONYMOUS_STATUS": anonymous_status,
+            "TOKEN_STATUS": token_status,
         }
     )
     result = subprocess.run(
@@ -120,3 +132,33 @@ def test_dependency_review_allows_dotgithub_product_repository(tmp_path: Path) -
     assert result.returncode == 0, result.stdout + result.stderr
     assert curl_marker.exists()
     assert output.read_text(encoding="utf-8") == "supported=true\n"
+
+
+def test_dependency_review_records_anonymous_and_job_token_canary(tmp_path: Path) -> None:
+    """Distinguish public endpoint availability from the reusable-workflow token boundary."""
+    result, curl_marker, output = _run_probe(
+        tmp_path,
+        "ContextualWisdomLab/ConceptWeave",
+        anonymous_status="403",
+        token_status="200",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert curl_marker.read_text(encoding="utf-8") == "anonymous\ntoken\n"
+    assert output.read_text(encoding="utf-8") == "supported=true\n"
+    assert "anonymous_http_status=403" in result.stdout
+    assert "token_http_status=200" in result.stdout
+
+
+def test_dependency_review_job_token_result_remains_authoritative(tmp_path: Path) -> None:
+    """Fail closed when the job token cannot establish the exact comparison."""
+    result, curl_marker, _output = _run_probe(
+        tmp_path,
+        "ContextualWisdomLab/ConceptWeave",
+        anonymous_status="200",
+        token_status="403",
+    )
+    assert result.returncode != 0
+    assert curl_marker.read_text(encoding="utf-8") == "anonymous\ntoken\n"
+    assert "anonymous_http_status=200" in result.stdout
+    assert "token_http_status=403" in result.stdout
+    assert "failing closed" in result.stdout.lower()
