@@ -1,0 +1,98 @@
+name: Temporary OpenCode observed-corpus writer
+
+on:
+  push:
+    branches:
+      - fix/opencode-observed-defect-corpus-current-main-20260902
+    paths:
+      - .github/workflows/_temporary-opencode-observed-corpus-writer.yml
+      - scripts/ci/_temporary_apply_opencode_observed_corpus.py
+      - tests/test_opencode_observed_defect_probe_taxonomy.py
+
+permissions:
+  contents: write
+
+jobs:
+  red-green-write:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Refuse stale writer head
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$remote_head"
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "::error::Writer head moved before execution: expected $GITHUB_SHA, observed $remote_head."
+            exit 1
+          fi
+      - name: Create isolated review test environment
+        run: |
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/opencode-observed-corpus-venv"
+          python3 -m venv "$VENV"
+          "$VENV/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          echo "REVIEW_PYTHON=$VENV/bin/python" >> "$GITHUB_ENV"
+      - name: Verify RED regression against current production gate
+        env:
+          PYTHONPATH: .
+        run: |
+          set +e
+          "$REVIEW_PYTHON" -m pytest -q tests/test_opencode_observed_defect_probe_taxonomy.py
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected assertion-level RED (pytest exit 1), observed exit $status."
+            exit 1
+          fi
+      - name: Apply smallest causal GREEN repair
+        run: "$REVIEW_PYTHON scripts/ci/_temporary_apply_opencode_observed_corpus.py"
+      - name: Remove temporary mutation machinery before verification
+        run: |
+          rm .github/workflows/_temporary-opencode-observed-corpus-writer.yml
+          rm scripts/ci/_temporary_apply_opencode_observed_corpus.py
+      - name: Verify focused GREEN review contracts
+        env:
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          "$REVIEW_PYTHON" -m pytest -q \
+            tests/test_opencode_observed_defect_probe_taxonomy.py \
+            tests/test_opencode_review_normalize_output.py \
+            tests/test_opencode_existing_approval_gate.py \
+            tests/test_opencode_agent_contract.py \
+            tests/test_opencode_model_pool_runner.py
+          "$REVIEW_PYTHON" -m compileall -q scripts/ci
+      - name: Verify broader OpenCode regression suite
+        env:
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          "$REVIEW_PYTHON" -m pytest -q tests/test_opencode*.py
+      - name: Verify final diff contains no temporary writer machinery
+        run: |
+          set -euo pipefail
+          test ! -e .github/workflows/_temporary-opencode-observed-corpus-writer.yml
+          test ! -e scripts/ci/_temporary_apply_opencode_observed_corpus.py
+          if git diff --name-only "${GITHUB_SHA}^" | grep -E '(^|/)_temporary|_tmp_' ; then
+            echo "::error::Temporary writer machinery remains in final diff."
+            exit 1
+          fi
+      - name: Commit exact GREEN tree and push if writer head stayed unchanged
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo "::error::Writer head moved during verification: expected $GITHUB_SHA, observed $remote_head."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(review): require observed-defect OpenCode probes"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
