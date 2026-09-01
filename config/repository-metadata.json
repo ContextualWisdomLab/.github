@@ -19,6 +19,12 @@
       "topics": ["interoperability", "json-schema", "asyncapi", "cloudevents", "provenance", "context-graph", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "ThreadWeave": {
+      "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
+      "topics": ["email", "threading", "imap", "rfc5256", "python", "mail", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
