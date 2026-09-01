@@ -127,6 +127,12 @@
       "topics": ["lcms", "learning-content", "content-authoring", "content-management", "accessibility", "scorm", "cmi5", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "learning-record-store": {
+      "description": "Authoritative xAPI learning-record persistence for the CWL Learning Platform.",
+      "topics": ["learning-record-store", "xapi", "cmi5", "learning-technology", "interoperability", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
