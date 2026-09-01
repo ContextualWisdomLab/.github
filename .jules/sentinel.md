@@ -33,7 +33,7 @@
 **Prevention:** Explicitly disable redirects by subclassing `urllib.request.HTTPRedirectHandler`, overriding `redirect_request` to raise an `urllib.error.HTTPError`, and using `urllib.request.build_opener(NoRedirectHandler())` instead of the default `urlopen`.
 ## 2026-07-13 - Complete the Fix for Command Injection Security Theater
 **Vulnerability:** Command Injection
-**Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper.
+**Learning:** Fixing a `shell=True` vulnerability by replacing it with `shell=False` and wrapping the command string in `["/bin/bash", "-lc", command]` is incomplete and still leaves the code vulnerable to shell injection. It acts as security theater, as it misleads linters while executing untrusted input via the bash wrapper. The vulnerability was still present in `sandboxed_web_e2e.py`.
 **Prevention:** Remove `/bin/bash` wrapper from `subprocess` calls in CI scripts. Always use `shlex.split(command)` to safely parse strings into a list of arguments and pass the list directly to `subprocess.Popen` or `subprocess.run`.
 ## 2026-08-28 - Prevent SSRF via URL parsing and Command Injection via explicit shell=False
 **Vulnerability:** Server-Side Request Forgery (SSRF) and Implicit Shell Usage in Subprocess
@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-01 - Prevent SSRF in urllib by raising HTTPError on redirects
+**Vulnerability:** Subclassing `urllib.request.HTTPRedirectHandler` and returning `None` to disable redirects leaves the handler vulnerable, as `None` simply passes the request back up the fallback chain, potentially resulting in returning a 301/302 response to the caller rather than preventing execution.
+**Learning:** Returning `None` from `redirect_request` relies on default behavior to handle the response, not raising a true failure condition which is expected to halt SSRF bypasses via 301/302.
+**Prevention:** To securely prevent redirects in `urllib` and avoid SSRF vulnerabilities, explicitly raise an `urllib.error.HTTPError` inside `redirect_request` instead of returning `None`.
