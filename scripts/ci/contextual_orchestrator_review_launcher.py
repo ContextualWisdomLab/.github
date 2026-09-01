@@ -687,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preflight-out", required=True, help="Path to write sanitized runtime preflight JSON")
     parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
-    parser.add_argument("--pool", choices=("free", "auto"), default="free")
+    parser.add_argument("--pool", choices=("free",), default="free")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential

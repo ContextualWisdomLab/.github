@@ -262,14 +262,10 @@ case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
 esac
 
 orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
-case "$orchestrator_pool" in
-  free|auto)
-    pool_args=(--pool "$orchestrator_pool")
-    ;;
-  *)
-    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
-    ;;
-esac
+if [ "$orchestrator_pool" != "free" ]; then
+  fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"
+fi
+pool_args=(--pool "free")
 
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
