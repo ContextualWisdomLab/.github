@@ -136,16 +136,24 @@ def _label_names(payload: dict[str, Any]) -> list[str]:
     return names
 
 
+def _managed_labels(
+    assignment: dict[str, Any], type_map: dict[str, str]
+) -> tuple[str, set[str], str]:
+    """Return issue endpoint, managed label universe, and desired managed label."""
+
+    repository = assignment["repository"]
+    issue = assignment["issue"]
+    desired_label = type_map[assignment["type"]]
+    endpoint = f"repos/{ORGANIZATION}/{repository}/issues/{issue}"
+    return endpoint, set(type_map.values()), desired_label
+
+
 def reconcile_assignment(
     assignment: dict[str, Any], type_map: dict[str, str]
 ) -> None:
     """Mutate only taxonomy labels and preserve concurrent unrelated labels."""
 
-    repository = assignment["repository"]
-    issue = assignment["issue"]
-    desired_label = type_map[assignment["type"]]
-    managed = set(type_map.values())
-    endpoint = f"repos/{ORGANIZATION}/{repository}/issues/{issue}"
+    endpoint, managed, desired_label = _managed_labels(assignment, type_map)
     payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
     current = _label_names(payload)
     obsolete = [
@@ -165,23 +173,32 @@ def reconcile_assignment(
             allow_not_found=True,
         )
 
-    verified_payload = _plain_dict(
-        json.loads(_gh_api("GET", endpoint)), field="GitHub issue"
-    )
-    verified = _label_names(verified_payload)
-    managed_after = {label for label in verified if label in managed}
+    verify_assignment(assignment, type_map)
+
+
+def verify_assignment(assignment: dict[str, Any], type_map: dict[str, str]) -> None:
+    """Re-read one target and fail unless its managed labels exactly converge."""
+
+    endpoint, managed, desired_label = _managed_labels(assignment, type_map)
+    payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
+    current = _label_names(payload)
+    managed_after = {label for label in current if label in managed}
     if managed_after != {desired_label}:
+        repository = assignment["repository"]
+        issue = assignment["issue"]
         raise RuntimeError(
             f"managed labels did not converge for {repository}#{issue}"
         )
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse validation and narrow repository selection arguments."""
+    """Parse validation, verification, and narrow repository selection arguments."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--taxonomy", type=Path, required=True)
-    parser.add_argument("--validate-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--validate-only", action="store_true")
+    mode.add_argument("--verify-only", action="store_true")
     parser.add_argument("--repository", action="append", default=[])
     return parser.parse_args()
 
@@ -211,22 +228,23 @@ def _select_repository_identities(
 
 
 def main() -> int:
-    """Validate taxonomy and reconcile every independent assignment possible."""
+    """Validate, reconcile, or verify every independent assignment possible."""
 
     args = parse_args()
     type_map, assignments = load_taxonomy(args.taxonomy)
     if args.validate_only:
         return 0
     if not os.environ.get("GH_TOKEN"):
-        raise RuntimeError("GH_TOKEN is required in apply mode")
+        raise RuntimeError("GH_TOKEN is required outside validation mode")
 
     selected = _select_repository_identities(args.repository, assignments)
+    operation = verify_assignment if getattr(args, "verify_only", False) else reconcile_assignment
     failures: list[str] = []
     for assignment in assignments:
         if selected and assignment["repository"].casefold() not in selected:
             continue
         try:
-            reconcile_assignment(assignment, type_map)
+            operation(assignment, type_map)
         except (
             TaxonomyError,
             RuntimeError,
@@ -235,9 +253,9 @@ def main() -> int:
         ) as exc:
             target = f'{assignment["repository"]}#{assignment["issue"]}'
             failures.append(f"{target}: {exc}")
-            print(f"label reconciliation failed for {target}: {exc}", file=sys.stderr)
+            print(f"label operation failed for {target}: {exc}", file=sys.stderr)
     if failures:
-        raise RuntimeError("label reconciliation failed: " + "; ".join(failures))
+        raise RuntimeError("label operation failed: " + "; ".join(failures))
     return 0
 
 
