@@ -5,6 +5,21 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **(Devin 리뷰 대응, 🟡 실제 결함 1건 + 🔍 문서 정정 1건) daemon-스레드 데드라인 fix 자체에 대한
+  Devin의 후속 지적 2건 반영.** (1) 🟡 `call_llm`이 `request_thread.join(timeout=
+  remaining_budget)`(공유 5.5시간 예산 전체)으로 join하고 있었는데, 이는 개별 호출의 상한이어야
+  할 `request_timeout`(`min(NOEMA_LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)`, 이미 공유
+  예산에 맞춰 min된 값)을 사실상 무시하는 것이었다 — trickle 응답 하나가 3시간이 아니라 공유
+  예산 전체(5.5시간)를 다 써버릴 수 있어, `NOEMA_LLM_REQUEST_TIMEOUT_SECONDS`가 애초에 막으려던
+  "한 호출이 repair 재시도 몫까지 다 태운다"는 바로 그 실패를 재도입하고 있었다. `join(timeout=
+  request_timeout)`으로 수정(Devin의 제안과 동일). 실제 wall-clock을 쓰는 새 테스트로 진짜
+  RED(공유 예산에 여유(10초)가 있으면 개별 호출 상한(0.05초)을 무시하고 0.3초 trickle이 정상
+  완료됨) → GREEN(0.05초 내 TimeoutError) 확인. 에러 메시지도 "shared wall-clock budget"에서
+  "per-request wall-clock budget"으로 정정(기존 트리클 테스트의 match 문자열도 함께 갱신).
+  (2) 🔍 `NOEMA_LLM_TOTAL_BUDGET_SECONDS` 위 주석이 "noema-review job에 명시적
+  timeout-minutes가 없다"고 말하고 있었는데, 바로 이 PR이 그 job에 `timeout-minutes: 360`을
+  추가했으므로 이미 낡은 서술이 되어 있었다 — 주석을 현재 상태를 반영하도록 갱신. 전체 스위트
+  2215 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%.
 - **(Devin 리뷰 대응, 실재 결함 3건) 지난 timeout/deadline 수정 자체에 대한 Devin의 후속 지적 3건
   반영.** (1) 🟡 `scripts/ci/noema_review_gate.py::call_llm`의 공유 데드라인이
   `urllib.request`의 `timeout=` 인자만으로 강제되고 있었는데, 그 인자는 소켓 단일 연산의

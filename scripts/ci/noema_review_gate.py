@@ -53,9 +53,10 @@ ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
 # the entire required review. 10800s gives the gateway's own internal
 # retry/failover machinery room to land on a working agent instead.
 NOEMA_LLM_REQUEST_TIMEOUT_SECONDS = 10800
-# The noema-review job carries no explicit timeout-minutes, so it is bounded
-# only by the 360-minute (6h) maximum job execution time GitHub-hosted
-# runners allow. call_llm can recurse once for a single validator-rejected
+# noema-review.yml's noema-review job now states timeout-minutes: 360
+# explicitly, matching the 360-minute (6h) maximum job execution time
+# GitHub-hosted runners allow in the first place. call_llm can recurse once
+# for a single validator-rejected
 # repair (see the repair_error branch below); two independent
 # NOEMA_LLM_REQUEST_TIMEOUT_SECONDS calls would total 21600s -- exactly that
 # 6h ceiling, leaving zero room for sidecar provisioning or job cleanup and
@@ -1032,10 +1033,15 @@ def call_llm(
         daemon=True,
     )
     request_thread.start()
-    request_thread.join(timeout=remaining_budget)
+    # Joins on request_timeout (this call's own cap, already MIN'd against
+    # remaining_budget), not remaining_budget itself: joining on the full
+    # shared deadline would let one trickling call consume the whole
+    # shared budget and leave nothing for a validator-rejected repair call
+    # (Devin Review, ContextualWisdomLab/.github#1438).
+    request_thread.join(timeout=request_timeout)
     if request_thread.is_alive():
         raise TimeoutError(
-            "Noema LLM review exceeded its shared wall-clock budget "
+            "Noema LLM review exceeded its per-request wall-clock budget "
             "(the connection kept receiving data past the deadline)"
         )
     status, payload = result_queue.get_nowait()

@@ -2216,7 +2216,7 @@ def test_call_llm_enforces_absolute_deadline_against_a_trickling_response(monkey
 
     deadline = noema.time.monotonic() + 0.05
     start = noema.time.monotonic()
-    with pytest.raises(TimeoutError, match="shared wall-clock budget"):
+    with pytest.raises(TimeoutError, match="per-request wall-clock budget"):
         noema.call_llm(
             "owner/repo", 7, make_pr(), "diff", False, "head", deadline=deadline
         )
@@ -2246,6 +2246,64 @@ def test_call_llm_propagates_a_transport_error_raised_on_the_background_thread(m
 
     with pytest.raises(noema.urllib.error.URLError):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+
+def test_call_llm_enforces_the_per_request_timeout_not_just_the_shared_budget(monkeypatch):
+    """A single call must not run past its own per-request cap just because
+    most of the shared total budget is still unspent.
+
+    Devin Review (ContextualWisdomLab/.github#1438): the deadline-join fix
+    joined on ``remaining_budget`` (the full shared deadline) instead of
+    ``request_timeout`` (the per-call cap, already MIN'd against the shared
+    budget). A single trickling call could then consume the entire shared
+    budget, leaving nothing for a validator-rejected repair call -- exactly
+    the failure ``NOEMA_LLM_REQUEST_TIMEOUT_SECONDS`` exists to prevent. Real
+    wall-clock time is used deliberately, as with the sibling deadline test.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
+    monkeypatch.setattr(noema, "NOEMA_LLM_REQUEST_TIMEOUT_SECONDS", 0.05)
+
+    class TricklingResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            # Longer than the 0.05s per-request cap, but well inside the 10s
+            # of shared budget still remaining below.
+            time.sleep(0.3)
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"decision": "approve", "summary": "clean", "findings": []}
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    class Opener:
+        def open(self, _request, timeout):
+            return TricklingResponse()
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    deadline = noema.time.monotonic() + 10
+    start = noema.time.monotonic()
+    with pytest.raises(TimeoutError, match="per-request wall-clock budget"):
+        noema.call_llm(
+            "owner/repo", 7, make_pr(), "diff", False, "head", deadline=deadline
+        )
+    elapsed = noema.time.monotonic() - start
+    assert elapsed < 1.0, f"call_llm ignored its per-request cap: {elapsed}s"
 
 
 def test_substantive_approve_requires_exact_changed_lines_and_falsified_probes():

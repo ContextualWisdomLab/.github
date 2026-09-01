@@ -3622,6 +3622,32 @@ Devin 후속 지적 3건 — 모두 실재, 모두 수정
 세 항목 모두 `bash -n` 문법 확인, 전체 스위트 2214 passed/1 skipped/21 subtests, coverage 100%,
 interrogate 100%.
 
+## 2026-09-01 웨이크업: daemon-스레드 데드라인 fix 자체에 대한 Devin 4번째 라운드 — join이
+공유 예산 전체로 걸려 있어 개별 호출 상한이 무효화되던 실재 회귀 1건 확인, 수정
+
+바로 직전 패스에서 daemon 스레드 + `Thread.join`으로 trickle 취약점을 고친 그 커밋(`e1862035`)
+자체에 대해 Devin이 다시 2건을 지적했다 — 둘 다 코드를 직접 추적해 실재 확인했다.
+
+1. **🟡 3시간 개별 호출 상한이 실제로는 강제되지 않았다.** `call_llm`이
+   `request_thread.join(timeout=remaining_budget)`로 join하고 있었는데, `remaining_budget`은
+   공유 총예산(초기 호출 시점엔 5.5시간) 전체다. 반면 `request_timeout =
+   min(NOEMA_LLM_REQUEST_TIMEOUT_SECONDS, remaining_budget)`(3시간, 이미 공유 예산에 맞춰
+   min된 값)은 옆에서 계산만 되고 join에는 전달되지 않았다 — 즉 trickle 응답 하나가 3시간이
+   아니라 공유 예산 5.5시간 전체를 다 써버릴 수 있어, `NOEMA_LLM_REQUEST_TIMEOUT_SECONDS`가
+   애초에 막으려던 "한 호출이 repair 재시도 몫까지 다 태운다"는 바로 그 실패(이전 owner
+   지적사항의 원래 문제)를 다른 경로로 재도입하고 있었다. `join(timeout=request_timeout)`으로
+   수정(Devin이 제안한 것과 동일한 한 줄 수정). 실제 wall-clock을 쓰는 새 테스트로 진짜
+   RED(공유 예산에 10초 여유가 있으면 0.05초 개별-호출 상한을 무시하고 0.3초 trickle 응답이
+   정상 완료됨, `DID NOT RAISE TimeoutError`) → GREEN(0.05초 내 TimeoutError) 확인. 에러
+   메시지도 "shared wall-clock budget"에서 "per-request wall-clock budget"으로 정정, 기존
+   트리클 테스트의 match 문자열도 함께 갱신.
+2. **🔍 주석이 이 PR 자체가 만든 변경으로 낡아 있었다.** `NOEMA_LLM_TOTAL_BUDGET_SECONDS` 위
+   주석이 "noema-review job에 명시적 timeout-minutes가 없다"고 서술했는데, 몇 커밋 전 이 PR이
+   바로 그 job에 `timeout-minutes: 360`을 추가했으므로 이미 낡은 서술이었다 — 현재 상태를
+   반영하도록 갱신.
+
+전체 스위트 2215 passed/1 skipped/21 subtests, coverage 100%, interrogate 100%.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
