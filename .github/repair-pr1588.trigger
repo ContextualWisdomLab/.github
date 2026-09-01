@@ -14,3 +14,4 @@ ref-bound-writer-guard=20260901T2311+0900
 merged-timeout-regression-reconciled=20260901T2317+0900
 bounded-timeout-helper-rerun=20260901T2328+0900
 event-capable-push-repair=20260901T2330+0900
+guarded-github-token-fallback=20260901T2344+0900
