@@ -13,13 +13,14 @@ permissions:
 jobs:
   repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
-      - name: RED, GREEN, full verification, and self-removal
+      - name: Run RED-GREEN repair driver and self-remove
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/no-heuristic-free-review-admission
           TEMP_WORKFLOW: .github/workflows/source-fix-1591-launcher-caps.yml
+          TEMP_DRIVER: scripts/ci/source_fix_1591_launcher_caps.py
         shell: bash
         run: |
           set -euo pipefail
@@ -31,283 +32,18 @@ jobs:
           branch_head="$(git rev-parse HEAD)"
 
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          PYTHONPATH=. python3 "$TEMP_DRIVER"
 
-          cat >> tests/test_contextual_orchestrator_no_heuristic_admission.py <<'PY'
-
-
-def test_legacy_ignored_inputs_accept_arbitrary_values() -> None:
-    """Ignored compatibility inputs cannot become an accidental admission contract."""
-    rows = [_free_row(index) for index in range(3)]
-    sentinel = object()
-
-    result = policy.build_zdr_prioritized_catalog(
-        rows,
-        pool="free",
-        limit="retired-limit",
-        account_cap=sentinel,
-    )
-
-    assert [entry["model"] for entry in result["agents"]] == [
-        row["model"] for row in rows
-    ]
-    assert result["report"]["legacy_limit_ignored"] is True
-    assert result["report"]["legacy_account_cap_ignored"] is True
-PY
-
-          cat >> tests/test_contextual_orchestrator_review_runtime_preflight.py <<'PY'
-
-
-def test_launcher_has_no_legacy_catalog_admission_caps() -> None:
-    """Runtime bootstrap must not turn retired catalog caps back into admission authority."""
-    namespace = _load_launcher()
-    source = _LAUNCHER.read_text(encoding="utf-8")
-
-    assert "_bounded_primary_catalog_limit" not in namespace
-    assert "_bounded_fallback_catalog_limit" not in namespace
-    assert "_catalog_account_cap" not in namespace
-    assert "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES" not in source
-    assert "REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT" not in source
-    assert "ORCHESTRATOR_CATALOG_LIMIT" not in source
-    assert "ORCHESTRATOR_CATALOG_ACCOUNT_CAP" not in source
-PY
-
-          if PYTHONPATH=. python3 -m pytest -q \
-            tests/test_contextual_orchestrator_no_heuristic_admission.py \
-            tests/test_contextual_orchestrator_review_runtime_preflight.py \
-            -k 'legacy_ignored_inputs_accept_arbitrary_values or launcher_has_no_legacy_catalog_admission_caps'; then
-            echo "expected RED before launcher/policy repair" >&2
-            exit 1
-          fi
-          echo "RED verified: ignored-input compatibility and launcher cap contract fail before repair"
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          launcher = Path("scripts/ci/contextual_orchestrator_review_launcher.py")
-          text = launcher.read_text(encoding="utf-8")
-          text = text.replace(
-              "ZDR-prioritized, credential-account-diverse catalog for ``orchestrator/free``.",
-              "evidence-admitted catalog for ``orchestrator/free``; routing preference remains owned by the orchestrator's explicit evidence model.",
-          )
-          text = text.replace(
-              "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12\nREVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8\n",
-              "",
-          )
-          start = text.index("def _bounded_primary_catalog_limit(")
-          end = text.index("def _with_discovery_counts(", start)
-          text = text[:start] + text[end:]
-          text = text.replace("        DEFAULT_ACCOUNT_CAP,\n", "")
-          old = '''    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
-    primary_limit = _bounded_primary_catalog_limit(
-        requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
-    )
-'''
-          if text.count(old) != 1:
-              raise SystemExit("launcher primary-limit block changed unexpectedly")
-          text = text.replace(old, "", 1)
-          text = text.replace(
-              '''    result = build_zdr_prioritized_catalog(
-        primary_rows,
-        limit=primary_limit,
-        account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
-''',
-              '''    result = build_zdr_prioritized_catalog(
-        primary_rows,
-''',
-              1,
-          )
-          old = '''    fallback_limit = _bounded_fallback_catalog_limit(
-        requested_catalog_limit, primary_count=len(result["agents"])
-    )
-'''
-          if text.count(old) != 1:
-              raise SystemExit("launcher fallback-limit block changed unexpectedly")
-          text = text.replace(old, "", 1)
-          text = text.replace(
-              '''        and admitted_priced_rows
-        and fallback_limit
-    ):
-''',
-              '''        and admitted_priced_rows
-    ):
-''',
-              1,
-          )
-          text = text.replace(
-              '''            fallback_result = build_zdr_prioritized_catalog(
-                admitted_priced_rows,
-                limit=fallback_limit,
-                account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP),
-''',
-              '''            fallback_result = build_zdr_prioritized_catalog(
-                admitted_priced_rows,
-''',
-              1,
-          )
-          forbidden = (
-              "_bounded_primary_catalog_limit",
-              "_bounded_fallback_catalog_limit",
-              "_catalog_account_cap",
-              "REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES",
-              "REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT",
-              "ORCHESTRATOR_CATALOG_LIMIT",
-              "ORCHESTRATOR_CATALOG_ACCOUNT_CAP",
-          )
-          lingering = [token for token in forbidden if token in text]
-          if lingering:
-              raise SystemExit(f"launcher still contains retired cap contracts: {lingering}")
-          launcher.write_text(text, encoding="utf-8")
-
-          policy = Path("scripts/ci/contextual_orchestrator_review_policy.py")
-          text = policy.read_text(encoding="utf-8")
-          text = text.replace("    limit: int = DEFAULT_CATALOG_LIMIT,\n    account_cap: int = DEFAULT_ACCOUNT_CAP,\n", "    limit: object = DEFAULT_CATALOG_LIMIT,\n    account_cap: object = DEFAULT_ACCOUNT_CAP,\n", 2)
-          validation = '''    if isinstance(limit, bool) or not isinstance(limit, int):
-        raise PolicyError("legacy limit must be an integer when supplied")
-    if isinstance(account_cap, bool) or not isinstance(account_cap, int):
-        raise PolicyError("legacy account_cap must be an integer when supplied")
-
-'''
-          if text.count(validation) != 1:
-              raise SystemExit("legacy policy validation block changed unexpectedly")
-          text = text.replace(validation, "", 1)
-          text = text.replace('            "legacy_limit_ignored": limit,\n            "legacy_account_cap_ignored": account_cap,\n', '            "legacy_limit_ignored": True,\n            "legacy_account_cap_ignored": True,\n', 1)
-          text = text.replace('        type=int,\n        default=DEFAULT_CATALOG_LIMIT,\n', '        default=DEFAULT_CATALOG_LIMIT,\n', 1)
-          text = text.replace('        type=int,\n        default=DEFAULT_ACCOUNT_CAP,\n', '        default=DEFAULT_ACCOUNT_CAP,\n', 1)
-          policy.write_text(text, encoding="utf-8")
-
-          sidecar = Path("scripts/ci/contextual_orchestrator_review_sidecar.sh")
-          text = sidecar.read_text(encoding="utf-8")
-          text = text.replace(
-              "ZDR-prioritized, credential-account-diverse agents catalog by\n# scripts/ci/contextual_orchestrator_review_policy.py for the `orchestrator/free`",
-              "evidence-admitted agents catalog by\n# scripts/ci/contextual_orchestrator_review_policy.py for the `orchestrator/free`",
-              1,
-          )
-          start = text.index('CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"')
-          end = text.index('ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"', start)
-          text = text[:start] + text[end:]
-          text = text.replace('export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"\nexport ORCHESTRATOR_CATALOG_ACCOUNT_CAP="$CATALOG_ACCOUNT_CAP"\n', "", 1)
-          if "ORCHESTRATOR_CATALOG_LIMIT" in text or "ORCHESTRATOR_CATALOG_ACCOUNT_CAP" in text:
-              raise SystemExit("sidecar still exports retired catalog caps")
-          sidecar.write_text(text, encoding="utf-8")
-
-          tests = Path("tests/test_contextual_orchestrator_review_runtime_preflight.py")
-          text = tests.read_text(encoding="utf-8")
-          start = text.index("def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case")
-          end = text.index("def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private", start)
-          replacement = '''def test_fallback_escalation_budget_is_shared_across_full_admitted_catalog() -> None:
-    """Escalation retries stay shared without evicting evidence-admitted routes."""
-    namespace = _load_launcher()
-    preflight = namespace["_preflight_with_fallback"]
-    max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    primary_agents = [
-        SimpleNamespace(id=f"primary_{index}", provider_name="openrouter", model="x/free")
-        for index in range(13)
-    ]
-    fallback_agents = [
-        SimpleNamespace(id=f"fallback_{index}", provider_name="openrouter", model="y/priced")
-        for index in range(5)
-    ]
-    starved = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
-    client = _ProbeClient({agent.id: dict(starved) for agent in [*primary_agents, *fallback_agents]})
-
-    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
-        preflight(primary_agents, fallback_agents, client=client)
-
-    assert failure.value.report["escalations_used"] == max_escalations
-    assert failure.value.report["primary_attempt"]["escalations_used"] == max_escalations
-    assert len(client.calls) == len(primary_agents) + len(fallback_agents) + max_escalations
-
-
-def test_preflight_keeps_more_than_twelve_admitted_primary_routes() -> None:
-    """Admission cardinality cannot crash or truncate runtime preflight."""
-    namespace = _load_launcher()
-    preflight = namespace["_preflight_with_fallback"]
-    agents = [
-        SimpleNamespace(id=f"ready_{index}", provider_name="openrouter", model=f"model/{index}")
-        for index in range(13)
-    ]
-    client = _ProbeClient({agent.id: _openai_text("OK") for agent in agents})
-
-    viable, report, fallback_used = preflight(agents, [], client=client)
-
-    assert viable == agents
-    assert report["ready_count"] == len(agents)
-    assert fallback_used is False
-    assert [call[0] for call in client.calls] == agents
-
-
-def test_auto_fallback_keeps_all_admitted_routes_after_primary_failure() -> None:
-    """Auto-pool fallback is evidence-triggered, not cardinality-truncated."""
-    namespace = _load_launcher()
-    preflight = namespace["_preflight_with_fallback"]
-    primary = [
-        SimpleNamespace(id=f"free_{index}", provider_name="openrouter", model=f"free/{index}")
-        for index in range(9)
-    ]
-    fallback = [
-        SimpleNamespace(id=f"priced_{index}", provider_name="openrouter", model=f"priced/{index}")
-        for index in range(5)
-    ]
-    client = _ProbeClient(
-        {agent.id: TimeoutError("unavailable") for agent in primary}
-        | {agent.id: _openai_text("OK") for agent in fallback}
-    )
-
-    viable, report, fallback_used = preflight(primary, fallback, client=client)
-
-    assert viable == fallback
-    assert fallback_used is True
-    assert report["fallback_reason"] == "primary_routes_unavailable"
-    assert [call[0] for call in client.calls] == [*primary, *fallback]
-
-
-'''
-          tests.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
-
-          changelog = Path("CHANGELOG.md")
-          text = changelog.read_text(encoding="utf-8")
-          entry = (
-              "- Remove the retired Noema/OpenCode catalog cardinality heuristics from the review launcher and sidecar. "
-              "Evidence-eligible routes are no longer truncated before runtime preflight, auto-mode keeps the full priced fallback set, "
-              "and legacy `limit`/`account_cap` inputs are accepted only as ignored compatibility arguments. This closes the >12-route startup crash found by Devin Review without making serialization order or provider identity a routing preference.\n"
-          )
-          if entry not in text:
-              text = text.replace("## [Unreleased]\n", "## [Unreleased]\n" + entry, 1)
-          changelog.write_text(text, encoding="utf-8")
-
-          baseline = Path("docs/product-technical-gap-baseline.md")
-          text = baseline.read_text(encoding="utf-8")
-          note = '''
-
-## 2026-09-01 Noema/OpenCode admission/runtime reconciliation
-
-Devin Review exposed a contract split in PR #1591: the policy layer correctly stopped truncating evidence-eligible routes, while the launcher still rejected any primary catalog larger than the historical 12-route preflight budget. The causal owner is the central `.github` launcher/sidecar boundary, not a leaf repository. The repair removes catalog cardinality and per-account caps from launcher admission, preserves the full primary and evidence-triggered priced fallback catalogs, and keeps neutral policy priority. Legacy `limit` and `account_cap` inputs remain accepted but are explicitly non-authoritative. Regression coverage includes >12 primary routes, >8 free routes with a priced fallback set, shared escalation evidence across a larger catalog, and arbitrary ignored compatibility values. The former `12 base attempts + 4 escalations = 160s` statement is historical rather than a current admission invariant; startup-latency control must not silently evict eligible routes without an independently justified decision model.
-'''
-          if "## 2026-09-01 Noema/OpenCode admission/runtime reconciliation" not in text:
-              text += note
-          baseline.write_text(text, encoding="utf-8")
-          PY
-
-          PYTHONPATH=. python3 -m pytest -q \
-            tests/test_contextual_orchestrator_no_heuristic_admission.py \
-            tests/test_contextual_orchestrator_review_policy.py \
-            tests/test_contextual_orchestrator_review_runtime_preflight.py
-          PYTHONPATH=. python3 -m pytest -q tests
-          python3 -m compileall -q scripts/ci tests
-          interrogate --fail-under=100 scripts/ci/contextual_orchestrator_review_policy.py scripts/ci/contextual_orchestrator_review_launcher.py
-          git diff --check
-
-          git rm "$TEMP_WORKFLOW"
-          git add \
-            scripts/ci/contextual_orchestrator_review_policy.py \
-            scripts/ci/contextual_orchestrator_review_launcher.py \
-            scripts/ci/contextual_orchestrator_review_sidecar.sh \
-            tests/test_contextual_orchestrator_no_heuristic_admission.py \
-            tests/test_contextual_orchestrator_review_runtime_preflight.py \
-            CHANGELOG.md \
-            docs/product-technical-gap-baseline.md
+          git rm "$TEMP_WORKFLOW" "$TEMP_DRIVER"
+          git add scripts/ci/contextual_orchestrator_review_policy.py
+          git add scripts/ci/contextual_orchestrator_review_launcher.py
+          git add scripts/ci/contextual_orchestrator_review_sidecar.sh
+          git add tests/test_contextual_orchestrator_no_heuristic_admission.py
+          git add tests/test_contextual_orchestrator_review_runtime_preflight.py
+          git add CHANGELOG.md docs/product-technical-gap-baseline.md
           git diff --cached --check
           test ! -e "$TEMP_WORKFLOW"
+          test ! -e "$TEMP_DRIVER"
 
           remote_branch="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
           test "$remote_branch" = "$branch_head"
