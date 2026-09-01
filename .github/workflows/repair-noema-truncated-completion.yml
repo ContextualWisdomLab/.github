@@ -1,0 +1,76 @@
+name: One-shot Noema truncated-completion repair
+
+on:
+  push:
+    branches:
+      - fix/noema-truncated-completion-contract-20260901
+    paths:
+      - .github/workflows/repair-noema-truncated-completion.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Reproduce, repair, verify, and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-truncated-completion-contract-20260901
+          REPAIR_SCRIPT: scripts/ci/repair_noema_truncated_completion.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+
+          git clone --filter=blob:none \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+          python3 "$REPAIR_SCRIPT" --write-tests
+
+          set +e
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_truncated_completion_contract.py \
+            > /tmp/noema-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/noema-red.log
+          test "$red_status" -ne 0
+          grep -q "extract_llm_completion" /tmp/noema-red.log
+
+          python3 "$REPAIR_SCRIPT" --apply
+
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_truncated_completion_contract.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_review_orchestrator_ssrf.py
+          PYTHONPATH=. python3 -m pytest -q tests
+          interrogate --fail-under=100 scripts/ci/noema_review_gate.py
+          python3 -m compileall -q scripts/ci tests
+          git diff --check
+
+          git rm "$REPAIR_SCRIPT"
+          git add \
+            CHANGELOG.md \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_truncated_completion_contract.py
+          git diff --cached --check
+
+          remote_head="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(noema): recover truncated structured completions"
+          git push origin "HEAD:${TARGET_BRANCH}"
