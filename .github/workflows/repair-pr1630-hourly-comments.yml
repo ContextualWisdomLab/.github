@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - fix/actions-queue-saturation-scheduler-cadence-20260902
-    paths:
-      - .github/workflows/repair-pr1630-hourly-comments.yml
 
 permissions:
   contents: read
