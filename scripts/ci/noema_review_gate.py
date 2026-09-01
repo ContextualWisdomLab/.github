@@ -33,7 +33,6 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
-NOEMA_LLM_TIMEOUT_SECONDS = 4 * 60 * 60
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -106,6 +105,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       title
       body
       isDraft
+      state
       headRefOid
       reviewDecision
       reviewThreads(first: 100) {
@@ -167,6 +167,21 @@ def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     return pr
 
 
+def require_expected_head(pr: dict[str, Any], expected_head_sha: str) -> None:
+    """Fail closed unless the pull request is open at the expected commit."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head_sha):
+        raise RuntimeError("Expected pull request head must be a full commit SHA")
+    live_head_sha = str(pr.get("headRefOid") or "")
+    if (
+        str(pr.get("state") or "").upper() != "OPEN"
+        or live_head_sha.lower() != expected_head_sha.lower()
+    ):
+        raise RuntimeError(
+            "Pull request is closed or its head changed before Noema review: "
+            f"expected {expected_head_sha}, observed {live_head_sha or '<missing>'}"
+        )
+
+
 def review_author(review: dict[str, Any]) -> str:
     """Return the normalized author login from a review node."""
     return ((review.get("author") or {}).get("login") or "").strip()
@@ -225,7 +240,19 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
-        diff = diff[:MAX_DIFF_CHARS]
+        marker = "[overlong changed line content omitted]"
+        bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
+        complete, separator, partial = bounded.rpartition("\n")
+        if not separator:
+            return diff[:MAX_DIFF_CHARS], truncated
+        last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
+        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
+        inside_hunk = last_hunk > last_file
+        if partial.startswith(("+", "-")) and (
+            inside_hunk or not partial.startswith(("+++", "---"))
+        ):
+            complete += f"\n{partial[0]}{marker}"
+        diff = complete
     return diff, truncated
 
 
@@ -903,7 +930,7 @@ def call_llm(
     publication. It is threaded through here so the one-time repair-retry
     request below — fired only after the first attempt's verdict was
     malformed — can also confirm the PR head has not moved before spending a
-    second, potentially multi-hour ``NOEMA_LLM_TIMEOUT_SECONDS`` call on a
+    second, potentially multi-hour model call on a
     review that ``inspect_and_review``'s own post-call stale-head check would
     discard anyway once this function returns. See ``fetch_pr`` for the live
     lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
@@ -916,6 +943,16 @@ def call_llm(
         raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
     reject_private_llm_url(api_url)
 
+    allowed_locations = [
+        {"path": path, "line": line, "side": side}
+        for path, line, side in sorted(changed_diff_locations(diff))
+    ]
+    location_example = (
+        allowed_locations[0]
+        if allowed_locations
+        else {"path": "path", "line": 0, "side": "RIGHT"}
+    )
+
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -923,7 +960,36 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with this shape:",
-                '{"decision":"approve|request_changes|comment","summary":"...","reviewed_lines":[{"path":"path","line":1,"side":"RIGHT|LEFT","analysis":"..."}],"adversarial_validation":{"status":"passed|failed","residual_risk":"...","probes":[{"path":"path","line":1,"side":"RIGHT|LEFT","hypothesis":"...","attack_or_counterexample":"...","evidence":"observed or source-traced result","outcome":"falsified|confirmed"}]},"findings":[{"severity":"high|medium|low","file":"path","line":1,"side":"RIGHT|LEFT","message":"..."}]}',
+                json.dumps(
+                    {
+                        "decision": "approve|request_changes|comment",
+                        "summary": "...",
+                        "reviewed_lines": [{**location_example, "analysis": "..."}],
+                        "adversarial_validation": {
+                            "status": "passed|failed",
+                            "residual_risk": "...",
+                            "probes": [
+                                {
+                                    **location_example,
+                                    "hypothesis": "...",
+                                    "attack_or_counterexample": "...",
+                                    "evidence": "observed or source-traced result",
+                                    "outcome": "falsified|confirmed",
+                                }
+                            ],
+                        },
+                        "findings": [
+                            {
+                                "severity": "high|medium|low",
+                                "file": location_example["path"],
+                                "line": location_example["line"],
+                                "side": location_example["side"],
+                                "message": "...",
+                            }
+                        ],
+                    },
+                    separators=(",", ":"),
+                ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
@@ -964,7 +1030,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    with opener.open(request, timeout=NOEMA_LLM_TIMEOUT_SECONDS) as response:  # nosec B310
+    with opener.open(request) as response:  # nosec B310
         raw_bytes = response.read()
     try:
         raw = decode_llm_response_body(raw_bytes)
@@ -1106,8 +1172,10 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """
     expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
-    if str(pr.get("headRefOid") or "").lower() != expected_head:
-        print("Trigger head is stale; Noema review skipped before model work.")
+    try:
+        require_expected_head(pr, expected_head)
+    except RuntimeError:
+        print("Pull request is closed or its trigger head is stale; Noema review skipped before model work.")
         return 0
     actor = current_actor()
     if not actor:
@@ -1132,8 +1200,10 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Pull request head changed during review; Noema review skipped before repair retry.")
         return 0
     current_pr = fetch_pr(repo, number)
-    if str(current_pr.get("headRefOid") or "").lower() != expected_head:
-        print("Pull request head changed during review; stale verdict was not published.")
+    try:
+        require_expected_head(current_pr, expected_head)
+    except RuntimeError:
+        print("Pull request closed or its head changed during review; stale verdict was not published.")
         return 0
     submit_review(repo, number, current_pr, actor, verdict)
     return 0
