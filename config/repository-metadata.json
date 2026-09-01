@@ -49,6 +49,30 @@
       "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "LineageWeave": {
+      "description": "LineageWeave — reconstruct auditable lineage DAGs from scattered records using multi-signal fusion and optional LLM adjudication.",
+      "topics": ["data-lineage", "record-linkage", "information-retrieval", "dag", "llm", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "contextual-orchestrator": {
+      "description": "Contextual Orchestrator — a governed model-orchestration control plane that routes, delegates, verifies, and synthesizes OpenAI-compatible workloads.",
+      "topics": ["enterprise-admin", "llm-orchestration", "model-orchestration", "control-plane", "openai-compatible", "python", "research", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "appguardrail": {
+      "description": "AppGuardrail — security guardrails, static checks, review guidance, and fix workflows for AI-assisted application development.",
+      "topics": ["ai-coding", "guardrails", "security", "static-analysis", "vibe-coding", "developer-tools", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
+    },
+    "naruon": {
+      "description": "Naruon — an AI email workspace that connects messages, attachments, calendars, and tasks into context-aware decisions and actions.",
+      "topics": ["ai-workspace", "email-workspace", "email", "automation", "llm", "productivity", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
