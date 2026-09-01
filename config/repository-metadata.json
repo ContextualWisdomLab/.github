@@ -37,6 +37,12 @@
       "topics": ["irt", "item-response-theory", "mlsirm", "psychometrics", "calibration", "measurement", "rust", "python", "simulation", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "EgressWeave": {
+      "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
+      "topics": ["egress", "ssrf", "dns-rebinding", "http", "network-security", "httpx", "python", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
