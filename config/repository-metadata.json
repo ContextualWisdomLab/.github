@@ -51,6 +51,22 @@
       "pages": {
         "enabled": false
       }
+    },
+    "learning-record-store": {
+      "description": "Immutable xAPI learning record storage and evidence services for interoperable learning analytics.",
+      "topics": [
+        "xapi",
+        "learning-record-store",
+        "cmi5",
+        "learning-analytics",
+        "education",
+        "evidence",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": {
+        "enabled": false
+      }
     }
   }
 }
