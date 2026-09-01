@@ -235,7 +235,17 @@ jobs:
     name: opencode-review
     needs: [coverage-evidence]
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    # Must stay >= opencode-review-dispatch.yml's own opencode-review-target
+    # job ceiling (currently 325m; see that workflow's
+    # test_opencode_job_timeout_contains_full_sequential_review_budget). That
+    # job's model-pool step alone is budgeted 205m for contextual-orchestrator
+    # sidecar preflight/escalation across its free-tier candidate pool, so a
+    # shorter poll budget here fails a legitimate slow-but-successful review
+    # indistinguishably from a genuinely broken dispatch (see
+    # ContextualWisdomLab/.github#1500, #1506, contextual-orchestrator#968,
+    # #946: dispatch always succeeded, but the 90-minute-bounded poll below
+    # always gave up before the dispatched job could post a verdict).
+    timeout-minutes: 340
     permissions:
       contents: read
       pull-requests: read
@@ -292,7 +302,7 @@ jobs:
             exit 1
           fi
           verdict=""
-          for attempt in $(seq 1 180); do
+          for attempt in $(seq 1 660); do
             reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
             verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
@@ -325,7 +335,7 @@ jobs:
             if [ -n "$verdict" ]; then
               break
             fi
-            if [ "$attempt" -lt 180 ]; then
+            if [ "$attempt" -lt 660 ]; then
               sleep 30
             fi
           done
