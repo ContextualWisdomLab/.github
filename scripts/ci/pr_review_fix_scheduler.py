@@ -16,6 +16,7 @@ try:
     from pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
@@ -27,6 +28,7 @@ except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
         fetch_open_prs,
         fetch_pr,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
@@ -69,6 +71,17 @@ RCA_REPAIR_CHANGE_REQUEST_MARKERS = (
     "sast semgrep failed",
     "codeql failed",
 )
+RCA_IGNORED_CHECK_NAMES = frozenset(
+    {
+        "metadata-only gate evaluation",
+        "opencode-review",
+        "PR governance metadata controller",
+    }
+)
+FAILED_CHECK_CONCLUSIONS = frozenset(
+    {"ACTION_REQUIRED", "CANCELLED", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
+)
+FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 
 
 def run_json(args: list[str]) -> Any:
@@ -203,12 +216,35 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 
 def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether exact-head failed-check evidence warrants RCA and repair."""
-    if not (
+    review_requires_rca = (
         has_current_head_changes_requested(pr)
         and change_request_requires_rca(pr)
-    ):
+    )
+    failed_checks = current_head_failed_checks(pr)
+    if not review_requires_rca and not failed_checks:
         return False, ()
+    if failed_checks:
+        return True, (
+            "current-head failed check(s) require RCA: " + ", ".join(failed_checks),
+        )
     return True, ("current-head failed-check blocker requires RCA",)
+
+
+def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
+    """Return terminal failed checks that can carry source-backed RCA evidence."""
+    failed: list[str] = []
+    for node in context_nodes(pr):
+        if node.get("__typename") == "CheckRun":
+            name = str(node.get("name") or "").strip()
+            conclusion = str(node.get("conclusion") or "").upper()
+            if name not in RCA_IGNORED_CHECK_NAMES and conclusion in FAILED_CHECK_CONCLUSIONS:
+                failed.append(name or "unnamed check")
+        else:
+            name = str(node.get("context") or "").strip()
+            state = str(node.get("state") or "").upper()
+            if name not in RCA_IGNORED_CHECK_NAMES and state in FAILED_STATUS_STATES:
+                failed.append(name or "unnamed status")
+    return tuple(dict.fromkeys(failed))
 
 
 CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
@@ -336,8 +372,6 @@ def inspect_pr(
 ) -> tuple[str, tuple[str, ...]]:
     """Inspect one PR and optionally dispatch a bounded repair."""
     number = int(pr["number"])
-    if pr.get("isDraft"):
-        return "skip", ("draft PR",)
     if not _base_branch_matches(pr, args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
@@ -347,11 +381,15 @@ def inspect_pr(
             "external PR head is not writable by repository workflow credentials",
         )
 
+    draft_rca, draft_rca_reasons = needs_rca_repair(pr)
+    if pr.get("isDraft") and not draft_rca:
+        return "skip", ("draft PR",)
+
     needs_fix, reasons = needs_autofix(pr)
     repair_mode = "review"
     resolve_conflict = False
     if not needs_fix:
-        needs_rca, rca_reasons = needs_rca_repair(pr)
+        needs_rca, rca_reasons = draft_rca, draft_rca_reasons
         if needs_rca:
             repair_mode = "rca"
             reasons = rca_reasons
@@ -406,8 +444,6 @@ def process_queue(args: argparse.Namespace) -> int:
 
     prs_needing_comments = []
     for pr in prs:
-        if pr.get("isDraft"):
-            continue
         if not _base_branch_matches(pr, args.base_branch):
             continue
         if not same_repository_head(args.repo, pr):
@@ -420,7 +456,9 @@ def process_queue(args: argparse.Namespace) -> int:
                 getattr(args, "resolve_unreviewed_conflicts", False)
             ),
         )
-        if needs_fix or needs_rca or needs_resolve:
+        if (needs_fix and not pr.get("isDraft")) or needs_rca or (
+            needs_resolve and not pr.get("isDraft")
+        ):
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}

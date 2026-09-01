@@ -37,6 +37,90 @@ def test_recent_fix_marker_is_head_scoped():
     assert not fix.recent_fix_marker_exists([{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}], head, 24 * 3600)
 
 
+def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
+    """Exact-head check evidence can start RCA without a circular review prerequisite."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ("Application CI",)
+    assert fix.needs_rca_repair(pr) == (
+        True,
+        ("current-head failed check(s) require RCA: Application CI",),
+    )
+
+
+def test_control_plane_failure_and_pending_checks_do_not_trigger_rca():
+    """The metadata gate and nonterminal checks cannot recursively dispatch repair."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "metadata-only gate evaluation",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "Application CI",
+                        "status": "IN_PROGRESS",
+                        "conclusion": None,
+                    },
+                ]
+            }
+        }
+    )
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
+
+
+def test_draft_with_failed_check_dispatches_rca(monkeypatch):
+    """A draft stays unmergeable while its real source failure reaches bounded RCA."""
+    captured = {}
+    pr = make_pr(
+        isDraft=True,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "Application CI",
+                        "state": "FAILURE",
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda repo, pr, dry_run: None)
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"])
+
+    action, reasons = fix.inspect_pr("owner/repo", pr, args)
+
+    assert action == "dispatch"
+    assert reasons == ("current-head failed check(s) require RCA: Application CI",)
+    assert captured["repair_mode"] == "rca"
+
+
 def test_needs_autofix_uses_current_head_evidence():
     """Autofix starts from current-head OpenCode change requests."""
     head = "a" * 40
