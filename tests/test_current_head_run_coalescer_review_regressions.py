@@ -169,6 +169,34 @@ def test_final_candidate_fetch_preserves_run_that_started_after_snapshot(monkeyp
     assert cancelled == []
 
 
+def test_authoritative_sibling_is_refetched_and_must_still_be_active(monkeypatch) -> None:
+    """A sibling that completed after the bulk snapshot cannot justify cancellation."""
+    module = load_module()
+    candidate = run_record(100)
+    stale_sibling = run_record(101)
+    completed_sibling = run_record(101, status="completed")
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, stale_sibling])
+
+    def fetch_run(_repo: str, run_id: int):
+        if run_id == 101:
+            return completed_sibling
+        return candidate
+
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
+    cancelled: list[int] = []
+    monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
+
+    assert module.coalesce(
+        "ContextualWisdomLab/.github",
+        2,
+        "ContextualWisdomLab/.github",
+        "feature/current",
+        "a" * 40,
+    ) == []
+    assert cancelled == []
+
+
 def test_transport_is_token_bound_and_individually_timeout_bounded(monkeypatch) -> None:
     """Read and cancellation transports require GH_TOKEN and a per-call timeout."""
     module = load_module()
