@@ -1,4 +1,4 @@
-name: Temporary PR 1619 status authority repair
+name: Temporary PR 1619 live-main reconstruction
 
 on:
   push:
@@ -10,11 +10,11 @@ on:
 permissions: {}
 
 concurrency:
-  group: tmp-pr1619-status-authority-repair
-  cancel-in-progress: false
+  group: tmp-pr1619-live-main-reconstruction
+  cancel-in-progress: true
 
 jobs:
-  repair:
+  reconstruct:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -25,39 +25,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Repair status authority and delete this one-shot writer
+      - name: Reconstruct intended delta from protected main
         shell: bash
         env:
           EXPECTED_REF: fix/current-main-remove-opencode-dispatch-bootstrap-20260902
         run: |
           set -euo pipefail
-          cleanup_on_failure() {
-            rc="$?"
-            if [ "$rc" -ne 0 ]; then
-              trap - EXIT
-              git reset --hard "${GITHUB_SHA}"
-              rm -f .github/workflows/tmp-pr1619-status-authority-repair.yml
-              git config user.name 'contextualwisdomlab-automation'
-              git config user.email 'contextualwisdomlab-automation@users.noreply.github.com'
-              git add .github/workflows/tmp-pr1619-status-authority-repair.yml
-              if ! git diff --cached --quiet; then
-                git commit -m 'chore(ci): remove failed PR 1619 status repair writer'
-                git fetch origin "${EXPECTED_REF}"
-                if [ "$(git rev-parse FETCH_HEAD)" = "${GITHUB_SHA}" ]; then
-                  git push origin "HEAD:${EXPECTED_REF}"
-                fi
-              fi
-            fi
-            exit "$rc"
-          }
-          trap cleanup_on_failure EXIT
-
           test "${GITHUB_REF_NAME}" = "${EXPECTED_REF}"
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
-          git fetch origin "${EXPECTED_REF}"
-          test "$(git rev-parse FETCH_HEAD)" = "${GITHUB_SHA}"
+          git fetch origin "${EXPECTED_REF}" main
+          test "$(git rev-parse "origin/${EXPECTED_REF}")" = "${GITHUB_SHA}"
+          MAIN_SHA="$(git rev-parse origin/main)"
+
+          # Protected main is the content baseline. The resulting commit keeps
+          # both the current PR head and current main as parents, so concurrent
+          # work is preserved without a force push or destructive rebase.
+          git read-tree --reset -u "${MAIN_SHA}"
 
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           workflow_path = Path('.github/workflows/opencode-review-dispatch.yml')
@@ -65,43 +51,80 @@ jobs:
           workflow = workflow_path.read_text(encoding='utf-8')
           tests = test_path.read_text(encoding='utf-8')
 
-          old_token = "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}"
-          new_token = "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}"
-          old_source = "OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}"
-          new_source = "OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}"
-          if workflow.count(old_token) != 1 or workflow.count(old_source) != 1:
-              raise SystemExit('exact status credential expression changed; refusing stale repair')
-          workflow = workflow.replace(old_token, new_token, 1).replace(old_source, new_source, 1)
-          workflow_path.write_text(workflow, encoding='utf-8')
+          dead_job = '''  required-workflow-bootstrap:
+            name: required-workflow-bootstrap
+            runs-on: ubuntu-latest
+            steps:
+              - run: echo "OpenCode repository-dispatch review run materialized."
 
-          old_assert = '''    assert (\n        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step\n    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step\n'''
-          new_assert = '''    assert (\n        "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == "\n        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "\n        "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "\n        "github.token }}"\n    ) in status_step\n    assert (\n        "OPENCODE_STATUS_TOKEN_SOURCE: ${{ "\n        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "\n        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN'"\n    ) in status_step\n    assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step\n'''
-          if tests.count(old_assert) != 1:
-              raise SystemExit('exact status contract test changed; refusing stale repair')
-          test_path.write_text(tests.replace(old_assert, new_assert, 1), encoding='utf-8')
+          '''.replace('        ', '')
+          if workflow.count(dead_job) != 1:
+              raise SystemExit('protected-main orphan bootstrap shape changed; refusing reconstruction')
+          workflow_path.write_text(workflow.replace(dead_job, '', 1), encoding='utf-8')
+
+          bootstrap_contract = re.compile(
+              r'    assert "required-workflow-bootstrap:" in workflow\n'
+              r'    assert "OpenCode repository-dispatch review run materialized\\\." in workflow\n'
+              r'    bootstrap_start = workflow\.index\("  required-workflow-bootstrap:\\\\n"\)\n'
+              r'    bootstrap_end = workflow\.index\("\\\\n  validate-pr-metadata:", bootstrap_start\)\n'
+              r'    bootstrap_job = workflow\[bootstrap_start:bootstrap_end\]\n'
+              r'    assert "\\\\n    if:" not in bootstrap_job\n'
+          )
+          replacement = (
+              '    assert "required-workflow-bootstrap:" not in workflow\n'
+              '    assert "OpenCode repository-dispatch review run materialized." not in workflow\n'
+          )
+          tests, count = bootstrap_contract.subn(replacement, tests, count=1)
+          if count != 1:
+              raise SystemExit('protected-main bootstrap regression contract changed; refusing reconstruction')
+          test_path.write_text(tests, encoding='utf-8')
           PY
 
           workflow_blob="$(git hash-object .github/workflows/opencode-review-dispatch.yml)"
-          python3 - "$workflow_blob" <<'PY'
-          import re, sys
+          python3 - "${workflow_blob}" <<'PY'
+          import re
+          import sys
           from pathlib import Path
+
           path = Path('tests/test_pr_review_autofix_nvidia_nim_contract.py')
           text = path.read_text(encoding='utf-8')
-          text, count = re.subn(r'REVIEW_DISPATCH_BLOB_SHA = "[0-9a-f]{40}"', f'REVIEW_DISPATCH_BLOB_SHA = "{sys.argv[1]}"', text, count=1)
+          text, count = re.subn(
+              r'REVIEW_DISPATCH_BLOB_SHA = "[0-9a-f]{40}"',
+              f'REVIEW_DISPATCH_BLOB_SHA = "{sys.argv[1]}"',
+              text,
+              count=1,
+          )
           if count != 1:
-              raise SystemExit('dispatch blob pin contract changed; refusing stale repair')
+              raise SystemExit('dispatch blob pin contract changed; refusing reconstruction')
           path.write_text(text, encoding='utf-8')
           PY
 
-          PYTHONPATH=. python -m pytest -q tests/test_opencode_agent_contract.py tests/test_pr_review_autofix_nvidia_nim_contract.py
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_opencode_agent_contract.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py
           git diff --check
-          rm .github/workflows/tmp-pr1619-status-authority-repair.yml
-          git add .github/workflows/opencode-review-dispatch.yml tests/test_opencode_agent_contract.py tests/test_pr_review_autofix_nvidia_nim_contract.py .github/workflows/tmp-pr1619-status-authority-repair.yml
-          git diff --cached --check
+
+          git add \
+            .github/workflows/opencode-review-dispatch.yml \
+            tests/test_opencode_agent_contract.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py
+
+          actual_paths="$(git diff --cached --name-only "${MAIN_SHA}" | LC_ALL=C sort)"
+          expected_paths="$(printf '%s\n' \
+            '.github/workflows/opencode-review-dispatch.yml' \
+            'tests/test_opencode_agent_contract.py' \
+            'tests/test_pr_review_autofix_nvidia_nim_contract.py' | LC_ALL=C sort)"
+          test "${actual_paths}" = "${expected_paths}"
+          git diff --cached --check "${MAIN_SHA}"
+
+          tree_sha="$(git write-tree)"
+          git config user.name 'contextualwisdomlab-automation'
+          git config user.email 'contextualwisdomlab-automation@users.noreply.github.com'
+          commit_sha="$(printf '%s\n\n%s\n' \
+            'chore(ci): reconstruct OpenCode bootstrap cleanup on live main' \
+            'Preserve current protected-main status authority and all concurrent changes while removing only the orphan repository-dispatch bootstrap job and updating its executable contracts.' \
+            | git commit-tree "${tree_sha}" -p "${GITHUB_SHA}" -p "${MAIN_SHA}")"
 
           git fetch origin "${EXPECTED_REF}"
           test "$(git rev-parse FETCH_HEAD)" = "${GITHUB_SHA}"
-          git config user.name 'contextualwisdomlab-automation'
-          git config user.email 'contextualwisdomlab-automation@users.noreply.github.com'
-          git commit -m 'fix(opencode): preserve same-repository status authority'
-          git push origin "HEAD:${EXPECTED_REF}"
+          git push origin "${commit_sha}:refs/heads/${EXPECTED_REF}"
