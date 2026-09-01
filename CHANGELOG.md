@@ -17,9 +17,13 @@ Semantic Versioning where the repository publishes a release.
   Agents SDK client sent `stream_options.include_usage=true` with
   `tools`/`response_format`, rejected by at least one `orchestrator/free`
   candidate with `HTTP 400 invalid_stream_options`, exhausting the pool —
-  fixed by `.github#1448` (commit `702392a2`), which scopes Strix's
-  `LLM_DISABLE_STREAMING` opt-in to the contextual-orchestrator loopback so
-  that combination is never sent to it. Second, a separate run
+  fixed at its root cause by `contextual-orchestrator#925` (merge commit
+  `7944a3c`), which makes the gateway itself stop rejecting the
+  combination; `.github#1448`'s earlier client-side `LLM_DISABLE_STREAMING`
+  workaround for the same symptom was since reverted by `.github#1463` now
+  that it is unnecessary (and `ORCHESTRATOR_PIN_SHA` bumped to `7944a3c` in
+  the same PR so the vendored sidecar actually carries `#925`'s fix).
+  Second, a separate run
   (`ContextualWisdomLab/.github#1441` job `99249903390`) got past that
   stage entirely and instead hung for the full 120s `curl` timeout with
   zero bytes back on the sidecar's post-`healthz` gateway smoke request —

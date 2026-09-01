@@ -1417,16 +1417,26 @@ the `ORCHESTRATOR_CATALOG_FAMILY_CAP` 4→8 raise, and (via the independent
   entry (or PR #1444, which restates it) was originally written, so this is
   a genuine update, not a contradiction of the historical narrative above.
   (1) The `stream_options.include_usage=true` + `tools`/`response_format`
-  rejection is fixed by `.github#1448` (commit `702392a2`, merged
-  2026-08-30T12:15:28Z): `strix_quick_gate.sh` now scopes Strix's
-  `LLM_DISABLE_STREAMING` opt-in to the contextual-orchestrator loopback, so
-  Strix's always-tools turns against that gateway never send
-  `stream_options.include_usage=true` in the first place — the exact
-  combination at least one `orchestrator/free` candidate was rejecting with
-  `HTTP 400 invalid_stream_options`. `contextual-orchestrator#924` (cited
-  above as the proposed, not-yet-merged fix) remains open and is superseded
-  by this Strix-side fix for this specific symptom; other providers in
-  Strix's fallback chain keep real SSE streaming. (2) The
+  rejection: `.github#1448` (commit `702392a2`) landed first as a
+  Strix-side `LLM_DISABLE_STREAMING` workaround, but **that workaround was
+  itself since reverted by `.github#1463`** once the real, upstream root
+  cause was fixed at the gateway — `contextual-orchestrator#925` (merge
+  commit `7944a3c`, "accept stream_options.include_usage=true for tools
+  passthrough") makes the server itself stop rejecting the combination, so
+  routing around it client-side became unnecessary. `.github#1463` bumped
+  `ORCHESTRATOR_PIN_SHA` to `7944a3c` itself (not a later tip, kept
+  minimal) after Devin Review on that revert caught that the *previously*
+  vendored pin predated `#925`'s merge and would have silently
+  reintroduced the original failure had the workaround been removed
+  first — see this file's own 2026-08-31 `ORCHESTRATOR_PIN_SHA bumped to
+  carry #925's stream_options/tools fix` entry for the full trail,
+  confirmed directly via `git merge-base --is-ancestor 7944a3c
+  8cd99f13...` (true) against the pin now in place. Net effect is the same
+  conclusion as originally written here — this gap is fixed — via a
+  cleaner, upstream mechanism instead of a client-side route-around; the
+  once-proposed `contextual-orchestrator#924` fix (cited above) is
+  superseded by `#925`, a different, more direct fix for the identical
+  symptom. (2) The
   120s-timeout-with-zero-bytes gap is fixed by `.github#1452` (commit
   `1ff82682`, merged 2026-08-30T14:54:45Z, implementing ADR-0005): the
   sidecar's own code comments now cite a live reproduction of this exact
