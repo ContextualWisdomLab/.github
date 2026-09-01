@@ -330,8 +330,7 @@ cleanup_sidecar_on_error() {
 trap cleanup_sidecar_on_error EXIT
 
 i=0
-until curl --connect-timeout 2 --max-time 5 -fsSL \
-  "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
+until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?

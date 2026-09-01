@@ -454,7 +454,8 @@ def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
     assert '--max-time 15 "https://openrouter.ai/api/v1/endpoints/zdr"' not in sidecar
-    assert 'curl --connect-timeout 2 --max-time 5 -fsSL' in sidecar
+    assert '--connect-timeout' not in sidecar
+    assert '--max-time 5' not in sidecar
     assert '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz"' in sidecar
     assert 'if [ "$i" -ge 180 ]' not in sidecar
 
