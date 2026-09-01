@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from scripts.ci import contextual_orchestrator_review_policy as policy
 
 
@@ -59,29 +61,22 @@ def test_free_pool_admission_assigns_no_hand_authored_priority() -> None:
     assert {entry["priority"] for entry in result["agents"]} == {0}
 
 
-def test_auto_pool_admission_does_not_rank_cost_or_provider_identity() -> None:
-    """The audit/auto catalog also must not synthesize a routing preference."""
-    free = _free_row(0, provider="openrouter")
-    priced = {
-        **_free_row(1, provider="bytez"),
-        "is_free": False,
-        "cost_evidence": policy.COST_PRICED,
-        "prompt_price_per_1k": 0.25,
-        "completion_price_per_1k": 0.75,
-    }
+def test_central_review_catalog_rejects_retired_auto_pool() -> None:
+    """The central Noema/OpenCode/Strix sidecar is free-only by contract."""
+    with pytest.raises(policy.PolicyError, match="unsupported review pool"):
+        policy.build_zdr_prioritized_catalog([_free_row(0)], pool="auto")
 
-    result = policy.build_zdr_prioritized_catalog(
-        [priced, free],
-        pool="auto",
-        limit=1,
-        account_cap=1,
-    )
 
-    assert {entry["model"] for entry in result["agents"]} == {
-        free["model"],
-        priced["model"],
-    }
-    assert {entry["priority"] for entry in result["agents"]} == {0}
+def test_normalized_agent_identity_collision_fails_closed() -> None:
+    """Two distinct routes may not share the runtime identity used for failover."""
+    first = _free_row(0)
+    second = _free_row(1)
+    first["agent_id"] = "openrouter/model-a"
+    second["agent_id"] = "openrouter-model-a"
+    assert first["model"] != second["model"]
+
+    with pytest.raises(policy.PolicyError, match="agent id collision"):
+        policy.build_zdr_prioritized_catalog([first, second], pool="free")
 
 
 def test_legacy_ignored_inputs_accept_arbitrary_values() -> None:
