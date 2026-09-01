@@ -10,10 +10,12 @@ on:
       - "tests/test_repository_metadata_reconciliation.py"
       - "tests/test_repository_metadata_convergence.py"
       - "tests/test_repository_metadata_identity.py"
+      - "tests/test_repository_metadata_live_verification.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - "tests/test_repository_label_convergence.py"
       - "tests/test_repository_label_identity.py"
+      - "tests/test_repository_label_live_verification.py"
       - ".github/workflows/repository-metadata-reconcile.yml"
   schedule:
     - cron: "23 * * * *"
@@ -69,7 +71,8 @@ jobs:
             --include=scripts/ci/reconcile_repository_metadata.py \
             -m pytest -q \
             tests/test_repository_metadata_reconciliation.py \
-            tests/test_repository_metadata_identity.py
+            tests/test_repository_metadata_identity.py \
+            tests/test_repository_metadata_live_verification.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
@@ -81,7 +84,8 @@ jobs:
             -m pytest -q \
             tests/test_repository_label_reconciliation.py \
             tests/test_repository_label_convergence.py \
-            tests/test_repository_label_identity.py
+            tests/test_repository_label_identity.py \
+            tests/test_repository_label_live_verification.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
@@ -116,20 +120,34 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Reconcile repository public surfaces
+      - name: Reconcile and verify repository public surfaces
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
         run: |
           set +e
           python scripts/ci/reconcile_repository_metadata.py \
             --manifest config/repository-metadata.json
-          metadata_status=$?
+          metadata_apply_status=$?
           python scripts/ci/reconcile_repository_labels.py \
             --taxonomy config/repository-label-taxonomy.json
-          label_status=$?
+          label_apply_status=$?
+          python scripts/ci/reconcile_repository_metadata.py \
+            --manifest config/repository-metadata.json \
+            --verify-only
+          metadata_verify_status=$?
+          python scripts/ci/reconcile_repository_labels.py \
+            --taxonomy config/repository-label-taxonomy.json \
+            --verify-only
+          label_verify_status=$?
           set -e
-          if (( metadata_status != 0 || label_status != 0 )); then
-            printf 'metadata_status=%s label_status=%s\n' \
-              "${metadata_status}" "${label_status}" >&2
+          if (( metadata_apply_status != 0 \
+                || label_apply_status != 0 \
+                || metadata_verify_status != 0 \
+                || label_verify_status != 0 )); then
+            printf 'metadata_apply=%s label_apply=%s metadata_verify=%s label_verify=%s\n' \
+              "${metadata_apply_status}" \
+              "${label_apply_status}" \
+              "${metadata_verify_status}" \
+              "${label_verify_status}" >&2
             exit 1
           fi
