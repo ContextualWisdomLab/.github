@@ -6,6 +6,8 @@ on:
       - fix/no-heuristic-free-review-admission
     paths:
       - .github/workflows/source-fix-1591-launcher-caps.yml
+      - scripts/ci/source_fix_1591_launcher_caps.py
+      - scripts/ci/source_fix_1591_resume.py
 
 permissions:
   contents: write
