@@ -35,7 +35,7 @@ permissions:
 jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
       contents: read
@@ -179,7 +179,7 @@ jobs:
 
   noema-review:
     name: noema-review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: >-
       github.event_name == 'repository_dispatch'
       || (

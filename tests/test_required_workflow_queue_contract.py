@@ -1292,7 +1292,7 @@ def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])  # last line: the printed value; earlier: the warning
-    expected_tick = int(time.time()) // 900
+    expected_tick = int(time.time()) // 3600
     assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
     assert "could not read/write" in result.stdout  # a `::warning::` workflow command
 
@@ -1318,7 +1318,7 @@ def test_org_queue_sweep_rotation_index_transient_read_failure_does_not_reset_co
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 900
+    expected_tick = int(time.time()) // 3600
     assert abs(computed_tick - expected_tick) <= 1
     # Critically: never "1" -- that would mean the failed read was treated
     # as a fresh-start reset rather than an unreadable existing value.
@@ -1341,7 +1341,7 @@ def test_org_queue_sweep_rotation_index_successful_read_but_failed_patch_falls_b
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 900
+    expected_tick = int(time.time()) // 3600
     assert abs(computed_tick - expected_tick) <= 1
     assert "read ORG_SWEEP_ROTATION_COUNTER=41 but could not PATCH it" in result.stdout
 
@@ -1386,7 +1386,7 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
 
     assert "ContextualWisdomLab/.github#1219" in workflow
     assert (
-        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))'
+        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))'
     ) in workflow
     assert (
         'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
