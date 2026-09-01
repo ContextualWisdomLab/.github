@@ -296,6 +296,7 @@ def test_draft_with_failed_check_dispatches_rca(monkeypatch):
         },
     )
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -329,6 +330,7 @@ def test_conflict_repair_precedes_failed_check_rca(monkeypatch):
         },
     )
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
