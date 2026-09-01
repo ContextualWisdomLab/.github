@@ -33,9 +33,11 @@ def _run_poll_loop(
     head_sha: str,
     live_pr: dict[str, object],
     reviews: list[dict[str, object]] | None = None,
+    fail_live_pr_once: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Execute the production poll body against a deterministic fake ``gh``."""
     call_log = tmp_path / "gh-calls.log"
+    fail_marker = tmp_path / "failed-live-pr-once"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         """#!/bin/sh
@@ -46,12 +48,19 @@ shift
 if [ "${1:-}" = "--paginate" ]; then
   printf '%s\\n' "$GH_REVIEWS"
 else
+  if [ "${GH_FAIL_LIVE_PR_ONCE:-false}" = "true" ] && [ ! -e "$GH_FAIL_MARKER" ]; then
+    : > "$GH_FAIL_MARKER"
+    exit 1
+  fi
   printf '%s\\n' "$GH_LIVE_PR"
 fi
 """,
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
+    fake_sleep = tmp_path / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
 
     script = "\n".join(
         (
@@ -70,6 +79,8 @@ fi
             "PR_NUMBER": "42",
             "HEAD_SHA": head_sha,
             "GH_CALL_LOG": str(call_log),
+            "GH_FAIL_LIVE_PR_ONCE": "true" if fail_live_pr_once else "false",
+            "GH_FAIL_MARKER": str(fail_marker),
             "GH_LIVE_PR": json.dumps(live_pr),
             "GH_REVIEWS": json.dumps(reviews or []),
         }
@@ -174,6 +185,35 @@ def test_poll_executes_live_state_read_before_current_head_review_read(
 
     assert result.returncode == 0, result.stderr
     assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
+    ]
+
+
+def test_poll_retries_transient_live_state_failure_before_reviews_read(
+    tmp_path: Path,
+) -> None:
+    """A transient live-state read failure retries without ending current authority."""
+    head_sha = "e" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        reviews=[
+            {
+                "user": {"login": "opencode-agent[bot]"},
+                "commit_id": head_sha,
+                "state": "APPROVED",
+                "body": "Source-backed current-head semantic review.",
+            }
+        ],
+        fail_live_pr_once=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Live pull request read failed while polling" in result.stdout
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
         "api repos/ContextualWisdomLab/example/pulls/42",
         "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews",
     ]
