@@ -613,6 +613,11 @@ jobs:
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
+      # Resolving live refs protects against stale pull-request payloads, but
+      # each lookup consumes one REST request. Above this independent bound,
+      # skip destructive cancellation for the repository instead of exhausting
+      # the organization sweep's API/runtime budget.
+      ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS: ${{ vars.ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS || '100' }}
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
@@ -844,6 +849,10 @@ jobs:
           fi
           if ! [[ "$ORG_SWEEP_BRANCH_UPDATE_LIMIT" =~ ^(-1|[0-9]+)$ ]]; then
             echo "::error::ORG_SWEEP_BRANCH_UPDATE_LIMIT must be -1 or a non-negative integer; got '${ORG_SWEEP_BRANCH_UPDATE_LIMIT}'. Fix the ORG_SWEEP_BRANCH_UPDATE_LIMIT repository variable."
+            exit 1
+          fi
+          if ! [[ "$ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS must be a positive integer; got '${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}'. Fix the ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS repository variable."
             exit 1
           fi
           # Unset in production (see the env-block comment above). Primary
@@ -1092,32 +1101,59 @@ jobs:
             # branch push/schedule runs superseded by a newer default HEAD. PR
             # concurrency normally does this on synchronize/close events, but it
             # cannot repair runs left behind by an outage or a manual dispatch.
-            # Compare live refs on every sweep instead of waiting for an age
-            # threshold: previous-head checks are never useful merge evidence.
+            # Classification resolves every open PR branch through GitHub's live
+            # ref endpoint, then each destructive cancellation is independently
+            # revalidated by scripts/ci/revalidate_queue_cancellation.sh.
             queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
+            open_pr_heads_json="{}"
+            if open_pr_refs_tsv="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
                 "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
                 --paginate \
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\(.head.repo.full_name):\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
+                | jq -sr '
+                    add[]
+                    | [
+                        (if (.head.repo.full_name | type) == "string" then .head.repo.full_name else "" end),
+                        (if (.head.ref | type) == "string" then .head.ref else "" end)
+                      ]
+                    | @tsv
                   '
             )"; then
+              open_pr_refs_tsv="$(printf '%s\n' "$open_pr_refs_tsv" | sort -u)"
+              open_pr_ref_count="$(printf '%s\n' "$open_pr_refs_tsv" | awk 'NF { count += 1 } END { print count + 0 }')"
+              if (( open_pr_ref_count > ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS )); then
+                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: ${open_pr_ref_count} open PR refs exceed the live-ref lookup limit ${ORG_QUEUE_HYGIENE_MAX_REF_LOOKUPS}. No run will be cancelled from incomplete evidence."
+                queue_hygiene_ready=false
+              elif [ -n "$open_pr_refs_tsv" ]; then
+                while IFS=$'\t' read -r head_repo head_ref; do
+                  if [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
+                    echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has a malformed head repository or ref. No run will be cancelled from incomplete evidence."
+                    queue_hygiene_ready=false
+                    break
+                  fi
+                  encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | split("/") | map(@uri) | join("/")')"
+                  if ! live_head_sha="$(
+                    gh api \
+                      -H "Accept: application/vnd.github+json" \
+                      "/repos/${head_repo}/git/ref/heads/${encoded_head_ref}" \
+                      --jq '.object.sha // empty'
+                  )" || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                    echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: live ref ${head_repo}:${head_ref} could not be resolved safely. No run will be cancelled from incomplete evidence."
+                    queue_hygiene_ready=false
+                    break
+                  fi
+                  open_pr_heads_json="$(
+                    jq \
+                      --arg key "${head_repo}:${head_ref}" \
+                      --arg value "$live_head_sha" \
+                      '. + {($key): $value}' \
+                      <<<"$open_pr_heads_json"
+                  )"
+                done <<<"$open_pr_refs_tsv"
+              fi
+            else
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
               queue_hygiene_ready=false
             fi
             if ! current_default_sha="$(
@@ -1187,13 +1223,17 @@ jobs:
             fi
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then
-              echo "Cancelling ${superseded_count} queued/in-progress run(s) that do not match an open PR or default-branch Current HEAD:"
+              echo "Revalidating ${superseded_count} queued/in-progress run(s) classified as non-current before cancellation:"
               jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
-                  fi
+                  bash scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    superseded
                 done < <(jq -r '.[].id' <<<"$superseded_runs_json")
               fi
             fi
@@ -1224,13 +1264,17 @@ jobs:
             fi
             stale_count="$(jq 'length' <<<"$stale_runs_json")"
             if [ "$stale_count" -gt 0 ]; then
-              echo "Cancelling ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
+              echo "Revalidating ${stale_count} queued aged-orphan run(s) before cancellation:"
               jq -r '.[] | "  run \(.id) [\(.name)] on \(.head_branch) queued since \(.created_at)"' <<<"$stale_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
-                  fi
+                  bash scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    aged-orphan
                 done < <(jq -r '.[].id' <<<"$stale_runs_json")
               fi
             fi
