@@ -22,6 +22,7 @@ from scripts.ci.organization_commercial_readiness_loop import (
     is_manual_product_entrypoint,
     repository_is_eligible,
 )
+from scripts.ci import organization_commercial_readiness_core as coordinator_core
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,6 +47,18 @@ def test_static_and_live_writer_lease_policy() -> None:
     complete = RunRecord(2, scheduled.name, scheduled.path, "completed", "b" * 40)
     assert is_live_writer_run(active)
     assert not is_live_writer_run(complete)
+
+
+def test_core_fallback_ddd_marker_contract() -> None:
+    """The standalone core fallback retains positive and negative coverage."""
+    assert not coordinator_core.has_domain_driven_development_contract("")
+    source = "\n".join(
+        (
+            coordinator_core.DDD_ENTRYPOINT_MARKER,
+            *coordinator_core.DDD_CONTRACT_TERMS,
+        )
+    )
+    assert coordinator_core.has_domain_driven_development_contract(source)
 
 
 def test_product_entrypoint_requires_manual_nvidia_and_ddd_opt_in() -> None:

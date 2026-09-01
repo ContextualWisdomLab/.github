@@ -39,4 +39,13 @@ _core.DDD_CONTRACT_CAPABILITIES = _ddd.DDD_CONTRACT_CAPABILITIES
 if __name__ == "__main__":
     raise SystemExit(_core.main())
 
+# The public import intentionally aliases the core object so monkeypatches reach
+# the globals used by its functions. Preserve the facade's import identity on
+# that object as well: standard module runners consult ``__spec__`` and its
+# loader after import, and the core's private identity cannot load this public
+# module name.
+_core.__name__ = __name__
+_core.__package__ = __package__
+_core.__loader__ = __loader__
+_core.__spec__ = __spec__
 sys.modules[__name__] = _core

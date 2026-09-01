@@ -32,3 +32,21 @@ def test_facade_direct_script_mode_delegates_to_core(
     with pytest.raises(SystemExit) as raised:
         runpy.run_path(str(path), run_name="__main__")
     assert raised.value.code == 2
+
+
+def test_imported_facade_remains_executable_by_public_module_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importing the facade must not corrupt its public module identity."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [coordinator.__file__, "--organization", "invalid/name"],
+    )
+    with pytest.warns(RuntimeWarning, match="found in sys.modules"):
+        with pytest.raises(SystemExit) as raised:
+            runpy.run_module(
+                "scripts.ci.organization_commercial_readiness_loop",
+                run_name="__main__",
+            )
+    assert raised.value.code == 2
