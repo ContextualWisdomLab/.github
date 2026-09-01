@@ -1,4 +1,5 @@
 name: Repair PR 1588 final source
+# Retrigger exact-head source materialization after stale contract failures surfaced.
 
 on:
   push:
