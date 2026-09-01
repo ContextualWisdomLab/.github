@@ -202,7 +202,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Validate desired state and optionally reconcile selected repositories."""
+    """Validate desired state and reconcile every independent repository possible."""
 
     args = parse_args()
     repositories = load_manifest(args.manifest)
@@ -214,8 +214,16 @@ def main() -> int:
     unknown = sorted(set(selected) - set(repositories))
     if unknown:
         raise ManifestError(f"undeclared repositories requested: {', '.join(unknown)}")
+
+    failures: list[str] = []
     for repository in selected:
-        reconcile_repository(repository, repositories[repository])
+        try:
+            reconcile_repository(repository, repositories[repository])
+        except (ManifestError, RuntimeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+            failures.append(f"{repository}: {exc}")
+            print(f"repository metadata reconciliation failed for {repository}: {exc}", file=sys.stderr)
+    if failures:
+        raise RuntimeError("metadata reconciliation failed: " + "; ".join(failures))
     return 0
 
 
