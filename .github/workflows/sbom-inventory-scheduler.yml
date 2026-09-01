@@ -8,9 +8,11 @@
 #   docs/sbom/inventory.json   machine-readable component roll-up
 #   docs/sbom/inventory.md     component + license roll-up for commercial-policy review
 #
-# Cross-repo reads reuse the OpenCode app OIDC token exchange the other
-# schedulers use, falling back to github.token. Results land through a PR so the
-# central inventory update follows the same review path as everything else.
+# Cross-repo reads require the OpenCode app OIDC token exchange or the dedicated
+# organization-wide SBOM token. A repository-scoped github.token is deliberately
+# not a fallback because a partial private-repository view must never publish as
+# a complete organization inventory. Results land through a PR so the central
+# inventory update follows the same review path as everything else.
 name: SBOM Inventory Scheduler
 
 on:
@@ -102,6 +104,17 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
+      - name: Require organization-wide SBOM credential
+        env:
+          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Organization-wide SBOM credential unavailable; refusing partial inventory." >&2
+            exit 1
+          fi
+          echo "::add-mask::$GH_TOKEN"
+
       - name: Checkout trusted aggregator
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -120,7 +133,7 @@ jobs:
 
       - name: Discover live non-fork repositories
         env:
-          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token }}
         run: |
           set -euo pipefail
           repos_json="$(
@@ -143,7 +156,7 @@ jobs:
 
       - name: Aggregate org SBOM inventory
         env:
-          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token }}
         run: |
           set -euo pipefail
           repo_args=()
@@ -164,7 +177,7 @@ jobs:
 
       - name: Open or update inventory PR
         env:
-          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ secrets.SBOM_INVENTORY_TOKEN || steps.aggregator_app_token.outputs.token }}
         run: |
           set -euo pipefail
           if git diff --quiet -- docs/sbom; then
@@ -177,6 +190,10 @@ jobs:
           git config user.email "cwl-sbom-inventory@users.noreply.github.com"
           git add docs/sbom
           git commit -m "chore: refresh org SBOM inventory"
+
+          # persist-credentials remains false; configure Git's credential helper
+          # from the already masked GH_TOKEN without putting the token in a URL.
+          gh auth setup-git
 
           # Preserve the existing publication head as ancestry without trusting
           # its generated tree. A concurrent writer makes the final normal push
