@@ -1715,6 +1715,54 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-09-01 opencode-review verdict-poll/dispatch-worker budget mismatch fixed; three follow-up product gaps opened
+
+- **Root-caused and fixed the systemic `opencode-review` blocker** that had left `.github#1500`, `#1506`,
+  `#1527`, `#1529`, and `contextual-orchestrator#968`/`#946` all stuck: `opencode-review.yml`'s verdict
+  poll job (`timeout-minutes: 100`, 90 minutes of polling) was structurally shorter than the dispatched
+  `opencode-review-dispatch.yml` worker job's own ceiling (`timeout-minutes: 325`, 205 minutes reserved
+  for its model-pool step alone, needed because the contextual-orchestrator sidecar preflight probes ~12
+  free-tier candidate models sequentially with real `TimeoutError`s and stale-model 404s). The dispatch
+  always succeeded; the poll could never outlast a worker job 3.6x its own budget. Confirmed with
+  concrete timestamps: on `.github#1500`, dispatch fired `11:37:27Z`, the poll gave up `13:08:30Z`, but
+  the `scan-pr-queue` pass touching that exact PR still had not produced an approval as of `13:55:04Z` —
+  47 minutes after the poll had already failed closed. Fixed in `.github#1532` (merged via
+  owner-authorized admin bypass — the fix edits `opencode-review.yml` itself, the exact required-check
+  pipeline it depends on, making normal review of this specific PR structurally impossible under the
+  pre-fix budget): raised the poll job to `timeout-minutes: 340` / 660 attempts (~330m), and added
+  `test_verdict_poll_budget_covers_the_dispatched_review_jobs_own_ceiling` so the two workflows' budgets
+  cannot silently drift out of alignment again. `contextual-orchestrator` is a contributing factor (its
+  free-tier model pool's real latency/flakiness is why worker timeouts run in the hundreds of minutes)
+  but not a new regression; open PR `#971` there is unrelated to this failure mode.
+- **Owner directive, 2026-09-01**, broadcast across `#1500`/`#1502`/`#1503`/`#1527`: any timeout on the
+  review path should be at minimum 3 hours ("120초 같은 건 당황스럽군요" — something like 120 seconds is
+  embarrassing), OpenCode/Noema should review as thoroughly as CodeRabbit/Devin, Strix's security review
+  should cover the entire codebase (not just the diff), and contextual-orchestrator should route review
+  requests to fast, capable models to cut wall-clock latency. Grepped `main` for remaining short
+  (≤120s) timeouts on the review path: two remain, both with fixes already in flight and not duplicated
+  here — `scripts/ci/noema_review_gate.py:656`'s `opener.open(request, timeout=120)` is addressed by
+  `#1508` (removes the per-request LLM timeout entirely so Noema reviews run for the enclosing job's
+  lifetime; currently `mergeable_state: dirty`, a real conflict against current `main`, not yet
+  resolved), and `scripts/ci/contextual_orchestrator_review_sidecar.sh:484`'s `curl -sS --max-time 120`
+  gateway-preflight call is addressed by `#1415` (raises it to a one-hour per-attempt bound with
+  caller-specific job ceilings; still under active iteration against fresh Devin findings, not merged).
+- **Three new tracked product gaps opened by this directive, not yet scoped or started:**
+  - **G-Review-Depth**: OpenCode/Noema review output quality/thoroughness has no measured parity target
+    against CodeRabbit/Devin. Needs: a comparison methodology (same PRs, same findings categories),
+    review prompt/config audit (`opencode.jsonc`, `ci-review-prompt.md`, `code-reviewer-prompt.md`,
+    `scripts/ci/noema_review_gate.py`'s prompt construction), and a decision on what "parity" concretely
+    means (finding count, finding precision, severity calibration, or some combination) before any
+    prompt/config change is made.
+  - **G-Strix-FullScope**: Strix's current security-review scope (diff-only vs. whole-repository) needs
+    to be confirmed against `strix.yml`'s actual scan configuration, then widened to full-codebase if it
+    is currently diff-scoped, with a cost/runtime-budget analysis (a whole-repo scan changes the timeout
+    arithmetic this same directive also touches).
+  - **G-FastModelRouting**: `contextual-orchestrator`'s model selection for review workloads currently
+    treats free-tier candidates largely interchangeably (see the 12-candidate sequential preflight cost
+    above); the directive asks for latency-aware ranking toward fast, capable models within the
+    free+ZDR-constrained pool, which needs a defined speed/capability signal (e.g. `model_discovery.py`'s
+    existing per-provider timing data, if any) before implementation — not attempted blind this pass.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
