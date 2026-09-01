@@ -1,4 +1,4 @@
-name: One-shot PR1629 workflow probe
+name: One-shot PR1629 review admission repair
 
 on:
   push:
@@ -8,15 +8,91 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: pr1629-review-admission-repair-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  probe:
+  repair:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout writer branch
+      - name: Checkout exact writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           ref: ${{ github.ref_name }}
           persist-credentials: true
           fetch-depth: 0
-      - name: Prove job creation
-        run: echo workflow-job-started
+
+      - name: Guard exact live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${GITHUB_SHA}"
+          actual="$(git rev-parse HEAD)"
+          live="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+          test "$actual" = "$expected"
+          test "$live" = "$expected"
+          printf '%s\n' "$expected" > /tmp/pr1629_expected_head
+
+      - name: Apply evidence-driven source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python scripts/ci/_temp_pr1629_review_latency_repair.py
+          python -m py_compile \
+            scripts/ci/contextual_orchestrator_review_launcher.py \
+            scripts/ci/contextual_orchestrator_review_policy.py
+
+      - name: Prove focused RED-to-GREEN contracts without external packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python - <<'PY'
+          import contextlib
+          import io
+          import runpy
+
+          from scripts.ci import contextual_orchestrator_review_policy as policy
+
+          stderr = io.StringIO()
+          with contextlib.redirect_stderr(stderr):
+              policy._warn_explicit_legacy_options(["--limit", "99", "--account-cap=7"])
+          assert stderr.getvalue().splitlines() == [
+              "contextual-orchestrator review policy: --limit is deprecated and ignored",
+              "contextual-orchestrator review policy: --account-cap is deprecated and ignored",
+          ]
+
+          namespace = runpy.run_path("tests/test_contextual_orchestrator_review_preflight_concurrency.py")
+          namespace[
+              "test_full_catalog_preflight_starts_routes_concurrently_and_preserves_evidence_order"
+          ]()
+          PY
+          ! grep -q 'args.pool == "auto"' scripts/ci/contextual_orchestrator_review_launcher.py
+
+      - name: Normalize branch and remove one-shot scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/_temp_pr1629_trigger.txt \
+            .github/workflows/_temp_pr1629_review_latency_repair.yml \
+            scripts/ci/_temp_pr1629_review_latency_repair.py
+          git diff --check
+          git status --short
+          git add -A
+          if git diff --cached --quiet; then
+            echo "repair produced no changes" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(ci): finish evidence-only review admission repair"
+
+      - name: Push only if writer head is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(cat /tmp/pr1629_expected_head)"
+          live="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+          test "$live" = "$expected"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
