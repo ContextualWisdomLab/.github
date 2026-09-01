@@ -106,43 +106,23 @@ def _validated_price(value: object, *, route: str, field: str) -> float:
 
 def _normalize_cost_evidence(
     *,
-    provider: str,
     route: str,
     is_free: bool,
     prompt_price: object,
     completion_price: object,
     currency_code: object,
-) -> tuple[
-    str,
-    float | None,
-    float | None,
-    str | None,
-    dict[str, object] | None,
-]:
-    """Classify token-price or exact-zero provider-meter cost evidence.
+) -> tuple[str, float | None, float | None, str | None]:
+    """Classify complete free, priced, or wholly unavailable token evidence.
 
-    Token-priced providers must publish both price components and a currency.
-    Bytez is different: the pinned contextual-orchestrator adapter derives its
-    ``is_free`` route identity from exact-zero ``meterPrice`` evidence while
-    intentionally leaving per-token fields unset because the provider bills by
-    its own meter. Preserve that attestation as a separate non-token vector
-    instead of fabricating token prices. A Bytez row lacking that upstream free
-    identity remains unknown and therefore cannot enter ``orchestrator/free``.
+    A provider that publishes neither token-price component is retained for
+    audit but is not eligible on this evidence path. A partial vector is
+    ambiguous and rejected. Free markers remain authoritative only when any
+    accompanying published token vector is complete, valid, and zero-priced.
+    Provider-native non-token evidence is normalized separately so this
+    compatibility contract does not fabricate or reinterpret token prices.
     """
     if prompt_price is None and completion_price is None:
-        if provider == "bytez" and is_free:
-            return (
-                COST_FREE,
-                None,
-                None,
-                None,
-                {
-                    "source": "bytez.meterPrice",
-                    "price": 0.0,
-                    "unit": "provider_meter_unit",
-                },
-            )
-        return (COST_UNKNOWN, None, None, None, None)
+        return (COST_UNKNOWN, None, None, None)
 
     normalized_prompt = _validated_price(
         prompt_price, route=route, field="prompt_price_per_1k"
@@ -159,8 +139,30 @@ def _normalize_cost_evidence(
         normalized_prompt,
         normalized_completion,
         currency_code.strip().upper(),
-        None,
     )
+
+
+def _bytez_non_token_price_evidence(
+    *,
+    is_free: bool,
+    prompt_price: object,
+    completion_price: object,
+) -> dict[str, object] | None:
+    """Preserve Bytez exact-zero provider-meter evidence without token prices.
+
+    The pinned contextual-orchestrator Bytez parser sets ``is_free`` only when
+    the provider's structured ``meterPrice`` rate parses as exactly zero, while
+    deliberately leaving prompt/completion per-token prices unset because Bytez
+    bills by provider meter time. A missing or nonzero meter price therefore
+    arrives as ``is_free=False`` and remains unknown here.
+    """
+    if is_free and prompt_price is None and completion_price is None:
+        return {
+            "source": "bytez.meterPrice",
+            "price": 0.0,
+            "unit": "provider_meter_unit",
+        }
+    return None
 
 
 def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -202,20 +204,35 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
 
         is_free = is_free_route(row.get("is_free"))
         route = f"{provider}/{model}"
-        (
-            cost_evidence,
-            prompt_price,
-            completion_price,
-            currency_code,
-            non_token_price_evidence,
-        ) = _normalize_cost_evidence(
-            provider=provider,
-            route=route,
-            is_free=is_free,
-            prompt_price=row.get("prompt_price_per_1k"),
-            completion_price=row.get("completion_price_per_1k"),
-            currency_code=row.get("currency_code"),
+        prompt_price_input = row.get("prompt_price_per_1k")
+        completion_price_input = row.get("completion_price_per_1k")
+        non_token_price_evidence = (
+            _bytez_non_token_price_evidence(
+                is_free=is_free,
+                prompt_price=prompt_price_input,
+                completion_price=completion_price_input,
+            )
+            if provider == "bytez"
+            else None
         )
+        if non_token_price_evidence is not None:
+            cost_evidence = COST_FREE
+            prompt_price = None
+            completion_price = None
+            currency_code = None
+        else:
+            (
+                cost_evidence,
+                prompt_price,
+                completion_price,
+                currency_code,
+            ) = _normalize_cost_evidence(
+                route=route,
+                is_free=is_free,
+                prompt_price=prompt_price_input,
+                completion_price=completion_price_input,
+                currency_code=row.get("currency_code"),
+            )
         candidate_id = row.get("agent_id") or f"{provider}_{model}"
         normalized.append(
             {
