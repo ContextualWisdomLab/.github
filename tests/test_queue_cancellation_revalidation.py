@@ -45,6 +45,7 @@ def _run_case(
     run_payload = json.dumps(
         {
             "event": "pull_request",
+            "status": "queued",
             "head_sha": run_sha,
             "pull_requests": [{"number": 12}],
         },
@@ -91,6 +92,65 @@ exit 79
             "main",
             "d" * 40,
             snapshot,
+            "superseded",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    return result, cancelled.exists()
+
+
+def _run_aged_orphan_case(
+    tmp_path: Path, *, event: str, status: str = "queued"
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run an aged orphan candidate that has no current PR/default-branch authority."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required for the queue-cancellation regression")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    cancelled = tmp_path / "cancelled"
+    run_payload = json.dumps(
+        {
+            "event": event,
+            "status": status,
+            "head_sha": "a" * 40,
+            "pull_requests": [],
+        },
+        separators=(",", ":"),
+    )
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "$args" == *"/actions/runs/77/cancel"* ]]; then
+  : > {cancelled!s}
+  exit 0
+fi
+if [[ "$args" == *"/actions/runs/77"* ]]; then
+  printf '%s\\n' '{run_payload}'
+  exit 0
+fi
+exit 79
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "ContextualWisdomLab/example",
+            "77",
+            "main",
+            "d" * 40,
+            "{}",
+            "aged-orphan",
         ],
         capture_output=True,
         text=True,
@@ -162,3 +222,24 @@ def test_proven_predecessor_is_cancelled(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert cancelled
+
+
+@pytest.mark.parametrize(
+    "event",
+    ["workflow_dispatch", "workflow_run", "repository_dispatch", "issues"],
+)
+def test_aged_orphan_events_remain_cancellable(tmp_path: Path, event: str) -> None:
+    """Final revalidation must not disable legacy aged-orphan queue cleanup."""
+    result, cancelled = _run_aged_orphan_case(tmp_path, event=event)
+    assert result.returncode == 0, result.stderr
+    assert cancelled
+
+
+def test_aged_orphan_that_started_running_is_preserved(tmp_path: Path) -> None:
+    """Aged-orphan mode applies only while the candidate is still queued."""
+    result, cancelled = _run_aged_orphan_case(
+        tmp_path, event="workflow_dispatch", status="in_progress"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "no longer queued" in result.stdout
+    assert not cancelled
