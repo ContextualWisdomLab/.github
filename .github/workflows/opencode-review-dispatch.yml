@@ -28,6 +28,7 @@ jobs:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: read
@@ -193,19 +194,10 @@ jobs:
             [ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")
             [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
             [ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")
+            [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
             if [ "${#mismatches[@]}" -gt 0 ]; then
               printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
               exit 1
-            fi
-            # A head advance between dispatch capture and this job is normal PR
-            # activity, and Actions queue backlog widens the window. Every
-            # downstream job consumes the re-fetched live head_sha emitted below
-            # and independently re-checks it against the live PR head with
-            # STALE_HEAD guards, so a head_sha-only change is not a trust failure:
-            # warn and proceed on the current head instead of failing closed and
-            # leaving the required review check with no verdict.
-            if [ -n "$SUPPLIED_HEAD_SHA" ] && [ "$SUPPLIED_HEAD_SHA" != "$live_head_sha" ]; then
-              printf '::warning::repository_dispatch head advanced since dispatch: supplied_head_sha=%s live_head_sha=%s; proceeding with the live head.\n' "$SUPPLIED_HEAD_SHA" "$live_head_sha"
             fi
           fi
 
@@ -227,6 +219,7 @@ jobs:
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       id-token: write
@@ -374,6 +367,7 @@ jobs:
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
       # identity, secret, or write token is available to untrusted tests.
@@ -2312,9 +2306,9 @@ jobs:
     # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
     # overhead without truncating a late current-head verdict, handoff, merge
     # scheduler follow-up, or bounded failure reason.
-    timeout-minutes: 325
+    timeout-minutes: 305
     permissions:
-      actions: read
+      actions: write
       checks: read
       id-token: write
       contents: read
@@ -4006,9 +4000,9 @@ jobs:
           OPENCODE_MODEL_ATTEMPTS: "1"
           # Preserve reviews that legitimately need tens of minutes to inspect a
           # large repository. Changed-file count is not a repository-complexity
-          # proxy, so every cadence class gets 90 minutes per candidate while the
-          # bounded provider-pool watchdog remains the outer guard.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
+          # proxy. Let Contextual Orchestrator use the existing total review
+          # budget; the bounded provider-pool watchdog remains the outer guard.
+          OPENCODE_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
           OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
           OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
@@ -4020,22 +4014,22 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
+          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
           OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
+          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "11700"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
@@ -7548,6 +7542,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Enforce current-head formal OpenCode review receipt
+        id: formal_review_receipt
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
@@ -7570,6 +7565,61 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --head-sha "$PR_HEAD_SHA" \
             "${draft_args[@]}"
+
+      - name: Wake exact-head required OpenCode workflow
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+          && github.event.client_payload.required_run_id != ''
+        env:
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            echo "::error::Actions-capable wake credential is unavailable. Native runs use github.token; sibling runs require PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN."
+            exit 1
+          fi
+          [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Required OpenCode run id is missing or non-canonical."
+            exit 1
+          }
+          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
+          # event, central workflow path, and live PR head before rerunning it;
+          # rendered titles and workflow_url differ between native and
+          # organization-required workflow contexts.
+          for attempt in $(seq 1 12); do
+            run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id)
+              | select(.event == "pull_request_target")
+              | select(.path == ".github/workflows/opencode-review.yml")
+              | select(.head_sha == $head)
+              | [(.id // ""), (.status // ""), (.conclusion // "")]
+              | @tsv
+            ')"
+            IFS=$'\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
+              gh api -X POST "repos/${GH_REPOSITORY}/actions/runs/${required_run_id}/rerun-failed-jobs" >/dev/null
+              echo "Re-ran failed jobs for exact-head Required OpenCode Review run ${required_run_id}."
+              exit 0
+            fi
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "success" ]; then
+              echo "Exact-head Required OpenCode Review run ${required_run_id} already succeeded."
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Formal OpenCode receipt exists, but the exact-head required workflow did not reach a rerunnable failed state."
+          exit 1
 
       - name: Publish repository_dispatch OpenCode status
         if: >-
