@@ -1,0 +1,280 @@
+name: Repair PR 1348 final queue revalidation
+
+on:
+  push:
+    branches:
+      - fix/queue-hygiene-live-ref-race
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr1348-final-revalidation
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]' || !contains(github.event.head_commit.message, '[pr1348-repair]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/queue-hygiene-live-ref-race
+          fetch-depth: 0
+      - name: Repair final cancellation revalidation and executable regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          workflow = workflow_path.read_text()
+
+          old_superseded = '''              if [ "$DRY_RUN" != "true" ]; then
+                while IFS= read -r run_id; do
+                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
+                  fi
+                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
+              fi
+'''
+          new_superseded = '''              # queue-hygiene-final-revalidation:start
+              revalidate_and_cancel_superseded_run() {
+                local run_id="$1"
+                local run_json event run_head head_repo head_ref pr_number pr_json
+                local live_state live_head_repo live_head_ref live_head_sha snapshot_sha
+
+                if ! run_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/${repo_full_name}/actions/runs/${run_id}")"; then
+                  echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live run metadata could not be re-fetched."
+                  return 0
+                fi
+                event="$(jq -r '.event // empty' <<<"$run_json")"
+                run_head="$(jq -r '.head_sha // empty' <<<"$run_json")"
+                if ! [[ "$run_head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                  echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live run head is malformed."
+                  return 0
+                fi
+
+                if [ "$event" = "pull_request" ] || [ "$event" = "pull_request_target" ]; then
+                  pr_number="$(jq -r '.pull_requests[0].number // empty' <<<"$run_json")"
+                  if ! [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]; then
+                    echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: no authoritative PR identity is attached to the live run."
+                    return 0
+                  fi
+                  if ! pr_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/${repo_full_name}/pulls/${pr_number}")"; then
+                    echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live PR ${pr_number} could not be re-fetched."
+                    return 0
+                  fi
+                  live_state="$(jq -r '.state // empty' <<<"$pr_json")"
+                  if [ "$live_state" != "open" ]; then
+                    if [ "$live_state" != "closed" ]; then
+                      echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live PR ${pr_number} state is malformed."
+                      return 0
+                    fi
+                  else
+                    live_head_repo="$(jq -r '.head.repo.full_name // empty' <<<"$pr_json")"
+                    live_head_ref="$(jq -r '.head.ref // empty' <<<"$pr_json")"
+                    live_head_sha="$(jq -r '.head.sha // empty' <<<"$pr_json")"
+                    if [ -z "$live_head_repo" ] || [ -z "$live_head_ref" ] || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                      echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live PR ${pr_number} head metadata is malformed."
+                      return 0
+                    fi
+                    snapshot_sha="$(jq -r --arg key "${live_head_repo}:${live_head_ref}" '.[$key] // empty' <<<"$open_pr_heads_json")"
+                    if ! [[ "$snapshot_sha" =~ ^[0-9a-fA-F]{40}$ ]] || [ "$live_head_sha" != "$snapshot_sha" ]; then
+                      echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: PR ${pr_number} moved after queue classification."
+                      return 0
+                    fi
+                    if [ "$run_head" = "$live_head_sha" ]; then
+                      echo "Preserving run ${run_id} in ${repo_full_name}: it is authoritative current-head evidence for PR ${pr_number}."
+                      return 0
+                    fi
+                  fi
+                elif [ "$event" = "push" ] || [ "$event" = "schedule" ]; then
+                  if ! live_head_sha="$(gh api -H "Accept: application/vnd.github+json" "/repos/${repo_full_name}/commits/${default_branch}" --jq '.sha // empty')" || ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                    echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: live default-branch HEAD could not be revalidated."
+                    return 0
+                  fi
+                  if [ "$live_head_sha" != "$current_default_sha" ]; then
+                    echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: default branch moved after queue classification."
+                    return 0
+                  fi
+                  if [ "$run_head" = "$live_head_sha" ]; then
+                    echo "Preserving run ${run_id} in ${repo_full_name}: it is authoritative current default-branch evidence."
+                    return 0
+                  fi
+                else
+                  echo "::warning::Skipping cancellation of run ${run_id} in ${repo_full_name}: event ${event:-<missing>} was not part of the authoritative superseded-run contract."
+                  return 0
+                fi
+
+                if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
+                fi
+              }
+              # queue-hygiene-final-revalidation:end
+              if [ "$DRY_RUN" != "true" ]; then
+                while IFS= read -r run_id; do
+                  revalidate_and_cancel_superseded_run "$run_id"
+                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
+              fi
+'''
+          if old_superseded not in workflow:
+              raise SystemExit('superseded cancellation block not found exactly; refusing unsafe repair')
+          workflow = workflow.replace(old_superseded, new_superseded, 1)
+
+          old_stale = '''              if [ "$DRY_RUN" != "true" ]; then
+                while IFS= read -r run_id; do
+                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
+                  fi
+                done < <(jq -r '.[].id' <<<"$stale_runs_json")
+              fi
+'''
+          new_stale = '''              if [ "$DRY_RUN" != "true" ]; then
+                while IFS= read -r run_id; do
+                  if ! run_json="$(gh api -H "Accept: application/vnd.github+json" "/repos/${repo_full_name}/actions/runs/${run_id}")"; then
+                    echo "::warning::Skipping stale-run cancellation of ${run_id} in ${repo_full_name}: live run metadata could not be re-fetched."
+                    continue
+                  fi
+                  run_head="$(jq -r '.head_sha // empty' <<<"$run_json")"
+                  head_repo="$(jq -r '.head_repository.full_name // empty' <<<"$run_json")"
+                  head_ref="$(jq -r '.head_branch // empty' <<<"$run_json")"
+                  if ! [[ "$run_head" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "$head_repo" ] || [ -z "$head_ref" ]; then
+                    echo "::warning::Skipping stale-run cancellation of ${run_id} in ${repo_full_name}: live head metadata is malformed."
+                    continue
+                  fi
+                  encoded_head_ref="$(jq -rn --arg value "$head_ref" '$value | split("/") | map(@uri) | join("/")')"
+                  if ! final_live_sha="$(gh api -H "Accept: application/vnd.github+json" "/repos/${head_repo}/git/ref/heads/${encoded_head_ref}" --jq '.object.sha // empty')" || ! [[ "$final_live_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                    echo "::warning::Skipping stale-run cancellation of ${run_id} in ${repo_full_name}: live branch ref could not be revalidated."
+                    continue
+                  fi
+                  if [ "$run_head" = "$final_live_sha" ]; then
+                    echo "Preserving stale-aged run ${run_id} in ${repo_full_name}: its head is still the live branch head."
+                    continue
+                  fi
+                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
+                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
+                  fi
+                done < <(jq -r '.[].id' <<<"$stale_runs_json")
+              fi
+'''
+          if old_stale not in workflow:
+              raise SystemExit('stale cancellation block not found exactly; refusing unsafe repair')
+          workflow = workflow.replace(old_stale, new_stale, 1)
+          workflow_path.write_text(workflow)
+
+          tests_path = Path('tests/test_required_workflow_queue_contract.py')
+          tests = tests_path.read_text()
+          marker = 'def test_org_queue_sweep_revalidates_live_pr_immediately_before_cancel() -> None:'
+          if marker not in tests:
+              tests += r'''
+
+
+def _extract_queue_hygiene_final_revalidation(workflow: str) -> str:
+    """Return the executable final PR/head revalidation function from the workflow."""
+    start_marker = "              # queue-hygiene-final-revalidation:start\n"
+    end_marker = "              # queue-hygiene-final-revalidation:end\n"
+    start = workflow.index(start_marker) + len(start_marker)
+    end = workflow.index(end_marker, start)
+    return textwrap.dedent(workflow[start:end])
+
+
+def _run_queue_hygiene_revalidation(*, snapshot_sha: str, live_sha: str, run_sha: str, fail_pr_lookup: bool = False) -> str:
+    """Execute production revalidation with a deterministic fake GitHub CLI."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required for the executable queue-hygiene regression test")
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    function = _extract_queue_hygiene_final_revalidation(workflow)
+    pr_lookup = "return 73" if fail_pr_lookup else (
+        "printf '%s\\n' '" + json.dumps({
+            "state": "open",
+            "head": {"repo": {"full_name": "ContextualWisdomLab/example"}, "ref": "feature/race", "sha": live_sha},
+        }, separators=(",", ":")) + "'"
+    )
+    run_payload = json.dumps({
+        "event": "pull_request",
+        "head_sha": run_sha,
+        "pull_requests": [{"number": 12}],
+    }, separators=(",", ":"))
+    script = f'''set -euo pipefail
+repo_full_name=ContextualWisdomLab/example
+default_branch=main
+current_default_sha={'d' * 40}
+open_pr_heads_json='{{"ContextualWisdomLab/example:feature/race":"{snapshot_sha}"}}'
+cancelled=0
+gh() {{
+  if [[ "$*" == *"/actions/runs/77/cancel"* ]]; then cancelled=$((cancelled + 1)); return 0; fi
+  if [[ "$*" == *"/actions/runs/77"* ]]; then printf '%s\\n' '{run_payload}'; return 0; fi
+  if [[ "$*" == *"/pulls/12"* ]]; then {pr_lookup}; return $?; fi
+  return 79
+}}
+{function}
+revalidate_and_cancel_superseded_run 77
+printf 'cancelled=%s\\n' "$cancelled"
+'''
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_org_queue_sweep_revalidates_live_pr_immediately_before_cancel() -> None:
+    """A ref movement after classification must not cancel new exact-head evidence."""
+    old = "a" * 40
+    new = "b" * 40
+    output = _run_queue_hygiene_revalidation(snapshot_sha=old, live_sha=new, run_sha=new)
+    assert "moved after queue classification" in output
+    assert "cancelled=0" in output
+
+
+def test_org_queue_sweep_final_revalidation_fails_closed_on_live_pr_lookup_error() -> None:
+    """A failed final authoritative PR lookup must preserve the candidate run."""
+    old = "a" * 40
+    output = _run_queue_hygiene_revalidation(snapshot_sha=old, live_sha=old, run_sha="c" * 40, fail_pr_lookup=True)
+    assert "could not be re-fetched" in output
+    assert "cancelled=0" in output
+
+
+def test_org_queue_sweep_final_revalidation_preserves_current_head_and_cancels_proven_predecessor() -> None:
+    """Only an unchanged live snapshot may authorize predecessor cancellation."""
+    current = "b" * 40
+    preserved = _run_queue_hygiene_revalidation(snapshot_sha=current, live_sha=current, run_sha=current)
+    cancelled = _run_queue_hygiene_revalidation(snapshot_sha=current, live_sha=current, run_sha="a" * 40)
+    assert "authoritative current-head evidence" in preserved
+    assert "cancelled=0" in preserved
+    assert "cancelled=1" in cancelled
+'''
+          tests_path.write_text(tests)
+
+          baseline_path = Path('docs/product-technical-gap-baseline.md')
+          baseline = baseline_path.read_text()
+          doc_marker = 'PR #1348 final cancellation revalidation'
+          if doc_marker not in baseline:
+              baseline += '''\n\n### PR #1348 final cancellation revalidation (2026-09-02)\n\n- **Root cause:** exact head `af519b7927225588d437fed6ee30f20e76291c3e` classified Actions runs from an initial live-ref snapshot, but cancellation occurred later without revalidating the live PR/head. A synchronize event between classification and cancellation could therefore make the snapshot stale and cause the new exact-head run to be cancelled.\n- **Repair:** every superseded PR/default-branch candidate is re-fetched immediately before cancellation; open PR metadata and the live head must still match the classification snapshot, lookup/malformed/moved state fails closed, and current-head evidence is explicitly preserved. The legacy aged orphan cleanup also re-fetches run and branch state before destructive cancellation.\n- **Executable evidence:** regressions execute the production Bash revalidation function for head movement, lookup failure, current-head preservation, and a proven predecessor cancellation.\n'''
+              baseline_path.write_text(baseline)
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text()
+          change_marker = 'Revalidate queue-hygiene cancellation candidates immediately before destructive cancellation'
+          if change_marker not in changelog:
+              changelog += '\n- Revalidate queue-hygiene cancellation candidates immediately before destructive cancellation, failing closed on moved/unavailable live PR or branch state and preserving exact-head evidence.\n'
+              changelog_path.write_text(changelog)
+          PY
+
+          python3 -m pytest -q tests/test_required_workflow_queue_contract.py
+          git diff --check
+      - name: Commit verified owner-side repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/pr-review-merge-scheduler.yml tests/test_required_workflow_queue_contract.py docs/product-technical-gap-baseline.md CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo 'No repair delta remains.'
+            exit 0
+          fi
+          git commit -m 'fix(scheduler): revalidate live state before run cancellation [pr1348-repair]'
+          git push origin HEAD:fix/queue-hygiene-live-ref-race
