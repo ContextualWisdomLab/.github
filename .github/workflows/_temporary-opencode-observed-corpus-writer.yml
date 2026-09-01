@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   red-green-write:
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout exact writer head
@@ -30,6 +30,10 @@ jobs:
             echo "::error::Writer head moved before execution: expected $GITHUB_SHA, observed $remote_head."
             exit 1
           fi
+      - name: Select supported Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
       - name: Create isolated review test environment
         run: |
           set -euo pipefail
