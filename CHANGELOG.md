@@ -5,6 +5,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix `tests/test_opencode_required_verdict_regression.py`'s
+  `test_non_draft_pr_without_a_verdict_still_fails_closed` test executing the
+  production step's real polling loop with genuine `sleep 30` calls between
+  attempts when no verdict is ever found. That loop's attempt bound moved
+  from 180 to 660 in `#1532`, turning what was already a slow (~90-minute)
+  test into a ~5.5-hour one once merged into this branch. `_run_step` now
+  also installs a no-op `sleep` fake on `PATH` alongside the existing fake
+  `gh`, so the loop's real iteration/attempt logic is still exercised while
+  the test itself completes in seconds. Also re-pins
+  `REVIEW_DISPATCH_BLOB_SHA` and the `opencode-review-dispatch.yml`
+  security-boundary assertions to match `#1533`'s already-merged
+  warn-and-proceed-on-`head_sha`-mismatch design (same root cause and fix
+  already applied in `#1482`; `main` itself is red on these two points until
+  `#1536` lands).
 - Fix `opencode-review.yml`'s required `opencode-review-target` check
   (`Fail closed without a current-head OpenCode verdict`) reporting a hard
   `exit 1` failure on every push to a draft PR, forever, until the PR is

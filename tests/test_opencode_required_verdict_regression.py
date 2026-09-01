@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -14,6 +15,7 @@ import pytest
 
 HEAD = "a" * 40
 WORKFLOW = Path(".github/workflows/opencode-review.yml")
+DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
 STATUS_HELPER = Path("scripts/ci/opencode_dispatch_status.py")
 STEP_NAME = "Fail closed without a current-head OpenCode verdict"
 
@@ -106,11 +108,11 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     assert "exchange_github_app_token" in workflow
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
-    assert "timeout-minutes: 100" in target_job.split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 340" in target_job.split("    steps:\n", 1)[0]
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
     assert 'event_type:"merge-scheduler"' in workflow
     assert "trigger_reviews:true" in workflow
-    assert "for attempt in $(seq 1 180)" in target_job
+    assert "for attempt in $(seq 1 660)" in target_job
     assert "sleep 30" in target_job
     assert "enable_auto_merge:false" in workflow
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
@@ -229,6 +231,22 @@ def _write_reviews_gh(bin_dir: Path, reviews: list[dict[str, object]]) -> Path:
     return fake_gh
 
 
+def _write_noop_sleep(bin_dir: Path) -> None:
+    """Install a fake ``sleep`` on PATH that returns immediately.
+
+    The production step's polling loop calls real ``sleep 30`` between
+    attempts (up to 660 of them per ``test_verdict_poll_budget_covers_the_
+    dispatched_review_jobs_own_ceiling``). A test that drives the loop to
+    exhaustion — proving the fail-closed path still works when no verdict
+    ever appears — would otherwise block on real wall-clock sleeps for
+    hours. Stubbing ``sleep`` keeps the loop's actual iteration/attempt
+    logic under test while making that test fast.
+    """
+    fake_sleep = bin_dir / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(fake_sleep.stat().st_mode | stat.S_IEXEC)
+
+
 def _run_step(
     tmp_path: Path,
     *,
@@ -243,7 +261,9 @@ def _run_step(
 
     ``gh_fixture`` selects a fake ``gh`` on PATH: ``"refuse"`` fails loudly if
     invoked (proving an early exit never reaches the Reviews API call), and
-    ``"reviews"`` serves ``reviews`` back from ``gh api``.
+    ``"reviews"`` serves ``reviews`` back from ``gh api``. A no-op ``sleep``
+    is always installed alongside it so a loop that never finds a verdict
+    exhausts its real attempt count without blocking on real wall-clock time.
     """
     bash = shutil.which("bash")
     jq = shutil.which("jq")
@@ -263,6 +283,7 @@ def _run_step(
         _write_refusing_gh(bin_dir)
     else:
         _write_reviews_gh(bin_dir, reviews or [])
+    _write_noop_sleep(bin_dir)
 
     env = {
         **os.environ,
@@ -362,3 +383,56 @@ def test_closed_pr_short_circuits_before_the_draft_check(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
     assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
     assert "PR is a draft" not in result.stdout
+
+
+def test_verdict_poll_budget_covers_the_dispatched_review_jobs_own_ceiling() -> None:
+    """The poll must outlast the worker job it is waiting on.
+
+    ContextualWisdomLab/.github#1500, #1506 and contextual-orchestrator#968,
+    #946 all showed the same pattern: the "Request current-head OpenCode
+    review execution" dispatch step always succeeded, but the poll loop below
+    it always gave up (fail-closed, "No APPROVED or CHANGES_REQUESTED...")
+    before opencode-review-dispatch.yml's own opencode-review-target job —
+    whose model-pool step alone is budgeted 205 minutes for
+    contextual-orchestrator sidecar preflight/escalation across its
+    free-tier candidate pool, per
+    test_opencode_job_timeout_contains_full_sequential_review_budget — ever
+    had a chance to post a verdict. A poll budget shorter than the dispatched
+    job's own declared ceiling makes a legitimate slow-but-successful review
+    indistinguishable from a genuinely broken dispatch. Guard both the outer
+    job timeout and the actual poll wall-clock budget against regressing
+    below that ceiling again.
+    """
+    poll_workflow = WORKFLOW.read_text(encoding="utf-8")
+    dispatch_workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+
+    target_job = poll_workflow.split("  opencode-review-target:\n", 1)[1]
+    job_section = target_job.split("    steps:\n", 1)[0]
+    poll_job_timeout_match = re.search(r"timeout-minutes: (\d+)", job_section)
+    assert poll_job_timeout_match, "poll job is missing a timeout-minutes value"
+    poll_job_timeout = int(poll_job_timeout_match.group(1))
+
+    attempts_match = re.search(r"for attempt in \$\(seq 1 (\d+)\); do", target_job)
+    sleep_match = re.search(r"\n\s+sleep (\d+)\n", target_job)
+    assert attempts_match and sleep_match, "poll loop shape changed unexpectedly"
+    poll_wait_minutes = (int(attempts_match.group(1)) - 1) * int(sleep_match.group(1)) / 60
+
+    dispatch_job_timeout_match = re.search(
+        r"^  opencode-review-target:\n[\s\S]{0,4000}?^    timeout-minutes: (\d+)$",
+        dispatch_workflow,
+        re.MULTILINE,
+    )
+    assert dispatch_job_timeout_match, "dispatch job timeout contract moved"
+    dispatch_job_timeout = int(dispatch_job_timeout_match.group(1))
+
+    assert poll_job_timeout >= dispatch_job_timeout, (
+        "opencode-review-target's poll job can be killed by its own "
+        f"timeout-minutes ({poll_job_timeout}) before the dispatched "
+        "opencode-review-dispatch.yml job's own ceiling "
+        f"({dispatch_job_timeout}) is reached."
+    )
+    assert poll_wait_minutes >= dispatch_job_timeout, (
+        f"The verdict poll loop gives up after {poll_wait_minutes:.0f}m, "
+        f"sooner than the dispatched review job is allowed to run "
+        f"({dispatch_job_timeout}m)."
+    )
