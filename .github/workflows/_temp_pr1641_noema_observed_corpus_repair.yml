@@ -1,5 +1,5 @@
 name: Temporary PR1641 Noema observed-corpus repair
-# execution nonce: review-followup-v1
+# execution nonce: review-followup-v2
 
 on:
   push:
@@ -129,7 +129,8 @@ jobs:
       - name: Push only if writer head is still exact
         shell: bash
         env:
-          GH_PUSH_TOKEN: ${{ github.token }}
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
           live="$(git ls-remote https://github.com/ContextualWisdomLab/.github.git "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
@@ -137,6 +138,17 @@ jobs:
             echo "::error::Writer branch moved from $GITHUB_SHA to ${live:-missing}; refusing overwrite."
             exit 75
           fi
+          if [ -n "${PR_REVIEW_MERGE_TOKEN:-}" ]; then
+            push_token="$PR_REVIEW_MERGE_TOKEN"
+            push_source='PR_REVIEW_MERGE_TOKEN'
+          elif [ -n "${OPENCODE_APPROVE_TOKEN:-}" ]; then
+            push_token="$OPENCODE_APPROVE_TOKEN"
+            push_source='OPENCODE_APPROVE_TOKEN'
+          else
+            echo '::error::No workflow-starting branch-mutation credential is configured. Refusing a github.token push because it would suppress successor-head required workflows.'
+            exit 78
+          fi
+          echo "Using workflow-starting mutation credential source: $push_source"
           git config core.hooksPath /dev/null
-          git remote set-url origin "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${push_token}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:${GITHUB_REF_NAME}"
