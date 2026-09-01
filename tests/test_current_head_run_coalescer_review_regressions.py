@@ -122,6 +122,30 @@ def test_real_actions_repository_shape_normalizes_to_pull_request_identity() -> 
     )
 
 
+@pytest.mark.parametrize(
+    ("repository_shape", "expected"),
+    [
+        (None, ""),
+        (full_repo(), "ContextualWisdomLab/.github"),
+        ({"full_name": "bad", "url": minimal_repo()["url"]}, ""),
+        ({}, ""),
+        ({"url": 7}, ""),
+        ({"url": "http://api.github.com/repos/ContextualWisdomLab/.github"}, ""),
+        ({"url": "https://example.com/repos/ContextualWisdomLab/.github"}, ""),
+        ({"url": "https://api.github.com/repos/ContextualWisdomLab/.github?x=1"}, ""),
+        ({"url": "https://api.github.com/repos/ContextualWisdomLab"}, ""),
+        ({"url": "https://api.github.com/repos/../.github"}, ""),
+        (minimal_repo(), "ContextualWisdomLab/.github"),
+    ],
+)
+def test_repository_shape_normalization_fails_closed(
+    repository_shape: object, expected: str
+) -> None:
+    """Repository normalization accepts only full names or canonical GitHub API URLs."""
+    module = load_module()
+    assert module._repository_full_name(repository_shape) == expected
+
+
 def test_minimal_actions_associations_pass_exact_scope_for_both_pr_events() -> None:
     """Real Actions association shapes remain eligible for PR and target-event coalescing."""
     module = load_module()
