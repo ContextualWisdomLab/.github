@@ -617,7 +617,11 @@ printf '{"model":"%s","orchestration":"route","messages":[{"role":"system","cont
 # ADR-0005; verified directly against contextual-orchestrator's server.py,
 # which exposes no parameter to exclude or deprioritize a specific candidate
 # on a retry).
-REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-3}"
+if [ "${launcher_attempt_args[*]:-}" = "--single-candidate-attempt" ]; then
+  REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-1}"
+else
+  REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS="${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS:-3}"
+fi
 # A malformed override (non-numeric, empty, or zero) must fail closed instead
 # of silently disabling the bound: `[ "$gateway_attempt" -ge "$X" ]` with a
 # non-integer `$X` is itself a bash integer-comparison error, not a false
@@ -641,7 +645,7 @@ gateway_attempt=1
 gateway_http_status=""
 while :; do
   if gateway_http_status="$(
-    curl -sS --connect-timeout 10 \
+    curl -sS --connect-timeout 10 --max-time 3600 \
       -o "$gateway_preflight_response" \
       -w '%{http_code}' \
       -X POST \

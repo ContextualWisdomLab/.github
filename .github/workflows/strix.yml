@@ -171,11 +171,12 @@ jobs:
     # standing operating directive accepts that central OpenCode/Strix/Noema
     # scans may take more than two hours per model (docs/product-goal-directive.md).
     # The scanner gets a 150-minute process budget and a 155-minute total
-    # retry budget; the 170-minute step and 200-minute job leave deterministic
-    # time to preserve partial reports and publish a concrete failure reason.
+    # retry budget. Three one-hour sidecar preflight attempts plus the
+    # 170-minute scan step fit within this six-hour job with ten minutes left
+    # to preserve partial reports and publish a concrete failure reason.
     # Hitting any cap is fail-closed and never turns an incomplete scan into
     # an approval.
-    timeout-minutes: 200
+    timeout-minutes: 360
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -565,8 +566,10 @@ jobs:
               ;;
           esac
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
-          echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          {
+            echo "strix_model=$strix_model"
+            echo 'enabled=true'
+          } >> "$GITHUB_OUTPUT"
           echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
 
       - name: Provision contextual-orchestrator Strix sidecar

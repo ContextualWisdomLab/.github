@@ -46,15 +46,14 @@ Citations below pin to the exact reviewed blob at `main`'s
 2. **The shell script's own virtual-pool smoke request.** Once `/healthz` succeeds (a separate,
    already-completed budget — Layer 2 does not draw from Layer 1's 180s), the shell script sends one
    `POST /v1/chat/completions` with `"model":"orchestrator/free"` (the *virtual* pool id, not a
-   specific candidate) and its own fixed `max_tokens`, currently `4096`, under a **120-second**
-   `curl --max-time`. This 120s value is itself the outcome of a prior, real, evidenced fix in this
+   specific candidate) and its own fixed `max_tokens`, currently `4096`, under a **one-hour**
+   `curl --max-time`. The former 120s value was itself the outcome of a prior, real, evidenced fix in this
    exact file (raised from a too-tight 30s after live reproduction on
    `ContextualWisdomLab/contextual-orchestrator#921` showed a genuinely-healthy DeepSeek NIM route
    needing more than 30s to complete a real generation) — the comment there explicitly documents that
-   this required-workflow job budgets **120 minutes** total (`timeout-minutes` in
-   `strix.yml`/`noema-review.yml`) and that *"the org's own stated policy accepts multi-hour central
-   review latency in favor of accuracy over speed."* This ADR's design deliberately **does not shorten
-   that 120s value** — doing so would reintroduce the exact regression that prior fix corrected. The
+   these required-workflow jobs now budget up to **six hours** total and that *"the org's own stated
+   policy accepts multi-hour central review latency in favor of accuracy over speed."* The one-hour
+   bound removes the synthetic 120s failure while preserving finite retry and failover behavior. The
    correct fix for a hang, per Devin Review (see Decision §1), is a bounded *retry*, not a shorter
    *timeout*.
 
@@ -178,10 +177,10 @@ correctly caught in an earlier revision of this text):**
     treats it as Trigger A: retried up to `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS` times against a
     candidate the gateway is, by the same reasoning as the Trigger-B/route-diversity note below, more
     likely to repeat than diversify away from. **This does not change Layer 2's stated worst case**
-    (`REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS × 120s` — this failure still consumes attempts from the
+    (`REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS × 3600s` — this failure still consumes attempts from the
     same shared Trigger-A budget, not an additional one), but it does mean this specific failure
     typically consumes the *entire* retry budget before failing closed, rather than failing fast the
-    way a correctly-classified Trigger B would (one attempt, ~120s). A correct fix requires a
+    way a correctly-classified Trigger B would (one attempt, up to one hour). A correct fix requires a
     `contextual-orchestrator` change (a machine-readable field distinguishing the two
     `ProviderResponseError` cases through the `/v1/chat/completions` error boundary) — genuinely out of
     scope for this sidecar-only ADR and its stacked implementation PR. Fragile string-matching on the
@@ -337,19 +336,22 @@ retried once, unconditionally, would be a real, computed worst-case blowup again
   itself be exactly the unjustified heuristic this ADR's convergence principle already rejects.
   Tracked as `ContextualWisdomLab/.github#1458`; revisit if real hosted-run telemetry (already required
   below) shows a specific, evidenced bias worth correcting.
-- **Layer 2** (bounded by the candidate job's 335-minute ceiling, per the org's stated "accuracy over
+- **Layer 2** (bounded by the caller job's ceiling, per the org's stated "accuracy over
   speed" policy already reasoned in this file — *not* by the 180s Layer 1 budget, which has already
-  completed by the time Layer 2 runs): do not impose a curl total-time timeout; retain only a
-  10-second connection timeout. Keep the existing **`4096` budget, unchanged throughout — Layer 2 never
+  completed by the time Layer 2 runs): use a one-hour total-time timeout plus a 10-second connection
+  timeout. Keep the existing **`4096` budget, unchanged throughout — Layer 2 never
   escalates** (already proven working on a real hosted run, `contextual-orchestrator#921`; see Decision
   §1 for why an escalation tier was considered and dropped here). Allow up to
-  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3` total attempts, consumed only by Trigger A (transport
+  `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS = 3` total attempts (one for an explicitly pinned
+  single-candidate job), consumed only by Trigger A (transport
   failure/hang/non-2xx) — Trigger B (empty + either its `finish_reason == "length"` or
   reasoning-without-content signature) is not retried at Layer 2 at all (Decision §1). The job timeout
-  is the single fail-closed wall-clock bound; when it fires, the cross-job workflow advances to the
-  next candidate instead of reporting curl's former synthetic 120-second transport failure.
-- **Initial values are reused precedent, not new guesses** (Devin Review's fourth finding): every
-  number above is either already deployed in this exact codebase today (`10s`, `120s`, `4096`, `12`)
+  and per-attempt timeouts are fail-closed wall-clock bounds; a pinned candidate failure advances to
+  the next job instead of reporting curl's former synthetic 120-second transport failure.
+- **Initial values are derived or reused, not guesses** (Devin Review's fourth finding): the one-hour
+  attempt bound follows from the six-hour caller ceiling: three attempts plus the 170-minute Strix
+  workload consume 350 minutes and preserve ten minutes for cleanup. Other numbers are either already
+  deployed in this exact codebase today (`10s`, `4096`, `12`)
   or has direct external documentation backing it (`16` — the pre-#1436 value this codebase already
   ran with, and separately the floor OpenRouter's own schema documents: *"some providers enforce a
   minimum of 16"* for the deprecated `max_tokens` field). The two new counters
@@ -395,8 +397,9 @@ outcome already observed in production.**
   being wrong for a fixed token budget, or hanging/failing transiently, which is the actual shape of
   the problem — while keeping every worst case explicit and bounded rather than open-ended.
 - Layer 1's worst case would grow from ~120s to a computed 160s, still under its existing 180s
-  healthz-readiness ceiling. Layer 2's worst case would grow from a single 120s attempt with no
-  recovery path to up to 360s across bounded retries — small relative to the job's 120-minute ceiling
+  healthz-readiness ceiling. Layer 2 allows up to three one-hour attempts; the six-hour Strix caller
+  leaves ten minutes after that maximum plus its 170-minute scan step, while pinned Noema jobs use one
+  attempt before cross-job failover.
   and consistent with this file's own already-stated "accuracy over speed" policy.
 - Keeping Layer 2 (not just Layer 1) would mean the preflight still proves the actual consumer-facing
   `orchestrator/free` route works, not only that individual candidates can respond in isolation —
