@@ -25,6 +25,7 @@ REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
 PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"
+PAGES_MODES = {"legacy", "workflow"}
 
 
 class ManifestError(ValueError):
@@ -36,7 +37,9 @@ class _NoPagesRedirects(HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         """Raise an HTTPError instead of following the redirect."""
+
         from urllib.error import HTTPError
+
         raise HTTPError(req.full_url, code, msg, headers, fp)
 
 
@@ -54,9 +57,12 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
     if not isinstance(name, str) or not REPOSITORY_RE.fullmatch(name):
         raise ManifestError("repository names must preserve exact GitHub-safe casing")
     item = _require_exact_dict(raw, field=f"repositories.{name}")
-    expected = {"description", "topics", "deepwiki", "pages"}
-    if set(item) != expected:
-        raise ManifestError(f"repositories.{name} must contain exactly {sorted(expected)}")
+    required = {"description", "topics", "deepwiki", "pages"}
+    allowed = required | {"pages_mode"}
+    if not required.issubset(item) or not set(item).issubset(allowed):
+        raise ManifestError(
+            f"repositories.{name} must contain exactly {sorted(required)} plus optional pages_mode"
+        )
 
     description = item["description"]
     if (
@@ -90,12 +96,25 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError(
             f"repositories.{name} deepwiki/pages flags must be booleans"
         )
-    return {
+    pages_mode = item.get("pages_mode", "legacy")
+    if type(pages_mode) is not str or pages_mode not in PAGES_MODES:
+        raise ManifestError(
+            f"repositories.{name}.pages_mode must be one of {sorted(PAGES_MODES)}"
+        )
+    if not item["pages"] and "pages_mode" in item:
+        raise ManifestError(
+            f"repositories.{name}.pages_mode is only valid when Pages is enabled"
+        )
+
+    validated = {
         "description": description,
         "topics": list(topics),
         "deepwiki": item["deepwiki"],
         "pages": item["pages"],
     }
+    if "pages_mode" in item:
+        validated["pages_mode"] = pages_mode
+    return validated
 
 
 def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
@@ -196,6 +215,12 @@ def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -
     )
 
 
+def _workflow_pages_configuration_matches(current: dict[str, Any]) -> bool:
+    """Return whether Pages is explicitly owned by a GitHub Actions deployment."""
+
+    return current.get("build_type") == "workflow"
+
+
 def _pages_url_is_expected(url: Any) -> bool:
     """Return whether a URL is confined to the organization-owned Pages origin."""
 
@@ -225,12 +250,10 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
         raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
 
 
-def _docs_index_exists(repository: str, default_branch: str) -> bool:
-    """Return whether the reviewed default branch contains docs/index.md."""
+def _repository_file_exists(repository: str, default_branch: str, path: str) -> bool:
+    """Return whether a reviewed default-branch regular file exists at the exact path."""
 
-    endpoint = (
-        f"repos/{ORGANIZATION}/{repository}/contents/docs/index.md?ref={default_branch}"
-    )
+    endpoint = f"repos/{ORGANIZATION}/{repository}/contents/{path}?ref={default_branch}"
     command = ["gh", "api", endpoint]
     completed = subprocess.run(
         command,
@@ -240,11 +263,28 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
         timeout=30,
     )
     if completed.returncode == 0:
-        return True
+        payload = json.loads(completed.stdout)
+        return type(payload) is dict and payload.get("type") == "file"
     combined = f"{completed.stdout}\n{completed.stderr}"
     if "HTTP 404" in combined or "Not Found" in combined:
         return False
-    raise RuntimeError(f"Pages source state could not be resolved for {repository}")
+    raise RuntimeError(
+        f"GitHub Pages source state could not be resolved for {repository}:{path}"
+    )
+
+
+def _docs_index_exists(repository: str, default_branch: str) -> bool:
+    """Return whether the reviewed default branch contains docs/index.md."""
+
+    return _repository_file_exists(repository, default_branch, "docs/index.md")
+
+
+def _workflow_pages_definition_exists(repository: str, default_branch: str) -> bool:
+    """Return whether the standard reviewed Pages workflow exists on the default branch."""
+
+    return _repository_file_exists(
+        repository, default_branch, ".github/workflows/pages.yml"
+    )
 
 
 def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
@@ -289,6 +329,40 @@ def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
     return _deepwiki_badge_linked(completed.stdout, repository)
 
 
+def _pages_precondition(repository: str, default_branch: str, desired: dict[str, Any]) -> None:
+    """Require the reviewed source contract for the selected Pages deployment mode."""
+
+    if not desired["pages"]:
+        return
+    pages_mode = desired.get("pages_mode", "legacy")
+    if pages_mode == "workflow":
+        if not _workflow_pages_definition_exists(repository, default_branch):
+            raise RuntimeError(
+                f"workflow Pages requested for {repository} but .github/workflows/pages.yml is not on {default_branch}"
+            )
+        return
+    if not _docs_index_exists(repository, default_branch):
+        raise RuntimeError(
+            f"Pages requested for {repository} but docs/index.md is not on {default_branch}"
+        )
+
+
+def _workflow_pages_live_precondition(repository: str, desired: dict[str, Any]) -> None:
+    """Require existing Actions-backed Pages before any repository metadata mutation."""
+
+    if not desired["pages"] or desired.get("pages_mode", "legacy") != "workflow":
+        return
+    if not _pages_exists(repository):
+        raise RuntimeError(
+            f"workflow Pages requested for {repository} but Pages is not configured"
+        )
+    current_pages = _pages_configuration(repository)
+    if not _workflow_pages_configuration_matches(current_pages):
+        raise RuntimeError(
+            f"workflow Pages requested for {repository} but live Pages is not Actions-backed"
+        )
+
+
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
@@ -308,10 +382,8 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
         raise RuntimeError(
             f"DeepWiki badge is disabled for {repository} but the exact badge is still on {default_branch}"
         )
-    if desired["pages"] and not _docs_index_exists(repository, default_branch):
-        raise RuntimeError(
-            f"Pages requested for {repository} but docs/index.md is not on {default_branch}"
-        )
+    _pages_precondition(repository, default_branch, desired)
+    _workflow_pages_live_precondition(repository, desired)
 
     if repository_payload.get("description") != desired["description"]:
         _gh_api(
@@ -329,6 +401,10 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
             f"repos/{ORGANIZATION}/{repository}/topics",
             body={"names": desired["topics"]},
         )
+
+    pages_mode = desired.get("pages_mode", "legacy")
+    if desired["pages"] and pages_mode == "workflow":
+        return
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
@@ -375,15 +451,28 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     badge_exists = _deepwiki_badge_exists(repository, default_branch)
     if badge_exists != desired["deepwiki"]:
         raise RuntimeError(f"DeepWiki state did not converge for {repository}")
-    if desired["pages"] and not _docs_index_exists(repository, default_branch):
-        raise RuntimeError(f"Pages source did not converge for {repository}")
+    if desired["pages"]:
+        pages_mode = desired.get("pages_mode", "legacy")
+        if pages_mode == "workflow":
+            if not _workflow_pages_definition_exists(repository, default_branch):
+                raise RuntimeError(
+                    f"Pages workflow source did not converge for {repository}"
+                )
+        elif not _docs_index_exists(repository, default_branch):
+            raise RuntimeError(f"Pages source did not converge for {repository}")
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
         if not pages_exists:
             raise RuntimeError(f"GitHub Pages was not published for {repository}")
         current_pages = _pages_configuration(repository)
-        if not _pages_configuration_matches(current_pages, default_branch):
+        pages_mode = desired.get("pages_mode", "legacy")
+        if pages_mode == "workflow":
+            if not _workflow_pages_configuration_matches(current_pages):
+                raise RuntimeError(
+                    f"GitHub Pages deployment mode did not converge for {repository}"
+                )
+        elif not _pages_configuration_matches(current_pages, default_branch):
             raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
         _pages_publication_ready(repository, current_pages)
     elif pages_exists:
