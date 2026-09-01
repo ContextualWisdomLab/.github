@@ -7,3 +7,4 @@ exact-helper-kick=20260901T2232+0900
 stale-contract-repair=20260901T2245+0900
 
 shell-contract-reconciled-v2=20260901T135954Z
+owner-exact-source-kick=20260901T2302+0900
