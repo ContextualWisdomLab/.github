@@ -71,6 +71,11 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "fast-mlsirm": ("psychometrics", "rust"),
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
+        "keyverse": ("identity", "openid-connect"),
+        "OriginWeave": ("browser-automation", "ai-agents"),
+        "accounting-information-platform": ("accounting", "ledger"),
+        "pg-erd-cloud": ("erd", "postgresql"),
+        "clearfolio": ("document-viewer", "document-conversion"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
