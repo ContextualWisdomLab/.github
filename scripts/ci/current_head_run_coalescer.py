@@ -19,7 +19,9 @@ from typing import Any, Iterable, Sequence
 
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(
+    r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+$"
+)
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 ACTIVE_STATUSES = ("queued", "in_progress")
 
