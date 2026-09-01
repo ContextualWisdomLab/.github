@@ -2344,6 +2344,57 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 post-#1546 `scripts/ci` coverage regression on protected main: root-caused and closed
+
+**Context**: `#1546` (merged, exact head `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`) reconciled
+unbounded exact-head review agents and, as part of a 90-line expansion of
+`scripts/ci/pr_review_fix_scheduler.py`, added a `live_head_matches` helper, a no-active/no-stale
+fall-through branch in `prepare_autofix_slot`, and an "already queued or running" wait branch in
+`inspect_pr` — none of which any test exercised directly. This compounded a narrower, older gap in
+the same file (`inspect_pr`'s conflicted-draft and conflicted-unauthorized returns) and in
+`scripts/ci/pr_review_merge_scheduler.py::fetch_workflow_names_by_check_suite_rest` (pagination,
+missing-suite-id/blank-name filtering, non-access-error propagation), first found and attempted in
+now-closed, unmerged `#1547`/`#1551`/`#1554` — none of whose evidence or diffs transferred here;
+this pass re-derived the current gap from a clean `origin/main` clone rather than assuming those
+predecessors were still accurate against `#1546`'s shifted line numbers and new branches. Verified
+directly: `coverage report --show-missing` on unmodified `main` showed
+`scripts/ci/pr_review_fix_scheduler.py` at 97% (missing 116-121, 459->466, 495, 503, 546) and
+`scripts/ci/pr_review_merge_scheduler.py` at 99% (missing 1003, 1008->1005, 1012) — total repo-wide
+99%, below the `pyproject.toml` `fail_under = 100` gate. Because `opencode-review-dispatch.yml`'s
+`coverage-evidence` job measures the **merged** PR tree (base + head) and hard-fails below 100%,
+every PR rebasing onto main inherited this failure regardless of its own diff — org-wide impact,
+not scoped to one PR.
+
+**Fix**: `#1567` (test-only, no production code) adds direct unit coverage for `live_head_matches`
+(case-insensitive match, mismatch, malformed-payload paths), `prepare_autofix_slot`'s empty-run
+fall-through, the `inspect_pr` conflicted-draft/conflicted-unauthorized/already-queued cases, and
+the `fetch_workflow_names_by_check_suite_rest` pagination/filtering/error-propagation paths.
+Verified on the fix commit (`db106d50f2134ece147bc5318e389aeb124d198c`): `coverage run -m pytest
+tests -q` (2251 passed, 1 skipped, 21 subtests), `coverage report` (repo-wide 100%, both files
+individually 100% statement and 100% branch), `interrogate` (100.0%).
+
+**Devin Review raised a false positive on the fix itself**, claiming
+`test_live_head_matches_compares_case_insensitively_and_fails_closed` left non-object-payload,
+non-string-SHA, and wrong-length-SHA branches uncovered. Re-verified against the actual gate rather
+than accepted at face value: `live_head_matches` has exactly one `if` statement (two arcs, both
+exercised by the committed test), and its final `return (isinstance(...) and len(...) == 40 and
+...)` is a single boolean expression with no `if`/`else` of its own — `coverage.py`'s branch mode
+(what `fail_under = 100` actually measures here) tracks control-flow arcs between statements, not
+sub-clause condition coverage within one expression. The cited cases are additional test
+thoroughness, not something the gate is currently failing on; confirmed by a full-suite run on the
+exact same head showing both files at 100% branch coverage with zero missing branches. Replied with
+this evidence on the review thread and did not widen the PR's diff for a claim that does not hold
+against this repo's own tooling.
+
+**One test in the full suite remained a known, pre-existing flake**, unrelated to this change:
+`tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`
+intermittently exited 141 (SIGPIPE) under full-suite parallel load; reproduced identically on
+unmodified `origin/main` and passed cleanly in file isolation. Not remediated in this pass — out of
+scope for a coverage-gap-only PR, and not itself a coverage regression. **Since remediated** (`9e0c0224`,
+`fix(test): eliminate scheduler-wake SIGPIPE flake`): the fixture's fake `gh dispatches` responder now
+drains its stdin (`cat >/dev/null`) before recording the call, closing the unread-pipe race that
+produced the intermittent SIGPIPE (Devin Review, PR #1500).
+
 ## 2026-09-01 naruon#1486 transport-crash: root cause, owner, status
 
 **Live incident**: the required `noema-review` check on `ContextualWisdomLab/naruon#1486` crashed with an
