@@ -355,6 +355,42 @@ def _associated_prs(
     return {number: _fetch_pr(repo, number) for number in sorted(numbers)}
 
 
+def _refresh_siblings(
+    repo: str,
+    runs: Sequence[Mapping[str, Any]],
+    candidate_run_id: int,
+    *,
+    repository: str,
+    branch: str,
+    head_sha: str,
+) -> list[dict[str, Any]]:
+    """Re-fetch candidate peers so stale bulk state cannot authorize cancellation."""
+    candidate_snapshot = next(
+        (
+            run_data
+            for run_data in runs
+            if _positive_int(run_data.get("id")) == candidate_run_id
+        ),
+        None,
+    )
+    if candidate_snapshot is None:
+        return []
+    workflow_id = _positive_int(candidate_snapshot.get("workflow_id"))
+    if workflow_id is None:
+        return []
+    sibling_ids = sorted(
+        sibling_run_id
+        for run_data in runs
+        if _positive_int(run_data.get("workflow_id")) == workflow_id
+        and _run_identity_matches(
+            dict(run_data), repository=repository, branch=branch, head_sha=head_sha
+        )
+        and (sibling_run_id := _positive_int(run_data.get("id"))) is not None
+        and sibling_run_id != candidate_run_id
+    )
+    return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
+
+
 def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expected_head: str) -> list[int]:
     """Cancel redundant queued runs after exact live PR/run/sibling revalidation."""
     if not REPOSITORY_RE.fullmatch(repo) or not REPOSITORY_RE.fullmatch(expected_repo):
@@ -384,7 +420,6 @@ def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expe
     cancelled: list[int] = []
     for run_id in candidates:
         try:
-            current_pr = _fetch_pr(repo, number)
             active = _active_runs(repo, expected_head)
             association_map = _associated_prs(
                 repo,
@@ -394,12 +429,20 @@ def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expe
                 branch=expected_ref,
                 head_sha=expected_head,
             )
+            refreshed_siblings = _refresh_siblings(
+                repo,
+                active,
+                run_id,
+                repository=expected_repo,
+                branch=expected_ref,
+                head_sha=expected_head,
+            )
             current_pr = _fetch_pr(repo, number)
             candidate = _fetch_run(repo, run_id)
             validate_candidate_against_live_state(
                 candidate,
                 live_pr=current_pr,
-                active_same_head_runs=active,
+                active_same_head_runs=refreshed_siblings,
                 current_pr_number=number,
                 associated_prs=association_map,
             )
