@@ -43,6 +43,12 @@
       "topics": ["egress", "ssrf", "dns-rebinding", "http", "network-security", "httpx", "python", "contextualwisdomlab"],
       "deepwiki": true,
       "pages": true
+    },
+    "psychometrics-commons": {
+      "description": "Psychometrics Commons — governed psychometric assessment, longitudinal measurement, and consent-aware research workflows.",
+      "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
