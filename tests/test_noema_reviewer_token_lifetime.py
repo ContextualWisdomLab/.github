@@ -1,11 +1,4 @@
-"""Regression contract for Noema reviewer credential lifetime.
-
-The repository-scoped cwl-noema-review GitHub App token is intentionally
-short-lived. A long contextual-orchestrator review can outlive the token
-minted before model work, so the trusted workflow must separate model
-preparation from publication and mint a fresh least-privilege App token after
-model work, before any reviewer-authorized publication operation.
-"""
+"""Regression contract for Noema reviewer credential lifetime."""
 
 from pathlib import Path
 
@@ -18,51 +11,55 @@ APP_TOKEN_ACTION = (
 )
 
 
-def _positions(text: str, needle: str) -> list[int]:
-    positions: list[int] = []
-    start = 0
-    while True:
-        position = text.find(needle, start)
-        if position < 0:
-            return positions
-        positions.append(position)
-        start = position + len(needle)
+def _step_block(text: str, name: str) -> str:
+    """Return one exact named workflow step without borrowing sibling evidence."""
+    marker = f"      - name: {name}\n"
+    start = text.index(marker)
+    next_step = text.find("\n      - name: ", start + len(marker))
+    return text[start:] if next_step < 0 else text[start:next_step]
 
 
 def test_noema_remints_repository_scoped_app_token_after_model_before_publication() -> None:
     """A long model call must not publish with its predecessor App token."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    token_actions = _positions(workflow, APP_TOKEN_ACTION)
+    prepare = _step_block(workflow, "Prepare Noema model verdict")
+    refresh = _step_block(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    publish = _step_block(workflow, "Publish prepared Noema verdict on the exact live head")
 
-    # The first token admits the review and supplies the independent reviewer
-    # identity. A second action-backed mint is required after model work so a
-    # one-hour installation credential cannot expire before publication.
-    assert len(token_actions) >= 2, (
-        "Noema must mint a fresh repository-scoped GitHub App token after "
-        "model work instead of reusing the pre-model installation token"
-    )
-
-    prepare = workflow.index("--prepare-verdict-file")
-    publish = workflow.index("--publish-verdict-file")
-    assert token_actions[0] < prepare < token_actions[-1] < publish
-
-    # Both phases stay bound to the exact same target/head, and the model
-    # route remains contextual-orchestrator's free pool rather than a direct
-    # provider escape hatch.
-    assert workflow.count('--expected-head "$EXPECTED_HEAD_SHA"') >= 2
-    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    assert APP_TOKEN_ACTION in refresh
+    assert "--prepare-verdict-file" in prepare
+    assert "--publish-verdict-file" in publish
+    assert '--expected-head "$EXPECTED_HEAD_SHA"' in prepare
+    assert '--expected-head "$EXPECTED_HEAD_SHA"' in publish
+    assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in prepare
+    assert "steps.noema_prepare.outputs.prepared == 'true'" in refresh
+    assert "steps.noema_credential.outputs.source == 'github-app'" in refresh
+    assert "steps.noema_prepare.outputs.prepared == 'true'" in publish
 
 
-def test_noema_publication_refresh_keeps_least_privilege_repository_scope() -> None:
-    """Refreshing the reviewer must not broaden identity or permissions."""
+def test_publication_step_uses_fresh_app_token_without_authority_fallback() -> None:
+    """Publication selects the refreshed App token and fails closed for unknown sources."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    token_actions = _positions(workflow, APP_TOKEN_ACTION)
-    assert len(token_actions) >= 2
+    refresh = _step_block(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    publish = _step_block(workflow, "Publish prepared Noema verdict on the exact live head")
 
-    publication_mint = workflow[token_actions[-1] :]
-    assert "owner: ContextualWisdomLab" in publication_mint
-    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in publication_mint
-    assert "permission-pull-requests: write" in publication_mint
-    assert "permission-contents: read" in publication_mint
-    assert "permission-actions: read" in publication_mint
-    assert "NOEMA_REVIEW_TOKEN" not in publication_mint.split("--publish-verdict-file", 1)[0]
+    assert "owner: ContextualWisdomLab" in refresh
+    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in refresh
+    assert "permission-pull-requests: write" in refresh
+    assert "permission-contents: read" in refresh
+    assert "permission-actions: read" in refresh
+    assert "steps.noema_github_app_publication_token.outputs.token" in publish
+    assert "steps.noema_github_app_token.outputs.token" not in publish
+    assert "secrets.NOEMA_REVIEW_TOKEN" in publish
+    assert "steps.noema_oidc_token.outputs.token" in publish
+    assert "github.token" not in publish
+    assert "refusing any GITHUB_TOKEN or author fallback" in publish
+
+
+def test_prepare_and_publish_are_the_only_model_verdict_execution_path() -> None:
+    """The old single-process review path must not survive beside the handoff."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "Run Noema LLM review and submit verdict" not in workflow
+    assert "python3 -m scripts.ci.noema_review_gate" not in workflow
+    assert workflow.count("--prepare-verdict-file") == 1
+    assert workflow.count("--publish-verdict-file") == 1

@@ -2562,3 +2562,14 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+## Noema reviewer credential-lifetime delta — 2026-09-01
+
+**Observed gap.** `ContextualWisdomLab/naruon#1497@152d1998c4e8024be9dc7026c8789d343c884fd0` demonstrated a control-plane latency/authority defect: a repository-scoped `cwl-noema-review` GitHub App token minted before contextual-orchestrator model work expired before the next GitHub operation, producing HTTP 401 even though repository-owned deterministic checks were otherwise successful. This is a central `.github` reviewer-lifecycle gap, not a Naruon product failure.
+
+**Owner-side closure in #1616.** The Noema workflow now treats model preparation and GitHub publication as separate trust phases. A bounded private envelope carries only the model verdict; the GitHub App path remints the same repository-scoped least-privilege authority after model work, and publication independently verifies repository, PR number, canonical exact head, live PR state, draft state, independent reviewer actor, and duplicate-current-head review state before submission. No predecessor-head evidence or predecessor App credential is accepted as publication authority. PAT/OIDC remain explicit sources and there is no `github.token` or author fallback.
+
+**Executable evidence.** `tests/test_noema_reviewer_token_lifetime.py` binds the production workflow step graph to prepare → fresh App mint → publish with exact-head arguments and source-specific credentials. `tests/test_noema_two_phase_handoff.py` executes the helper against controlled gate doubles and proves no preparation-side publication, fresh-head/actor rebinding, stale-head non-publication, draft skip behavior, cleanup on malformed handoff, and hard-link alias rejection. `.github/workflows/noema-token-lifetime-quality-ci.yml` runs these contracts with hash-pinned dependencies on every relevant seam.
+
+**Residual external verification.** After this central change reaches protected `main`, replay Required Noema Review for unchanged `naruon#1497@152d1998c4e8024be9dc7026c8789d343c884fd0`. Closure evidence requires a current-head schema-valid review or typed review-unavailable outcome without expired-token 401; a pre-merge run cannot prove the merged workflow-source path and is not promoted to release evidence.

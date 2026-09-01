@@ -172,8 +172,8 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
 def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:
     """Publish a prepared verdict only with fresh exact-head reviewer authority."""
     expected = _canonical_head(expected_head)
-    payload = _read_envelope(path)
     try:
+        payload = _read_envelope(path)
         required_keys = {
             "schema_version",
             "repository",
