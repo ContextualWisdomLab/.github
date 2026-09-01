@@ -169,7 +169,7 @@ def test_scheduler_wake_reuses_trusted_receipt_predicate(
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
-  base64 <"$REAL_RECEIPT_HELPER"
+  python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '%s' "$FAKE_REVIEWS"
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
