@@ -5,6 +5,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Fix a flaky SIGPIPE (exit 141) in
+  `test_scheduler_wake_reuses_trusted_receipt_predicate`: the fixture's fake
+  `gh` never read stdin on its `repos/ContextualWisdomLab/.github/dispatches`
+  branch, racing the real production pipe (`jq -cn ... | gh api -X POST
+  .../dispatches --input -`) — an early-exiting non-stdin-reading downstream
+  reader can SIGPIPE the upstream writer depending on process-scheduling
+  timing. Reproduced locally (~1/20 runs) and confirmed test-harness-only,
+  not a production bug (the real `gh api --input -` does read stdin). Fixed
+  by draining stdin (`cat >/dev/null`) before that branch proceeds; 60/60
+  clean runs after the fix.
 - Avoid redundant merge-scheduler wakes when the trusted receipt predicate
   already finds a substantive exact-head OpenCode verdict. Missing, stale, or
   fallback-only evidence still dispatches review work, while receipt lookup or
