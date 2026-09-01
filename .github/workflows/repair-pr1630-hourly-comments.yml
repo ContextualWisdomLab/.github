@@ -1,0 +1,72 @@
+name: Repair PR 1630 hourly cadence comments
+
+on:
+  push:
+    branches:
+      - fix/actions-queue-saturation-scheduler-cadence-20260902
+    paths:
+      - .github/workflows/repair-pr1630-hourly-comments.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+
+      - name: Repair comments, verify contract, and retire helper
+        shell: bash
+        env:
+          WRITER_BRANCH: fix/actions-queue-saturation-scheduler-cadence-20260902
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          source = path.read_text(encoding='utf-8')
+          replacements = {
+              'one latest pending */15 sweep': 'one latest pending hourly sweep',
+              'one 900s window elapse': 'one hourly window elapse',
+              'wall-clock tick (one per 900s)': 'wall-clock tick (one per hour)',
+          }
+          for old, new in replacements.items():
+              assert source.count(old) == 1, old
+              source = source.replace(old, new)
+          assert 'pending */15 sweep' not in source
+          assert '900s window' not in source
+          assert '900s)' not in source
+          assert source.count('$(date -u +%s) / 3600') == 2
+          assert '*/15 * * * *' not in source
+          path.write_text(source, encoding='utf-8')
+          PY
+
+          python3 - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_actions_queue_saturation_scheduler_cadence.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+                  print(f'PASS {name}')
+          PY
+          git diff --check
+
+          git rm .github/workflows/repair-pr1630-hourly-comments.yml
+          git add .github/workflows/pr-review-merge-scheduler.yml tests/test_actions_queue_saturation_scheduler_cadence.py
+          git diff --cached --check
+          remote_head="$(git ls-remote origin "refs/heads/${WRITER_BRANCH}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "docs(scheduler): align rotation comments with hourly fallback"
+          git push origin "HEAD:${WRITER_BRANCH}"
