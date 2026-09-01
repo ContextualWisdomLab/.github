@@ -3097,9 +3097,18 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     return "dispatched"
 
 
+def is_strix_scan_check_run(node: dict[str, Any]) -> bool:
+    """Return whether a check run is the authoritative Strix scan job."""
+    return (
+        node.get("__typename") == "CheckRun"
+        and node.get("name") == "strix"
+        and is_strix_context(node)
+    )
+
+
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
-    job_id = matching_actions_job_id(pr, is_strix_context)
+    job_id = matching_actions_job_id(pr, is_strix_scan_check_run)
     if job_id:
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
         return "rerun" if not dry_run else "dry_run"

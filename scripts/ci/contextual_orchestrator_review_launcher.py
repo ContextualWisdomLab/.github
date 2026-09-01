@@ -29,6 +29,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from scripts.ci.contextual_orchestrator_review_policy import FREE_POOL_CREDENTIAL_NAMES
+
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
 # This loopback, bearer-authenticated review sidecar accepts OpenAI's image-input
@@ -689,18 +691,29 @@ def _with_discovery_counts(
     from whatever narrower row set it was given, would otherwise contradict
     that field's documented "among *all* discovered free routes" contract.
     """
+    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
+    free_pool_rows = [
+        row
+        for row in free_rows
+        if isinstance(row.get("credential_key"), str)
+        and row["credential_key"] in FREE_POOL_CREDENTIAL_NAMES
+    ]
     enriched = dict(report)
     enriched.update(
         {
             "total_routes": len(rows),
-            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
+            "total_free_routes": len(free_rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
             "free_account_diversity": len(
+                {provider_account(str(row["provider"])) for row in free_rows}
+            ),
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": len(
                 {
                     provider_account(str(row["provider"]))
-                    for row in rows
-                    if row.get("cost_evidence") == "free"
+                    for row in free_pool_rows
                 }
             ),
         }
