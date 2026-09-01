@@ -36,6 +36,9 @@ on:
       - tests/test_contextual_orchestrator_review_sidecar_contract.py
       - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
       - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
+      - docs/doctoring/review-repair-quality-workflow-identity.md
+      - docs/product-technical-gap-baseline.md
+      - CHANGELOG.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_inkspan_hourly_review_caller.py
@@ -110,6 +113,9 @@ on:
       - tests/test_contextual_orchestrator_review_sidecar_contract.py
       - docs/doctoring/contextual-orchestrator-vendored-sidecar.md
       - docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
+      - docs/doctoring/review-repair-quality-workflow-identity.md
+      - docs/product-technical-gap-baseline.md
+      - CHANGELOG.md
       - tests/test_bandscope_hourly_review_caller.py
       - tests/test_disksage_hourly_review_caller.py
       - tests/test_inkspan_hourly_review_caller.py
