@@ -2,10 +2,10 @@
 """Retire redundant queued GitHub Actions runs for one exact open PR head.
 
 The coalescer is intentionally narrower than ordinary stale-head cleanup. It
-never cancels an in-progress run and never cancels the only queued run for a
-workflow. A queued candidate is eligible only when a distinct same-workflow,
-same-repository, same-branch, same-head pull-request run is still active after
-live PR and Actions state are re-fetched immediately before cancellation.
+never intentionally cancels an in-progress run and never cancels the only
+queued run for a workflow. A queued candidate is eligible only when a distinct
+same-workflow run is still authoritative after live PR, association, sibling,
+and candidate state are re-fetched immediately before cancellation.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -24,6 +24,7 @@ REPOSITORY_RE = re.compile(
 )
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 ACTIVE_STATUSES = ("queued", "in_progress")
+API_TIMEOUT_SECONDS = 30
 
 
 class CoalescingRefused(RuntimeError):
@@ -35,6 +36,47 @@ def _positive_int(value: object) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
+def _pull_request_associations(run_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return only well-shaped pull-request associations from an Actions run."""
+    value = run_data.get("pull_requests")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _association_number(association: Mapping[str, Any]) -> int | None:
+    """Return one associated PR number when GitHub supplied a positive integer."""
+    return _positive_int(association.get("number"))
+
+
+def _head_tuple(value: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Normalize a PR-style head object to repository, ref, and lowercase SHA."""
+    repository = ((value.get("repo") or {}).get("full_name") or "")
+    ref = str(value.get("ref") or "")
+    sha = str(value.get("sha") or "").lower()
+    return repository, ref, sha
+
+
+def _run_matches_head_identity(
+    run_data: Mapping[str, Any], *, repository: str, branch: str, head_sha: str
+) -> bool:
+    """Match a run to the live PR head, including pull_request_target semantics."""
+    event = run_data.get("event")
+    if event not in PR_EVENTS:
+        return False
+    if event == "pull_request":
+        if (
+            str(run_data.get("head_sha") or "").lower() == head_sha
+            and run_data.get("head_branch") == branch
+            and ((run_data.get("head_repository") or {}).get("full_name") == repository)
+        ):
+            return True
+    for association in _pull_request_associations(run_data):
+        if _head_tuple(association.get("head") or {}) == (repository, branch, head_sha):
+            return True
+    return False
+
+
 def _run_identity_matches(
     run_data: dict[str, Any],
     *,
@@ -44,10 +86,9 @@ def _run_identity_matches(
 ) -> bool:
     """Return whether one run belongs to the exact PR-head cancellation boundary."""
     return (
-        run_data.get("event") in PR_EVENTS
-        and str(run_data.get("head_sha") or "").lower() == head_sha
-        and run_data.get("head_branch") == branch
-        and ((run_data.get("head_repository") or {}).get("full_name") == repository)
+        _run_matches_head_identity(
+            run_data, repository=repository, branch=branch, head_sha=head_sha
+        )
         and _positive_int(run_data.get("workflow_id")) is not None
         and _positive_int(run_data.get("id")) is not None
         and run_data.get("status") in ACTIVE_STATUSES
@@ -61,14 +102,7 @@ def select_duplicate_queued_run_ids(
     branch: str,
     head_sha: str,
 ) -> list[int]:
-    """Select only redundant queued runs while retaining authoritative siblings.
-
-    Runs are grouped by GitHub's stable numeric ``workflow_id`` after exact
-    repository/branch/head/event filtering. If a workflow already has an
-    in-progress run, every queued sibling is redundant. Otherwise the newest
-    queued run ID is retained and only older queued siblings are selected.
-    In-progress runs are never returned.
-    """
+    """Select redundant queued runs while retaining one authoritative sibling."""
     groups: dict[int, list[dict[str, Any]]] = {}
     for run_data in runs:
         if not _run_identity_matches(
@@ -101,11 +135,56 @@ def select_duplicate_queued_run_ids(
     return sorted(redundant)
 
 
+def _run_pr_scope_is_safe(
+    run_data: Mapping[str, Any],
+    *,
+    live_pr: Mapping[str, Any],
+    current_pr_number: int,
+    associated_prs: Mapping[int, Mapping[str, Any]],
+) -> bool:
+    """Keep evidence isolated across live PRs while allowing closed predecessors."""
+    associations = _pull_request_associations(run_data)
+    if not associations:
+        return False
+    live_repo, live_ref, live_sha = _head_tuple(live_pr.get("head") or {})
+    live_base_ref = str(((live_pr.get("base") or {}).get("ref") or ""))
+    saw_current = False
+    saw_closed_predecessor = False
+    for association in associations:
+        number = _association_number(association)
+        if number is None:
+            return False
+        if _head_tuple(association.get("head") or {}) != (live_repo, live_ref, live_sha):
+            return False
+        if number == current_pr_number:
+            saw_current = True
+            continue
+        other = associated_prs.get(number)
+        if not isinstance(other, Mapping):
+            return False
+        if other.get("state") == "open":
+            return False
+        other_repo, other_ref, other_sha = _head_tuple(other.get("head") or {})
+        other_base_ref = str(((other.get("base") or {}).get("ref") or ""))
+        if (
+            other_repo != live_repo
+            or other_ref != live_ref
+            or other_sha != live_sha
+            or not live_base_ref
+            or other_base_ref != live_base_ref
+        ):
+            return False
+        saw_closed_predecessor = True
+    return saw_current or saw_closed_predecessor
+
+
 def validate_candidate_against_live_state(
     candidate: dict[str, Any],
     *,
     live_pr: dict[str, Any],
     active_same_head_runs: Sequence[dict[str, Any]],
+    current_pr_number: int | None = None,
+    associated_prs: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> None:
     """Fail closed unless a queued candidate still has an authoritative sibling."""
     if candidate.get("status") != "queued":
@@ -113,18 +192,12 @@ def validate_candidate_against_live_state(
     if live_pr.get("state") != "open":
         raise CoalescingRefused("pull request is no longer open")
 
-    live_head = live_pr.get("head") or {}
-    live_repo = ((live_head.get("repo") or {}).get("full_name") or "")
-    live_ref = str(live_head.get("ref") or "")
-    live_sha = str(live_head.get("sha") or "").lower()
-    candidate_repo = ((candidate.get("head_repository") or {}).get("full_name") or "")
-    candidate_ref = str(candidate.get("head_branch") or "")
-    candidate_sha = str(candidate.get("head_sha") or "").lower()
+    live_repo, live_ref, live_sha = _head_tuple(live_pr.get("head") or {})
     if (
         not GIT_SHA_RE.fullmatch(live_sha)
-        or live_sha != candidate_sha
-        or live_ref != candidate_ref
-        or live_repo != candidate_repo
+        or not _run_matches_head_identity(
+            candidate, repository=live_repo, branch=live_ref, head_sha=live_sha
+        )
     ):
         raise CoalescingRefused("pull request head moved after duplicate classification")
 
@@ -134,6 +207,15 @@ def validate_candidate_against_live_state(
         raise CoalescingRefused("candidate identity is malformed")
     if candidate.get("event") not in PR_EVENTS:
         raise CoalescingRefused("candidate is not a pull-request workflow run")
+
+    association_map = associated_prs or {}
+    if current_pr_number is not None and not _run_pr_scope_is_safe(
+        candidate,
+        live_pr=live_pr,
+        current_pr_number=current_pr_number,
+        associated_prs=association_map,
+    ):
+        raise CoalescingRefused("candidate belongs to an independent pull request")
 
     authoritative_sibling = False
     for sibling in active_same_head_runs:
@@ -146,6 +228,13 @@ def validate_candidate_against_live_state(
             sibling, repository=live_repo, branch=live_ref, head_sha=live_sha
         ):
             continue
+        if current_pr_number is not None and not _run_pr_scope_is_safe(
+            sibling,
+            live_pr=live_pr,
+            current_pr_number=current_pr_number,
+            associated_prs=association_map,
+        ):
+            continue
         if sibling.get("status") == "in_progress" or sibling_id > candidate_id:
             authoritative_sibling = True
             break
@@ -154,17 +243,21 @@ def validate_candidate_against_live_state(
 
 
 def _run_json(args: Sequence[str]) -> Any:
-    """Run one bounded GitHub CLI call and decode its JSON response."""
+    """Run one token-bound GitHub CLI call with an individual request timeout."""
     if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GH_TOKEN is required for current-head run coalescing")
-    completed = subprocess.run(
-        list(args),
-        capture_output=True,
-        text=True,
-        check=False,
-        shell=False,
-        env=os.environ.copy(),
-    )
+    try:
+        completed = subprocess.run(
+            list(args),
+            capture_output=True,
+            text=True,
+            check=False,
+            shell=False,
+            env=os.environ.copy(),
+            timeout=API_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("GitHub API request timed out") from exc
     if completed.returncode != 0:
         diagnostic = (completed.stderr or completed.stdout or "GitHub API request failed").strip()
         raise RuntimeError(diagnostic[:600])
@@ -181,8 +274,8 @@ def _fetch_pr(repo: str, number: int) -> dict[str, Any]:
     return payload
 
 
-def _active_runs(repo: str, head_sha: str) -> list[dict[str, Any]]:
-    """Fetch queued and in-progress runs for one exact commit SHA."""
+def _active_runs(repo: str, _head_sha: str) -> list[dict[str, Any]]:
+    """Fetch all queued/in-progress runs so pull_request_target runs are visible."""
     runs: list[dict[str, Any]] = []
     for status in ACTIVE_STATUSES:
         page = 1
@@ -196,8 +289,6 @@ def _active_runs(repo: str, head_sha: str) -> list[dict[str, Any]]:
                     f"repos/{repo}/actions/runs",
                     "-f",
                     f"status={status}",
-                    "-f",
-                    f"head_sha={head_sha}",
                     "-F",
                     "per_page=100",
                     "-F",
@@ -231,18 +322,22 @@ def _fetch_run(repo: str, run_id: int) -> dict[str, Any]:
 
 
 def _cancel_run(repo: str, run_id: int) -> None:
-    """Cancel one queued duplicate using GitHub's ordinary cancellation endpoint."""
-    completed = subprocess.run(
-        ["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"],
-        capture_output=True,
-        text=True,
-        check=False,
-        shell=False,
-        env=os.environ.copy(),
-    )
-    if completed.returncode != 0:
-        diagnostic = (completed.stderr or completed.stdout or "GitHub cancellation failed").strip()
-        raise RuntimeError(diagnostic[:600])
+    """Request ordinary cancellation using the same explicit token/timeout contract."""
+    _run_json(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
+
+
+def _associated_prs(
+    repo: str, runs: Sequence[Mapping[str, Any]], current_pr_number: int
+) -> dict[int, dict[str, Any]]:
+    """Fetch non-current PR associations needed to prove closed-predecessor safety."""
+    numbers = {
+        number
+        for run_data in runs
+        for association in _pull_request_associations(run_data)
+        if (number := _association_number(association)) is not None
+        and number != current_pr_number
+    }
+    return {number: _fetch_pr(repo, number) for number in sorted(numbers)}
 
 
 def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expected_head: str) -> list[int]:
@@ -255,12 +350,12 @@ def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expe
         raise RuntimeError("pull-request identity is malformed")
 
     live_pr = _fetch_pr(repo, number)
-    live_head = live_pr.get("head") or {}
+    live_repo, live_ref, live_sha = _head_tuple(live_pr.get("head") or {})
     if (
         live_pr.get("state") != "open"
-        or str(live_head.get("sha") or "").lower() != expected_head
-        or live_head.get("ref") != expected_ref
-        or ((live_head.get("repo") or {}).get("full_name") != expected_repo)
+        or live_sha != expected_head
+        or live_ref != expected_ref
+        or live_repo != expected_repo
     ):
         raise CoalescingRefused("pull request head moved before duplicate classification")
 
@@ -274,13 +369,17 @@ def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expe
     cancelled: list[int] = []
     for run_id in candidates:
         try:
-            candidate = _fetch_run(repo, run_id)
             current_pr = _fetch_pr(repo, number)
             active = _active_runs(repo, expected_head)
+            association_map = _associated_prs(repo, active, number)
+            current_pr = _fetch_pr(repo, number)
+            candidate = _fetch_run(repo, run_id)
             validate_candidate_against_live_state(
                 candidate,
                 live_pr=current_pr,
                 active_same_head_runs=active,
+                current_pr_number=number,
+                associated_prs=association_map,
             )
             _cancel_run(repo, run_id)
         except CoalescingRefused as exc:
