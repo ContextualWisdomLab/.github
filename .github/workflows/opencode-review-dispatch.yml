@@ -24,12 +24,6 @@ permissions:
   contents: read
 
 jobs:
-  required-workflow-bootstrap:
-    name: required-workflow-bootstrap
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "OpenCode repository-dispatch review run materialized."
-
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
