@@ -33,8 +33,9 @@ Repository-facing metadata is an organization control-plane responsibility,
 while product README content remains owned by each sibling repository. The
 reviewed desired state lives in `config/repository-metadata.json` and
 `config/repository-label-taxonomy.json`. Pull requests validate both manifests
-and their reconciliation behavior without write authority. Scheduled/manual
-apply runs only from trusted `.github/main` after validation.
+and their reconciliation behavior without write authority. Scheduled apply
+runs only from trusted `.github/main` after validation; branch-selected manual
+dispatch is intentionally absent under the central workflow trust contract.
 
 ```mermaid
 flowchart TD
@@ -62,15 +63,18 @@ flowchart TD
 
 The metadata reconciler is convergent: already-correct descriptions/topics and
 legacy default-branch `/docs` Pages sites receive no write; absent or drifted
-Pages state is created/updated, and disabled Pages is deleted. Exact DeepWiki
-badge state is a leaf-owned precondition, including a fail-closed contradiction
-when desired state disables DeepWiki while the badge remains live. Label
-reconciliation manages only taxonomy-declared labels and preserves unrelated
-priority/status/area labels. Failures aggregate after independent repositories
-or assignments are attempted, so one blocked leaf never serializes the fleet.
-Scheduled/manual applies share a ref-scoped lane and do not cancel active apply
-work midway. See ADR-0020 and the operational baseline for the authority and
-live-verification contract.
+Pages state is created/updated, and disabled Pages is deleted. Topic equality
+is set-based so GitHub presentation ordering cannot manufacture drift. Exact
+DeepWiki badge state is a leaf-owned precondition, including a fail-closed
+contradiction when desired state disables DeepWiki while the badge remains
+live. Label reconciliation adds/removes only taxonomy-declared labels through
+individual endpoints, preserving unrelated concurrent priority/status/area
+labels. Metadata and label failures retain independent exit statuses, so a
+blocked metadata leaf does not prevent eligible label work in the same apply.
+Failures aggregate after independent repositories or assignments are attempted,
+so one blocked leaf never serializes the fleet. Scheduled applies share a
+ref-scoped lane and do not cancel active apply work midway. See ADR-0020 and the
+operational baseline for the authority and live-verification contract.
 
 ## OriginWeave hourly caller
 
