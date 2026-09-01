@@ -4878,6 +4878,105 @@ def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
+def test_active_opencode_run_refs_treats_sole_head_adopting_dispatch_as_current(monkeypatch):
+    """Devin Review finding on PR #1507, "Live-head reviews retain stale identity".
+
+    A run dispatched for supplied head A can have its ``validate-pr-metadata``
+    step accept a live head B that advanced after dispatch (the warn-and-proceed
+    path #1533 added) and review B end-to-end, while the run's immutable
+    run-name/``display_title`` still renders ``...@A`` -- GitHub renders
+    ``run-name`` once, at dispatch time, from the *supplied* head, and there is
+    no supported way to update it afterward. With only this one run active for
+    the PR, there is no rival run to prefer, so it must still be classified
+    current -- not stale -- or a scheduler pass would cancel a review that is
+    correctly reviewing the live head and dispatch duplicate work in its place.
+    """
+    supplied_head = "a" * 40
+    live_head = "b" * 40
+    sole_run = {
+        "id": 9500,
+        "name": "Required OpenCode Review",
+        "event": "repository_dispatch",
+        "head_sha": "default-branch-sha",
+        "display_title": f"Required OpenCode Review owner/repo#1@{supplied_head}",
+        "pull_requests": [],
+    }
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [sole_run],
+    )
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    current, stale = sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=live_head),
+    )
+
+    assert current == [("ContextualWisdomLab/.github", "9500")]
+    assert stale == []
+
+
+def test_dispatch_opencode_review_does_not_cancel_sole_head_adopting_run(monkeypatch, capsys):
+    """End-to-end: a scheduler pass must not cancel or duplicate-dispatch the
+    sole active run above just because its stale title differs from the live
+    head it is actually reviewing (see the unit test immediately above)."""
+    calls = []
+    supplied_head = "a" * 40
+    live_head = "b" * 40
+    sole_run = {
+        "id": 9501,
+        "name": "Required OpenCode Review",
+        "event": "repository_dispatch",
+        "head_sha": "default-branch-sha",
+        "display_title": f"Required OpenCode Review owner/repo#1@{supplied_head}",
+        "pull_requests": [],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/ContextualWisdomLab/.github/actions/runs",
+        ]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": [sole_run]})
+            return json.dumps({"workflow_runs": []})
+        if "/actions/runs" in " ".join(args):
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    result = sched.dispatch_opencode_review(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=live_head),
+        dry_run=False,
+    )
+
+    assert result == "already_running"
+    assert not any("force-cancel" in " ".join(call) for call in calls)
+    assert not any(call[-2:] == ["--input", "-"] for call in calls)
+    assert (
+        "active same-head workflow run(s) ContextualWisdomLab/.github@9501"
+        in capsys.readouterr().out
+    )
+
+
 def test_latest_opencode_dispatch_started_at_matches_exact_completed_run(monkeypatch):
     """Completed same-head repository dispatch runs provide a retry timestamp."""
     head_sha = "a" * 40
