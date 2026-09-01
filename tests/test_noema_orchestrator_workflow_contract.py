@@ -87,8 +87,8 @@ def test_peer_workflow_completion_does_not_cancel_long_noema_review() -> None:
     workflow = workflow_text("noema-review.yml")
 
     assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' || "
-        "github.event_name == 'repository_dispatch' }}"
+        "cancel-in-progress: ${{ github.event_name != 'workflow_run' || "
+        "github.event.workflow_run.conclusion != 'cancelled' }}"
     ) in workflow
 
 
