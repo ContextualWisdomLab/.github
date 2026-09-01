@@ -893,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         require_zdr=args.require_zdr,
         pool=args.pool,
+        guarantee_domain_coverage=True,
     )
     result["report"] = _with_discovery_counts(
         result["report"],

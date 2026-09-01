@@ -1032,6 +1032,37 @@ def test_build_catalog_guarantee_domain_coverage_uses_full_budget_on_eight_over_
     assert all(count <= 4 for count in counts.values())
 
 
+def test_build_catalog_guarantee_domain_coverage_fixes_auto_primary_stage_too() -> None:
+    """Regression for Devin Review's "auto primary catalog remains single-domain" finding.
+
+    The *primary* ``auto``-pool stage has the identical single-scalar-cap-
+    equals-limit coincidence the priced-fallback stage already had fixed --
+    not the launcher's ``DEFAULT_ACCOUNT_CAP`` (4) it might appear to use
+    at a glance, but the review sidecar's own real deployed default: the
+    sidecar script exports ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP=8`` (see
+    ``contextual_orchestrator_review_sidecar.sh``), and the launcher's
+    ``REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT`` is also 8 for the ``auto``
+    pool's primary stage. Eight free routes from one dominant outage
+    domain, ``limit=8`` and ``account_cap=8`` (the real deployed values,
+    not this file's usual ``account_cap=4`` fixtures), used to exclude
+    every independent free domain entirely.
+    """
+    report = {
+        "models": [
+            {"provider": "nvidia_nim", "model": f"n{i}", "agent_id": f"nim_{i}", "is_free": True, **FREE_PRICE}
+            for i in range(8)
+        ]
+        + [{"provider": "openrouter", "model": "independent", "agent_id": "or_0", "is_free": True, **FREE_PRICE}]
+    }
+    rows = policy.parse_discovery_report(report)
+    result = policy.build_zdr_prioritized_catalog(
+        rows, limit=8, account_cap=8, pool="auto", guarantee_domain_coverage=True
+    )
+    providers = {agent["provider_name"] for agent in result["agents"]}
+    assert providers == {"nvidia_nim", "openrouter"}
+    assert len(result["agents"]) == 8
+
+
 def test_build_catalog_guarantee_domain_coverage_still_bounded_by_account_cap() -> None:
     """The first-pass diversity guarantee never lets a domain skip its own cap.
 

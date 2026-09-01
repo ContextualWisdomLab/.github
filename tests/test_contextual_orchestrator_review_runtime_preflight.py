@@ -1488,9 +1488,24 @@ def test_catalog_account_cap_honors_an_explicit_override(
     assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
 
 
-def test_main_wires_guarantee_domain_coverage_for_the_priced_fallback_stage() -> None:
-    """``main()``'s priced-fallback ``build_zdr_prioritized_catalog`` call opts into coverage."""
+def test_main_wires_guarantee_domain_coverage_for_both_catalog_stages() -> None:
+    """``main()``'s primary and priced-fallback catalog calls both opt into coverage.
+
+    Devin Review finding on `.github#1474`: the primary stage's own real
+    deployment shape has the identical single-scalar-cap-equals-limit
+    coincidence the fallback stage already had fixed -- the sidecar's own
+    default `ORCHESTRATOR_CATALOG_ACCOUNT_CAP` is 8 (not
+    `DEFAULT_ACCOUNT_CAP`'s library-level fallback of 4, which the sidecar
+    never leaves the env var unset for), and `REVIEW_PREFLIGHT_PRIMARY_
+    ROUTE_LIMIT` is also 8 for the ``auto`` pool's primary stage. Both
+    ``build_zdr_prioritized_catalog`` call sites in ``main()`` must pass
+    ``guarantee_domain_coverage=True``.
+    """
     source = _LAUNCHER.read_text(encoding="utf-8")
+    assert source.count("guarantee_domain_coverage=True") == 2
+    primary_call_start = source.index("result = build_zdr_prioritized_catalog(")
+    primary_call = source[primary_call_start : primary_call_start + 400]
+    assert "guarantee_domain_coverage=True" in primary_call
     fallback_call_start = source.index('pool == "auto"\n        and admitted_free_rows')
     fallback_call = source[fallback_call_start : fallback_call_start + 800]
     assert "guarantee_domain_coverage=True" in fallback_call

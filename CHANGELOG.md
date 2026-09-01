@@ -69,7 +69,17 @@ Semantic Versioning where the repository publishes a release.
   split was uneven (a second Devin Review finding, "fallback quota wastes
   probe slots" -- `limit=4` across 3 domains admitted only 3 routes under
   a floor of 1); the two-pass approach guarantees both properties at
-  once. The common single-domain case is unchanged.
+  once. The common single-domain case is unchanged. A third Devin Review
+  finding caught the identical gap reachable through the *primary*
+  `auto`-pool stage too, not just the fallback: the review sidecar's real
+  deployed default is `ORCHESTRATOR_CATALOG_ACCOUNT_CAP=8` (not the
+  launcher's `DEFAULT_ACCOUNT_CAP=4` fallback, which the sidecar never
+  leaves the env var unset for), and the primary stage's own route limit
+  for the `auto` pool is also capped at 8
+  (`REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT`) -- the same cap-equals-limit
+  coincidence, just at 8 instead of 4. `guarantee_domain_coverage=True`
+  now applies to both `build_zdr_prioritized_catalog` call sites in
+  `main()`.
 - Noema, Strix, and OpenCode review sidecars now vendor contextual-orchestrator
   at `c107e3e52371993aa9c326fcc245e01c41fc3850` and treat every KV credential
   as an independent discovery account. Same-vendor credentials no longer
