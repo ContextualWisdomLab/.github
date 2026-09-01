@@ -1,0 +1,169 @@
+name: One-shot PR 1589 current-main validation v4
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-probe-taxonomy-20260901
+    paths:
+      - .github/workflows/source-fix-1589-current-main-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Apply current-main semantic repair and migrate exact tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_BRANCH: fix/noema-observed-defect-probe-taxonomy-20260901
+          TEMP_WORKFLOW: .github/workflows/source-fix-1589-current-main-v4.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" source
+          cd source
+          git checkout "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path(".github/workflows/source-fix-1589-current-main.yml").read_text(encoding="utf-8")
+          marker = "        run: |\n"
+          script = textwrap.dedent(workflow.split(marker, 1)[1])
+
+          start = script.index("old = '''                f\"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` \"")
+          end_marker = 'path.write_text(text.replace(old, new, 1), encoding="utf-8")\n'
+          end = script.index(end_marker, start) + len(end_marker)
+          formatter = '''needle = "f\\\"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — \\""
+          if text.count(needle) != 1:
+              raise SystemExit("evidence formatter outcome line changed")
+          text = text.replace(
+              needle,
+              "f\\\"[{probe.get('probe_kind')}] {probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — \\"",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          '''
+          script = script[:start] + formatter + script[end:]
+
+          insert_start = script.index("insertion = '''    if len(probe_kinds) < required_probes:")
+          insert_end = script.index("\nif text.count(marker) != 1:", insert_start)
+          diversity = '''insertion = (
+              "    if len(probe_kinds) < required_probes:\\n"
+              "        raise RuntimeError(\\n"
+              "            f\\\"Noema {decision} requires at least {required_probes} distinct probe_kind values\\\"\\n"
+              "        )\\n\\n"
+          )'''
+          script = script[:insert_start] + diversity + script[insert_end:]
+
+          migration = r'''
+          python3 - <<'PYTESTS'
+          from pathlib import Path
+
+          path = Path("tests/test_noema_review_gate.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace('"fetch_changed_file_paths"', '"fetch_changed_files"')
+          text = text.replace('noema.fetch_changed_file_paths', 'noema.fetch_changed_files')
+          text = text.replace('lambda repo, number: ["tool.py"]', 'lambda repo, number: [("tool.py", "modified")]')
+          text = text.replace('lambda repo, number, value: "context"', 'lambda repo, number, value, changed_files=None: "context"')
+
+          start = text.index('def test_review_context_builders_include_codegraph_threads_and_files')
+          end = text.index('\n\nclass FakeResponse:', start)
+          replacement = '''def test_review_context_builders_include_threads_and_files(monkeypatch):
+              assert noema.truncate_text("abc", 10) == "abc"
+              assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
+              assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
+
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
+              assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
+
+              encoded = base64.b64encode(b"print('hello')\\n").decode("ascii")
+              calls = []
+
+              def fake_run(args, stdin=None):
+                  calls.append(args)
+                  target = args[2]
+                  if target.endswith("/files"):
+                      return "\\n".join([
+                          json.dumps(["src/a.py", "modified"]),
+                          json.dumps(["README.md", "modified"]),
+                          json.dumps(["empty.txt", "modified"]),
+                      ]) + "\\n"
+                  if "contents/src/a.py" in target:
+                      return encoded
+                  if "contents/README.md" in target:
+                      raise RuntimeError("Command failed: token secret")
+                  if "contents/empty.txt" in target:
+                      return ""
+                  raise AssertionError(args)
+
+              monkeypatch.setattr(noema, "run", fake_run)
+              pr = make_pr(
+                  headRefOid="head sha",
+                  reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False, "path": "src/a.py", "line": 3, "comments": {"nodes": [{"author": {"login": "reviewer"}, "body": "check call site"}]}}]},
+              )
+              context = noema.build_review_context("owner/repo", 7, pr)
+              assert "CodeGraph context" not in context
+              assert "Thread open at src/a.py:3" in context
+              assert "reviewer: check call site" in context
+              assert "### src/a.py" in context
+              assert "print('hello')" in context
+              assert "Unavailable from head content API" in context
+              assert "No UTF-8 text content available" in context
+              assert any("/files" in call[2] for call in calls)
+
+
+          def test_review_context_reports_omitted_files(monkeypatch):
+              files = [(f"src/file_{index}.py", "modified") for index in range(noema.MAX_CONTEXT_FILES + 1)]
+              monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: files)
+              monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
+              context = noema.changed_file_context("owner/repo", 7, "head")
+              assert "1 changed files omitted from context budget" in context
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          pairs = [
+              ('"hypothesis": "The assignment was removed.",\n                    "attack_or_counterexample": "Inspect the added hunk line.",\n                    "evidence": "The RIGHT-side assignment remains present.",',
+               '"probe_kind": "coercion_boundary",\n                    "class_evidence": {"raw_value": "The replacement could be a truthy non-boolean value.", "conversion_path": "Trace the changed assignment without implicit conversion.", "canonicality_guard": "The changed source uses the canonical boolean literal True."},\n                    "hypothesis": "A truthy non-boolean value could masquerade as canonical boolean state.",\n                    "attack_or_counterexample": "Use a string-like truthy value as the coercion counterexample.",\n                    "evidence": "The RIGHT-side assignment uses the boolean literal True without coercion.",'),
+              ('"hypothesis": "The value became false.",\n                    "attack_or_counterexample": "Read the replacement literal.",\n                    "evidence": "The literal is True.",',
+               '"probe_kind": "test_oracle",\n                    "class_evidence": {"assertion_under_test": "A truthiness-only review oracle could accept a string value.", "negative_control": "Use a non-boolean truthy string as a negative control.", "distinguishing_observation": "The changed source is the boolean literal True, distinct by type."},\n                    "hypothesis": "A truthiness-only oracle could accept a non-boolean replacement.",\n                    "attack_or_counterexample": "Compare the boolean literal with a truthy string negative control.",\n                    "evidence": "The replacement is the exact boolean literal True.",'),
+              ('"hypothesis": "The value becomes false.",\n                    "attack_or_counterexample": "Trace the literal assigned at the changed line.",\n                    "evidence": "The changed source assigns the boolean literal True.",',
+               '"probe_kind": "coercion_boundary",\n                    "class_evidence": {"raw_value": "A caller could supply a truthy non-boolean value.", "conversion_path": "Trace whether the changed assignment coerces input.", "canonicality_guard": "The changed line assigns the canonical boolean literal True."},\n                    "hypothesis": "A truthy non-boolean value could cross the canonical boolean boundary.",\n                    "attack_or_counterexample": "Compare the literal with a truthy string counterexample.",\n                    "evidence": "The changed source assigns the exact boolean literal True.",'),
+              ('"hypothesis": "The assignment is removed.",\n                    "attack_or_counterexample": "Compare the added side with the deleted side.",\n                    "evidence": "The RIGHT-side hunk contains one replacement assignment.",',
+               '"probe_kind": "test_oracle",\n                    "class_evidence": {"assertion_under_test": "Presence-only inspection could miss a wrong replacement type.", "negative_control": "Use a present but non-boolean replacement as the negative control.", "distinguishing_observation": "The changed line is both present and the exact boolean literal True."},\n                    "hypothesis": "A presence-only oracle could accept the wrong replacement value.",\n                    "attack_or_counterexample": "Use a present but type-wrong assignment as a negative control.",\n                    "evidence": "The RIGHT-side hunk contains the exact boolean replacement assignment.",'),
+          ]
+          for old, new in pairs:
+              text = text.replace(old, new, 1)
+
+          text = text.replace(
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "hypothesis": "The value is false.", "attack_or_counterexample": "Read the literal.", "evidence": "The literal is True.", "outcome": "falsified"}',
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "coercion_boundary", "class_evidence": {"raw_value": "A truthy non-boolean value", "conversion_path": "No implicit conversion in the changed assignment", "canonicality_guard": "Exact boolean literal True"}, "hypothesis": "A non-boolean value crosses the canonical boundary.", "attack_or_counterexample": "Compare with a truthy string negative control.", "evidence": "The literal is the canonical boolean True.", "outcome": "falsified"}',
+              1,
+          )
+          text = text.replace(
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "hypothesis": "The assignment vanished.", "attack_or_counterexample": "Inspect the added line.", "evidence": "One assignment is present.", "outcome": "falsified"}',
+              '{"path": "tool.py", "line": 1, "side": "RIGHT", "probe_kind": "test_oracle", "class_evidence": {"assertion_under_test": "Presence-only assignment check", "negative_control": "Present assignment with wrong value type", "distinguishing_observation": "Exact boolean literal and presence are both checked"}, "hypothesis": "A presence-only oracle accepts a wrong replacement.", "attack_or_counterexample": "Use a present but non-boolean assignment.", "evidence": "The changed assignment has the exact expected boolean value.", "outcome": "falsified"}',
+              1,
+          )
+          additions = {
+              '"hypothesis": "The obsolete claim remains documented.",': '"probe_kind": "cross_contract",\n                    "class_evidence": {"first_contract": "The deleted documentation claim.", "second_contract": "The changed-side contract after deletion.", "contradiction_or_alignment": "The obsolete conflicting claim is removed."},\n                    "hypothesis": "The obsolete claim remains documented.",',
+              '"hypothesis": "The safety gate is disabled.",': '"probe_kind": "authority_boundary",\n                    "class_evidence": {"component_authority": "The changed config controls this safety gate.", "external_authority": "No external caller may silently disable the gate.", "enforcement_boundary": "The effective changed value is checked at the component boundary."},\n                    "hypothesis": "The safety gate is disabled.",',
+              '"hypothesis": "The key was renamed instead.",': '"probe_kind": "cross_contract",\n                    "class_evidence": {"first_contract": "The prior key is safe=true.", "second_contract": "The changed key remains safe with value false.", "contradiction_or_alignment": "Key identity aligns while its value contradicts the prior contract."},\n                    "hypothesis": "The key was renamed instead.",',
+          }
+          for old, new in additions.items():
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PYTESTS
+          '''
+          needle = 'rm "$TEMP_WORKFLOW"\n'
+          script = script.replace(needle, migration + '\nrm "$TEMP_WORKFLOW" .github/workflows/source-fix-1589-current-main.yml .github/workflows/source-fix-1589-current-main-v2.yml .github/workflows/source-fix-1589-current-main-v3.yml\n', 1)
+          Path("/tmp/validate-current-main.sh").write_text(script, encoding="utf-8")
+          PY
+          cd ..
+          rm -rf source
+          bash /tmp/validate-current-main.sh
