@@ -36,9 +36,11 @@ class _NoPagesRedirects(HTTPRedirectHandler):
     """Refuse redirects so Pages verification cannot be redirected off GitHub Pages."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Return no follow-up request for any redirect."""
+        """Raise an HTTPError instead of following the redirect."""
 
-        return None
+        from urllib.error import HTTPError
+
+        raise HTTPError(req.full_url, code, msg, headers, fp)
 
 
 def _require_exact_dict(value: Any, *, field: str) -> dict[str, Any]:
