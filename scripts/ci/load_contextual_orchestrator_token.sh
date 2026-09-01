@@ -57,9 +57,67 @@ _contextual_orchestrator_load_token() {
   export CONTEXTUAL_ORCHESTRATOR_TOKEN
 }
 
+_contextual_orchestrator_materialize_noema_codegraph() {
+  # This loader is shared by several model consumers. Noema is identified by
+  # the reviewer-credential provenance that its trusted workflow sets in the
+  # same step; all other consumers retain token-loading-only behavior.
+  if [ -z "${NOEMA_REVIEW_TOKEN_SOURCE:-}" ]; then
+    return 0
+  fi
+  if [ -z "${TARGET_REPOSITORY:-}" ] || [ -z "${PR_NUMBER:-}" ] || [ -z "${EXPECTED_HEAD_SHA:-}" ]; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph materialization requires target repository, PR number, and exact head SHA." || return 1
+  fi
+  if [ -z "${GH_TOKEN:-}" ]; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph materialization requires the selected repository-scoped reviewer token." || return 1
+  fi
+  if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_WORKSPACE:-}" ]; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph materialization requires GitHub runner paths." || return 1
+  fi
+
+  local pull_request_json live_head_sha base_sha helper
+  if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph could not refresh pull-request identity before materialization." || return 1
+  fi
+  live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+  base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
+  if [[ ! "$base_sha" =~ ^[0-9a-fA-F]{40}$ ]] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph refused stale or malformed pull-request source identity." || return 1
+  fi
+
+  helper="${GITHUB_WORKSPACE}/scripts/ci/noema_codegraph_context.sh"
+  if [ ! -f "$helper" ] || [ -L "$helper" ]; then
+    _contextual_orchestrator_token_fail "Trusted Noema CodeGraph helper is missing or symlinked." || return 1
+  fi
+
+  PR_BASE_SHA="$base_sha"
+  NOEMA_CODEGRAPH_CONTEXT_PATH="${RUNNER_TEMP}/noema-codegraph-evidence.md"
+  NOEMA_REQUIRE_CODEGRAPH_CONTEXT=1
+  export PR_BASE_SHA NOEMA_CODEGRAPH_CONTEXT_PATH NOEMA_REQUIRE_CODEGRAPH_CONTEXT
+  if ! bash "$helper"; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph exact-head materialization failed." || return 1
+  fi
+  if [ ! -s "$NOEMA_CODEGRAPH_CONTEXT_PATH" ] || [ -L "$NOEMA_CODEGRAPH_CONTEXT_PATH" ]; then
+    _contextual_orchestrator_token_fail "Noema CodeGraph did not produce a regular non-empty evidence packet." || return 1
+  fi
+}
+
+_contextual_orchestrator_cleanup_helpers() {
+  unset -f \
+    _contextual_orchestrator_load_token \
+    _contextual_orchestrator_materialize_noema_codegraph \
+    _contextual_orchestrator_stat \
+    _contextual_orchestrator_token_fail \
+    _contextual_orchestrator_cleanup_helpers
+}
+
 _contextual_orchestrator_load_token || {
   _contextual_orchestrator_status=$?
-  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+  _contextual_orchestrator_cleanup_helpers
   return "$_contextual_orchestrator_status"
 }
-unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+_contextual_orchestrator_materialize_noema_codegraph || {
+  _contextual_orchestrator_status=$?
+  _contextual_orchestrator_cleanup_helpers
+  return "$_contextual_orchestrator_status"
+}
+_contextual_orchestrator_cleanup_helpers
