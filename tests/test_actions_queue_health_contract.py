@@ -17,7 +17,7 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     assert "timeout-minutes: 30" in workflow
     assert "runs-on: ubuntu-24.04" in workflow
     assert "actions: read" in workflow
-    assert "pull-requests: read" in workflow
+    assert "pull-requests: read" not in workflow
     assert "contents: write" not in workflow
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}"
