@@ -40,10 +40,6 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-# A selected route that cannot answer within ten seconds is not reliable enough
-# for a required CI gate. With at most twelve sequential candidates, startup is
-# bounded below the sidecar's three-minute readiness deadline.
-REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
@@ -62,27 +58,7 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's PROBING worst case stays computed and
-# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
-# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
-#
-# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
-# discover_all_models() call that runs before it inside the SAME 180s
-# watchdog. Verified directly against the vendored contextual-orchestrator
-# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
-# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
-# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
-# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
-# own 160s even starts. Combined real worst case is therefore up to ~265s,
-# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
-# shared monotonic deadline, scaled-down probing, or an evidence-justified
-# watchdog extension) and #1454 for the related, separately-tracked gap that
-# a base-probe *success* never confirms the candidate at the real serving
-# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
-# findings; both are architecturally significant enough to need their own
-# design pass rather than a guessed patch here.
+# escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
@@ -555,8 +531,8 @@ def _preflight_with_fallback(
     stage's ending ``escalations_used`` is passed as the fallback stage's
     starting point, so a run that rejects all 8 primary routes and then
     probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
-    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    base attempts + 4 escalations). This bounds request count, not individual
+    model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its
@@ -931,7 +907,6 @@ def main(argv: list[str] | None = None) -> int:
                 loader=load_agents,
             )
     client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
         max_retries=0,
         temperature=REVIEW_TEMPERATURE,
