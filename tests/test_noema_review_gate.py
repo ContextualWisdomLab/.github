@@ -1244,7 +1244,8 @@ def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatc
     """``inspect_and_review`` must treat a stale-during-repair-retry signal
     exactly like its own pre-model and pre-publication stale checks: a clean
     skip (return 0), never an unhandled exception or a published review."""
-    pr = make_pr()
+    head = "a" * 40
+    pr = make_pr(headRefOid=head)
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -1263,7 +1264,7 @@ def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatc
         lambda *args, **kwargs: pytest.fail("stale-during-repair verdict must not publish"),
     )
 
-    assert noema.inspect_and_review("owner/repo", 7, "head") == 0
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
 
 
 def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):
@@ -1741,13 +1742,13 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
 
 
 def test_stale_trigger_stops_before_identity_or_model_work(monkeypatch):
-    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="new"))
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="b" * 40))
     monkeypatch.setattr(
         noema,
         "current_actor",
         lambda: pytest.fail("stale execution must stop before identity lookup"),
     )
-    assert noema.inspect_and_review("owner/repo", 7, "old") == 0
+    assert noema.inspect_and_review("owner/repo", 7, "a" * 40) == 0
 
 
 def test_expected_head_comparison_is_case_insensitive(monkeypatch):
@@ -1763,7 +1764,10 @@ def test_expected_head_comparison_is_case_insensitive(monkeypatch):
 
 
 def test_head_movement_stops_before_review_publication(monkeypatch):
-    pull_requests = iter((make_pr(), make_pr(headRefOid="new")))
+    head = "a" * 40
+    pull_requests = iter(
+        (make_pr(headRefOid=head), make_pr(headRefOid="b" * 40))
+    )
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -1779,12 +1783,33 @@ def test_head_movement_stops_before_review_publication(monkeypatch):
         "submit_review",
         lambda *args, **kwargs: pytest.fail("stale verdict must not publish"),
     )
-    assert noema.inspect_and_review("owner/repo", 7, "head") == 0
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+
+
+def test_closed_during_model_stops_before_review_publication(monkeypatch):
+    head = "a" * 40
+    pull_requests = iter(
+        (make_pr(headRefOid=head), make_pr(headRefOid=head, state="CLOSED"))
+    )
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_file_paths", lambda repo, number: ["tool.py"])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: pytest.fail("closed PR verdict must not publish"),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
 
 
 def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
     """An uppercase --expected-head must match GitHub's lowercase live SHA (Devin Review, PR #1507)."""
-    pr = make_pr(headRefOid="abc123def0")
+    head = "abc123def0" * 4
+    pr = make_pr(headRefOid=head)
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -1794,13 +1819,14 @@ def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
     calls = []
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
-    assert noema.inspect_and_review("owner/repo", 7, "ABC123DEF0") == 0
+    assert noema.inspect_and_review("owner/repo", 7, head.upper()) == 0
     assert calls
 
 
 def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
     """The pre-publication re-check must also compare case-insensitively."""
-    pull_requests = iter((make_pr(headRefOid="abc123def0"), make_pr(headRefOid="abc123def0")))
+    head = "abc123def0" * 4
+    pull_requests = iter((make_pr(headRefOid=head), make_pr(headRefOid=head)))
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
     monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
@@ -1814,7 +1840,7 @@ def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
     calls = []
     monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
 
-    assert noema.inspect_and_review("owner/repo", 7, "ABC123DEF0") == 0
+    assert noema.inspect_and_review("owner/repo", 7, head.upper()) == 0
     assert calls
 
 

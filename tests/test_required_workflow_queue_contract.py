@@ -365,6 +365,12 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert "github.event.action == 'synchronize'" in cleanup_job
     assert 'endswith("@" + $head_sha)' in cleanup_job
     assert "/force-cancel" in cleanup_job
+    assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}"' in cleanup_job
+    assert "could not re-verify the live pull request before cancelling" in cleanup_job
+    assert "target changed before cancellation" in cleanup_job
+    assert cleanup_job.index('live_pr_json="$(gh api') < cleanup_job.index(
+        'gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel"'
+    )
     assert "actions: write" in cleanup_job
     assert "actions/checkout" not in cleanup_job
     assert (

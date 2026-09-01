@@ -1172,8 +1172,10 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """
     expected_head = expected_head.strip().lower()
     pr = fetch_pr(repo, number)
-    if str(pr.get("headRefOid") or "").lower() != expected_head:
-        print("Trigger head is stale; Noema review skipped before model work.")
+    try:
+        require_expected_head(pr, expected_head)
+    except RuntimeError:
+        print("Pull request is closed or its trigger head is stale; Noema review skipped before model work.")
         return 0
     actor = current_actor()
     if not actor:
@@ -1198,8 +1200,10 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Pull request head changed during review; Noema review skipped before repair retry.")
         return 0
     current_pr = fetch_pr(repo, number)
-    if str(current_pr.get("headRefOid") or "").lower() != expected_head:
-        print("Pull request head changed during review; stale verdict was not published.")
+    try:
+        require_expected_head(current_pr, expected_head)
+    except RuntimeError:
+        print("Pull request closed or its head changed during review; stale verdict was not published.")
         return 0
     submit_review(repo, number, current_pr, actor, verdict)
     return 0
