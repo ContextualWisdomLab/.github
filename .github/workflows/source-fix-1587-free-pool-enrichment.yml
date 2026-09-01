@@ -53,58 +53,53 @@ jobs:
                   raise SystemExit("unexpected launcher import marker cardinality")
               text = text.replace(import_marker, import_marker + "\n" + policy_import)
 
-          start = text.index("def _with_discovery_counts(\n")
-          end = text.index("\ndef _zdr_admitted_rows(\n", start)
-          replacement = '''def _with_discovery_counts(
-    report: dict[str, object],
-    rows: list[dict[str, Any]],
-    *,
-    provider_account: Any,
-) -> dict[str, object]:
-    """Copy a stage report while restoring full discovery and free-pool counts.
+          enrich_marker = "    enriched = dict(report)\n"
+          free_rows_block = (
+              "    free_rows = [row for row in rows if row.get(\"cost_evidence\") == \"free\"]\n"
+              "    free_pool_rows = [\n"
+              "        row\n"
+              "        for row in free_rows\n"
+              "        if isinstance(row.get(\"credential_key\"), str)\n"
+              "        and row[\"credential_key\"] in FREE_POOL_CREDENTIAL_NAMES\n"
+              "    ]\n"
+          )
+          if free_rows_block not in text:
+              if text.count(enrich_marker) != 1:
+                  raise SystemExit("unexpected discovery enrichment marker cardinality")
+              text = text.replace(enrich_marker, free_rows_block + enrich_marker)
 
-    Discovery-wide fields are recomputed from ``rows`` because primary and
-    priced-fallback stages may each see narrower subsets. Free-pool fields are
-    likewise recomputed from the same full normalized rows, but only zero-cost
-    rows carrying one of the credential sources authorized by
-    :data:`FREE_POOL_CREDENTIAL_NAMES` contribute to pool capacity. This keeps
-    a priced-only fallback report from erasing discovered free capacity while
-    still excluding globally discovered OpenAI rows from ``orchestrator/free``.
-    """
-    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
-    free_pool_rows = [
-        row
-        for row in free_rows
-        if isinstance(row.get("credential_key"), str)
-        and row["credential_key"] in FREE_POOL_CREDENTIAL_NAMES
-    ]
-    enriched = dict(report)
-    enriched.update(
-        {
-            "total_routes": len(rows),
-            "total_free_routes": len(free_rows),
-            "total_priced_routes": sum(
-                row.get("cost_evidence") == "priced" for row in rows
-            ),
-            "total_unknown_routes": sum(
-                row.get("cost_evidence") == "unknown" for row in rows
-            ),
-            "free_account_diversity": len(
-                {provider_account(str(row["provider"])) for row in free_rows}
-            ),
-            "free_pool_admitted_routes": len(free_pool_rows),
-            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
-            "free_pool_account_diversity": len(
-                {
-                    provider_account(str(row["provider"]))
-                    for row in free_pool_rows
-                }
-            ),
-        }
-    )
-    return enriched
-'''
-          text = text[:start] + replacement + text[end:]
+          old_total_free = (
+              '            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),\n'
+          )
+          new_total_free = '            "total_free_routes": len(free_rows),\n'
+          if old_total_free in text:
+              text = text.replace(old_total_free, new_total_free, 1)
+
+          old_diversity = (
+              '            "free_account_diversity": len(\n'
+              '                {\n'
+              '                    provider_account(str(row["provider"]))\n'
+              '                    for row in rows\n'
+              '                    if row.get("cost_evidence") == "free"\n'
+              '                }\n'
+              '            ),\n'
+          )
+          new_diversity = (
+              '            "free_account_diversity": len(\n'
+              '                {provider_account(str(row["provider"])) for row in free_rows}\n'
+              '            ),\n'
+              '            "free_pool_admitted_routes": len(free_pool_rows),\n'
+              '            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),\n'
+              '            "free_pool_account_diversity": len(\n'
+              '                {\n'
+              '                    provider_account(str(row["provider"]))\n'
+              '                    for row in free_pool_rows\n'
+              '                }\n'
+              '            ),\n'
+          )
+          if old_diversity not in text:
+              raise SystemExit("unexpected free-account diversity block")
+          text = text.replace(old_diversity, new_diversity, 1)
           path.write_text(text, encoding="utf-8")
           PY
 
