@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - name: Reproduce, repair, verify, and commit
+      - name: Reproduce, reconcile, verify, and commit
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: fix/noema-truncated-completion-contract-20260901
