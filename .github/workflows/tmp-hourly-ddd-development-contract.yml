@@ -33,9 +33,37 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Normalize bootstrap source after exact failure evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/tmp_apply_hourly_ddd_contract.py")
+          source = path.read_text(encoding="utf-8")
+          replacements = (
+              (
+                  '    assert "misleading directory paths" in doctoring\n',
+                  '    assert "Misleading directory paths" in doctoring\n',
+              ),
+              (
+                  '              *\\?*) ;;\n',
+                  '              *\\\\?*) ;;\n',
+              ),
+          )
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"bootstrap normalization expected one fragment, found {count}: {old!r}"
+                  )
+              source = source.replace(old, new, 1)
+          path.write_text(source, encoding="utf-8")
+          PY
+
       - name: Apply exact bounded repair
         shell: bash --noprofile --norc -e -o pipefail {0}
-        run: python scripts/ci/tmp_apply_hourly_ddd_contract.py
+        run: python -W error scripts/ci/tmp_apply_hourly_ddd_contract.py
 
       - name: Install exact focused-test dependencies
         env:
