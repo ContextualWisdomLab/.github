@@ -66,6 +66,7 @@ fragment SchedulerPullRequestFields on PullRequest {
   }
   statusCheckRollup {
     contexts(first: 100) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         __typename
         ... on CheckRun {
@@ -132,6 +133,28 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
           submittedAt
           author { login __typename }
           commit { oid }
+        }
+      }
+    }
+  }
+}
+"""
+
+PR_CONTEXTS_PAGE_QUERY = """\
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      statusCheckRollup {
+        contexts(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CheckRun {
+              name status conclusion startedAt detailsUrl
+              checkSuite { createdAt workflowRun { workflow { name } } }
+            }
+            ... on StatusContext { context state }
+          }
         }
       }
     }
@@ -856,6 +879,37 @@ def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) ->
             )
 
 
+def complete_paginated_pr_contexts(repo: str, pr: dict[str, Any]) -> None:
+    """Load every status-context page before selecting a required workflow run."""
+    contexts = ((pr.get("statusCheckRollup") or {}).get("contexts") or {})
+    page_info = contexts.get("pageInfo") or {}
+    nodes = list(contexts.get("nodes") or [])
+    owner, name = validate_github_repository(repo).split("/", 1)
+    pages = 0
+    while page_info.get("hasNextPage"):
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise RuntimeError("Status context pagination did not provide an end cursor")
+        pages += 1
+        if pages > MAX_REVIEW_PAGINATION_PAGES:
+            raise RuntimeError("Status context pagination exceeded its safety bound")
+        payload = gh_graphql(
+            PR_CONTEXTS_PAGE_QUERY,
+            owner=owner,
+            name=name,
+            number=int(pr["number"]),
+            cursor=cursor,
+        )
+        pull_request = ((payload.get("data") or {}).get("repository") or {}).get(
+            "pullRequest"
+        ) or {}
+        page_contexts = ((pull_request.get("statusCheckRollup") or {}).get("contexts") or {})
+        nodes.extend(page_contexts.get("nodes") or [])
+        page_info = page_contexts.get("pageInfo") or {}
+    contexts["nodes"] = nodes
+    contexts["pageInfo"] = page_info
+
+
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
     """Return whether GitHub denied an API read for the current integration token."""
 
@@ -1278,13 +1332,21 @@ def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
 
 def matching_actions_run_id(pr: dict[str, Any], predicate: Any) -> int | None:
     """Return the latest matching check-run workflow run id, if exposed."""
-    for node in reversed(context_nodes(pr)):
+    candidates: list[tuple[tuple[int, datetime, int], int]] = []
+    for index, node in enumerate(context_nodes(pr)):
         if node.get("__typename") != "CheckRun" or not predicate(node):
             continue
         match = ACTIONS_RUN_DETAILS_URL_RE.search(node.get("detailsUrl") or "")
         if match:
-            return int(match.group(1))
-    return None
+            candidates.append(
+                (
+                    check_run_recency_key(
+                        node, parse_github_datetime(node.get("startedAt")), index
+                    ),
+                    int(match.group(1)),
+                )
+            )
+    return max(candidates)[1] if candidates else None
 
 
 def parse_github_datetime(value: str | None) -> datetime | None:
@@ -2884,6 +2946,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         "pr_head_ref": head_ref,
         "pr_head_sha": head_sha,
     }
+    complete_paginated_pr_contexts(target_repo, pr)
     required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id

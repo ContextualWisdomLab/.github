@@ -4529,6 +4529,51 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
 
 
+def test_matching_actions_run_id_uses_check_suite_recency_not_list_order():
+    """Select the newest same-head required run even when GraphQL order conflicts."""
+    older = opencode_check(details_url="https://github.com/owner/repo/actions/runs/41/job/1")
+    newer = opencode_check(details_url="https://github.com/owner/repo/actions/runs/42/job/2")
+    older["checkSuite"]["createdAt"] = "2026-08-31T01:00:00Z"
+    newer["checkSuite"]["createdAt"] = "2026-08-31T02:00:00Z"
+    pr = make_pr(statusCheckRollup={"contexts": {"nodes": [newer, older]}})
+    assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 42
+
+
+def test_complete_paginated_pr_contexts_finds_required_run_after_first_100(monkeypatch):
+    """Load later GraphQL pages before required-run selection."""
+    required = opencode_check(details_url="https://github.com/owner/repo/actions/runs/142/job/2")
+    required["checkSuite"]["createdAt"] = "2026-08-31T02:00:00Z"
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [{"__typename": "StatusContext", "context": f"check-{i}"} for i in range(100)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "page-2"},
+            }
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "gh_graphql",
+        lambda *args, **kwargs: {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [required],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    sched.complete_paginated_pr_contexts("owner/repo", pr)
+    assert len(sched.context_nodes(pr)) == 101
+    assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 142
+
+
 @pytest.mark.parametrize(
     ("workflow_name", "run_title"),
     [
