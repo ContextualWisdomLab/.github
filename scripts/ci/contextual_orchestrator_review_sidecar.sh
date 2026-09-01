@@ -429,12 +429,15 @@ printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful 
 # cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
 # request could not reach the local sidecar" is this curl failure, not an
 # actual connectivity problem. The calling job's own outer bound already
-# gives multi-hour headroom for this required-workflow job: strix.yml's
-# job-level timeout-minutes is 200 (can change independently of this
-# value, so no specific number is pinned here); noema-review.yml's
-# `noema-review` job sets no job-level timeout-minutes at all, so its
-# outer bound is GitHub Actions' own 360-minute default. Either way, the
-# org's own stated policy accepts multi-hour central review latency in
+# gives multi-hour headroom for this required-workflow job regardless of
+# which caller invokes this script: strix.yml's job-level timeout-minutes
+# is 200; noema-review.yml's `noema-review` job and pr-review-autofix.yml's
+# job that runs this script both set no job-level timeout-minutes at all,
+# so their outer bound is GitHub Actions' own 360-minute default. Do not
+# assume this list of callers or their timeout values is exhaustive or
+# durable -- check each caller workflow directly rather than trusting this
+# comment if it matters at the time of reading. Either way, the org's own
+# stated policy accepts multi-hour central review latency in
 # favor of accuracy over speed -- a 30s bound on one preflight self-check
 # contradicted that policy and rejected a route the routing probe had just
 # proven healthy. 120s keeps this a bounded, fail-closed check while giving
