@@ -71,6 +71,7 @@ def _repository_ruleset_payload() -> dict:
                 "parameters": {
                     "required_approving_review_count": 0,
                     "dismiss_stale_reviews_on_push": True,
+                    "require_code_owner_review": False,
                     "require_last_push_approval": False,
                     "required_review_thread_resolution": True,
                     "required_reviewers": [],
@@ -121,6 +122,26 @@ def test_repository_ruleset_rejects_synthetic_required_reviewer() -> None:
 
     assert audit.audit_repository_ruleset(payload) == [
         "repository solo-maintainer ruleset must not configure required reviewers"
+    ]
+
+
+def test_central_ruleset_rejects_code_owner_review_deadlock() -> None:
+    """Code-owner approval cannot be mandatory when the only owner authors the change."""
+    payload = _central_ruleset_payload()
+    _review_parameters(payload)["require_code_owner_review"] = True
+
+    assert audit.audit_ruleset(payload) == [
+        "central solo-maintainer ruleset must not require code-owner review"
+    ]
+
+
+def test_repository_ruleset_rejects_code_owner_review_deadlock() -> None:
+    """The control plane cannot reintroduce independence through CODEOWNERS."""
+    payload = _repository_ruleset_payload()
+    _review_parameters(payload)["require_code_owner_review"] = True
+
+    assert audit.audit_repository_ruleset(payload) == [
+        "repository solo-maintainer ruleset must not require code-owner review"
     ]
 
 
