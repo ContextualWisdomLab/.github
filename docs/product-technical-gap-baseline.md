@@ -2378,8 +2378,12 @@ failure with no actionable next step for the PR author.
    live fetch, and the dispatch step builds its payload from those outputs instead.
 
 **Net result.** Stale workflow reruns can no longer grant a draft/closed exemption or dispatch stale
-base/head metadata — both the pass/fail decision and the dispatch payload are sourced from one live
-PR-state fetch per run, never from the frozen triggering-event payload. Full regression coverage in
+base/head metadata — the exemption decision and the dispatch payload are both sourced from one live
+PR-state fetch per run, never from the frozen triggering-event payload. One event-derived value remains
+deliberate, not a residual gap: the formal-review-match step still keys off the triggering event's own
+`HEAD_SHA` (Devin review, same PR) — this run's own check result is itself attributed to whatever commit
+GitHub associated with it at creation, so matching a review against any other ("live") SHA would search
+the wrong commit for what this exact check result represents. Full regression coverage in
 `tests/test_opencode_required_verdict_regression.py` executes each step's actual production bash body
 against fake `gh` fixtures. This closes one confirmed, now-eliminated source of required-workflow queue
 waste (draft PRs); it does not by itself resolve the separate org-wide runner-capacity congestion
