@@ -11,6 +11,7 @@ on:
       - "tests/test_repository_metadata_convergence.py"
       - "tests/test_repository_metadata_identity.py"
       - "tests/test_repository_metadata_live_verification.py"
+      - "tests/test_repository_metadata_workflow.py"
       - "tests/test_repository_label_taxonomy.py"
       - "tests/test_repository_label_reconciliation.py"
       - "tests/test_repository_label_convergence.py"
@@ -120,9 +121,14 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Require dedicated repository settings credential
+        env:
+          GH_TOKEN: ${{ secrets.CWL_REPOSITORY_METADATA_TOKEN }}
+        shell: bash
+        run: test -n "${GH_TOKEN}"
       - name: Reconcile and verify repository public surfaces
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          GH_TOKEN: ${{ secrets.CWL_REPOSITORY_METADATA_TOKEN }}
         run: |
           set +e
           python scripts/ci/reconcile_repository_metadata.py \
