@@ -11,13 +11,13 @@
 The earlier version of this record correctly observed an outage-domain
 concentration incident, but it proposed automatically switching Strix between
 `orchestrator/free` and `orchestrator/auto` when a
-`free_family_diversity >= 2` condition was met. That cardinality threshold was
+`free_account_diversity >= 2` condition was met. That cardinality threshold was
 not derived from a reliability model, statistical estimand, authoritative
 standard, or experimentally validated routing policy. It is therefore not a
 permitted decision rule under the organization no-heuristics contract and must
 not be implemented or revived.
 
-`free_family_diversity` or equivalent provider/outage-domain observations may
+`free_account_diversity` or equivalent provider/outage-domain observations may
 remain diagnostic evidence. Diagnostics do not acquire routing authority merely
 because they are deterministic or measured. Any future reliability-aware model
 selection must identify its estimand and be independently evaluated rather than
