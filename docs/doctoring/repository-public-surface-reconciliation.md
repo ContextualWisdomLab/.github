@@ -54,7 +54,7 @@ The fleet loop is deliberately non-blocking. Every repository or label assignmen
 
 The repository metadata manifest currently covers eight repositories selected because their public-surface work already has a concrete leaf source or active writer: `CalendarWeave`, `ConceptWeave`, `context-graph-contracts`, `ThreadWeave`, `RankWeave`, `fast-mlsirm`, `EgressWeave`, and `psychometrics-commons`. EgressWeave and Psychometrics Commons joined the fleet after their exact-cased DeepWiki badges and bounded `docs/index.md` Pages sources reached their protected default branches.
 
-The explicit label assignments cover the central metadata PR plus the active or just-integrated leaf public-surface PRs whose type is directly evidenced by their scope: `.github#1582`, `CalendarWeave#1`, `ConceptWeave#1`, `context-graph-contracts#20`, `RankWeave#40`, `fast-mlsirm#1717`, `EgressWeave#231`, and `psychometrics-commons#442`. The assignment reconciler preserves richer repository-local labels such as priority, status, and `type: maintenance` when those labels are outside the managed semantic set.
+The explicit label assignments now cover 18 evidence-backed targets: `.github#1582`, `CalendarWeave#1`, `ConceptWeave#1`, `context-graph-contracts#20`, `RankWeave#40`, `fast-mlsirm#1717`, `EgressWeave#231`, `psychometrics-commons#442`, `contextual-orchestrator#994`, `contextual-orchestrator#1003`, `appguardrail#1077`, `naruon#1513`, `LineageWeave#908`, `ContextualWisdomLab.github.io#203`, `TEPP#435`, `semantic-data-portal#72`, `Orgmetra#160`, and `noema#530`. The assignment reconciler preserves richer repository-local labels such as priority, status, and `type: maintenance` when those labels are outside the managed semantic set.
 
 ## Verification contract
 
