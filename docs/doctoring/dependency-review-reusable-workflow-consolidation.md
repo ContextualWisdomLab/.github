@@ -25,6 +25,7 @@ found real, repo-specific policy differences, not accidental copy drift:
 | concurrency group | none | workflow+PR/ref group, cancel-in-progress | none | `dependency-review-`+PR/ref group, cancel-in-progress |
 | `actions/checkout` pin | unpinned `@v4` | not used | SHA `3d3c42e5aac5ba805825da76410c181273ba90b1` | SHA `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) |
 | `dependency-review-action` pin | unpinned `@v4` | SHA `a1d282b36b6f3519aa1f3fc636f609c47dddb294` (v5.0.0) | same SHA | same SHA |
+| `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` | unset | unset | `true` | unset |
 
 Two decisions this audit drove (see ADR-0024 for the full reasoning):
 
@@ -38,6 +39,13 @@ Two decisions this audit drove (see ADR-0024 for the full reasoning):
    assumption is provably wrong in both directions (a private+GHAS repo, or
    a public+Dependency-Graph-disabled repo). argos and newsdom-api gain this
    safety net for free; they previously had none.
+3. `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` (newsdom-api's original only)
+   is applied uniformly in the reusable workflow's job `env` rather than
+   made an input — it opts the job's JS actions (`checkout`,
+   `dependency-review-action`, present in all four originals) into GitHub's
+   Node 24 actions runtime ahead of the default cutover, which is a
+   forward-compatibility setting all four repositories benefit from
+   identically, not a per-repo policy choice.
 
 ## Mechanism
 

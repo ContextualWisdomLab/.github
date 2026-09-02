@@ -68,6 +68,12 @@ permissions:
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
+    env:
+      # Opts every JS action this job runs (checkout, dependency-review-action)
+      # into the Node 24 actions runtime ahead of GitHub's default cutover,
+      # matching newsdom-api's original workflow -- applied uniformly here
+      # since it is a forward-compatibility setting, not a per-repo policy.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

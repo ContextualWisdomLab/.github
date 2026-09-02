@@ -27,6 +27,7 @@ A field-by-field audit of all four files (2026-09-02) found:
 | concurrency group | none | `${{ github.workflow }}-${{ github.event.pull_request.number \|\| github.ref }}` | none | `dependency-review-${{ github.event.pull_request.number \|\| github.ref }}` |
 | `actions/checkout` pin | unpinned `@v4` | n/a (action doesn't need checkout) | SHA `3d3c42e5...` | SHA `9c091bb2...` (v7.0.0) |
 | `dependency-review-action` pin | unpinned `@v4` | SHA `a1d282b3...` (v5.0.0) | SHA `a1d282b3...` | SHA `a1d282b3...` |
+| `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` | unset | unset | `true` | unset |
 
 Two findings changed the design from a naive copy-paste consolidation:
 
@@ -48,6 +49,15 @@ Two findings changed the design from a naive copy-paste consolidation:
    with a conditional step (the same job either runs the gate or emits the
    unavailability note, never both, with no risk of the fallback job being
    forgotten when Dependency Graph later becomes available).
+3. **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is a forward-compatibility setting,
+   not a policy choice.** newsdom-api was the only original to set it,
+   opting its job into GitHub's Node 24 actions runtime ahead of the default
+   cutover for the JS actions it runs (`actions/checkout`,
+   `actions/dependency-review-action` — both JS actions in every one of the
+   four originals). There is no reason the other three repositories should
+   not also get this ahead of Node 20's eventual end-of-life, so it is
+   hardcoded uniformly in the reusable workflow's job `env`, not made an
+   input.
 
 ## Decision
 

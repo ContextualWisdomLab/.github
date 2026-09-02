@@ -83,6 +83,12 @@ def test_uniform_fields_are_hardcoded_not_parameterized() -> None:
     assert "persist-credentials: false" in workflow
 
 
+def test_forces_node24_runtime_for_js_actions() -> None:
+    """newsdom-api's Node24 opt-in applies uniformly, not only to that one caller."""
+    workflow = _workflow_text()
+    assert "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true" in workflow
+
+
 def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
     """The preflight must query the real capability, not infer from repository visibility."""
     workflow = _workflow_text()
