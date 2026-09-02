@@ -38,9 +38,9 @@ The scheduled central ruleset audit already verifies that every member of `REQUI
 
 No workflow source is copied into consumers and no branch/PR head becomes production authority. If live ruleset evidence loses one of these paths, the audit must fail until the organization policy itself is repaired.
 
-## Outstanding documentation gate
+## Documentation reconciliation
 
-`docs/org-required-workflow-rollout.md` already records that the organization administrator expanded the live ruleset to ten paths, but its historical “Follow-up: audit tool coverage” paragraph still describes the source audit as seven-path-only. That prose is now stale relative to `3501ac32...` and must be reconciled before PR #1719 leaves Draft/ADR-0026 becomes Accepted. It is not treated as completion evidence for the source repair.
+The rollout record now distinguishes the historical seven-path incident from the current ten-path exact-inventory audit and documents the live repository exclusions `.github`, `noema`, and `IRT-bibliography-set`. This closes the documentation gate without rewriting the incident chronology; ADR-0026 remains Proposed until ordinary protected integration and exact-head evidence complete.
 
 ## References
 
