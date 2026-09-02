@@ -1,5 +1,9 @@
 name: Temporary PR1723 Carryover Repair
 
+# Re-armed after PR #1723 was incorrectly closed before its verified successor
+# carried the remaining PR #1714/#1715 model-authority deltas and retired the
+# bounded source-fix assets. This writer is exact-head guarded and self-removes.
+
 on:
   push:
     branches:
