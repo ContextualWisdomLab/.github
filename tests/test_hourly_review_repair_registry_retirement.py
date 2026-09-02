@@ -34,14 +34,16 @@ def _text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_retirement_is_not_another_scheduled_writer() -> None:
-    """The migration can run on protected-main activation but owns no cadence."""
+def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
+    """Privileged registry mutation cannot run from an arbitrary branch or cadence."""
     text = _text()
 
     assert "  schedule:" not in text
     assert "  push:" in text
     assert "      - main" in text
-    assert "  workflow_dispatch:" in text
+    assert "workflow_dispatch:" not in text
+    assert "github.event_name == 'push'" in text
+    assert "github.ref == 'refs/heads/main'" in text
     assert "actions: write" in text
     assert "contents: read" in text
     assert "contents: write" not in text
