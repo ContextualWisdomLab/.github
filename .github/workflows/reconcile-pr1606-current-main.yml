@@ -26,6 +26,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
       - name: Reconcile protected main without history rewrite
         env:
           EXPECTED_HEAD: ${{ github.sha }}
