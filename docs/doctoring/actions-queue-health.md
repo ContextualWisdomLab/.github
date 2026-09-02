@@ -11,62 +11,83 @@ for sibling-repository reads.
 
 The report schema is `actions.queue_health.v1`. Each observed run records its
 repository, pull-request number, head SHA, event, run attempt, concurrency
-group (or an explicit unavailable marker), queue age, job state, and runner
-assignment. A run is `current_head` only when its linked open pull request and
-head SHA match; the match compares the open pull request's head SHA against
-the *linked* pull-request entry's head SHA carried on the run
-(`run.pull_requests[].head.sha`), never against the run-level `head_sha`.
-`pull_request_target`-triggered runs report the base-branch commit that was
-checked out as their run-level `head_sha`, so comparing against that value
-would misclassify a genuinely active, current required-workflow run as
-obsolete and skip its job evidence. Stale linked runs are `obsolete`; runs
-without a pull-request link are `unlinked`. Queued evidence remains incomplete
-even when a report is successfully produced. GitHub's `waiting` job status
-(paused on an environment or deployment approval) is also treated as pending
-evidence, distinct from a runner-capacity blocker.
+group (or an explicit unavailable marker), stable workflow identity, queue age,
+job state, and runner assignment. When GitHub supplies a positive
+`workflow_id`, the report exposes `workflow_identity` as `workflow_id:<id>` and
+uses that value for duplicate-lane grouping; `workflow_name` remains
+presentation data. Older/offline v1 snapshots that lack `workflow_id` retain a
+compatibility fallback of `workflow_name:<name>`. A malformed present
+`workflow_id` fails closed instead of being coerced.
 
-Queue age for a job is measured from that job's own `created_at`, not the
-parent run's, so a later job in an already in-progress run (for example one
+A run is `current_head` only when its linked open pull request and head SHA
+match. The match compares the open pull request's head SHA against the *linked*
+pull-request entry's head SHA carried on the run (`run.pull_requests[].head.sha`),
+never against the run-level `head_sha`. `pull_request_target`-triggered runs
+report the base-branch commit that was checked out as their run-level
+`head_sha`, so comparing against that value would misclassify a genuinely
+active, current required-workflow run as obsolete and skip its job evidence.
+Stale linked runs are `obsolete`; runs without a pull-request link are
+`unlinked`. Queued evidence remains incomplete even when a report is
+successfully produced. GitHub's `waiting` job status (paused on an environment
+or deployment approval) is also treated as pending evidence, distinct from a
+runner-capacity blocker.
+
+Pull-request identity is sampled before and after the bounded active-run
+sweeps. The repository snapshot is accepted only when the open pull-request
+number/state/head view is unchanged. A push, closure, or other identity change
+between those samples becomes repository-scoped incomplete evidence instead of
+being allowed to invert current/obsolete classification. A pull-request
+response with incomplete head/base identity retains one bounded retry after a
+one-second delay.
+
+Queue age for a fetched job is measured from that job's own `created_at`, not
+the parent run's, so a later job in an already in-progress run (for example one
 gated by `needs:`) that only just became eligible is not measured against the
-whole run's age and does not trigger a false capacity-breach alert.
+whole run's age and does not trigger a false capacity-breach alert. Every row
+exports both `queue_age_started_at` and `queue_age_source` (`job_created_at` or
+`run_created_at`) so consumers can reproduce the reported `queue_age_seconds`.
+Requested, pending, and queued runs intentionally use run-level evidence when
+GitHub has not supplied job detail.
 
 Two bounded active-status sweeps run in opposite orders and must agree before
 the snapshot is accepted. This prevents historical completed runs from
 exhausting the bound while rejecting evidence that changes between partitioned
 reads. Each status read is capped at one 50-run page, limiting collection to ten
 run-list calls per repository; exceeding the cap is reported as incomplete
-evidence. Requested, pending, and queued runs use run-level evidence because GitHub has
-not assigned their jobs. Current-head `in_progress` and `waiting` runs make the
-additional jobs API read needed to distinguish concrete runner assignment from
-an environment or deployment approval wait.
+evidence. Current-head `in_progress` and `waiting` runs make the additional jobs
+API read needed to distinguish concrete runner assignment from an environment
+or deployment approval wait.
 
 List endpoints use collector-controlled GitHub API pagination with at most 20
 explicit page reads; the collector never asks GitHub CLI to download an
-unbounded page set and never requests page 21. Pull-request
-and job lists use pages of 100 records; workflow-run lists use pages of 50 so a
-large Actions queue does not require one oversized response. An incomplete,
-malformed, or larger response is recorded as repository-scoped incomplete
-evidence and the collector continues with the remaining allowlisted
-repositories; it never silently claims that the visible page is the whole
-queue. The JSON and HTML reports expose each collection error explicitly.
+unbounded page set and never requests page 21. Pull-request and job lists use
+pages of 100 records; workflow-run lists use pages of 50 so a large Actions
+queue does not require one oversized response. An incomplete, malformed, or
+larger response is recorded as repository-scoped incomplete evidence and the
+collector continues with the remaining allowlisted repositories; it never
+silently claims that the visible page is the whole queue. The JSON and HTML
+reports expose each collection error explicitly.
 
 Every external `gh api` read has a 30-second subprocess timeout, and the
 collector job has a 30-minute execution ceiling. A timeout is typed as
-incomplete queue evidence rather than success. A pull-request response missing
-head or base identity gets one typed retry after a one-second delay; a second
-incomplete response remains an explicit repository error. Repository names
-reject `.` and `..` path segments. Offline snapshots also reject duplicate
-repository entries before counting runs so repeated input cannot inflate the
-reported queue.
+incomplete queue evidence rather than success. Repository names reject `.` and
+`..` path segments. Offline snapshots also reject duplicate repository entries
+before counting runs so repeated input cannot inflate the reported queue.
 
 The default queue-age SLO is 900 seconds. A current-head job that remains
 unassigned beyond that limit produces a warning and an explicit manual action
-to inspect runner capacity, billing, runner-group policy, environment
-approval, and concurrency saturation. The workflow intentionally remains
-read-only and fail-closed when GitHub API or runner evidence is unavailable.
-Paged API reads are not atomic; changing totals are retained only when the
-collected records cover the largest observed total, and the report remains
-explicitly an observation rather than a merge decision.
+to inspect runner capacity, billing, runner-group policy, environment approval,
+and concurrency saturation. The workflow intentionally remains read-only and
+fail-closed when GitHub API or runner evidence is unavailable. Paged API reads
+are not atomic; changing totals are retained only when the collected records
+cover the largest observed total, and the report remains explicitly an
+observation rather than a merge decision.
+
+Implementation ownership is intentionally split without duplicate collector
+copies: `actions_queue_health_core.py` owns the shared bounded parsing and
+reporting primitives, while the executable `actions_queue_health.py` entrypoint
+owns stable pull/workflow identity and audit-provenance reconciliation. Tests
+load the executable boundary used by the scheduled workflow.
 
 The allowlist is deliberately explicit in
 `config/actions_queue_health_repositories.json`; adding a repository requires
