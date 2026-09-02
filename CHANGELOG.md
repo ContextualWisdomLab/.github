@@ -42,6 +42,7 @@ Semantic Versioning where the repository publishes a release.
   Left untouched, matching the precedent already set for ruling out the agent-mention
   dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
   2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
+- **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review. Also ensures every cancellation path (`cancel_stale_pr_runs`, `cancel_stale_opencode_runs`, `_cancel_revalidated_review_run_refs`) treats a run as cancelled only when `force_cancel_workflow_runs` actually reports success, not merely when live revalidation proved it stale -- superseding PR #1712's simpler `force_cancel_workflow_run_refs` wrapper (removed as dead code; its safety guarantee is preserved inline at every call site by this more thorough revalidate-then-cancel design).
 - **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
   invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
   every non-draft PR before any eligibility gate, and several other call sites
