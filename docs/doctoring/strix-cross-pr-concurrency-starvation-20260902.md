@@ -181,6 +181,15 @@ without more evidence or design work:
    "arbitrary constant, not verified against real data" mistake this repo's
    own operating history has already flagged as a recurring error to avoid.
 
+**Further corroboration, found by peer review (`cool-jackson-3a6130-78`):**
+`contextual-orchestrator`'s own `docs/planning/adrs/0004-pr-review-merge-loop.md`
+records real production NVIDIA NIM `429` incidents on 2026-08-12/13 — a
+primary source, not a blog aggregation, though qualitative (no specific RPM
+figure) — reinforcing that `ContextualWisdomLab/.github#1297`'s serialize
+decision was grounded in a real, recurring problem and not a one-off. Still
+not enough to size a bounded-concurrency lane count `K` responsibly; the
+capacity-data gap in the next paragraph stands.
+
 A genuine fix needs either (a) real capacity/rate-limit data for the
 `orchestrator/free` → NVIDIA NIM path to size a bounded-concurrency lane
 count responsibly, or (b) a deliberately designed fair-queueing mechanism
