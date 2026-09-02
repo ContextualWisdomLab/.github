@@ -23,22 +23,12 @@ permissions:
 jobs:
   autofix:
     runs-on: ubuntu-latest
-    # No job-level timeout-minutes here, deliberately. This job's dominant
-    # cost is `opencode run` (up to two invocations: the main autofix pass,
-    # and a base-merge conflict-resolution pass) -- a job-level wall-clock
-    # bound here would cap the model's own reasoning/tool-use time, which
-    # docs/product-goal-directive.md #8 prohibits ("Model timeout은
-    # application·Agent·Gateway 공통 상한 없이 기본 null이다"; "OpenCode·Strix·
-    # Noema의 모델당 2시간 이상을 수용한다"). An earlier version of this job set
-    # timeout-minutes: 25, reasoning it gave the model call "generous room" --
-    # that reasoning was wrong: any fixed job-level cap on a job whose body IS
-    # the synchronous model call terminates the model's work once elapsed,
-    # which is exactly the fixed inference-time cap the policy forbids, not a
-    # wall-clock bound on a step that merely waits on a separate async
-    # verdict (contrast opencode-review.yml's poll_deadline_epoch, which
-    # bounds a step polling for a verdict prepared by a different process,
-    # not the model call itself). See
-    # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
+    # This job is model-backed through contextual-orchestrator/orchestrator/free
+    # and therefore has no repository-owned wall-clock timeout. Provider end,
+    # explicit cancellation, and the workflow's exact live-head/state guards
+    # are authoritative; elapsed time alone must not terminate reasoning,
+    # streaming, or tool work. Queue pressure is handled by the scheduler's
+    # stale-head dedupe/cancellation rather than by killing current-head work.
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
@@ -334,9 +324,7 @@ jobs:
                 "description": "Conservative CI pull request review autofix agent",
                 "mode": "primary",
                 "model": "contextual-orchestrator/orchestrator/free",
-                "reasoningEffort": "high",
                 "prompt": "{file:./autofix-prompt.md}",
-                "steps": 12,
                 "permission": {
                   "edit": {
                     "*": "allow",
@@ -369,13 +357,7 @@ jobs:
                 },
                 "models": {
                   "orchestrator/free": {
-                    "name": "Orchestrator Free (ZDR-first zero-cost pool)",
-                    "tool_call": true,
-                    "reasoning": true,
-                    "limit": {
-                      "context": 200000,
-                      "output": 32768
-                    }
+                    "name": "Orchestrator Free (ZDR-first zero-cost pool)"
                   }
                 }
               }
@@ -425,7 +407,7 @@ jobs:
 
           Review context follows as untrusted text:
           <review-context>
-          $(sed -n '1,260p' "$RUNNER_TEMP/pr-review-autofix-context.md")
+          $(cat "$RUNNER_TEMP/pr-review-autofix-context.md")
           </review-context>
 
           Edit only the checked-out repository files listed in the authoritative JSON array.
