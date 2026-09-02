@@ -46,8 +46,10 @@ jobs:
             scripts/ci/noema_review_gate.py
             tests/test_noema_truncated_completion_contract.py
           )
-          git diff --binary "$base" HEAD -- "${intended[@]}" > /tmp/pr1606.patch
-          test -s /tmp/pr1606.patch
+          git diff --binary "$base" HEAD -- \
+            scripts/ci/noema_review_gate.py \
+            tests/test_noema_truncated_completion_contract.py > /tmp/pr1606-core.patch
+          test -s /tmp/pr1606-core.patch
 
           set +e
           git merge --no-ff --no-commit origin/main
@@ -64,9 +66,9 @@ jobs:
             done <<< "$conflicts"
           fi
 
-          # Resolve every intended path from current protected main first, then
-          # reapply only PR1606's semantic delta. Fail closed if that delta no
-          # longer applies cleanly to the live baseline.
+          # Resolve intended paths from current protected main first. The new
+          # test does not exist on main, so remove it from the merge index
+          # without passing a now-missing pathspec to a bulk git-add command.
           for path in "${intended[@]}"; do
             if git cat-file -e "origin/main:$path" 2>/dev/null; then
               git checkout origin/main -- "$path"
@@ -74,9 +76,39 @@ jobs:
               git rm -f --ignore-unmatch "$path"
             fi
           done
-          git add -A -- "${intended[@]}"
-          git apply --check /tmp/pr1606.patch
-          git apply --index /tmp/pr1606.patch
+          git add -A -- CHANGELOG.md scripts/ci/noema_review_gate.py
+
+          # Reapply the production/test semantic delta with Git's three-way
+          # machinery so concurrent main edits are retained where non-conflicting.
+          git apply --3way --index /tmp/pr1606-core.patch
+
+          # Changelog additions near [Unreleased] conflict frequently with
+          # unrelated concurrent entries. Materialize this PR's exact entry
+          # idempotently on the live-main text instead of replaying an obsolete
+          # line-context patch that would overwrite or conflict with new entries.
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("CHANGELOG.md")
+          text = path.read_text()
+          marker = "- **Recover Noema from provider-truncated structured review completions (`#1596`).**"
+          if marker not in text:
+              block = """- **Recover Noema from provider-truncated structured review completions (`#1596`).**
+            The review client now retains bounded `finish_reason`, model, and token-usage
+            metadata from the OpenAI-compatible envelope, requests JSON mode with an
+            explicit 4,096-token output budget through Contextual Orchestrator, and
+            constrains verdict cardinality and field lengths. A provider-declared
+            `finish_reason=length` receives one compact exact-head repair request; a
+            repeated length stop fails closed as `truncated_after_retry`, distinct from
+            `invalid_json_after_retry`. Raw model output remains absent from public logs.
+          """
+              heading = "## [Unreleased]\n"
+              if heading not in text:
+                  raise SystemExit("missing [Unreleased] changelog heading")
+              text = text.replace(heading, heading + block, 1)
+              path.write_text(text)
+          PY
+          git add CHANGELOG.md
 
           python -m pytest -q tests/test_noema_truncated_completion_contract.py
           python -m pytest -q
