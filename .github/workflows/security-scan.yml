@@ -49,15 +49,9 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   osv-scan:
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       actions: read
@@ -278,7 +272,7 @@ jobs:
 
   dependency-review:
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -356,7 +350,7 @@ jobs:
 
   trivy-fs:
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -462,7 +456,7 @@ jobs:
 
   scorecard:
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:

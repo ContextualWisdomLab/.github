@@ -1,0 +1,92 @@
+name: Exact-Head Coverage Quality Gate
+
+# Reusable workflow_call gate shared by quality-CI callers that measure one
+# scripts/ci module at 100% branch coverage against the exact PR head SHA.
+# Callers: javascript-coverage-quality-ci.yml,
+# organization-commercial-readiness-loop-quality-ci.yml.
+#
+# Not every quality-CI workflow under .github/workflows/ fits this shape —
+# harden-runner presence, docstring gates, exact-head verification mechanics,
+# and multi-python-version matrices differ enough across the others
+# (agent-mention-router, exact-artifact-sbom-attestation, noema-token-lifetime,
+# opencode-rust-coverage-toolchain, strix-changed-path, trusted-uv-materializer)
+# that forcing them into this same template would either weaken what they
+# enforce or need enough per-caller toggles to defeat the point of sharing.
+
+on:
+  workflow_call:
+    inputs:
+      timeout_minutes:
+        description: Job timeout in minutes
+        required: true
+        type: number
+      pytest_target:
+        description: pytest path or glob to run under coverage
+        required: true
+        type: string
+      coverage_include:
+        description: Single scripts/ci module path passed to `coverage report --include`
+        required: true
+        type: string
+      compileall_targets:
+        description: Space-separated file list passed to `python -m compileall -q`
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install exact hash-verified quality dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+          PIP_NO_INPUT: '1'
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/exact-head-coverage-quality-gate-requirements.txt" <<'EOF'
+          coverage==7.15.2 --hash=sha256:b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install \
+            --only-binary=:all: \
+            --require-hashes \
+            -r "${RUNNER_TEMP}/exact-head-coverage-quality-gate-requirements.txt"
+      - name: Verify exact-head policy and full branch coverage
+        env:
+          PYTEST_TARGET: ${{ inputs.pytest_target }}
+          COVERAGE_INCLUDE: ${{ inputs.coverage_include }}
+          COMPILEALL_TARGETS: ${{ inputs.compileall_targets }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          # PYTEST_TARGET/COMPILEALL_TARGETS are deliberately unquoted: callers
+          # pass space-separated lists and glob patterns that must still word-
+          # split and expand. Routing workflow_call inputs through env instead
+          # of interpolating them directly into the script keeps a caller-
+          # controlled value from ever being re-parsed as shell syntax.
+          # shellcheck disable=SC2086
+          python -m coverage run --branch -m pytest --import-mode=importlib $PYTEST_TARGET -q
+          python -m coverage report \
+            --include="$COVERAGE_INCLUDE" \
+            --show-missing \
+            --fail-under=100
+          # shellcheck disable=SC2086
+          python -m compileall -q $COMPILEALL_TARGETS
+          git diff --exit-code
