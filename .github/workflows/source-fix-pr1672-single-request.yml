@@ -65,14 +65,32 @@ jobs:
               raise SystemExit('PR1672 replace_once helper moved; refusing an unverified rewrite')
           text = text.replace(helper_old, helper_new, 1)
 
-          gate_pattern_old = r"r'    try:\\n        verdict = call_llm\\((.*?)\\n        \\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\(\"Pull request head changed during review; Noema review skipped before repair retry\\.\"\\)\\n        return 0\\n'"
-          gate_pattern_new = r"r'    try:\\n        verdict = call_llm\\((.*?)\\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\(\"Pull request head changed during review; Noema review skipped before repair retry\\.\"\\)\\n        return 0\\n'"
-          gate_replacement_old = r"r'    verdict = call_llm(\\1\\n    )\\n'"
-          gate_replacement_new = r"r'    verdict = call_llm(\\1)\\n'"
-          if text.count(gate_pattern_old) != 1 or text.count(gate_replacement_old) < 1:
-              raise SystemExit('PR1672 inspect_and_review materializer anchor moved; refusing an unverified rewrite')
-          text = text.replace(gate_pattern_old, gate_pattern_new, 1)
-          text = text.replace(gate_replacement_old, gate_replacement_new, 1)
+          def replace_labeled_call(source: str, label: str, replacement: str) -> str:
+              marker = f"        '{label}',\n    )"
+              marker_pos = source.find(marker)
+              if marker_pos < 0 or source.find(marker, marker_pos + 1) >= 0:
+                  raise SystemExit(f'PR1672 {label} marker moved or duplicated; refusing rewrite')
+              start = source.rfind('    source = replace_once(\n', 0, marker_pos)
+              if start < 0:
+                  raise SystemExit(f'PR1672 {label} replace_once start missing')
+              end = marker_pos + len(marker)
+              return source[:start] + replacement + source[end:]
+
+          gate_call = '''    source = replace_once(
+              source,
+              r'    try:\\n        verdict = call_llm\\(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths\\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\("Pull request head changed during review; Noema review skipped before repair retry\\."\\)\\n        return 0\\n',
+              '    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)\\n',
+              'inspect_and_review retry catch',
+          )'''
+          text = replace_labeled_call(text, 'inspect_and_review retry catch', gate_call)
+
+          two_phase_call = '''    source = replace_once(
+              source,
+              r'    try:\\n        verdict = gate\\.call_llm\\(\\n            repo,\\n            number,\\n            pull_request,\\n            diff,\\n            truncated,\\n            expected,\\n            review_context,\\n            changed_paths,\\n        \\)\\n    except gate\\.StaleHeadDuringRepairRetryError:\\n        print\\("Pull request head changed during model repair retry; verdict was not sealed\\."\\)\\n        return 0\\n',
+              '    verdict = gate.call_llm(\\n        repo,\\n        number,\\n        pull_request,\\n        diff,\\n        truncated,\\n        expected,\\n        review_context,\\n        changed_paths,\\n    )\\n',
+              'two-phase retry catch',
+          )'''
+          text = replace_labeled_call(text, 'two-phase retry catch', two_phase_call)
 
           path.write_text(text, encoding='utf-8')
           PY
