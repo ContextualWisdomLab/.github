@@ -5,6 +5,17 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Add an evidence-gated issue-draft composer (`scripts/ci/issue_draft_composer.py`), the first
+  increment of ADR-0022's Noema/OpenCode agent PR-follow-up design.** Composes a GitHub issue
+  title/body from structured evidence (summary, citation-backed findings, source), rejecting a
+  draft with no findings, citations, or traceable source. Renders the draft by default; only calls
+  `gh api -X POST repos/{repo}/issues` when invoked with `--create` explicitly. No workflow wires
+  `--create` into any scheduled/dispatched trigger in this change — `docs/product-goal-directive.md`
+  authorizes autonomous PR work but never mentions issue creation, so unattended use is deferred
+  until that directive text is extended. See
+  [ADR-0022](docs/adr/0022-agent-pr-followup-search-and-issue-authoring-scope.md) and the
+  2026-09-02 entry in `docs/product-technical-gap-baseline.md` for the full architecture decision
+  and deferred roadmap (web search, paper search, unattended issue creation, `noema-core` adoption).
 - **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
   At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
   `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
