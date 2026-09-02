@@ -3254,19 +3254,62 @@ from the run's own name instead), and the PR it belonged to had *already been cl
 PR a run belongs to can silently miss runs from this specific trigger type. Worth checking whether any
 central cancel-on-close job has this same blind spot.
 
-**The "적체" (piling up) complaint's root answer: a concurrency ceiling, confirmed by three repeated
-measurements, not something a fourth workflow fix will move.** Checked `status=queued` counts across
-`.github`/`bandscope`/`contextual-orchestrator` at three separate points this session: `.github`
-1849 -> 1928 -> 1975 -> 2003; `bandscope` 1601 -> 1523 -> 1496 -> 1567; `contextual-orchestrator`
-395 -> 419 -> 466. All three are net *increasing* despite the real fixes landing today (unbounded
-opencode-review.yml/noema-review.yml polling removed, 16 confirmed zombie runs cleared org-wide).
-Cross-checked with `in_progress` counts sampled across 8 repositories earlier: only ~15 jobs running
-concurrently org-wide against thousands queued -- a hard throughput ceiling, most likely GitHub's
-Team-plan concurrent-job limit, that normal PR/CI volume (this tick visibly compounded by three
-Claude sessions simultaneously opening and pushing PRs) exceeds. GitHub's billing API is deprecated
+**The "적체" (piling up) complaint's likely-primary-answer: a concurrency ceiling -- a hypothesis with
+real supporting evidence, not yet a confirmed root cause.** **Correction (Devin, this same PR, three
+findings on the first version of this entry):** (1) the original text called the queue-depth series
+"three repeated measurements" uniformly, but `.github` and `bandscope` were actually each checked
+four times this session while `contextual-orchestrator` was checked three -- an internal
+inconsistency, now stated precisely per repo below. (2) the queue-depth numbers had no timestamps or
+exact commands recorded, so they were not independently reproducible -- added below. (3, the more
+substantive finding) the `in_progress` sample this entry originally cited as "~15 jobs running
+concurrently" actually counted `status=in_progress` **workflow runs** via
+`gh api repos/<org>/<repo>/actions/runs?status=in_progress`, not **jobs** -- GitHub's hosted-runner
+concurrency limit is enforced at the job level, and a single workflow run can contain multiple jobs
+(some completed, some still queued, some genuinely in progress simultaneously), so a run-level count
+is not a valid stand-in for the actual concurrency-limit-governed quantity. This was a real
+methodological gap, not just an imprecise word choice -- the two numbers could differ substantially
+depending on how many multi-job workflows are in flight.
+
+Re-measured with actual job-level counts to correct this, `2026-09-02T13:28:00Z`-`13:29:xxZ` UTC (each
+run's own job list fetched via `gh api repos/ContextualWisdomLab/<repo>/actions/runs/<run_id>/jobs`
+and filtered to `status == "in_progress"`, summed per repo):
+
+| Repository | `in_progress` **runs** (`status=in_progress` on the runs-list endpoint) | `in_progress` **jobs** (summed per-run job list) |
+| --- | --- | --- |
+| `.github` | 7 | 5 |
+| `bandscope` | 15 | 12 |
+| `contextual-orchestrator` | 0 | 0 |
+| **Total (3 repos)** | **22** | **17** |
+
+Runs and jobs are roughly comparable in this org's actual usage (mostly single- or few-job workflows),
+so the order of magnitude of the earlier "~15" claim survives this correction, but the run-count
+figure itself was not the right quantity to have cited as job-level evidence, and this 3-repository,
+single-instant sample is far too small to generalize to an org-wide job-concurrency ceiling with
+confidence -- **downgrading this from "confirmed" to "a hypothesis with real supporting evidence"**,
+per Devin's finding. Also observed directly while re-measuring: querying the *same* repository's
+`in_progress` run list twice within about 10 seconds returned different counts (`.github`: 1, then 7,
+moments apart) -- this queue is volatile enough that any single-instant snapshot, run-level or
+job-level, should be treated as exactly that: one instant, not a stable steady-state reading.
+
+The original three queued-count series (timestamps not recorded when first taken -- a real gap this
+correction cannot retroactively fill, consistent with finding (2) above) remain as directional
+evidence that queue depth trended upward across the session despite real fixes landing:
+`.github` (4 checks) 1849 -> 1928 -> 1975 -> 2003; `bandscope` (4 checks)
+1601 -> 1523 -> 1496 -> 1567; `contextual-orchestrator` (3 checks) 395 -> 419 -> 466. All three trended
+upward net despite the real fixes landing today (unbounded opencode-review.yml/noema-review.yml
+polling removed, 16 confirmed zombie runs cleared org-wide). Whether the underlying cause is a hard
+GitHub plan-tier job-concurrency ceiling, workflow-level concurrency-group contention (see the
+scheduler `workflow-run-no-pr-{repo}` fallback-group investigation elsewhere in this doc, which turned
+out not to explain a related symptom either), or genuine demand growth from three Claude sessions
+pushing PRs in parallel this tick, remains open -- **not yet distinguished with the rigor Devin's
+finding correctly demands**. GitHub's billing API is deprecated
 (`GET orgs/{org}/settings/billing/*` -> `410 Gone`, `https://gh.io/billing-api-updates-org`), so the
-exact number cannot be confirmed programmatically -- **told the user directly this tick** that this
-needs a human check of `https://github.com/organizations/ContextualWisdomLab/settings/actions` (or
-the Billing page) rather than another round of workflow-level engineering, since the actual levers
-from here are a plan upgrade, self-hosted runner capacity, or deliberately throttling how many PRs
-get pushed to simultaneously across concurrent agent sessions -- not more YAML.
+exact plan-tier concurrency limit cannot be confirmed programmatically -- **told the user directly
+this tick** that a human check of `https://github.com/organizations/ContextualWisdomLab/settings/actions`
+(or the Billing page) is the next step, not another round of workflow-level engineering, since the
+actual levers from here are a plan upgrade, self-hosted runner capacity, or deliberately throttling
+how many PRs get pushed to simultaneously across concurrent agent sessions -- not more YAML. If that
+check instead shows headroom well above the ~15-22 concurrent-job range measured here, the hypothesis
+in this entry is wrong and the real cause is one of the other two candidates above (workflow-level
+contention or genuine demand growth), which would need its own dedicated, better-instrumented
+investigation before any further fix is attempted.
