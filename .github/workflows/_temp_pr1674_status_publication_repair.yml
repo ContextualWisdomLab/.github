@@ -40,11 +40,16 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install hash-locked review and Strix test dependencies
+      - name: Install hash-locked test dependencies in isolated environments
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
-            -r requirements-opencode-review-ci-hashes.txt \
+          python -m venv "$RUNNER_TEMP/review-venv"
+          "$RUNNER_TEMP/review-venv/bin/python" -m pip install \
+            --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+          python -m venv "$RUNNER_TEMP/strix-venv"
+          "$RUNNER_TEMP/strix-venv/bin/python" -m pip install \
+            --disable-pip-version-check --require-hashes --only-binary=:all: \
             -r requirements-strix-ci-hashes.txt
 
       - name: Revalidate exact writer head
@@ -79,12 +84,14 @@ jobs:
       - name: Verify executable live-state and transport contracts
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest \
+          PYTHONPATH=. "$RUNNER_TEMP/strix-venv/bin/python" -m pytest \
             tests/test_strix_repository_dispatch_live_state.py \
+            -q
+          PYTHONPATH=. "$RUNNER_TEMP/review-venv/bin/python" -m pytest \
             tests/test_noema_live_target_admission.py \
             tests/test_required_workflow_queue_contract.py \
             -q
-          python - <<'PY'
+          "$RUNNER_TEMP/strix-venv/bin/python" - <<'PY'
           import yaml
           from pathlib import Path
           for path in (Path('.github/workflows/strix.yml'), Path('.github/workflows/noema-review.yml')):
