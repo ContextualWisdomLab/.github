@@ -115,5 +115,16 @@ jobs:
           git commit -m "fix(noema): delegate repair ownership to orchestrator"
           remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
-          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:refs/heads/fix/noema-repair-attempt-telemetry
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          askpass="$RUNNER_TEMP/pr1672-git-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$WORKFLOW_PUSH_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push origin HEAD:refs/heads/fix/noema-repair-attempt-telemetry
+          rm -f "$askpass"
