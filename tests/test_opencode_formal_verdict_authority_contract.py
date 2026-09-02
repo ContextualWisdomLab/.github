@@ -98,4 +98,8 @@ def test_fallback_marker_invalidates_approval_only_not_change_request() -> None:
         "CHANGES_REQUESTED\t"
     )
     assert _run_selector(admission_program, approval) == ""
-    assert _run_selector(reconciliation_program, approval) == "\t"
+    # _run_selector intentionally strips jq's trailing whitespace, so an empty
+    # scheduler state/timestamp tuple is observed as the empty string rather
+    # than a literal tab. This keeps the oracle causal instead of depending on
+    # incidental transport whitespace.
+    assert _run_selector(reconciliation_program, approval) == ""
