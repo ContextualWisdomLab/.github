@@ -2814,3 +2814,132 @@ yet resolve `contextual-orchestrator#1010`'s four enforcement-correctness findin
 **Status**: design-only ADR posted as an open PR (`Status: Proposed`), `tests/test_planning_adr_identifiers.py`
 verified passing locally; no telemetry, estimator, or admin-surface code has been implemented yet --
 Phase 0 (latency retention) is the next real prerequisite before Phases 1-3 can run on real traffic.
+
+## 2026-09-02 org-wide Actions capacity incident: root cause, relief, and structural fix
+
+**Problem.** GitHub Actions queue depth across the organization grew into the thousands (`.github`:
+peaked ~1,865 queued; `contextual-orchestrator`: ~500+; `bandscope`: ~1,600+), stalling required-check
+dispatch for essentially every open PR org-wide, including the review pipeline's own fix PRs (a genuine
+chicken-and-egg case per standing backlog item 31, bypass-merge authorized by the repository owner in
+real time). Root-caused to three independent, compounding contributors, each an unbounded-wait/
+missing-timeout defect of the same general shape:
+
+1. `opencode-review.yml`'s "Fail closed without a current-head OpenCode verdict" polling loop was
+   bounded only by `max_poll_transport_failures` (consecutive `gh api` *transport* failures), not by
+   total wall-clock time -- a review dispatch that never produces a verdict, while every individual
+   `gh api` call keeps succeeding, polled forever, holding a live runner for up to GitHub's 360-minute
+   platform default. Confirmed live: multiple "Required OpenCode Review"/"Strix Security Scan" runs
+   stuck in this exact step for 7-31 hours (e.g. run `33509949967` on `bandscope#1115`, stuck 1190+
+   minutes). Fixed: `.github#1707` adds a 10800s (3h) wall-clock deadline check inside the loop,
+   alongside (not instead of) the existing transport-failure counter -- 3h chosen to stay comfortably
+   above this org's own documented "accommodate over two hours per model" allowance (§8 above) while
+   releasing the runner well before the platform cap. This bounds how long the CI job *waits for a
+   verdict*; it does not cap the model's own reasoning/streaming time.
+2. `pr-review-merge-scheduler.yml`'s `scan-pr-queue` job had no job-level `timeout-minutes` at all
+   (`.github#1702`, `timeout-minutes: 30`), and its `active_workflow_runs()` helper re-issued an
+   identical repository-wide, paginated `gh api .../actions/runs` fetch up to ~200 times per scheduler
+   invocation with zero caching (`.github#1711`, ADR-0022: per-invocation memoization keyed on
+   `(repo, statuses, event, created, head_sha)`, invalidated at exactly the four run-mutating call
+   sites -- ruled out a Rust rewrite with cited evidence: the bottleneck is redundant sequential I/O
+   wait, not CPU/GIL work, so caching fixes it and a rewrite would not).
+3. `strix.yml`'s `cancel-superseded-pr-runs`/`publish-manual-pr-evidence-status` jobs and
+   `noema-review.yml`'s `cancel-closed-pr-runs`/`noema-review` jobs all lacked job-level
+   `timeout-minutes`, the same defect class -- notably `noema-review`'s own job runs the identical
+   `contextual-orchestrator`-gateway LLM-verdict call opencode-review.yml's stuck runs were traced to,
+   with no bound of its own. Fixed: `.github#1713` (strix.yml, 10min/5min) and `.github#1715`
+   (noema-review.yml, 20min/210min -- the 210min figure mirrors #1707's own 180min model-wait allowance
+   plus a 30min buffer). `opencode-review-dispatch.yml` was investigated and *deliberately left
+   unchanged*: the requested pattern would have reverted a binding, already-merged policy decision
+   (`.github` commit `5686de4`, PR #1546, and the 2026-08-31 ADR-0003 amendment) that OpenCode model
+   inference must not have any fixed wall-clock cap -- applying the incident's own fix pattern there
+   would have reintroduced the bug that decision fixed.
+
+A fourth, independently-discovered bug in the same subsystem: `pr_review_merge_scheduler.py`'s
+`cancel_stale_pr_runs`/`cancel_stale_opencode_runs`/`_cancel_revalidated_review_run_refs` all called
+`force_cancel_workflow_runs()` (which returns `{run_id: failure_reason}` for GitHub-rejected
+cancellations) and then unconditionally treated every requested run as cancelled, discarding the
+failure dict -- a run GitHub actually refused to cancel could be reported as gone, letting a duplicate
+review dispatch alongside a still-running one. Fixed in `.github#1712` (a standalone choke-point fix)
+and re-verified as part of the larger PR #1669 reconciliation below.
+
+**Immediate relief** (not a substitute for the structural fixes above): ~700+ confirmed-stale queued/
+in-progress runs (superseded head or closed PR, identified by cross-referencing each run's embedded PR
+number + head SHA against the PR's live current head) were directly cancelled across `.github`,
+`contextual-orchestrator`, `naruon`, `Orgmetra` (127 of 141 PR-tied runs there were stale -- a 90% stale
+rate), `bandscope`, `fast-mlsirm`, `afipc`, `semantic-data-portal`, and `keyverse`.
+
+**A parallel, independent repair effort collided with this work.** `ContextualWisdomLab/.github` PR
+#1669 ("fix(scheduler): never let a falsy headRefOid cancel every run for a PR") diagnosed a real,
+separate incident (`naruon#1528`'s Strix run wrongfully force-cancelled while it was the PR's sole,
+unchanged current head -- `stale_pr_run_ids()`/`active_review_run_refs()` computed
+`str(pr.get("headRefOid") or "").lower()` instead of validating via `validate_git_sha()`, so a
+falsy/missing headRefOid coerced to `""`, matched nothing, and caused every active run to be
+misclassified as stale). This PR was being developed *live, concurrently* by the org's own autonomous
+PR-review/fix loop across many hours, via a repeating pattern of self-triggering, self-modifying
+"source-fix" workflows (e.g. `_temp_pr1669_live_head_revalidation_repair.yml`,
+`source-fix-pr1669-current-main.yml`) that materialize a fix, run the full verification gate, then
+delete their own script and workflow file as the final step of the commit they push -- a genuinely
+well-designed one-shot pattern (verified: its trigger paths require the files it deletes, so it cannot
+re-fire after a successful run), but one instance of it failed closed (correctly) when its configured
+push credential (`PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN`) was unavailable in that run's
+context, leaving debris and a **silently regressed fix** on the branch (a later reconciliation commit,
+`c946c7b7`, merged this session's own `#1711` cache fix into PR #1669's branch and, in resolving that
+merge, reverted the `validate_git_sha()` guards back to the original buggy pattern and dropped the
+entire live-revalidation safety net -- `_direct_pr_run_still_superseded`, `_review_run_still_superseded`,
+`_cancel_revalidated_review_run_refs`). This was caught (not assumed fixed) by re-diffing the branch
+against its own last independently-verified-good commit (`a37a428`, 100% coverage, 2614 tests, real
+regression tests reproducing the exact `naruon#1528` incident) before merging. The final, correct
+resolution rebuilt the merge from `a37a428` against current `main` directly (not from the regressed
+`c946c7b7`), combining PR #1669's live-revalidation design with #1712's separate
+force-cancel-failure-tracking fix at every call site (neither fix alone was sufficient: revalidation
+without a result check still reports a rejected cancel as successful; a result check without
+revalidation still misclassifies a merely-stale-looking-but-current run) -- verified with 2621 tests
+passing, 100% coverage, 100% docstrings, before push. `.github#1712`'s now-superseded
+`force_cancel_workflow_run_refs()` wrapper was removed as dead code with its tests adapted (not
+deleted) to target the functions that now carry its safety guarantee forward. Two further debris/
+regression artifacts from this same autonomous process (`source-fix-pr1714-no-model-job-timeout.*`,
+`source-fix-pr1715-no-model-job-timeout.*` -- confirmed harmless, scoped to trigger only on their own
+already-merged feature branches, not `main`) were found on `main` after merging and removed in this
+commit.
+
+**A second, independent gap found and fixed while executing the "standardize workflows, consolidate
+into `.github`" request**: `docs/org-required-workflow-rollout.md` claimed org ruleset `18156473`
+("CWL Central required workflows") included `codeql-pr.yml`, `scorecard-pr.yml`, and
+`osv-scanner-pr.yml` as required workflows dispatched org-wide. Live verification (`gh api
+repos/<repo>/rules/branches/<branch>`) against six repos (`aFIPC`, `bandscope`, `newsdom-api`,
+`naruon`, `xtrmLLMBatchPython`, `pg-erd-cloud`) showed the ruleset's actual `workflows` rule contained
+only the 7 paths listed in this doc's own "Active required workflow paths" section -- the three
+code-scanning workflows were never actually added, despite the doc's later section claiming otherwise
+(~2 months of drift, undetected because `scripts/ci/audit_central_required_workflows.py` never checked
+for these three paths). Real consequence, not just doc staleness: multiple repos had already removed
+their local PR-triggered CodeQL scanning on the false assumption that central coverage existed
+(`aFIPC#118`, `pg-erd-cloud` commit `479fc055`, `naruon` PR #953+#1024, `xtrmLLMBatchPython#154`,
+`bandscope` commits, all 2026-07-10 through -13) -- as of 2026-09-02, `aFIPC` and `bandscope` had
+**zero** CodeQL PR-head coverage from any source. **Fixed at the root**, not worked around: with the
+repository owner's own `admin:org`-scoped token (obtained via `gh auth refresh` + browser device-code
+authorization the owner completed personally after this session's own browser safety classifier
+correctly declined to enter the authorization code itself), `orgs/ContextualWisdomLab/rulesets/18156473`
+was read and PUT back with the three missing workflow paths appended -- verified live, both on the org
+ruleset itself and on a real target repo's (`aFIPC`) inherited dispatch list, now showing all 10
+required paths. This is the actual fix; any interim per-repo local-CodeQL restoration is now
+unnecessary and should be treated as redundant-again once confirmed working through the central path.
+Separately, and addressing standing backlog item 38 ("new repos should automatically get CodeQL"): the
+org's native code-security "default configuration for new repositories" was found unset entirely
+(`orgs/ContextualWisdomLab/code-security/configurations/defaults` returned `[]` -- any newly created
+repository received zero automatic security configuration). Set `default_for_new_repos=all` on the
+existing "GitHub recommended" configuration (id 17, which already had `code_scanning_default_setup:
+"enabled"` but `enforcement: "unenforced"` and was manually attached to only 3 of ~70+ repos) -- this is
+GitHub's own native, zero-maintenance, stack-auto-detecting mechanism, not a bespoke Noema/OpenCode
+automation, and durably satisfies item 38 for every future repository without further code.
+
+**Owner**: `ContextualWisdomLab/.github` -- merged: `#1707`, `#1702`, `#1711`, `#1712`, `#1713`,
+`#1715`, `#1669` (rebuilt merge), `#1704` (schedule cadence), `#1710`/`#1706`/`#1705`/`#1709`
+(a separate 4-PR collision on the same draft/head-moved check-ordering question, reconciled by merging
+the most complete delta and closing the other three with evidence they were fully subsumed); org
+ruleset `18156473` and code-security configuration `17` (org-level settings, not a PR).
+**Status**: all code fixes merged and confirmed live on `main` (verified by reading raw file content
+post-merge, not by trusting merge command output). Org ruleset and default-configuration changes
+verified live via direct API re-read. Pre-existing queue backlog (runs already queued before the fixes
+landed) drains at normal GitHub Actions runner throughput, not instantly -- expect residual elevated
+queue depth for a period after this entry's timestamp, including a temporary bump from every org repo's
+open PRs receiving their first-ever `codeql-pr.yml`/`scorecard-pr.yml`/`osv-scanner-pr.yml` dispatch.
