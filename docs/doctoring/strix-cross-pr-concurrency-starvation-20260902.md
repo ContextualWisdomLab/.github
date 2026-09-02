@@ -64,10 +64,16 @@ via `gh api repos/ContextualWisdomLab/.github/branches/main/protection`) —
 so for `.github`'s *own* PRs, a cancelled Strix run is cosmetic, not
 merge-blocking. But the org ruleset `18156473`
 (`conditions.repository_name: {include: ["~ALL"], exclude: ["noema",
-".github", "IRT-bibliography-set"]}`) makes `strix.yml` a required workflow
-in every other org repository, and this same job is what runs for them
-(dispatched centrally). Spot-checking three busy sibling repos confirmed the
-identical signature:
+".github", "IRT-bibliography-set"]}` — **source: live
+`gh api orgs/ContextualWisdomLab/rulesets/18156473` response**, re-verified
+2026-09-02; this exact `exclude` list is not written anywhere in
+`docs/org-required-workflow-rollout.md`, which only records the `include:
+["~ALL"]` half — noted here per peer review (`trusting-wilbur-195f90-93`)
+after they couldn't corroborate the `exclude` list from that doc and lack
+org-admin scope to query the API directly themselves) makes `strix.yml` a
+required workflow in every other org repository, and this same job is what
+runs for them (dispatched centrally). Spot-checking three busy sibling repos
+confirmed the identical signature:
 
 | Repo | Open PRs | Sample | Result |
 |---|---|---|---|
