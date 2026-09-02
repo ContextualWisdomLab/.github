@@ -13,6 +13,7 @@ def _review_parameters() -> dict[str, object]:
     return {
         "required_approving_review_count": 0,
         "dismiss_stale_reviews_on_push": True,
+        "require_code_owner_review": False,
         "require_last_push_approval": False,
         "required_review_thread_resolution": True,
         "required_reviewers": [],
