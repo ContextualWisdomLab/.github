@@ -16,11 +16,13 @@
 
 - `ModelClient.timeout=None` means no hidden wall-clock inference deadline for any model.
 - Explicit caller cancellation, stale-head cancellation, and workflow/job termination remain valid outer lifecycle controls.
+- Connection establishment and other transport controls are independent configuration. They are not selected from model names or reasoning capability.
 - HTTP 502, 503, 429, timeout, and connection failures are retried only when Contextual-Orchestrator classifies them as transient.
 - HTTP 400, 401, 403 and other permanent failures remain terminal under the existing taxonomy.
 - Preflight transport retry budget is exactly one recovery attempt and is recorded separately from semantic prompt attempts.
-- No branch may inspect `model`, `agent_id`, or `provider_name` to decide timeout or transport retry eligibility.
+- No branch may inspect `model`, `agent_id`, `provider_name`, or `reasoning_effort_supported` to decide inference timeout or transport retry eligibility.
 - Reasoning-specific token escalation is triggered by response evidence: `finish_reason == "length"` or populated reasoning with no usable content. It is independent of transport retry and does not require a model-name allowlist.
+- Independent provider-account lanes may probe concurrently; routes sharing one provider account remain serialized. Published results return to catalog order.
 - Completion timing, retry count, provider identity, and discovery order do not become routing or admission authority.
 - Provider response bodies, prompts, exception messages, credentials, and internal topology are not persisted in preflight evidence.
 
