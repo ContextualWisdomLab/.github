@@ -6884,6 +6884,90 @@ def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr
     assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == (["22"], ["23"])
 
 
+def test_stale_pr_run_ids_preserves_current_head_run_when_head_ref_oid_missing(monkeypatch):
+    """Regression for the naruon PR #1528 incident (Strix run 33581213829,
+    2026-09-02, docs/doctoring/2026-09-02-strix-current-head-cancellation.md):
+    a still-current-head run must never be misclassified as stale merely
+    because the caller's PR snapshot lost its headRefOid (observed on a
+    just-opened PR). Before this guard, ``head =
+    str(pr.get("headRefOid") or "").lower()`` silently coerced a missing
+    head to "", which matches no real run head_sha and therefore
+    misclassified *every* active run for the PR -- including the one for
+    its true, unchanged current head -- as stale."""
+    current_head_run = {
+        "name": "Strix Security Scan",
+        "id": 33581213829,
+        "head_sha": "cf472cf77fb93325858f485a22e967449d7c387a",
+        "pull_requests": [{"number": 1528}],
+    }
+    monkeypatch.setattr(
+        sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): [current_head_run]
+    )
+
+    assert sched.stale_pr_run_ids(
+        "ContextualWisdomLab/naruon", make_pr(number=1528, headRefOid=None)
+    ) == []
+    assert sched.stale_pr_run_ids(
+        "ContextualWisdomLab/naruon", make_pr(number=1528, headRefOid="")
+    ) == []
+
+
+def test_cancel_stale_pr_runs_issues_no_cancel_call_when_head_ref_oid_missing(monkeypatch):
+    """End-to-end regression: cancel_stale_pr_runs must not force-cancel a
+    current-head run when its PR snapshot cannot supply a headRefOid."""
+    calls = []
+    current_head_run = {
+        "id": 33581213829,
+        "name": "Strix Security Scan",
+        "head_sha": "cf472cf77fb93325858f485a22e967449d7c387a",
+        "pull_requests": [{"number": 1528}],
+    }
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args[:5] == ["gh", "api", "--method", "GET", "repos/ContextualWisdomLab/naruon/actions/runs"]:
+            if "status=queued" in args:
+                return json.dumps({"workflow_runs": [current_head_run]})
+            return json.dumps({"workflow_runs": []})
+        return ""
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+
+    run_ids = sched.cancel_stale_pr_runs(
+        "ContextualWisdomLab/naruon",
+        make_pr(number=1528, headRefOid=None),
+        dry_run=False,
+    )
+
+    assert run_ids == []
+    assert not any("force-cancel" in " ".join(call) for call in calls)
+
+
+def test_active_review_run_refs_preserves_current_head_run_when_head_ref_oid_missing(monkeypatch):
+    """Same guard for the OpenCode/Noema cancellation path
+    (active_review_run_refs -> cancel_stale_opencode_runs)."""
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda repo, statuses=("queued", "in_progress"): [
+            {
+                "name": "OpenCode Review",
+                "id": 99,
+                "head_sha": "head",
+                "pull_requests": [{"number": 1528}],
+            }
+        ],
+    )
+
+    current, stale = sched.active_opencode_run_refs(
+        "ContextualWisdomLab/naruon", "OpenCode Review", make_pr(number=1528, headRefOid=None)
+    )
+    assert current == []
+    assert stale == []
+
+
 def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
     cancelled = []
     monkeypatch.setattr(

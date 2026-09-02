@@ -2731,8 +2731,31 @@ def stale_pr_run_ids(
     workflow: str | None = None,
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> list[str]:
-    """Return active run ids for older heads of the same pull request."""
-    head = str(pr.get("headRefOid") or "").lower()
+    """Return active run ids for older heads of the same pull request.
+
+    ``pr["headRefOid"]`` is the sole authority for "current head" here, and
+    unlike the sibling bash queue-hygiene sweep in
+    ``pr-review-merge-scheduler.yml`` (which revalidates a run's live head
+    immediately before cancelling it via ``revalidate_queue_cancellation.sh``
+    specifically because its classification snapshot can race a head move),
+    this function's caller cancels every returned id with no further check.
+    A falsy ``headRefOid`` (missing, ``None``, or empty -- e.g. a transient
+    upstream data gap on a just-opened PR) must never silently coerce to
+    ``""``: every active run's real ``head_sha`` would then fail to equal it
+    and get misclassified as stale, including a run for the PR's true,
+    unchanged current head (the incident this guard fixes: naruon PR #1528,
+    Strix run 33581213829, docs/doctoring/2026-09-02-strix-current-head-cancellation.md).
+    Fail safe instead: identify nothing as stale for this PR.
+    """
+    raw_head = pr.get("headRefOid")
+    if not raw_head:
+        print(
+            f"::warning::stale_pr_run_ids: PR #{pr.get('number')} in {repo} has no "
+            "resolvable headRefOid; skipping stale-run cancellation for this PR "
+            "rather than risk cancelling its current-head run."
+        )
+        return []
+    head = str(raw_head).lower()
     number = int(pr["number"])
     stale: list[str] = []
     for run_data in active_workflow_runs(repo, statuses):
@@ -2763,13 +2786,29 @@ def active_review_run_refs(
     workflow_aliases: frozenset[str],
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Return repository-qualified current and stale review workflow runs."""
+    """Return repository-qualified current and stale review workflow runs.
+
+    A falsy ``headRefOid`` must never silently coerce to ``""``: an empty
+    expected head never equals a real run head, so every active run for this
+    PR (dispatched or direct) would misclassify as stale and its caller
+    (``cancel_stale_opencode_runs``) would force-cancel it with no further
+    check -- including a run for the PR's true, unchanged current head. Fail
+    safe instead: report no current and no stale runs for this PR.
+    """
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
     centralized_dispatch = bool(
         (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
     )
-    head = str(pr.get("headRefOid") or "").lower()
+    raw_head = pr.get("headRefOid")
+    if not raw_head:
+        print(
+            f"::warning::active_review_run_refs: PR #{pr.get('number')} in {repo} "
+            "has no resolvable headRefOid; skipping current/stale classification "
+            "for this PR rather than risk cancelling its current-head run."
+        )
+        return [], []
+    head = str(raw_head).lower()
     number = int(pr["number"])
     dispatch_title_prefixes = tuple(
         f"{title} {target_repo}#{number}@"
