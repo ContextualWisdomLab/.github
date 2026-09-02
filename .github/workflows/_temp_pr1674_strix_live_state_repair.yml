@@ -18,7 +18,7 @@ jobs:
       - name: Checkout exact writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: fix/noema-closed-not-stale
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -27,12 +27,13 @@ jobs:
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git fetch origin fix/noema-closed-not-stale
           live_head="$(git rev-parse origin/fix/noema-closed-not-stale)"
-          test "$live_head" = "$EXPECTED_HEAD" || {
-            echo "::notice::Writer branch advanced to $live_head; predecessor repair is obsolete."
-            exit 0
-          }
+          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+            echo "::error::Writer branch advanced from $EXPECTED_HEAD to $live_head; refusing stale repair execution."
+            exit 1
+          fi
 
       - name: Install hash-locked test dependencies
         run: |
@@ -59,12 +60,19 @@ jobs:
       - name: Verify exact repair
         run: |
           set -euo pipefail
-          python3 -m pytest tests/test_strix_repository_dispatch_live_state.py tests/test_opencode_workflow_shell_syntax.py tests/test_required_workflow_queue_contract.py -q
+          python3 -m pytest \
+            tests/test_strix_repository_dispatch_live_state.py \
+            tests/test_opencode_workflow_shell_syntax.py \
+            tests/test_noema_private_target_live_admission.py \
+            tests/test_required_workflow_queue_contract.py \
+            -q
           python3 - <<'PY'
           import yaml
           from pathlib import Path
-          workflow = yaml.safe_load(Path('.github/workflows/strix.yml').read_text(encoding='utf-8'))
-          assert 'strix' in workflow['jobs']
+          strix = yaml.safe_load(Path('.github/workflows/strix.yml').read_text(encoding='utf-8'))
+          noema = yaml.safe_load(Path('.github/workflows/noema-review.yml').read_text(encoding='utf-8'))
+          assert 'strix' in strix['jobs']
+          assert 'noema-review' in noema['jobs']
           PY
           git diff --check
 
@@ -75,14 +83,19 @@ jobs:
           set -euo pipefail
           git fetch origin fix/noema-closed-not-stale
           live_head="$(git rev-parse origin/fix/noema-closed-not-stale)"
-          test "$live_head" = "$EXPECTED_HEAD" || {
+          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
             echo "::error::Writer branch advanced from $EXPECTED_HEAD to $live_head; refusing stale publication."
             exit 1
-          }
+          fi
           git rm -- .github/workflows/_temp_pr1674_strix_live_state_repair.yml scripts/ci/_temp_pr1674_strix_live_state_repair.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/strix.yml tests/test_strix_repository_dispatch_live_state.py
+          git add \
+            .github/workflows/strix.yml \
+            .github/workflows/noema-review.yml \
+            tests/test_strix_repository_dispatch_live_state.py \
+            tests/test_opencode_workflow_shell_syntax.py \
+            tests/test_noema_private_target_live_admission.py
           git diff --cached --check
-          git commit -m "fix(strix): revalidate live dispatch state before admission"
+          git commit -m "fix(review): revalidate live dispatch targets before admission"
           git push origin HEAD:fix/noema-closed-not-stale
