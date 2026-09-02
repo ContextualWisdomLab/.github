@@ -136,6 +136,141 @@ jobs:
           set -euo pipefail
           env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/source_fix_pr1672_single_request.py
 
+      - name: Replace obsolete local-retry regressions with single-request failure contracts
+        if: steps.owner.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          review_test = Path('tests/test_noema_review_gate.py')
+          source = review_test.read_text(encoding='utf-8')
+          names = {
+              'test_call_llm_repairs_one_malformed_envelope_before_failing_closed',
+              'test_call_llm_still_repairs_once_when_head_has_not_moved',
+              'test_call_llm_fails_closed_after_repeated_malformed_envelope',
+              'test_call_llm_fails_closed_after_repeated_invalid_utf8_response',
+              'test_call_llm_repairs_once_after_a_transport_error_then_succeeds',
+              'test_call_llm_fails_closed_after_a_repeated_transport_error',
+              'test_call_llm_repairs_once_after_a_truncated_response_then_succeeds',
+              'test_call_llm_fails_closed_after_a_repeated_truncated_response',
+              'test_call_llm_repairs_once_after_a_socket_timeout_then_succeeds',
+              'test_call_llm_fails_closed_after_a_repeated_socket_timeout',
+              'test_call_llm_repairs_one_malformed_json_response',
+              'test_call_llm_repairs_one_rejected_changed_line_verdict',
+          }
+          tree = ast.parse(source)
+          lines = source.splitlines(keepends=True)
+          spans = []
+          found = set()
+          for node in tree.body:
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+                  decorator_lines = [decorator.lineno for decorator in node.decorator_list]
+                  start = min([node.lineno, *decorator_lines]) - 1
+                  end = node.end_lineno or node.lineno
+                  spans.append((start, end))
+                  found.add(node.name)
+          missing = names - found
+          if missing:
+              raise SystemExit(f'PR1672 stale retry tests moved or disappeared unexpectedly: {sorted(missing)}')
+          for start, end in sorted(spans, reverse=True):
+              del lines[start:end]
+          review_test.write_text(''.join(lines), encoding='utf-8')
+
+          telemetry = Path('tests/test_noema_repair_attempt_telemetry.py')
+          extra = r'''
+
+
+def _call_with_transport(monkeypatch, *, open_error=None, read_error=None, raw=None):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            if read_error is not None:
+                raise read_error
+            assert raw is not None
+            return raw
+
+    def open_response(_opener, request, **kwargs):
+        calls.append(request)
+        assert kwargs == {}
+        if open_error is not None:
+            raise open_error(request) if callable(open_error) else open_error
+        return Response()
+
+    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
+    return calls
+
+
+def test_malformed_gateway_envelope_is_one_request_fail_closed(monkeypatch) -> None:
+    calls = _call_with_transport(monkeypatch, raw=b"[]")
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "c" * 40}, DIFF, False, "c" * 40, changed_paths=("README.md",))
+    assert len(calls) == 1
+
+
+def test_invalid_utf8_is_one_request_fail_closed(monkeypatch) -> None:
+    calls = _call_with_transport(monkeypatch, raw=b"invalid: \x80\x81\xfe")
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "d" * 40}, DIFF, False, "d" * 40, changed_paths=("README.md",))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        lambda request: gate.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None),
+        OSError("socket timeout"),
+    ],
+)
+def test_connect_failures_are_one_request_and_typed(monkeypatch, failure) -> None:
+    calls = _call_with_transport(monkeypatch, open_error=failure)
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "e" * 40}, DIFF, False, "e" * 40, changed_paths=("README.md",))
+    assert len(calls) == 1
+
+
+def test_truncated_read_is_one_request_and_typed(monkeypatch) -> None:
+    calls = _call_with_transport(monkeypatch, read_error=gate.http.client.IncompleteRead(b"", 10))
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "f" * 40}, DIFF, False, "f" * 40, changed_paths=("README.md",))
+    assert len(calls) == 1
+
+
+def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
+    verdict = _verdict()
+    verdict["decision"] = "request_changes"
+    verdict["findings"] = [{
+        "severity": "high",
+        "file": "README.md",
+        "line": 99,
+        "side": "RIGHT",
+        "message": "Outside the changed hunk.",
+    }]
+    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+    calls = _call_with_transport(monkeypatch, raw=raw)
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "1" * 40}, DIFF, False, "1" * 40, changed_paths=("README.md",))
+    assert len(calls) == 1
+'''
+          current = telemetry.read_text(encoding='utf-8')
+          marker = 'def _call_with_transport('
+          if marker not in current:
+              telemetry.write_text(current.rstrip() + extra + '\n', encoding='utf-8')
+          PY
+          python -m py_compile tests/test_noema_review_gate.py tests/test_noema_repair_attempt_telemetry.py
+          git diff --check
+
       - name: Verify permanent single-request contract and focused regressions
         if: steps.owner.outputs.active == 'true'
         shell: bash
