@@ -81,6 +81,36 @@ NEW_HELPER = '''def _fresh_open_pr_for_cancellation(repo: str, number: int) -> d
 '''
 
 
+def _reconcile_ready_only_fixture(tests: str) -> str:
+    """Align the pre-existing cancellation fixture with draft review-only cleanup semantics."""
+    obsolete_case = '            {"state": "open", "draft": True, "head": {"sha": "b" * 40}},\n'
+    if tests.count(obsolete_case) != 1:
+        raise RuntimeError("PR1669 ready-only invalid-case fixture drifted")
+    tests = tests.replace(obsolete_case, "", 1)
+
+    old_name = (
+        "def test_pr1669_fresh_open_pr_fails_closed_without_ready_exact_head"
+        "(monkeypatch, live_pr):"
+    )
+    new_name = (
+        "def test_pr1669_fresh_open_pr_fails_closed_without_open_exact_head"
+        "(monkeypatch, live_pr):"
+    )
+    if tests.count(old_name) != 1:
+        raise RuntimeError("PR1669 ready-only fixture name drifted")
+    tests = tests.replace(old_name, new_name, 1)
+
+    old_doc = (
+        '    """Only an open, explicitly ready PR with a valid SHA grants cancellation authority."""'
+    )
+    new_doc = (
+        '    """Only an open PR with explicit draft state and valid SHA grants stale-run cancellation authority."""'
+    )
+    if tests.count(old_doc) != 1:
+        raise RuntimeError("PR1669 ready-only fixture documentation drifted")
+    return tests.replace(old_doc, new_doc, 1)
+
+
 def _prove_red(test_name: str) -> None:
     result = subprocess.run(
         [sys.executable, "-m", "pytest", f"tests/test_pr_review_merge_scheduler.py::{test_name}", "-q"],
@@ -101,7 +131,7 @@ def _prove_red(test_name: str) -> None:
 
 def main() -> int:
     """Install RED coverage, repair live cancellation authority, and self-retire."""
-    tests = TESTS.read_text(encoding="utf-8")
+    tests = _reconcile_ready_only_fixture(TESTS.read_text(encoding="utf-8"))
     marker = "def test_pr1669_opencode_open_draft_old_head_remains_cancellable"
     if marker in tests:
         raise RuntimeError("PR1669 draft-review regressions already exist on input head")
