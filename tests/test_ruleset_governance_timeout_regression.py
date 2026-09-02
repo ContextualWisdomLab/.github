@@ -107,7 +107,8 @@ def exercise_ambiguous_put(monkeypatch, *, history_outcome: str) -> tuple[object
         assert seen_target == target
         assert baseline_version == 41
         assert seen_desired == desired
-        assert expected_main_sha == "a" * 40
+        # Once a PUT is issued, history settlement must finish without a stale-main veto.
+        assert expected_main_sha is None
         if history_outcome == "not-accepted":
             raise module.RulesetGovernanceError("ruleset mutation is not visible in history")
         if history_outcome == "collision":
