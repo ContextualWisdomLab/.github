@@ -268,7 +268,10 @@ def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypa
         lambda *_args, **_kwargs: [{"version_id": 8}, {"version_id": 7}],
     )
     monkeypatch.setattr(module, "_history_version_state", lambda *_args, **_kwargs: _live())
-    with pytest.raises(module.RulesetGovernanceError, match="does not match reviewed mutation"):
+    with pytest.raises(
+        module.RulesetMutationStillSettlingError,
+        match="latest ruleset history changed before the reviewed mutation became visible",
+    ):
         module._verify_ruleset_history_transition(_target(), 7, desired)
 
 
@@ -396,6 +399,98 @@ def test_history_collision_recovers_admin_write_between_recovery_get_and_put(mon
         module._editable_projection(first_admin),
         module._editable_projection(second_admin),
     ]
+
+
+def test_history_collision_with_bad_predecessor_metadata_fails_before_restore(monkeypatch) -> None:
+    """Malformed collision history cannot be interpreted as a safe rollback target."""
+
+    desired_state = _converged()
+    desired = _desired()
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 10}, {"version_id": True}],
+    )
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args, **_kwargs: desired_state)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no live mutation expected")),
+    )
+    with pytest.raises(module.RulesetGovernanceError, match="version identity is malformed"):
+        module._verify_ruleset_history_transition(_target(), 7, desired)
+
+
+def test_history_collision_aborts_if_main_advances_before_recovery(monkeypatch) -> None:
+    """Before rollback starts, a protected-main advance still vetoes privileged recovery."""
+
+    desired_state = _converged()
+    desired = _desired()
+    external = _live()
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [{"version_id": 10}, {"version_id": 9}, {"version_id": 7}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_history_version_state",
+        lambda _target, version: desired_state if version == 10 else external,
+    )
+    monkeypatch.setattr(
+        module,
+        "_assert_current_main",
+        lambda _expected: (_ for _ in ()).throw(
+            module.RulesetGovernanceError("protected main advanced")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no recovery write expected")),
+    )
+    with pytest.raises(module.RulesetGovernanceError, match="protected main advanced"):
+        module._verify_ruleset_history_transition(
+            _target(),
+            7,
+            desired,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_history_collision_after_our_write_ignores_stale_main_guard_during_recovery(monkeypatch) -> None:
+    """Once the reviewed PUT exists, recovery must settle collision history even if main moved."""
+
+    desired_state = _converged()
+    desired = _desired()
+    external = _live()
+    histories = iter(
+        [
+            [{"version_id": 10}, {"version_id": 9}, {"version_id": 7}],
+            [{"version_id": 11}, {"version_id": 10}],
+        ]
+    )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: next(histories))
+    monkeypatch.setattr(
+        module,
+        "_history_version_state",
+        lambda _target, version: desired_state if version == 10 else external,
+    )
+    monkeypatch.setattr(
+        module,
+        "_assert_current_main",
+        lambda _expected: (_ for _ in ()).throw(AssertionError("stale-main guard must not run")),
+    )
+    replies = iter([desired_state, {}, external])
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: next(replies))
+
+    with pytest.raises(module.RulesetGovernanceError, match="restored newest displaced administrator state"):
+        module._verify_ruleset_history_transition(
+            _target(),
+            7,
+            desired,
+            expected_main_sha=None,
+        )
 
 
 def test_reconcile_forwards_expected_main_sha_to_each_target(monkeypatch) -> None:
