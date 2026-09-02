@@ -637,3 +637,29 @@ fixed:
   → no matches; `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5
   passed.
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 4: escalated re-review of round 3's own §10 fix, one real gap tightened
+
+- **Date:** 2026-09-02.
+- **Subject:** Devin re-reviewed round 3's §10 owner-authorization reconciliation note (commit
+  `537c3872`) and escalated it to 🔴 (highest severity in this session's experience with this
+  reviewer): "Authorized routing can be reverted" — the note, as written, quoted ADR-0003's "reverting
+  to `orchestrator/auto`... is not foreclosed" sentence and said that framing was "unchanged by this
+  item," which — read in isolation from the sentence right after it — could be misread as current,
+  standing license for an agent to revert the owner's own binding §10 CI pin on its own initiative.
+- **Assessment:** the note's own very next sentence already said reversion would require "§10 would
+  need updating to match, not the other way around," so the substantive guardrail was present — but the
+  finding is right that the paragraph's internal ordering let the "not foreclosed" quote read as the
+  operative instruction if a reader stopped there, exactly the kind of ambiguity that produced the
+  original 2026-08-30 incident this whole note exists to prevent a repeat of. Real clarity gap, fixed.
+- **Fix:** rewrote the paragraph to lead with an explicit, unambiguous prohibition — "No agent may treat
+  ADR-0003's... sentence as standing authorization to revert the CI pin today" — and to explain *why*:
+  that ADR-0003 sentence describes the risk-acceptance question's unreviewed status as of 2026-08-31,
+  written *before* §10 existed; §10 is the later, explicit, binding instruction; the only legitimate
+  path to `orchestrator/auto` is a **new owner decision updating §10 itself**, never an agent's own
+  reading of "not foreclosed" in isolation. Closes with the same "both records true at once" framing as
+  round 3, now preceded by the explicit guardrail rather than following the ambiguous quote unguarded.
+- **Verification:** `git diff --check origin/main -- docs/product-goal-directive.md` → exit 0;
+  `grep -n "�" docs/product-goal-directive.md` → no matches;
+  `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.

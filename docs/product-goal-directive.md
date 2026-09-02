@@ -453,12 +453,22 @@ What §10's owner authorization does **not** do is retroactively supply the spec
 acceptance ADR-0003 says is still missing: an explicit decision by someone with authority, informed by
 the single-outage-domain/no-fallback trade-off ADR-0003 describes, that this risk is acceptable. §10
 directs a CI routing *policy*; it is not evidence that the owner was shown or considered that specific
-availability-risk analysis when issuing it. ADR-0003's "reverting to `orchestrator/auto` pending a real
-decision is... not foreclosed" framing is therefore also unchanged by this item — if that risk-specific
-review happens and concludes reversion is warranted, §10 would need updating to match, not the other
-way around. Until then, both records are true at once: the pin is owner-authorized as a matter of
-CI-workflow policy (§10), and the specific availability risk it carries remains open and unreviewed
-(`AGENTS.md`, ADR-0003).
+availability-risk analysis when issuing it.
+
+**No agent may treat ADR-0003's "reverting to `orchestrator/auto`... is not foreclosed" sentence as
+standing authorization to revert the CI pin today.** That sentence describes the status of the
+*risk-acceptance question* (unreviewed, therefore not settled) as of ADR-0003's 2026-08-31 correction —
+written *before* §10 existed. §10 is the owner's own later, explicit, binding instruction ("...로
+고정" — fixed/pinned) governing CI-consumer workflows now; an agent reverting a required-check
+workflow away from it on the strength of a pre-§10 ADR sentence, without a new owner decision, would be
+exactly the kind of unilateral action that produced the original 2026-08-30 incident this whole note
+exists to distinguish from. The only path from here to `orchestrator/auto` is a **new owner decision
+updating §10 itself** — possibly informed by the risk-specific review ADR-0003 says is still missing —
+never an agent's own reading of "not foreclosed" in isolation. Until such an update lands, both records
+stay true at once without conflict: the pin is owner-authorized and binding as CI-workflow policy (§10),
+and the specific availability risk it carries remains open, unreviewed, and unresolved
+(`AGENTS.md`, ADR-0003) — an open question about the risk is not the same as open license to change the
+policy.
 
 **Addition (2026-09-02, second revision) — verified against current source, not merely restated:**
 this revision adds three specific architectural constraints on top of the existing pin, all confirmed
