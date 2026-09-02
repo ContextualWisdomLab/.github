@@ -153,7 +153,7 @@ def test_recovery_chain_exhaustion_fails_closed_after_bounded_attempts(monkeypat
         if method == "PUT" and endpoint == target.endpoint:
             assert body is not None
             put_count += 1
-            live_state = body
+            live_state = {**live_state, **body}
             return {}
         raise AssertionError((method, endpoint))
 
