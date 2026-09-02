@@ -167,12 +167,17 @@ def patch_validator() -> None:
         "prompt language-neutral contract",
     )
 
+    # Round two intentionally materializes the literal Git diff marker. Use a raw
+    # string in the generated validator so Python does not interpret `\ ` as an
+    # invalid escape sequence and exact-head verification stays warning-free.
+    text = text.replace('raw_line.startswith("\\ No newline")', 'raw_line.startswith(r"\\ No newline")')
+
     ast.parse(text, filename=str(SOURCE))
     SOURCE.write_text(text, encoding="utf-8")
 
 
 def patch_tests() -> None:
-    """Make final regressions exercise structural roles and language-neutral source binding."""
+    """Make final regressions exercise structural roles and exact-source observation binding."""
     corpus = CORPUS_TEST.read_text(encoding="utf-8")
     corpus = replace_once(
         corpus,
@@ -184,7 +189,7 @@ def patch_tests() -> None:
         '''            "source_excerpt": "new = 1",
             "claim_role": noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES[kind][field],
             "observation": (
-                f"The exact `new = 1` source is evidence for structured role {index}: {field}."
+                f"new = 1 is exact source evidence for structured role {index}: {field}."
             ),
 ''',
         "corpus claim roles",
@@ -196,7 +201,7 @@ def patch_tests() -> None:
 ''',
         '''        "source_excerpt": "old = 1",
         "claim_role": noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["mutable_alias"]["mutation_attempt"],
-        "observation": "The exact `old = 1` source is evidence for the mutation-attempt role.",
+        "observation": "old = 1 is exact source evidence for the mutation-attempt role.",
 ''',
         "wrong-side claim role fixture",
     )
@@ -208,12 +213,34 @@ def patch_tests() -> None:
         observations,
         '''        witness = _location()
         if observations:
+            if repeated:
+                witness["observation"] = (
+                    "The `new` assignment preserves one repeated runtime relationship."
+                )
+            elif generic_but_different:
+                witness["observation"] = (
+                    f"Generic {field.replace('_', ' ')} concern appears in this area."
+                )
+            else:
+                witness["observation"] = (
+                    f"The `new` assignment preserves runtime relationship {index} relevant to {field}."
+                )
 ''',
         '''        witness = _location()
         witness["claim_role"] = noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES[kind][field]
         if observations:
+            if repeated:
+                witness["observation"] = "new = 1 is the same repeated source observation."
+            elif generic_but_different:
+                witness["observation"] = (
+                    f"Generic {field.replace('_', ' ')} concern appears in this area."
+                )
+            else:
+                witness["observation"] = (
+                    f"new = 1 is exact source evidence for structured witness {index}: {field}."
+                )
 ''',
-        "observation claim-role fixture",
+        "observation claim-role/source fixture",
     )
     observations = observations.replace(
         'match="concrete token from source_excerpt"',
