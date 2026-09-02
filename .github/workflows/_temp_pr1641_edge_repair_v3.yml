@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 45
     env:
-      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
     steps:
       - name: Checkout exact writer head
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -35,38 +35,210 @@ jobs:
           python-version: "3.14"
 
       - name: Install hash-locked review dependencies
+        shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
 
       - name: Revalidate exact writer head
-        env:
-          EXPECTED_HEAD: ${{ github.sha }}
+        shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
-          test "$remote_head" = "$EXPECTED_HEAD"
+          test "$remote_head" = "${GITHUB_SHA}"
 
-      - name: Prove RED, repair owner source, and prove GREEN
+      - name: Materialize and prove exact-source edge REDs
+        shell: bash
         run: |
           set -euo pipefail
-          python scripts/ci/temp_pr1641_edge_repair.py
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Publish verified successor without workflow mutation
-        env:
-          EXPECTED_HEAD: ${{ github.sha }}
+          target = Path("tests/test_noema_class_evidence_observation_contract.py")
+          text = target.read_text(encoding="utf-8")
+          marker = "def test_whitespace_only_changed_source_requires_explicit_blank_marker() -> None:"
+          if marker not in text:
+              text = text.rstrip() + r'''
+
+
+def test_whitespace_only_changed_source_requires_explicit_blank_marker() -> None:
+    """Whitespace-only source cannot satisfy the quote guard via incidental spacing."""
+    source = "    "
+    diff = f"""diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1 +1 @@
+-old = 1
++{source}
+"""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["source_excerpt"] = source
+            witness["observation"] = (
+                f"Incidental    spacing is not a source quote for {probe['probe_kind']}:{field}."
+            )
+    with pytest.raises(noema.NoemaModelOutputError, match="quote the exact source_excerpt"):
+        noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
+def test_long_changed_line_uses_structural_exact_source_binding() -> None:
+    """A source line longer than the prose cap remains reviewable through structural equality."""
+    source = "x" * (noema.MAX_THREAD_BODY_CHARS + 64)
+    diff = f"""diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1 +1 @@
+-old = 1
++{source}
+"""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["source_excerpt"] = source
+            witness["observation"] = (
+                f"Bounded structural observation for {probe['probe_kind']}:{field} at the exact cited line."
+            )
+    noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+''' + "\n"
+              target.write_text(text, encoding="utf-8")
+          PY
+
+          for spec in \
+            tests/test_noema_class_evidence_observation_contract.py::test_whitespace_only_changed_source_requires_explicit_blank_marker \
+            tests/test_noema_class_evidence_observation_contract.py::test_long_changed_line_uses_structural_exact_source_binding; do
+            log="$(mktemp)"
+            set +e
+            python -m pytest -q "$spec" >"$log" 2>&1
+            rc=$?
+            set -e
+            cat "$log"
+            test "$rc" -ne 0
+            grep -q "1 failed" "$log"
+          done
+
+      - name: Apply smallest causal GREEN and traceability
+        shell: bash
         run: |
           set -euo pipefail
-          test -n "${WORKFLOW_PUSH_TOKEN:-}"
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact replacement, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def append_once(path: str, marker: str, addition: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if marker not in text:
+                  target.write_text(text.rstrip() + "\n\n" + addition.strip() + "\n", encoding="utf-8")
+
+          gate = "scripts/ci/noema_review_gate.py"
+          replace_once(
+              gate,
+              '''        source_marker = source_excerpt if source_excerpt else "<blank>"
+          if source_marker not in observation:
+              raise NoemaModelOutputError(
+                  f"Noema adversarial probe {index} class_evidence.{field} observation "
+                  "must quote the exact source_excerpt (or <blank> for an empty line)"
+              )
+          ''',
+              '''        source_is_blank = not source_excerpt.strip()
+          source_marker = "<blank>" if source_is_blank else source_excerpt
+          # Exact source identity is already proven by equality with the trusted
+          # changed-line map. Repetition in bounded prose is an extra anti-vacuity
+          # signal only when the nonblank source itself fits that bounded field.
+          if source_is_blank or len(source_excerpt) <= MAX_THREAD_BODY_CHARS:
+              if source_marker not in observation:
+                  raise NoemaModelOutputError(
+                      f"Noema adversarial probe {index} class_evidence.{field} observation "
+                      "must quote the exact source_excerpt (or <blank> for an empty line)"
+                  )
+          ''',
+          )
+          replace_once(
+              gate,
+              "The observation must quote that exact source_excerpt (or <blank>) and explain the claimed behavior.",
+              "For an empty or whitespace-only line the observation must quote <blank>; for a nonblank source_excerpt no longer than MAX_THREAD_BODY_CHARS it must quote the exact source_excerpt. Longer nonblank lines remain exactly bound by the separately validated source_excerpt field, while observation stays bounded and explains the claimed behavior.",
+          )
+
+          append_once(
+              "docs/product-technical-gap-baseline.md",
+              "## 2026-09-02 — Noema exact-source edge binding",
+              '''## 2026-09-02 — Noema exact-source edge binding
+
+          External review exposed two deterministic evidence-edge failures in the observed-defect corpus. A whitespace-only changed line could satisfy the source-quote predicate through incidental spacing in otherwise generic prose, while a nonblank changed line longer than the bounded observation field could never be repeated and therefore made a valid formal verdict impossible. Exact source identity remains the equality check between `class_evidence.source_excerpt` and the trusted changed-side diff map. Whitespace-only source now requires the explicit `<blank>` marker; over-cap nonblank lines retain structural exact-source equality while bounded observations remain distinct and claim-role-bound. Regression fixtures preserve both cases without vendor-specific wording.''',
+          )
+          append_once(
+              "docs/doctoring/noema-observed-defect-corpus-current-main.md",
+              "## Exact-source edge follow-up (2026-09-02)",
+              '''## Exact-source edge follow-up (2026-09-02)
+
+          The corpus now includes a weak-oracle negative control for whitespace-only changed lines and a representability regression for changed lines longer than the observation cap. The deterministic gate treats source equality as authoritative identity, uses `<blank>` for blank/whitespace-only lines, and does not require an impossible copy of an over-cap source line into bounded prose.''',
+          )
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          entry = "- Harden Noema exact-source evidence edges: whitespace-only lines require `<blank>`, while over-cap nonblank lines retain structural exact-source binding without impossible bounded-prose repetition.\n"
+          if entry not in text:
+              if "## [Unreleased]\n" in text:
+                  text = text.replace("## [Unreleased]\n", "## [Unreleased]\n" + entry, 1)
+              elif "## Unreleased\n" in text:
+                  text = text.replace("## Unreleased\n", "## Unreleased\n" + entry, 1)
+              else:
+                  text = entry + "\n" + text
+              changelog.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify focused and broader GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q scripts/ci
+          python -m pytest -q \
+            tests/test_noema_class_evidence_observation_contract.py \
+            tests/test_noema_observed_defect_corpus_current_main.py
+          python -m pytest -q tests/test_noema_*.py
+          git diff --check
+
+      - name: Remove every temporary PR1641 repair identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/_temp_pr1641_edge_repair_v2.yml \
+            .github/workflows/_temp_pr1641_edge_repair_v3.yml \
+            .github/workflows/_temp_pr1641_source_evidence_edge_repair.yml \
+            scripts/ci/temp_pr1641_edge_repair.py
+          if git ls-files | grep -E '(^|/)_?temp_pr1641|temp-pr1641'; then
+            echo "::error::temporary PR1641 repair identity remains tracked"
+            exit 1
+          fi
+          git diff --check
+
+      - name: Publish verified successor with workflow-starting credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${WORKFLOW_PUSH_TOKEN:-}" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
-          test "$remote_head" = "$EXPECTED_HEAD"
+          test "$remote_head" = "${GITHUB_SHA}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
-          git commit -m "fix(noema): harden exact-source evidence edges"
+          git commit -m "fix(noema): harden exact-source evidence edge cases"
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
