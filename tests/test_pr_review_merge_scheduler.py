@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -33,6 +34,19 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+
+
+@pytest.fixture(autouse=True)
+def reset_active_workflow_runs_cache():
+    """Isolate ``active_workflow_runs``'s cache so tests never see a sibling's data.
+
+    Different tests reuse the same ``owner/repo`` cache key with different
+    fake GitHub responses; without this the module-global cache from one test
+    would leak into the next.
+    """
+    sched.reset_active_workflow_runs_cache()
+    yield
+    sched.reset_active_workflow_runs_cache()
 
 
 def fake_github_token(prefix, body):
@@ -4160,7 +4174,11 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8] == [
+    # dispatch_strix_evidence's busy_refs check re-reads the exact same
+    # (repo, ("queued", "in_progress")) shape calls[4:6] already fetched;
+    # active_workflow_runs's per-invocation cache serves it without a
+    # third/fourth GET, so its dispatch POST lands right after calls[4:6].
+    assert calls[6] == [
         "gh",
         "api",
         "-X",
@@ -4169,17 +4187,20 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--input",
         "-",
     ]
-    assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[10][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # calls[11:14]: the bounded discover_opencode_required_run_id fallback
+    # That dispatch invalidates the cache (it just queued a new run), so
+    # dispatch_opencode_review's own active_opencode_run_refs check below
+    # re-fetches fresh instead of reusing calls[4:6]'s now-stale snapshot.
+    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    # calls[9:12]: the bounded discover_opencode_required_run_id fallback
     # (matching_actions_run_id found nothing in this PR's empty rollup).
     for offset, status in enumerate(("queued", "in_progress", "completed")):
-        discover_call = calls[11 + offset]
+        discover_call = calls[9 + offset]
         assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
         assert f"head_sha={head_sha}" in discover_call
-    assert calls[14] == [
+    assert calls[12] == [
         "gh",
         "api",
         "-X",
@@ -4423,7 +4444,11 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
     assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0] == [
+    # dispatch_strix_evidence's busy_refs check re-reads the exact same
+    # (repo, ("queued", "in_progress")) shape calls[1:3] already fetched;
+    # active_workflow_runs's per-invocation cache serves it without a
+    # third/fourth GET, so its dispatch POST lands right after calls[1:3].
+    assert calls[3][0] == [
         "gh",
         "api",
         "-X",
@@ -4432,19 +4457,22 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
-    assert calls[6][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[7][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # calls[8:11]: the bounded discover_opencode_required_run_id fallback
+    # That dispatch invalidates the cache (it just queued a new run), so
+    # dispatch_opencode_review's own active_opencode_run_refs check below
+    # re-fetches fresh instead of reusing calls[1:3]'s now-stale snapshot.
+    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    # calls[6:9]: the bounded discover_opencode_required_run_id fallback
     # (matching_actions_run_id found nothing in the empty rollup), scoped to
     # the exact head SHA across the three statuses that can hold the
     # required run.
     for offset, status in enumerate(("queued", "in_progress", "completed")):
-        discover_call = calls[8 + offset][0]
+        discover_call = calls[6 + offset][0]
         assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
         assert f"head_sha={'a' * 40}" in discover_call
-    assert calls[11][0] == [
+    assert calls[9][0] == [
         "gh",
         "api",
         "-X",
@@ -5093,6 +5121,121 @@ def test_active_workflow_runs_omits_filters_by_default(monkeypatch):
     args = calls[0]
     assert not any(str(arg).startswith("event=") for arg in args)
     assert not any(str(arg).startswith("created=") for arg in args)
+
+
+def test_active_workflow_runs_caches_repeated_identical_calls(monkeypatch):
+    """A repeated identical call is served from cache with the identical result.
+
+    This is the scan-pr-queue win: every non-draft PR unconditionally asks
+    for the same (repo, ("queued", "in_progress")) shape via
+    ``cancel_stale_pr_runs``, and review dispatch re-asks the same shape
+    again -- all against the one repository a scheduler invocation ever
+    targets. Only the first call should reach the (faked) GitHub API; every
+    later call with the same arguments must return the same data without a
+    new call.
+    """
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": [{"id": 1}, {"id": 2}]}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    first = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    for _ in range(50):
+        repeated = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+        assert repeated == first
+
+    # 2 calls total: one per status in the first, cache-populating call --
+    # not 2 * 51 for 51 identical requests.
+    assert len(calls) == 2
+
+
+def test_active_workflow_runs_cache_is_faster_than_repeated_fetches(monkeypatch):
+    """Caching turns N redundant slow fetches into 1: wall clock reflects that."""
+    delay = 0.02
+    call_count = 0
+
+    def slow_fake_run(args, stdin=None):
+        del args, stdin
+        nonlocal call_count
+        call_count += 1
+        time.sleep(delay)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", slow_fake_run)
+
+    repeats = 20
+    start = time.monotonic()
+    for _ in range(repeats):
+        sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    elapsed = time.monotonic() - start
+
+    # Uncached, 20 repeats * 2 statuses * 0.02s would take >= 0.8s; cached,
+    # only the first call's 2 statuses ever sleep. Generous bound keeps this
+    # robust on a loaded CI runner while still catching a caching regression.
+    assert call_count == 2
+    assert elapsed < delay * 2 * repeats / 2
+
+
+def test_active_workflow_runs_cache_keys_on_full_call_shape(monkeypatch):
+    """Distinct repo/statuses/event/created/head_sha never share a cache entry."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    sched.active_workflow_runs("owner/repo", ("queued",))
+    sched.active_workflow_runs("owner/other-repo", ("queued",))
+    sched.active_workflow_runs("owner/repo", ("in_progress",))
+    sched.active_workflow_runs("owner/repo", ("queued",), event="repository_dispatch")
+    sched.active_workflow_runs("owner/repo", ("queued",), head_sha="a" * 40)
+    sched.active_workflow_runs("owner/repo", ("queued",))  # repeat of the first: cache hit
+
+    assert len(calls) == 5
+
+
+def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monkeypatch):
+    """A cancellation must not be masked by a stale pre-cancellation cache entry.
+
+    ``dispatch_strix_evidence``'s busy_refs check runs right after
+    ``force_cancel_workflow_run_refs`` cancels stale runs for the same
+    repository; if the cache were not invalidated, that check could see a
+    run this very call just cancelled and wrongly report the repository
+    busy, or a later PR's cancel_stale_pr_runs could miss a run it should
+    force-cancel because a same-shape read from before an earlier
+    cancellation was replayed instead of re-fetched.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    responses = [
+        json.dumps([{"workflow_runs": [{"id": 9001}]}]),  # queued, before cancel
+        json.dumps([{"workflow_runs": []}]),  # in_progress, before cancel
+        "",  # the force-cancel POST itself
+        json.dumps([{"workflow_runs": []}]),  # queued, after cancel: must re-fetch
+        json.dumps([{"workflow_runs": []}]),  # in_progress, after cancel
+    ]
+
+    def fake_run(args, stdin=None):
+        del args, stdin
+        return responses.pop(0)
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    before = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    assert before == [{"id": 9001}]
+
+    sched.force_cancel_workflow_runs("owner/repo", ["9001"])
+
+    after = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    assert after == []
+    assert responses == []  # every canned response was consumed: no call was skipped or reused
 
 
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
