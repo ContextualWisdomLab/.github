@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh legacy scheduler fixtures and close live-revalidation coverage gaps."""
+"""Refresh legacy scheduler fixtures and retire dead pre-revalidation cancellation code."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / "tests/test_pr_review_merge_scheduler.py"
+SCHEDULER = ROOT / "scripts/ci/pr_review_merge_scheduler.py"
 SELF = Path(__file__).resolve()
 PATCH = '    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)\n'
 
@@ -129,8 +130,23 @@ def insert_after_signature(text: str, signature: str) -> str:
     return text.replace(anchor, anchor + PATCH, 1)
 
 
+def retire_dead_batch_helper() -> None:
+    """Delete the old batch helper after v6 removes its final production callers."""
+    text = SCHEDULER.read_text(encoding="utf-8")
+    name = "force_cancel_workflow_run_refs("
+    if text.count(name) != 1:
+        raise RuntimeError(
+            "force_cancel_workflow_run_refs must have exactly its definition and no live callers "
+            f"after v6; observed {text.count(name)} references"
+        )
+    block = '''def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> None:\n    """Force-cancel repository-qualified runs while retaining bounded batches."""\n    runs_by_repo: dict[str, list[str]] = {}\n    for run_repo, run_id in run_refs:\n        runs_by_repo.setdefault(run_repo, []).append(run_id)\n    for run_repo, run_ids in runs_by_repo.items():\n        force_cancel_workflow_runs(run_repo, run_ids)\n\n\n'''
+    if text.count(block) != 1:
+        raise RuntimeError("dead batch helper body drifted")
+    SCHEDULER.write_text(text.replace(block, "", 1), encoding="utf-8")
+
+
 def main() -> int:
-    """Preserve legacy intent and add focused coverage for all destructive-boundary branches."""
+    """Preserve legacy intent, add boundary coverage, and remove dead batch cancellation code."""
     text = TESTS.read_text(encoding="utf-8")
     text = insert_after_signature(
         text,
@@ -143,7 +159,15 @@ def main() -> int:
     marker = "def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable"
     if marker not in text:
         text += COVERAGE_TESTS
+    # v6's RED fixtures still observe the legacy helper to prove that the repaired dispatches
+    # never use it. Allow those test-only monkeypatches to synthesize the now-retired symbol.
+    old = '''        "force_cancel_workflow_run_refs",\n        lambda refs: batch_cancellations.append(list(refs)),\n    )'''
+    new = '''        "force_cancel_workflow_run_refs",\n        lambda refs: batch_cancellations.append(list(refs)),\n        raising=False,\n    )'''
+    if text.count(old) != 2:
+        raise RuntimeError(f"expected two legacy batch-helper test probes, found {text.count(old)}")
+    text = text.replace(old, new)
     TESTS.write_text(text, encoding="utf-8")
+    retire_dead_batch_helper()
     SELF.unlink()
     return 0
 
