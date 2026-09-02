@@ -1,0 +1,96 @@
+name: Source fix Strix free-only model boundary
+
+on:
+  push:
+    branches:
+      - fix/strix-free-only-model-normalization-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile-docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Append canonical gap and changelog evidence once
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          gap = Path("docs/product-technical-gap-baseline.md")
+          changelog = Path("CHANGELOG.md")
+
+          gap_marker = "## 2026-09-02 Strix direct-provider model-boundary repair"
+          gap_text = """
+
+          ## 2026-09-02 Strix direct-provider model-boundary repair
+
+          **Live gap.** Protected `main@23df081c36c93da019c89c474351002afb014daa` already provisions the central Strix workflow through contextual-orchestrator with `STRIX_MODEL=contextual-orchestrator/orchestrator/free`, `CONTEXTUAL_ORCHESTRATOR_POOL=free`, private-target ZDR enforcement, all five bootstrap credential variables, and no external fallback list. The reusable Strix model normalizer nevertheless continued accepting concrete provider/model identifiers, leaving a second routing surface below the central workflow.
+
+          **Causal owner and repair.** `scripts/ci/strix_model_utils.sh` is the earliest reusable model-admission boundary. Regression commit `2083a72dccaa1d96ea423a51af537240fde8a210` requires direct OpenAI, OpenRouter, NVIDIA NIM, GitHub Models, Vertex/Gemini, and unqualified identifiers to fail closed. Production commit `10c1ddf822f1e6336b73a9093a56680fea8f4f54` admits only `orchestrator/free` and `contextual-orchestrator/orchestrator/free`. No fallback rank, weight, score, threshold, or provider order replaces the removed authority; contextual-orchestrator owns candidate generation, routing, serving, and failover.
+
+          **Credential/privacy boundary.** The central workflow must continue supplying `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` as bootstrap/global-discovery inputs. `OPENAI_API_KEY` transport is not a defect. The separate contextual-orchestrator `orchestrator/free` candidate policy excludes OpenAI-derived candidates while permitting the four eligible provider-account sources only when their explicit free/privacy/capability evidence passes. Private-target ZDR remains mandatory.
+
+          **Verification.** Hosted exact-head checks and independent review remain authoritative. Pending, queued, stale, predecessor-head, or synthetic evidence is non-passing. Historical direct-provider fallback helpers are now unreachable through the accepted model normalizer and remain dead-code cleanup debt until removed with exact-head regression evidence.
+          """.rstrip() + "\n"
+
+          text = gap.read_text(encoding="utf-8")
+          if gap_marker not in text:
+              gap.write_text(text.rstrip() + gap_text, encoding="utf-8")
+
+          changelog_marker = "Strix model normalization now fails closed on every direct-provider model identifier"
+          changelog_text = """
+          - Strix model normalization now fails closed on every direct-provider model identifier and accepts only the contextual-orchestrator `orchestrator/free` virtual pool spellings. This closes the reusable model-selection bypass without removing `OPENAI_API_KEY` from bootstrap/global discovery; the orchestrator's free-pool credential-source policy remains the candidate-admission authority.
+          """.strip() + "\n"
+          current = changelog.read_text(encoding="utf-8")
+          if changelog_marker not in current:
+              lines = current.splitlines(keepends=True)
+              insert_at = next((i + 1 for i, line in enumerate(lines) if line.strip() == "## [Unreleased]"), None)
+              if insert_at is None:
+                  raise SystemExit("CHANGELOG.md has no [Unreleased] heading")
+              lines.insert(insert_at, changelog_text)
+              changelog.write_text("".join(lines), encoding="utf-8")
+          PY
+
+      - name: Verify focused model-boundary contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          path = Path("tests/test_strix_orchestrator_free_only.py")
+          spec = importlib.util.spec_from_file_location("strix_free_contract", path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+          module.test_strix_accepts_only_the_governed_free_virtual_model_ids()
+          module.test_strix_rejects_every_direct_provider_model_before_execution()
+          PY
+
+      - name: Remove one-shot source-fix workflow and commit
+        shell: bash
+        env:
+          BRANCH: fix/strix-free-only-model-normalization-20260902
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/source-fix-strix-free-only-model-boundary.yml
+          git diff --check
+          if git diff --quiet; then
+            echo "No reconciliation delta remains."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/product-technical-gap-baseline.md CHANGELOG.md .github/workflows/source-fix-strix-free-only-model-boundary.yml
+          git commit -m "docs(strix): reconcile free-only routing evidence"
+          git push origin "HEAD:${BRANCH}"
