@@ -126,6 +126,24 @@ def test_in_progress_run_is_never_selected_and_makes_queued_siblings_redundant()
     ) == [101, 102]
 
 
+def test_group_with_no_queued_runs_has_nothing_to_coalesce() -> None:
+    """A workflow group whose only active runs are in-progress selects nothing.
+
+    ``_run_identity_matches`` only admits runs whose ``status`` is queued or
+    in-progress, so a group can legitimately contain zero queued entries when
+    every admitted run for that workflow happens to already be running --
+    the ``if not queued: continue`` guard exists precisely for that shape.
+    """
+    module = load_module()
+    runs = [run_record(100, 10, status="in_progress"), run_record(101, 10, status="in_progress")]
+    assert module.select_duplicate_queued_run_ids(
+        runs,
+        repository="ContextualWisdomLab/.github",
+        branch="feature/current",
+        head_sha="a" * 40,
+    ) == []
+
+
 def test_pull_request_target_uses_associated_pr_head_not_execution_head() -> None:
     """Trusted-base pull_request_target runs coalesce by their associated PR head."""
     module = load_module()
@@ -199,7 +217,7 @@ def test_revalidation_fails_closed_for_status_state_identity_and_event_changes()
         module.validate_candidate_against_live_state(candidate, live_pr=live_pr(head_sha="b" * 40), active_same_head_runs=[sibling])
     with pytest.raises(module.CoalescingRefused, match="identity is malformed"):
         module.validate_candidate_against_live_state(run_record(0, 10), live_pr=live_pr(), active_same_head_runs=[sibling])
-    with pytest.raises(module.CoalescingRefused, match="not a pull-request"):
+    with pytest.raises(module.CoalescingRefused, match="head moved"):
         module.validate_candidate_against_live_state(run_record(100, 10, event="push"), live_pr=live_pr(), active_same_head_runs=[sibling])
 
 
@@ -236,6 +254,123 @@ def test_pr_scope_rejects_other_open_pr_and_accepts_closed_matching_predecessor(
             current_pr_number=1,
             associated_prs={2: wrong_base},
         )
+
+
+def test_pr_scope_unsafe_sibling_cannot_supply_authoritative_evidence() -> None:
+    """A sibling belonging to an independent open PR is skipped, not authoritative.
+
+    Regression for the ``validate_candidate_against_live_state`` sibling loop
+    specifically (not the standalone ``_run_pr_scope_is_safe`` calls above):
+    a sibling that passes id/workflow/head-identity but belongs to a
+    different, still-open PR must be excluded from the authoritative-sibling
+    search entirely, not merely fail some other unrelated check. The bad
+    sibling's id (150) exceeds the candidate's (100), so if it were wrongly
+    treated as authoritative this would pass instead of failing closed.
+    """
+    module = load_module()
+    candidate = run_record(100, 10, pr_number=1)
+    other_open = live_pr(number=2)
+    bad_sibling = run_record(150, 10, pr_number=2, associations=[pr_association(2)])
+    with pytest.raises(module.CoalescingRefused, match="authoritative sibling"):
+        module.validate_candidate_against_live_state(
+            candidate,
+            live_pr=live_pr(),
+            active_same_head_runs=[candidate, bad_sibling],
+            current_pr_number=1,
+            associated_prs={2: other_open},
+        )
+
+
+def test_pr_scope_rejects_a_run_with_no_pull_request_associations() -> None:
+    """An orphaned run with zero PR associations cannot claim any PR's scope."""
+    module = load_module()
+    assert not module._run_pr_scope_is_safe(
+        run_record(100, 10, associations=[]),
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_a_malformed_live_pr() -> None:
+    """A live PR missing head/base identity cannot authorize any scope decision."""
+    module = load_module()
+    malformed_live_pr = {
+        "number": 1,
+        "state": "open",
+        "head": {"sha": "", "ref": "feature/current", "repo": {"full_name": "ContextualWisdomLab/.github"}},
+        "base": {"sha": "c" * 40, "ref": "main", "repo": {"full_name": "ContextualWisdomLab/.github"}},
+    }
+    assert not module._run_pr_scope_is_safe(
+        run_record(100, 10),
+        live_pr=malformed_live_pr,
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_an_association_with_a_malformed_number() -> None:
+    """An association carrying no positive-integer PR number is untrusted."""
+    module = load_module()
+    malformed_association = {
+        **pr_association(1),
+        "number": None,
+    }
+    assert not module._run_pr_scope_is_safe(
+        run_record(100, 10, associations=[malformed_association]),
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_an_association_whose_head_does_not_match_live_head() -> None:
+    """An association reporting a different head than the live PR is untrusted."""
+    module = load_module()
+    mismatched_association = pr_association(1, head_sha="b" * 40)
+    assert not module._run_pr_scope_is_safe(
+        run_record(100, 10, associations=[mismatched_association]),
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_an_association_whose_base_does_not_match_live_base() -> None:
+    """An association reporting a different base branch than the live PR is untrusted."""
+    module = load_module()
+    mismatched_association = pr_association(1, base_ref="release")
+    assert not module._run_pr_scope_is_safe(
+        run_record(100, 10, associations=[mismatched_association]),
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_a_predecessor_number_missing_from_associated_prs() -> None:
+    """A closed-predecessor PR number with no fetched live state is untrusted."""
+    module = load_module()
+    candidate = run_record(100, 10, pr_number=2, associations=[pr_association(2)])
+    assert not module._run_pr_scope_is_safe(
+        candidate,
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={},
+    )
+
+
+def test_pr_scope_rejects_a_predecessor_whose_live_head_does_not_match() -> None:
+    """A fetched closed predecessor whose live head has since moved is untrusted."""
+    module = load_module()
+    candidate = run_record(100, 10, pr_number=2, associations=[pr_association(2)])
+    moved_predecessor = live_pr(state="closed", number=2, head_sha="b" * 40)
+    assert not module._run_pr_scope_is_safe(
+        candidate,
+        live_pr=live_pr(),
+        current_pr_number=1,
+        associated_prs={2: moved_predecessor},
+    )
 
 
 def test_revalidation_ignores_non_authoritative_sibling_shapes() -> None:

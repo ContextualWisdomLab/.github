@@ -17,13 +17,18 @@ class RequiredSecurityRunnerImageContract(unittest.TestCase):
         """Require every Security Scan job to use explicit Ubuntu 24.04."""
         workflow = SECURITY_SCAN.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 5)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 4)
 
     def test_sast_semgrep_uses_explicit_supported_image(self) -> None:
-        """Require both SAST Semgrep jobs to use explicit Ubuntu 24.04."""
+        """Require the SAST Semgrep job to use explicit Ubuntu 24.04.
+
+        `#1656` removed the sibling `cancel-closed-pr-runs` no-op job (it
+        only duplicated PR-stable workflow concurrency), leaving one runner
+        job in this workflow instead of two.
+        """
         workflow = SAST_SEMGREP.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 1)
 
 
 if __name__ == "__main__":
