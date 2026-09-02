@@ -1,0 +1,233 @@
+name: Source fix Strix no-heuristic retry and severity
+
+on:
+  push:
+    branches:
+      - fix/strix-free-only-model-normalization-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prove retry and severity contracts are RED before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          for filename in (
+              "tests/test_strix_no_heuristic_retry_contract.py",
+              "tests/test_strix_no_heuristic_severity_contract.py",
+          ):
+              path = Path(filename)
+              spec = importlib.util.spec_from_file_location(path.stem, path)
+              module = importlib.util.module_from_spec(spec)
+              assert spec.loader is not None
+              spec.loader.exec_module(module)
+              for name in dir(module):
+                  if name.startswith("test_"):
+                      getattr(module, name)()
+          PY
+          then
+            echo "::error::No-heuristics Strix regressions were already green before the production repair."
+            exit 1
+          fi
+
+      - name: Remove repository-authored retry allocation and severity admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          gate_path = Path("scripts/ci/strix_quick_gate.sh")
+          workflow_path = Path(".github/workflows/strix.yml")
+          queue_test_path = Path("tests/test_required_workflow_queue_contract.py")
+
+          gate = gate_path.read_text(encoding="utf-8")
+          for line in (
+              'STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"\n',
+              'STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"\n',
+              '\trequire_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"\n',
+              '\trequire_non_negative_integer "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS" "STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"\n',
+          ):
+              if line not in gate:
+                  raise SystemExit(f"expected gate line missing: {line!r}")
+              gate = gate.replace(line, "", 1)
+
+          for function_name in (
+              "is_transient_same_model_retry_error",
+              "github_models_rate_limit_should_skip_same_model_retry",
+              "run_strix_with_transient_retry",
+          ):
+              pattern = rf"(?ms)^{re.escape(function_name)}\(\) \{{\n.*?^\}}\n\n"
+              gate, count = re.subn(pattern, "", gate, count=1)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one {function_name} function, found {count}")
+
+          old_success = '''\tif [ "$rc" -eq 0 ]; then
+\t\tif has_blocking_vulnerability_reports; then
+\t\t\tif ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
+\t\t\t\techo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
+\t\t\t\treturn 1
+\t\t\tfi
+\t\tfi
+\t\tprintf "Strix run succeeded for model '%s' in %ds.\\n" "$model" "$elapsed" >&2
+\t\treturn 0
+\tfi
+'''
+          new_success = '''\tif [ "$rc" -eq 0 ]; then
+\t\tlocal current_vulnerability_file
+\t\tcurrent_vulnerability_file="$(find "$ACTIVE_REPORTS_DIR" -type f -path '*/vulnerabilities/*.md' -print -quit 2>/dev/null || true)"
+\t\tif [ -n "$current_vulnerability_file" ]; then
+\t\t\techo "Current Strix vulnerability report exists; failing closed without a repository-authored severity threshold." >&2
+\t\t\treturn 1
+\t\tfi
+\t\tprintf "Strix run succeeded for model '%s' in %ds.\\n" "$model" "$elapsed" >&2
+\t\treturn 0
+\tfi
+'''
+          if old_success not in gate:
+              raise SystemExit("run_strix_once success block did not match expected source")
+          gate = gate.replace(old_success, new_success, 1)
+
+          simple_scan = '''run_current_target_scan() {
+\tINFRA_ERROR_DETECTED=0
+\tZERO_FINDINGS_REPORTED=0
+
+\tlocal primary_scan_rc=0
+\trun_strix_once "$PRIMARY_MODEL" || primary_scan_rc=$?
+\tif [ "$primary_scan_rc" -eq 0 ]; then
+\t\treturn 0
+\tfi
+\tif [ "$primary_scan_rc" -eq 2 ]; then
+\t\treturn 2
+\tfi
+\tif [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+\t\techo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free did not produce authoritative scan evidence; failing closed without repository-authored retry or fallback allocation." >&2
+\telse
+\t\techo "Strix quick scan failed; failing closed without repository-authored retry or fallback allocation." >&2
+\tfi
+\treturn 1
+}
+
+'''
+          gate, count = re.subn(
+              r"(?ms)^run_current_target_scan\(\) \{\n.*?^\}\n\n(?=prepare_pull_request_scan_scope)",
+              simple_scan,
+              gate,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one run_current_target_scan block, found {count}")
+          gate_path.write_text(gate, encoding="utf-8")
+
+          workflow = workflow_path.read_text(encoding="utf-8")
+          for line in (
+              "          STRIX_LLM_MAX_RETRIES: 1\n",
+              "          STRIX_TRANSIENT_RETRY_PER_MODEL: 2\n",
+              "          STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS: 60\n",
+              "          STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM\n",
+          ):
+              if line not in workflow:
+                  raise SystemExit(f"expected workflow line missing: {line!r}")
+              workflow = workflow.replace(line, "", 1)
+
+          workflow = workflow.replace(
+              "          # severity branch anchored away from identifiers so environment lines\n"
+              "          # such as STRIX_FAIL_ON_MIN_SEVERITY do not look like findings.\n",
+              "          # Keep the severity marker anchored away from identifiers so unrelated\n"
+              "          # environment text does not look like a reported finding.\n",
+              1,
+          )
+
+          single_run = '''          strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
+          : > "$strix_run_log"
+          strix_terminal_log="$strix_run_log"
+          strix_rc=0
+          set +e
+          bash "$TRUSTED_STRIX_GATE" 2>&1 | tee "$strix_terminal_log"
+          strix_rc="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$strix_rc" -eq 0 ]; then'''
+          workflow, count = re.subn(
+              r'''(?ms)          strix_run_log="\$RUNNER_TEMP/strix_gate_console\.log"\n.*?          set -e\n\n          if \[ "\$strix_rc" -eq 0 \]; then''',
+              single_run,
+              workflow,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"expected one outer Strix retry loop, found {count}")
+
+          workflow = workflow.replace("out-of-scope/below-threshold finding", "out-of-scope finding")
+          workflow = workflow.replace("below-threshold finding", "out-of-scope finding")
+          if "STRIX_FAIL_ON_MIN_SEVERITY" in workflow:
+              raise SystemExit("stale STRIX_FAIL_ON_MIN_SEVERITY remains in workflow")
+          if "strix_gate_attempt" in workflow or "STRIX_GATE_RETRY_BACKOFF_SECONDS" in workflow:
+              raise SystemExit("stale outer retry authority remains in workflow")
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          queue_test = queue_test_path.read_text(encoding="utf-8")
+          old_assert = '    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow\n'
+          new_assert = '    assert "STRIX_FAIL_ON_MIN_SEVERITY" not in workflow\n'
+          if old_assert not in queue_test:
+              raise SystemExit("required workflow queue test threshold assertion not found")
+          queue_test_path.write_text(queue_test.replace(old_assert, new_assert, 1), encoding="utf-8")
+          PY
+
+      - name: Verify focused no-heuristics contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          for filename in (
+              "tests/test_strix_no_heuristic_retry_contract.py",
+              "tests/test_strix_no_heuristic_severity_contract.py",
+          ):
+              path = Path(filename)
+              spec = importlib.util.spec_from_file_location(path.stem, path)
+              module = importlib.util.module_from_spec(spec)
+              assert spec.loader is not None
+              spec.loader.exec_module(module)
+              for name in dir(module):
+                  if name.startswith("test_"):
+                      getattr(module, name)()
+          PY
+          python3 -m pytest -q tests/test_required_workflow_queue_contract.py
+          git diff --check
+
+      - name: Record research/causal trace and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >> docs/doctoring/strix-orchestrator-free-model-boundary-2026-09-02.md <<'EOF'
+
+          ## Retry and severity decision repair
+
+          Fresh protected-main evidence showed that the required Strix workflow still allocated two same-model gate retries plus a second outer three-attempt retry loop with fixed linear/exponential-style sleep values, while the reusable gate classified retryability through hand-authored provider/error regex families. The same path converted Strix severity labels to numeric ranks and used the repository-selected `MEDIUM` cutoff as a merge admission rule. Neither retry allocation nor the severity cutoff had an identified statistical model, authoritative standard, or executable experimental calibration.
+
+          The repair therefore does not substitute different retry counts, backoff constants, severity weights, or cutoffs. The central Strix path executes the governed `orchestrator/free` request once; contextual-orchestrator retains provider discovery/failover authority. Any execution that fails to produce authoritative scan evidence fails closed. Any current vulnerability report artifact also fails closed without a repository-authored severity threshold. Severity labels may remain descriptive evidence, but they are not converted into a local admission score.
+          EOF
+          rm -f .github/workflows/source-fix-strix-no-heuristic-retry-severity.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/strix.yml scripts/ci/strix_quick_gate.sh tests/test_required_workflow_queue_contract.py tests/test_strix_no_heuristic_retry_contract.py tests/test_strix_no_heuristic_severity_contract.py docs/doctoring/strix-orchestrator-free-model-boundary-2026-09-02.md .github/workflows/source-fix-strix-no-heuristic-retry-severity.yml
+          git commit -m "fix(strix): remove heuristic retry and severity admission"
+          git push origin HEAD:fix/strix-free-only-model-normalization-20260902
