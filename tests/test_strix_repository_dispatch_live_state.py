@@ -28,6 +28,11 @@ def _step(name: str) -> dict[str, object]:
     return next(step for step in _steps() if step.get("name") == name)
 
 
+def _step_index(name: str) -> int:
+    """Return the position of a named step in the authoritative Strix scan job."""
+    return next(index for index, step in enumerate(_steps()) if step.get("name") == name)
+
+
 def _fake_gh_environment(tmp_path: Path, pull_request: dict[str, object] | None, *, gh_fails: bool) -> dict[str, str]:
     """Build a deterministic fake-GitHub shell environment for workflow-step tests."""
     fake_bin = tmp_path / "bin"
@@ -169,8 +174,21 @@ def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effec
 
 def test_repository_dispatch_revalidates_live_state_again_before_status_publication(tmp_path: Path) -> None:
     """Hours-long scans cannot publish after the exact target closes or becomes draft."""
-    validation = _step("Revalidate repository dispatch before status publication")
+    refresh_name = "Refresh OpenCode app token for Strix status revalidation"
+    validation_name = "Revalidate repository dispatch before status publication"
+    assert _step_index(refresh_name) < _step_index(validation_name)
+
+    refresh = _step(refresh_name)
+    validation = _step(validation_name)
+    assert refresh.get("id") == "status_target_app_token"
+    refresh_condition = str(refresh.get("if", ""))
+    assert "steps.dispatch_validation.outputs.should_scan != 'false'" in refresh_condition
+    assert "github.event_name == 'repository_dispatch'" in refresh_condition
+
     assert validation.get("id") == "dispatch_publish_validation"
+    token_expression = str(validation.get("env", {}).get("GH_TOKEN", ""))
+    assert "status_target_app_token.outputs.token" in token_expression
+    assert "target_app_token.outputs.token" not in token_expression
 
     rc, output = _run_status_revalidation(tmp_path / "ready", _live_pr())
     assert rc == 0
