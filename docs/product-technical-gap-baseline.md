@@ -94,6 +94,13 @@ flowchart LR
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
+| G-17 | 어떤 저장소도 k6 E2E 스위트가 없고, directive §7의 p95≤20ms 전 페이지 요구가 어떤 timing boundary(서버/네비게이션/인터랙션)를 재는지도 미정의다 | "충족"의 의미가 구현마다 달라지고 회귀를 놓칠 수 있다 | naruon에서 모든 page/route를 열거하는 k6 script와 명시적 timing-boundary 정의, per-page p95 assertion, bottleneck-triage 절차를 CI에 추가한다. 상세: 본문 하단 서술 항목 |
+| G-18 | LLM 호출에 단일 hardcoded timeout ceiling을 두지 않는다는 원칙은 이미 받아들여졌으나, admin이 조회·설정·해제·복원할 수 있는 감사된 override 표면은 아직 없다 | 운영자가 개별 model/pool timeout을 조정·감사할 수단이 없다 | contextual-orchestrator `/admin`에 per-model timeout CRUD·우선순위·상속·검증·감사 API를 ADR과 함께 추가한다. 상세: 본문 하단 서술 항목 |
+| G-19 | i18n 번역 문자열의 저장 위치(파일/JS bundle vs versioned DB resource)가 `naruon/frontend`에서 아직 감사되지 않았다 | 8개 언어의 텍스트 팽창·CJK·locale 실패를 놓치면 고객이 잘림·겹침을 본다 | naruon/frontend의 현재 i18n 저장 방식을 감사하고, versioned DB resource·언어별 Storybook/E2E로 전환한다. 상세: 본문 하단 서술 항목 |
+| G-20 | ConceptWeave/SDP/context-graph-contracts/enterprise-architecture-core의 온톨로지 파이프라인 책임 분리가 문서 인용 수준이며 이 세션의 저장소 접근으로는 교차 검증할 수 없다 | 문서상 경계와 실제 구현 경계가 다르면 온톨로지 release 신뢰성이 깨진다 | 해당 4개 저장소 접근 권한이 있는 세션이 파이프라인·의사결정 소유권 분리를 실제 코드와 대조 검증한다. 상세: 본문 하단 서술 항목 |
+| G-21 | directive가 이름을 붙인 14개 저장소가 `CWL-MASTER-CONTEXT.md`의 ecosystem catalog/UML에 아직 없다 | 문서 간 불일치로 신규 에이전트·구매자가 실제 생태계 범위를 오판한다 | 각 저장소의 실제 현재 상태를 확인해 `CWL-MASTER-CONTEXT.md`의 카탈로그·UML에 추가한다. 상세: 본문 하단 서술 항목 |
+| G-22 | `contextual-orchestrator`의 stdlib-Python core가 새로 sharpened된 §6 Rust 원칙(허용 예외는 ADR로 근거·범위·제거조건 명시) 기준을 충족하는지 미검증이다 | 언어 선택이 정책과 어긋나면 성능·유지보수 리스크가 문서화 없이 누적된다 | `library_research.md`의 기존 항목을 §6 신판 기준으로 재검토하고, control-plane 로직이 Rust mandate 범위에 드는지 판정한다. 상세: 본문 하단 서술 항목 |
+| G-23 | directive §8의 CI 통합 아키텍처(exact-SHA 검증, owner RED→fix→GREEN→release, mutable-head 금지 등) 요구가 현재 owner/consumer 관계 전반에서 실제로 충족되는지 감사되지 않았다 | "이미 하고 있다"는 인상과 검증된 준수는 다르다 | 모든 owner PR·release·consumer 변경에 대해 SBOM/provenance/exact-SHA 검증이 실제로 걸리는지 전용 감사 pass로 확인한다. 상세: 본문 하단 서술 항목 |
 
 ## 4. 열린 PR live inventory
 
@@ -2601,7 +2608,7 @@ diff-against-prior-text reasoning). Two of the three genuinely new requirements 
 concrete, testable product gaps with no owning repository or implementation yet, recorded here per
 directive §1's own instruction to derive gap/status entries from ADRs, research, current data, and PRs.
 
-**Gap 1 — E2E load-test acceptance gate (directive §7).** New requirement: every page's p95
+**G-17 — E2E load-test acceptance gate (directive §7).** New requirement: every page's p95
 end-to-end processing time must be ≤ 20ms under k6 load test, checked across *all* pages (not a
 sample), with any bottleneck removed and the page re-verified before the gate can pass. None of this
 session's four in-scope repositories (`.github`, `noema`, `contextual-orchestrator`, `naruon`) has a
@@ -2611,9 +2618,17 @@ whose async request path this gate would exercise directly — but this has not 
 or started. Needs, at minimum: a k6 script enumerating every page/route, a CI job running it against a
 built `frontend`+`backend` stack, a p95-per-page assertion (not an aggregate/average), and a documented
 bottleneck-triage procedure so a first failure has a defined remediation path rather than an
-open-ended investigation each time.
+open-ended investigation each time. **Timing boundary undefined (flagged by Devin Review):** neither
+the directive text nor this entry states what "processing time" spans — server request-received-to-
+response-sent, browser navigation-start-to-load-event, or interaction-to-next-paint would each yield a
+materially different number for the same page. k6's own default HTTP-request-duration metric measures
+only the transport-level request/response leg, not client-side render/hydration; a future k6 suite
+implementing this gate must pick and document one explicit boundary (and, if client-rendered work is
+in scope, pair k6 with a browser-timing tool that measures it) so "p95 ≤ 20ms" has one unambiguous
+meaning across every page and every future re-verification, rather than each implementer choosing
+whichever boundary makes their own page look compliant.
 
-**Gap 2 — Admin-configurable per-model LLM timeout (directive §8).** New requirement: no application/
+**G-18 — Admin-configurable per-model LLM timeout (directive §8).** New requirement: no application/
 agent/gateway layer may impose a single hardcoded timeout ceiling on LLM calls (default: unlimited/
 `null`); a per-model timeout becomes active only through an admin-facing web surface with full CRUD
 (query/set/clear/restore), explicit units, priority, inheritance, input validation, and an audit
@@ -2696,7 +2711,7 @@ concrete, currently-unimplemented product/process gaps worth tracking here per d
 instruction; a fourth item is a documentation-sync gap (a set of ecosystem repos this directive now
 names that `docs/CWL-MASTER-CONTEXT.md`'s own catalog does not yet carry), not a product gap.
 
-**Gap 3 — i18n translation ledger must be a versioned DB resource (directive §4).** New requirement:
+**G-19 — i18n translation ledger must be a versioned DB resource (directive §4).** New requirement:
 any customer-facing UI's translation strings must live in a **versioned DB resource**, never static
 files or a JS bundle; server/native code fetches only the current screen's keys with caching, the
 browser is never handed the whole catalog or heavy i18n JavaScript, and no SPA architecture may be
@@ -2712,14 +2727,14 @@ requirement in mind) or already meets this bar. That audit is deliberately defer
 future Gap increment — this entry only records the requirement and its current unverified-compliance
 status, consistent with directive §1's "one Gap increment at a time" philosophy.
 
-**Gap 4 — Ontology-pipeline repo-responsibility split needs a cross-check, not just a citation
+**G-20 — Ontology-pipeline repo-responsibility split needs a cross-check, not just a citation
 (directive §5).** New requirement: ConceptWeave owns the
 observe→discover→propose→align→validate→review→publish pipeline and semantic release; SDP owns
 catalog/governance/consumption; context-graph-contracts owns interop contracts;
 enterprise-architecture-core owns the Context Map and cross-cutting decisions. Released
 concepts/relations/dimensions/measures/mappings must carry evidence/provenance/validity/confidence/
 status/deprecation/locale-label metadata; consumers may use only released API/contract/ACL (no file
-copies, no cross-service SQL, no unapproved publication); the UI translation ledger (Gap 3, above)
+copies, no cross-service SQL, no unapproved publication); the UI translation ledger (G-19, above)
 and the ontology label ledger must never share a store. This session could confirm `semantic-data-portal`'s
 role against its existing `docs/CWL-MASTER-CONTEXT.md` description (consistent, additive), but could
 **not** reach `ConceptWeave`, `context-graph-contracts`, or `enterprise-architecture-core` (outside
@@ -2728,7 +2743,7 @@ what those repos currently implement, or whether the immutable-release metadata 
 enforced anywhere. Needs a follow-up pass with access to those three repos before treating this split
 as verified rather than merely recorded.
 
-**Gap 5 — `docs/CWL-MASTER-CONTEXT.md` ecosystem catalog is missing 14 repo names the directive now
+**G-21 — `docs/CWL-MASTER-CONTEXT.md` ecosystem catalog is missing 14 repo names the directive now
 uses (directives §5, §9).** `ConceptWeave`, `context-graph-contracts`, `enterprise-architecture-core`,
 `EgressWeave`, `OriginWeave`, `pingora-gateway`, `quarantine-sandbox-runtime`, `EmbedRelay`,
 `DiagramWeave`, `mhtml-etl-gateway`, `psychometrics-commons`, `PolicyWeave`, `CalendarWeave`, and
@@ -2744,8 +2759,8 @@ consistent — this session's repository access (`.github`, `noema`, `contextual
 
 None of these three gaps blocks any currently open PR; all are recorded so a future pass of this loop
 (or a `spawn_task` suggestion, repository access permitting) picks them up once the open-PR queue is
-exhausted, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다." Gap 4 and
-Gap 5 are the same underlying documentation-completeness issue seen from two angles (pipeline-role
+exhausted, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다." G-20 and
+G-21 are the same underlying documentation-completeness issue seen from two angles (pipeline-role
 verification vs. catalog-entry existence) and should likely be closed by the same follow-up pass.
 ## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
 
@@ -2811,7 +2826,7 @@ source before recording (§10's CO pool-pin elaboration, confirmed true against 
 currently-unverified audit gaps, recorded here rather than either asserted as already-compliant or
 silently dropped:
 
-**Gap 6 — `contextual-orchestrator`'s stdlib-Python core against the newly sharpened §6 Python rule.**
+**G-22 — `contextual-orchestrator`'s stdlib-Python core against the newly sharpened §6 Python rule.**
 §6 now states plainly that Python is disfavored and must never be chosen for LLM/agent-tooling
 convenience, with exactly one permitted exception (a Python-only ML runtime with no practical Rust
 alternative for that specific part, scope/rationale/removal-condition recorded in an ADR, hot path
@@ -2833,7 +2848,7 @@ for the HTTP-routing/dispatch parts) and "general software where speed/stability
 close read of `contextual-orchestrator`'s existing ADRs and `library_research.md` against this
 revision's exact §6 text, before treating this as either compliant or a violation.
 
-**Gap 7 — §8's CI integration architecture, not yet audited for compliance.** §8 gained a detailed
+**G-23 — §8's CI integration architecture, not yet audited for compliance.** §8 gained a detailed
 CI integration architecture requirement this revision (`.github` reusable-workflow-plus-thin-caller
 composition; exact-SHA verification of build/API-schema-contract/E2E/model-behavior/security/SBOM/
 provenance on every owner PR/release/consumer change; owner-side RED→fix→GREEN→release with a consumer

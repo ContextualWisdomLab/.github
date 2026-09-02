@@ -1,7 +1,12 @@
 # Product goal directive — autonomous PR/merge/development loop
 
-**Status:** active standing directive · **Owner intent recorded:** 2026-08-30, revised 2026-09-01,
-2026-09-02 (twice, same day) · **Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from
+**Status:** active standing directive · **Owner intent recorded:** original 2026-08-30, plus three
+substantive revisions since — 2026-09-01 (one), 2026-09-02 (two, same day; the second of these is
+labeled "third revision" in `docs/doctoring/product-goal-directive.md` because it is the third
+substantive revision overall, not a third same-day one). A fourth same-day restatement on 2026-09-02
+was compared section-by-section against the stored text and found to be a verified duplicate with no
+new obligation (see doctoring's "fourth restatement" entry) — it is not counted as a revision here. ·
+**Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from
 this org, leveraged in order of product responsibility / reuse boundary / docs / implementation /
 consumption — not by name).
 

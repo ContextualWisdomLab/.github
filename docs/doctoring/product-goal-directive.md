@@ -663,3 +663,66 @@ fixed:
   `grep -n "�" docs/product-goal-directive.md` → no matches;
   `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 5: one real ID-collision bug fixed, one real clarity gap tightened, one analysis finding verified false and not acted on
+
+- **Date:** 2026-09-02, after this PR's second merge from `main` (commit `c16d712c`, pulling in the
+  `#1672` Noema single-request work and 10 other commits).
+- **Subject:** a fifth Devin Review pass found 3 new items: 1 `BUG` (`based_on_repo_rules: true`),
+  2 `ANALYSIS`. All three checked against live source before acting, per this session's standing
+  verify-before-acting discipline.
+- **Finding 1 (BUG, real, fixed) — "New gaps have colliding identifiers."** `docs/product-technical-gap-baseline.md`
+  had accumulated seven narrative product-gap entries across this PR's own commits, labeled "Gap 1"
+  through "Gap 7" — a distinct, informal numbering scheme that collides on sight with this same file's
+  canonical `## 3. Gap register` table, which already uses `G-01` through `G-16` as the one ID space
+  every PR is instructed to cite (`"이 문서의 Gap ID를 연결한다"`, line 2523/2534). Confirmed via
+  `git diff origin/main...HEAD` that all seven "Gap N" labels were introduced by this branch's own
+  commits (none exist on `main`), so this was this PR's own defect to fix, not a pre-existing one to
+  merely flag. **Fix:** renamed all seven in place to continue the canonical sequence — `Gap 1`→`G-17`
+  (E2E load-test gate), `Gap 2`→`G-18` (admin per-model LLM timeout), `Gap 3`→`G-19` (i18n ledger),
+  `Gap 4`→`G-20` (ontology-pipeline split), `Gap 5`→`G-21` (master-context catalog gap), `Gap 6`→`G-22`
+  (contextual-orchestrator Python-vs-Rust audit), `Gap 7`→`G-23` (§8 CI-architecture audit) — updated
+  every cross-reference (the "Gap 3, above" and "Gap 4 and Gap 5 are the same..." sentences), and added
+  one compact row per new ID to the `## 3. Gap register` table itself (pointing to the fuller narrative
+  entries below for detail), so the register — the thing PRs are actually told to cite — is complete
+  rather than seven items existing only in prose with no register row.
+- **Finding 2 (ANALYSIS, verified false as stated, but a real underlying clarity gap fixed) —
+  "Revision count is stale."** Anchored on the status line's "revised 2026-09-01, 2026-09-02 (twice,
+  same day)." Checked this against every dated heading in this file: `2026-09-01 revision` (substantive,
+  3 sections), `2026-09-02 revision` (substantive, 5 sections), `2026-09-02 third revision` (substantive,
+  8 sections — labeled "third" because it is the third substantive revision *overall*, counting
+  2026-08-30's original as the baseline), and `2026-09-02 fourth restatement` (verified, in its own
+  entry above with a full section-by-section comparison, to be a **non-substantive duplicate** — no
+  edit was made to `product-goal-directive.md` for it). Arithmetic: 1 (09-01) + 2 (09-02) = 3
+  substantive revisions total, which is exactly what "revised 2026-09-01, 2026-09-02 (twice, same day)"
+  already states — so the specific claim "the history documents a third substantive revision" not
+  reflected in the status line is **false**; the third one (the "third revision" heading) *is* one of
+  the two 09-02 occurrences the status line already counts. Not acted on as stated. However, the
+  underlying confusion is real and worth preventing: a heading reading "third revision (second same-day
+  chat message)" sitting next to a status line reading "twice, same day" invites exactly this
+  misreading (is "third" a same-day count or an overall count?) for the next reviewer, human or bot.
+  **Fix (clarity, not correction):** reworded the status line to spell out the count explicitly ("plus
+  three substantive revisions since — 2026-09-01 (one), 2026-09-02 (two, same day; the second of these
+  is labeled 'third revision' in the doctoring file because it is the third substantive revision
+  overall, not a third same-day one)") and to state plainly that the fourth same-day restatement was
+  compared and found non-substantive, so a future reader (or reviewer) never has to redo this exact
+  arithmetic check.
+- **Finding 3 (ANALYSIS, real, fixed) — "Load target lacks a timing boundary."** The new `G-17` entry's
+  "every page's p95 end-to-end processing time must be ≤ 20ms" never stated what interval that spans.
+  Confirmed the ambiguity is real and consequential: a server request-received-to-response-sent
+  measurement, a browser navigation-start-to-load-event measurement, and an interaction-to-next-paint
+  measurement are all plausible readings of "processing time" and would yield materially different
+  numbers for the same page — and k6's own default HTTP-duration metric only covers the first of the
+  three, silently excluding client-side render/hydration cost if that boundary were assumed without
+  being stated. This ambiguity lives in this file's own explanatory prose (not the directive's verbatim
+  quote elsewhere, which this file's governance clause forbids rewording), so it was this session's own
+  gap to fix. **Fix:** added a sentence to `G-17` naming the three candidate boundaries, noting k6's
+  default metric only covers the transport leg, and instructing that a future implementing k6 suite
+  must pick and document one explicit boundary (pairing k6 with a browser-timing tool if client-side
+  work is in scope) so "meets the gate" has one fixed meaning across every page and re-verification.
+- **Verification:** `git diff --check origin/main -- docs/product-goal-directive.md
+  docs/product-technical-gap-baseline.md` → exit 0; `grep -n "�" docs/product-goal-directive.md
+  docs/product-technical-gap-baseline.md` → no matches; `grep -n "Gap [0-9]"
+  docs/product-technical-gap-baseline.md` → no matches (confirms no collision-prone label survives);
+  `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.
