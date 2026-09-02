@@ -152,4 +152,36 @@ test_path.write_text(test_text, encoding="utf-8")
 # workflow token cannot be assumed to read that sibling, so defer the live API
 # lookup until the selected repository-scoped reviewer credential is minted.
 noema_path = Path(".github/workflows/noema-review.yml")
-noema = noema_path.read_text(encoding="utf-8")n
+noema = noema_path.read_text(encoding="utf-8")
+lookup_anchor = '''          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not retrieve the live pull request before Noema setup."
+            exit 1
+          fi
+'''
+deferred_lookup = '''          if [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "proceed=true" >>"$GITHUB_OUTPUT"
+            echo "::notice::Cross-repository Noema live lookup deferred until the selected repository-scoped reviewer credential is available."
+            exit 0
+          fi
+
+''' + lookup_anchor
+if noema.count(lookup_anchor) != 1:
+    raise SystemExit("Noema early live-lookup anchor drifted")
+noema = noema.replace(lookup_anchor, deferred_lookup, 1)
+
+refresh_anchor = '''      - name: Revalidate live Noema target before model setup
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
+        id: live_pr_refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+'''
+refresh_replacement = '''      - name: Revalidate live Noema target before model setup
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
+        id: live_pr_refresh
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+'''
+if noema.count(refresh_anchor) != 1:
+    raise SystemExit("Noema post-credential live-refresh anchor drifted")
+noema = noema.replace(refresh_anchor, refresh_replacement, 1)
+noema_path.write_text(noema, encoding="utf-8")
