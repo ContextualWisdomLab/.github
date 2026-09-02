@@ -10,7 +10,8 @@ JSON booleans are rejected as line coordinates even though Python considers `Tru
 
 This repair is a narrow current-main successor to the heavily diverged PR #1589 evidence lineage. It does not copy CodeRabbitAI or Devin wording and makes no superiority claim.
 
-
 Exact-head follow-up also makes bounded-diff omission markers ineligible as source evidence. Short identifiers, symbol-only lines, blank changed lines, and non-ASCII source remain admissible through exact string equality rather than lexical guessing.
 
 The exact-head structural follow-up removes the fixed English relation-word list. Formal evidence now carries a schema-derived `claim_role` for each defect-class witness, while the deterministic gate verifies exact source identity, canonical coordinates, role identity, and distinct observations. Semantic causal adequacy remains a reviewer/evaluation responsibility; the validator does not pretend English keyword presence proves causality.
+
+Workflow-local bootstrap or generated commits are not accepted as final review/check proof merely because their source transaction verified locally. The merge candidate must be a workflow-starting successor writer head produced through ordinary owner-side mutation, with the required review and quality checks observed on that exact unchanged head before merge.
