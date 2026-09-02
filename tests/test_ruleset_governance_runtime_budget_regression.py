@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts" / "ci" / "reconcile_ruleset_governance.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ruleset-governance-reconcile.yml"
+GITHUB_HOSTED_JOB_EXECUTION_LIMIT_MINUTES = 360
 
 
 def load_module():
@@ -54,8 +55,8 @@ def test_ambiguous_recovery_budget_counts_every_history_state_read() -> None:
     assert expected_seconds == 7_680
 
 
-def test_workflow_timeout_and_focused_gate_cover_runtime_budget_regression() -> None:
-    """The apply job and focused CI must cover the source-derived 128-minute bound."""
+def test_workflow_uses_full_hosted_job_limit_for_critical_section_headroom() -> None:
+    """Do not self-terminate before GitHub's hosted-runner execution hard limit."""
 
     module = load_module()
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -69,4 +70,5 @@ def test_workflow_timeout_and_focused_gate_cover_runtime_budget_regression() -> 
     configured_minutes = int(timeout_match.group(1))
     required_minutes = math.ceil(module.worst_case_apply_seconds(target_count=2) / 60)
     assert required_minutes == 128
-    assert configured_minutes >= required_minutes
+    assert configured_minutes == GITHUB_HOSTED_JOB_EXECUTION_LIMIT_MINUTES
+    assert configured_minutes - required_minutes == 232
