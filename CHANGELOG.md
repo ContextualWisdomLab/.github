@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Pin `CONTEXTUAL_ORCHESTRATOR_POOL` to `free` for every GitHub Actions
+  Workflow invocation of the review sidecar; `auto` is no longer an accepted
+  value.** `scripts/ci/contextual_orchestrator_review_sidecar.sh` previously
+  accepted `free` or `auto` and defaulted to `free`, but every current caller
+  already used `free` (`strix.yml` sets it explicitly; every other central
+  review workflow relies on the script's own default) -- so this closes an
+  unused, unaudited escape hatch rather than fixing a live incident. The org
+  has not yet solved cost-safe free+ZDR routing well enough in central CI to
+  justify admitting priced routes there (see `docs/adr/0003-contextual-
+  orchestrator-vendored-free-zdr.md`); an operator setting
+  `CONTEXTUAL_ORCHESTRATOR_POOL=auto` in a future workflow change would have
+  silently opened every required review (OpenCode, Noema, Strix) to priced
+  model spend with no budget/authorization gate, since the sidecar's own
+  validation was the only thing standing between that env var and the
+  launcher's `--pool` flag. The launcher's own `--pool` CLI flag (a
+  general-purpose tool also invoked outside GitHub Actions, e.g. local
+  testing) is unchanged and still accepts `auto`; only this repo's GitHub-
+  Actions-facing sidecar script is narrowed. New
+  `test_sidecar_pins_the_pool_to_free_for_github_actions` extracts and
+  executes the sidecar's own `case` statement against `free`, `auto`, empty,
+  and an arbitrary value, asserting `auto` now fails closed with a
+  `CONTEXTUAL_ORCHESTRATOR_POOL must be free` diagnostic instead of being
+  silently accepted.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
