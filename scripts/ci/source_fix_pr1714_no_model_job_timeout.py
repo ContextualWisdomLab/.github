@@ -1,4 +1,4 @@
-"""One-shot repair for PR #1714's model-backed autofix timeout contract."""
+"""One-shot repair for PR #1714's model-backed autofix no-heuristics contract."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def patch_workflow() -> None:
-    """Remove elapsed-time termination while retaining live-head safety controls."""
+    """Remove repository-authored model termination, compute, capability, and evidence heuristics."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    old = '''    # Bound the job well short of GitHub's 360-minute platform default. Setup
+    timeout_old = '''    # Bound the job well short of GitHub's 360-minute platform default. Setup
     # (checkout, OIDC token exchange, OpenCode CLI install, context collection)
     # is API/IO-bound and normally finishes in a few minutes; the one
     # `opencode run` call (12 agent steps, single fixed model, no
@@ -32,61 +32,111 @@ def patch_workflow() -> None:
     # before the platform cap.
     timeout-minutes: 25
 '''
-    new = '''    # This job is model-backed through contextual-orchestrator/orchestrator/free
+    timeout_new = '''    # This job is model-backed through contextual-orchestrator/orchestrator/free
     # and therefore has no repository-owned wall-clock timeout. Provider end,
     # explicit cancellation, and the workflow's exact live-head/state guards
     # are authoritative; elapsed time alone must not terminate reasoning,
     # streaming, or tool work. Queue pressure is handled by the scheduler's
     # stale-head dedupe/cancellation rather than by killing current-head work.
 '''
-    WORKFLOW.write_text(
-        replace_once(text, old, new, "autofix timeout block"), encoding="utf-8"
+    text = replace_once(text, timeout_old, timeout_new, "autofix timeout block")
+
+    text = replace_once(
+        text,
+        '                "reasoningEffort": "high",\n',
+        "",
+        "repository-authored reasoning effort",
     )
+    text = replace_once(
+        text,
+        '                "steps": 12,\n',
+        "",
+        "repository-authored agent step budget",
+    )
+    capability_old = '''                    "name": "Orchestrator Free (ZDR-first zero-cost pool)",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {
+                      "context": 200000,
+                      "output": 32768
+                    }
+'''
+    capability_new = '''                    "name": "Orchestrator Free (ZDR-first zero-cost pool)"
+'''
+    text = replace_once(
+        text,
+        capability_old,
+        capability_new,
+        "leaf model capability and context/output declarations",
+    )
+    text = replace_once(
+        text,
+        '          $(sed -n \'1,260p\' "$RUNNER_TEMP/pr-review-autofix-context.md")\n',
+        '          $(cat "$RUNNER_TEMP/pr-review-autofix-context.md")\n',
+        "review-context line quota",
+    )
+    WORKFLOW.write_text(text, encoding="utf-8")
 
 
 def patch_test() -> None:
-    """Replace stale timeout-positive regression with the model authority contract."""
+    """Replace the timeout-positive regression with fail-closed authority contracts."""
     text = TEST.read_text(encoding="utf-8")
     marker = "def test_autofix_job_has_a_bounded_runtime() -> None:\n"
     start = text.find(marker)
     if start < 0 or text.find(marker, start + 1) >= 0:
         raise SystemExit("PR1714 stale timeout test marker moved or duplicated")
-    replacement = '''def test_autofix_model_job_has_no_elapsed_time_termination() -> None:
-    """OpenCode autofix delegates model completion to orchestrator/provider authority."""
+    replacement = '''def test_autofix_model_job_delegates_termination_and_compute_to_orchestrator() -> None:
+    """Leaf OpenCode config must not invent model-time or test-time-compute authority."""
     workflow = _workflow_text()
     job = workflow.split("  autofix:\\n", maxsplit=1)[1]
     job_header = job.split("    steps:\\n", maxsplit=1)[0]
 
     assert "timeout-minutes:" not in job_header
-    assert "contextual-orchestrator/orchestrator/free" in workflow
+    assert '"model": "contextual-orchestrator/orchestrator/free"' in workflow
+    assert '"reasoningEffort":' not in workflow
+    assert '"steps": 12' not in workflow
+    assert '"tool_call": true' not in workflow
+    assert '"reasoning": true' not in workflow
+    assert '"limit": {' not in workflow
     assert "no repository-owned wall-clock timeout" in job_header
     assert "cancel-in-progress: false" in workflow
+
+
+def test_autofix_review_context_is_not_sampled_by_a_fixed_line_quota() -> None:
+    """Exact review evidence must reach the model without a repository-authored line cutoff."""
+    workflow = _workflow_text()
+
+    assert "sed -n '1,260p'" not in workflow
+    assert '$(cat "$RUNNER_TEMP/pr-review-autofix-context.md")' in workflow
 '''
     TEST.write_text(text[:start] + replacement, encoding="utf-8")
 
 
 def append_traceability() -> None:
-    """Document the queue-pressure/model-termination boundary."""
+    """Document the model-authority and complete-evidence boundary."""
     changelog = CHANGELOG.read_text(encoding="utf-8")
     note = (
-        "\n- PR #1714: reject a 25-minute GitHub job timeout on model-backed OpenCode "
-        "autofix; keep `orchestrator/free` provider completion and exact-head/explicit "
-        "cancellation as termination authority, with stale-run pressure handled by the scheduler.\n"
+        "\n- PR #1714: reject repository-authored OpenCode autofix wall-clock, reasoning-effort, "
+        "agent-step, capability/context/output, and fixed review-line allocation. The leaf requests "
+        "only `orchestrator/free`; contextual-orchestrator owns verified capability/routing/test-time "
+        "compute and the full collected review evidence is passed without a hand-selected line quota.\n"
     )
-    if "PR #1714: reject a 25-minute GitHub job timeout" not in changelog:
+    if "PR #1714: reject repository-authored OpenCode autofix wall-clock" not in changelog:
         CHANGELOG.write_text(changelog + note, encoding="utf-8")
 
     baseline = BASELINE.read_text(encoding="utf-8")
     section = '''
 
-### OpenCode autofix model-job timeout authority — PR #1714
+### OpenCode autofix orchestration authority — PR #1714
 
-- **Root cause:** the queue-capacity repair proposed `timeout-minutes: 25` around a current-head OpenCode model job, converting elapsed wall time into model termination authority.
-- **Contract:** OpenCode remains fixed to `contextual-orchestrator/orchestrator/free`; provider completion, explicit cancellation, and exact live-head/state guards end work. Scheduler stale-head dedupe/cancellation handles queue waste without killing the sole current-head model run by elapsed time.
-- **Regression:** `test_autofix_model_job_has_no_elapsed_time_termination` requires no job-level timeout while preserving `cancel-in-progress: false` for the mutation-capable writer lane.
-- **Status:** Implemented on the PR #1714 writer branch; regenerate exact-head checks/reviews after materialization.
+- **Root cause:** the leaf workflow proposed `timeout-minutes: 25` and also carried repository-authored `reasoningEffort: high`, a 12-step agent budget, asserted tool/reasoning capabilities, fixed context/output limits, and a 260-line review-context cutoff. None of those leaf allocations had executable research/model evidence establishing them as decision authority.
+- **Owner boundary:** `.github` requests exactly `contextual-orchestrator/orchestrator/free` through the gateway token. contextual-orchestrator owns provider discovery, verified capability admission, routing, and research-backed test-time compute; the leaf does not invent provider/model capability or compute limits.
+- **Evidence contract:** the complete review context produced by the governed collector is passed to the model. If contextual-orchestrator cannot admit/serve the request under its verified capability/privacy/free-pool contracts, the path fails closed rather than silently sampling evidence or selecting a paid/provider fallback.
+- **Termination contract:** provider completion, explicit cancellation, and exact live-head/state guards end model work. Scheduler stale-head dedupe/cancellation handles queue waste without terminating the sole current-head model run by elapsed time.
+- **Regression:** `test_autofix_model_job_delegates_termination_and_compute_to_orchestrator` and `test_autofix_review_context_is_not_sampled_by_a_fixed_line_quota` forbid reintroduction of those leaf heuristics while preserving the exact `orchestrator/free` contract.
+- **Status:** Proposed until the one-shot source repair self-removes and fresh exact-head Checks are GREEN.
 '''
-    if "### OpenCode autofix model-job timeout authority — PR #1714" not in baseline:
+    if "### OpenCode autofix orchestration authority — PR #1714" not in baseline:
         BASELINE.write_text(baseline + section, encoding="utf-8")
 
 
