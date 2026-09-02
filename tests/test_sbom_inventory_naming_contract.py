@@ -27,6 +27,15 @@ def test_internal_sbom_models_use_semantic_identifiers() -> None:
     assert not hasattr(agg, "RepoInventory")
 
 
+def test_internal_sbom_helpers_use_semantic_identifiers() -> None:
+    """Owned helper names describe the operation instead of generic one-word actions."""
+
+    assert hasattr(agg, "_dedupe_components")
+    assert hasattr(agg, "_run_command")
+    assert not hasattr(agg, "_dedupe")
+    assert not hasattr(agg, "_run")
+
+
 def test_legacy_v1_inventory_adapter_preserves_existing_wire_keys() -> None:
     """The semantic internal model must not break the published v1 inventory shape."""
 
