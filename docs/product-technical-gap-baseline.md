@@ -2809,3 +2809,14 @@ those repos next, now with an unambiguous target to document against.
 **부수적으로 확인된 사실.** `disksage`의 대상 브랜치 이름이 `codex/canonical-prd`라는 점은, 이 저장소에 대해 (적어도 브랜치 이름 규약상) Codex 계열 도구를 사용한 작업이 별도로 존재했음을 시사한다 — 이번 세션이 만든 브랜치가 아니라는 점만 사실로 기록하며, 조율 여부나 승인 여부에 대해서는 추측하지 않는다. 또한 `supply-chain-control-plane`에서 이름이 다른 두 브랜치(`feat/disruption-impact-foundation`, `docs/master-product-planning-v2-check`)가 동일 커밋 SHA를 가리키는 것은 의도된 중복 ref인지 라벨링 이상 징후인지 확인이 필요한 사안으로 별도 플래그해 둔다.
 
 **Follow-up.** 병합을 우선 검토해야 할 것은 `PolicyWeave`의 `develop`(main에 없는 PRD/ADR 링크 단절을 해소), `supply-chain-control-plane`의 `feat/disruption-impact-foundation`(또는 동일 커밋을 가리키는 `docs/master-product-planning-v2-check`), `disksage`의 `codex/canonical-prd`(main에 없는 PRD와 소유 경계 문서) 세 건이다 — 셋 다 main으로 승격되면 §9 (b)절의 "완전 스텁형"/"partial" 판정을 실질적으로 해소한다. `CalendarWeave`는 병합 판단이 아니라 **조직 차원의 재조정**이 먼저 필요하다: 4개 브랜치 모두가 Accepted ADR로 "CalendarWeave = authoritative owner"를 문서화한 상태이므로, `docs/product-goal-directive.md` §9 관리자가 이 저장소를 composition consumer로 유지할지 core owner로 재분류할지 명시적으로 결정하지 않는 한 이 불일치는 어느 브랜치를 merge해도 저절로 풀리지 않는다. `enterprise-architecture-core`는 여전히 실질적 문서 갭이 완전히 남아 있다 — 재검증 대상이었던 유일한 브랜치가 기본 브랜치와 동일한 이상, PRD/ARCHITECTURE 작성은 여전히 미착수 상태이며 이번 패스로는 전혀 진전되지 않았다.
+## Noema single-request model-control ownership — PR #1672 (2026-09-02)
+
+**Status:** Proposed / exact-head verification required before merge.
+
+**Root cause.** Noema duplicated `contextual-orchestrator` structured-output repair by making a second model request and wrapped that request in an unmeasured 900-second repository wall-clock deadline. This created a self-hosting admission failure: the required review could terminate valid long inference using policy that the gateway already owns.
+
+**Context Map / responsibility boundary.** `.github` owns CI review orchestration, exact-revision evidence, deterministic verdict validation and publication. `contextual-orchestrator` owns provider discovery, capability routing, `orchestrator/free`, structured-output repair/failover and provider completion. No provider/model-specific fallback or caller wall-clock timeout crosses that boundary.
+
+**Action.** Replace recursive caller repair with one structured-output gateway request; remove fixed deadline/signal machinery and sampling temperature; retain exact-head checks before and after model work; sanitize serving-model telemetry; restore exact changed-line diagnostics; retain bounded non-heuristic evidence cardinality and strict local JSON parsing.
+
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks/reviews remain the admission authority; predecessor-head evidence is not transferable.
