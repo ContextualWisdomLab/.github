@@ -105,10 +105,11 @@ replacement = r'''      - name: Fail closed without a current-head OpenCode verd
 '''
 WORKFLOW.write_text(before + replacement + end + after, encoding="utf-8")
 
-# A pull_request_target run is created from the protected base, so workflow-run
-# head_sha is not the PR head. Bind the immutable Required OpenCode run id to the
-# intended PR and exact PR head through the run's pull_requests association.
-dispatch = DISPATCH.read_text(encoding="utf-8")ndispatch = replace_once(
+# pull_request_target workflow-run head_sha is the protected base. Bind the
+# immutable required run to the intended PR and exact PR head through the run's
+# pull_requests association instead of comparing run.head_sha to the PR head.
+dispatch = DISPATCH.read_text(encoding="utf-8")
+dispatch = replace_once(
     dispatch,
     '          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}\n          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}\n',
     '          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}\n          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}\n          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}\n',
