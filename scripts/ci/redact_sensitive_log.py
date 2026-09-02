@@ -148,11 +148,16 @@ def _redact_unstructured(text: str) -> str:
 
 def _redact_line(line: str) -> str:
     """Redact one log line, preferring recursive JSON handling when valid."""
-    try:
-        value = json.loads(line)
-    except json.JSONDecodeError:
-        return _redact_unstructured(line)
-    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+    # ⚡ Bolt: Fast O(1) character check to bypass expensive json.loads()
+    # throwing JSONDecodeError for obvious non-JSON log lines.
+    stripped = line.lstrip(" \t")
+    if stripped and (stripped[0] == "{" or stripped[0] == "["):
+        try:
+            value = json.loads(line)
+            return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+        except json.JSONDecodeError:
+            pass
+    return _redact_unstructured(line)
 
 
 def redact_text(text: str) -> str:
