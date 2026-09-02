@@ -34,6 +34,19 @@ def _text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
+def _job_block(text: str, job_name: str) -> str:
+    """Return only one top-level job block, excluding comments and sibling jobs."""
+    anchor = f"  {job_name}:\n"
+    assert text.count(anchor) == 1
+    remainder = text.split(anchor, 1)[1]
+    lines: list[str] = []
+    for line in remainder.splitlines():
+        if line.startswith("  ") and not line.startswith("    ") and line.strip():
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
     """Privileged registry mutation cannot run from an arbitrary branch or cadence."""
     text = _text()
@@ -51,12 +64,13 @@ def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
 
 
 def test_retirement_uses_capacity_available_short_lived_runner() -> None:
-    """The one-shot retirement must not wait behind the saturated standard queue it repairs."""
-    text = _text()
+    """The retirement job itself must use the capacity-available short-lived runner."""
+    job = _job_block(_text(), "retire-legacy-identities")
+    runner_directives = [
+        line.strip() for line in job.splitlines() if line.startswith("    runs-on:")
+    ]
 
-    assert "runs-on: ubuntu-slim" in text
-    assert "runs-on: ubuntu-24.04" not in text
-    assert "runs-on: ubuntu-latest" not in text
+    assert runner_directives == ["runs-on: ubuntu-slim"]
 
 
 def test_retirement_names_every_legacy_identity_exactly_once() -> None:
