@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,10 +13,19 @@ OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reco
 OPERATING_RECORD_SUPPLEMENT = (
     ROOT / "docs" / "doctoring" / "repository-label-taxonomy-wave-3.md"
 )
+EXPECTED_TAXONOMY_BLOB_SHA = "f7d53520bc69be7a80310af5bde6a6704bad1d7f"
+
+
+def _git_blob_sha(path: Path) -> str:
+    """Return Git's content-addressed blob identity for ``path``."""
+
+    data = path.read_bytes()
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
 
 
 def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
-    """Common semantic types and reviewed targets remain explicit and stable."""
+    """Semantic mappings and the reviewed assignment inventory stay exact."""
 
     payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
 
@@ -25,121 +35,17 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         "bug": "bug",
         "documentation": "documentation",
     }
-    # Keep assignments exact so reviewed target drift cannot silently escape CI.
-    assert payload["assignments"] == [
-        {"repository": ".github", "issue": 1579, "type": "feature"},
-        {"repository": ".github", "issue": 1582, "type": "feature"},
-        {"repository": ".github", "issue": 1622, "type": "feature"},
-        {"repository": ".github", "issue": 1625, "type": "bug"},
-        {"repository": ".github", "issue": 1634, "type": "documentation"},
-        {"repository": "CalendarWeave", "issue": 1, "type": "documentation"},
-        {"repository": "ConceptWeave", "issue": 1, "type": "feature"},
-        {"repository": "context-graph-contracts", "issue": 20, "type": "documentation"},
-        {"repository": "ThreadWeave", "issue": 37, "type": "documentation"},
-        {"repository": "RankWeave", "issue": 40, "type": "documentation"},
-        {"repository": "fast-mlsirm", "issue": 1717, "type": "bug"},
-        {"repository": "fast-mlsirm", "issue": 1716, "type": "documentation"},
-        {"repository": "EgressWeave", "issue": 231, "type": "documentation"},
-        {"repository": "EgressWeave", "issue": 190, "type": "documentation"},
-        {"repository": "psychometrics-commons", "issue": 442, "type": "documentation"},
-        {"repository": "contextual-orchestrator", "issue": 994, "type": "documentation"},
-        {"repository": "contextual-orchestrator", "issue": 1003, "type": "documentation"},
-        {"repository": "appguardrail", "issue": 1077, "type": "documentation"},
-        {"repository": "naruon", "issue": 1513, "type": "documentation"},
-        {"repository": "LineageWeave", "issue": 908, "type": "documentation"},
-        {"repository": "ContextualWisdomLab.github.io", "issue": 203, "type": "documentation"},
-        {"repository": "TEPP", "issue": 435, "type": "documentation"},
-        {"repository": "semantic-data-portal", "issue": 72, "type": "documentation"},
-        {"repository": "Orgmetra", "issue": 160, "type": "documentation"},
-        {"repository": "learning-interoperability-contracts", "issue": 1, "type": "feature"},
-        {"repository": "noema", "issue": 530, "type": "feature"},
-        {"repository": "bandscope", "issue": 1125, "type": "documentation"},
-        {"repository": "bandscope", "issue": 1116, "type": "documentation"},
-        {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
-        {"repository": "saju-caldav", "issue": 42, "type": "documentation"},
-        {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
-        {"repository": "OriginWeave", "issue": 238, "type": "documentation"},
-        {"repository": "semantic-data-portal", "issue": 90, "type": "documentation"},
-        {"repository": "accounting-information-platform", "issue": 45, "type": "documentation"},
-        {"repository": "accounting-information-platform", "issue": 37, "type": "documentation"},
-        {"repository": "clearfolio", "issue": 538, "type": "documentation"},
-        {"repository": "disksage", "issue": 315, "type": "documentation"},
-        {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
-        {"repository": "pg-erd-cloud", "issue": 1040, "type": "documentation"},
-        {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
-        {"repository": "DiagramWeave", "issue": 33, "type": "documentation"},
-        {"repository": "keyverse", "issue": 103, "type": "feature"},
-        {"repository": "mhtml-etl-gateway", "issue": 56, "type": "documentation"},
-        {"repository": "mhtml-etl-gateway", "issue": 44, "type": "documentation"},
-        {"repository": "j-planner", "issue": 2, "type": "documentation"},
-        {"repository": "learning-record-store", "issue": 1, "type": "documentation"},
-        {"repository": "learning-content-studio", "issue": 1, "type": "documentation"},
-        {"repository": "learning-management-platform", "issue": 1, "type": "documentation"},
-        {"repository": "metering-billing-platform", "issue": 157, "type": "documentation"},
-        {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
-        {"repository": "supply-chain-control-plane", "issue": 1, "type": "feature"},
-        {"repository": "governance-risk-compliance", "issue": 65, "type": "documentation"},
-        {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
-        {"repository": "life-os", "issue": 211, "type": "documentation"},
-        {"repository": "scopeweave", "issue": 650, "type": "documentation"},
-        {"repository": "scopeweave", "issue": 625, "type": "documentation"},
-        {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
-        {"repository": "kaefa", "issue": 81, "type": "documentation"},
-        {"repository": "kaefa", "issue": 82, "type": "documentation"},
-        {"repository": "aFIPC", "issue": 261, "type": "documentation"},
-        {"repository": "nonnest2", "issue": 115, "type": "documentation"},
-        {"repository": "nonnest2", "issue": 84, "type": "bug"},
-        {"repository": "wardnet", "issue": 130, "type": "documentation"},
-        {"repository": "four-pillars", "issue": 31, "type": "bug"},
-        {"repository": "enterprise-architecture-core", "issue": 18, "type": "documentation"},
-        {"repository": "enterprise-architecture-core", "issue": 37, "type": "documentation"},
-        {"repository": "html4tree", "issue": 588, "type": "bug"},
-        {"repository": "newsdom-api", "issue": 774, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 381, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 384, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 387, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 379, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 354, "type": "bug"},
-        {"repository": "seedream_evasepic", "issue": 388, "type": "documentation"},
-        {"repository": "aFIPC", "issue": 316, "type": "bug"},
-        {"repository": "aFIPC", "issue": 318, "type": "feature"},
-        {"repository": "aFIPC", "issue": 317, "type": "feature"},
-        {"repository": "aFIPC", "issue": 314, "type": "bug"},
-        {"repository": "aFIPC", "issue": 311, "type": "bug"},
-        {"repository": "aFIPC", "issue": 315, "type": "feature"},
-        {"repository": "aFIPC", "issue": 313, "type": "bug"},
-        {"repository": "aFIPC", "issue": 312, "type": "feature"},
-        {"repository": "aFIPC", "issue": 310, "type": "feature"},
-        {"repository": "aFIPC", "issue": 309, "type": "bug"},
-        {"repository": "aFIPC", "issue": 308, "type": "feature"},
-        {"repository": "g7", "issue": 2, "type": "documentation"},
-        {"repository": "codec-carver", "issue": 513, "type": "bug"},
-        {"repository": "codec-carver", "issue": 514, "type": "documentation"},
-        {"repository": "noema", "issue": 531, "type": "bug"},
-        {"repository": "semantic-data-portal", "issue": 91, "type": "bug"},
-        {"repository": "learning-content-studio", "issue": 3, "type": "feature"},
-        {"repository": "learning-record-store", "issue": 3, "type": "feature"},
-        {"repository": "bandscope", "issue": 985, "type": "feature"},
-        {"repository": "fast-mlsirm", "issue": 1691, "type": "bug"},
-        {"repository": ".github", "issue": 1613, "type": "bug"},
-        {"repository": ".github", "issue": 1637, "type": "bug"},
-        {"repository": "contextual-orchestrator", "issue": 998, "type": "bug"},
-        {"repository": "contextual-orchestrator", "issue": 1001, "type": "bug"},
-        {"repository": "LineageWeave", "issue": 906, "type": "bug"},
-        {"repository": "fast-mlsirm", "issue": 1720, "type": "feature"},
-        {"repository": "fast-mlsirm", "issue": 1713, "type": "feature"},
-        {"repository": "governance-risk-compliance", "issue": 61, "type": "feature"},
-        {"repository": "governance-risk-compliance", "issue": 63, "type": "feature"},
-        {"repository": "EgressWeave", "issue": 82, "type": "feature"},
-        {"repository": ".github", "issue": 1234, "type": "bug"},
-        {"repository": ".github", "issue": 1565, "type": "feature"},
-        {"repository": "life-os", "issue": 129, "type": "feature"},
-        {"repository": "life-os", "issue": 130, "type": "feature"},
-        {"repository": "quarantine-sandbox-runtime", "issue": 7, "type": "bug"},
-        {"repository": "quarantine-sandbox-runtime", "issue": 4, "type": "bug"},
-        {"repository": "TEPP", "issue": 174, "type": "feature"},
-        {"repository": "TEPP", "issue": 175, "type": "feature"},
+    # Pin the complete human-reviewed taxonomy, not only a prefix of the list.
+    # Git blob identity is intentionally used as a compact exact-inventory
+    # contract; SHA-1 here is Git object addressing, not a security primitive.
+    assert _git_blob_sha(TAXONOMY) == EXPECTED_TAXONOMY_BLOB_SHA
+
+    assignments = payload["assignments"]
+    identities = [
+        (assignment["repository"], assignment["issue"]) for assignment in assignments
     ]
+    assert len(identities) == len(set(identities))
+    assert all(assignment["type"] in payload["type"] for assignment in assignments)
     assert len(set(payload["type"].values())) == len(payload["type"])
 
 
