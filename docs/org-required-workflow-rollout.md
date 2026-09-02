@@ -282,11 +282,12 @@ SARIF/dependency evidence, test evidence, and review marker all bind to
 
 ## Scope
 
-The active ruleset no longer maintains a repository-name allowlist. Live
-ruleset inspection on 2026-09-02 KST reports
-`repository_name.include=["~ALL"]`, so all current and future organization
-repositories inherit the ten central required workflows on their default
-branch unless a later ruleset exclusion is added. The table below is the public
+The active ruleset uses `repository_name.include=["~ALL"]` together with the
+canonical exclusions `.github`, `noema`, and `IRT-bibliography-set`, matching
+`scripts/ci/audit_central_required_workflows.py::EXPECTED_EXCLUSIONS` and the
+live ruleset contract verified on 2026-09-02 KST. Every current or future
+organization repository outside that exclusion set inherits the ten central
+required workflows on its default branch. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 | Repository | Visibility | Default branch | Flow | Open PRs | Local central-workflow copies on default branch | Rollout status |
@@ -358,7 +359,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - On 2026-07-13 21:10 KST, live inspection found that `sast-semgrep.yml` described itself as the central replacement for removed repository-local Semgrep jobs but was absent from ruleset `18156473`. The active ruleset was updated to require that workflow from `.github@refs/heads/main`, while preserving one approval, stale-review dismissal, last-push approval, and review-thread resolution. `scripts/ci/audit_central_required_workflows.py` and the scheduled ruleset audit now report each missing workflow, wrong source ref, weakened review protection, malformed/duplicate entry, or unexpected workflow explicitly.
 - On 2026-07-13 22:21 KST, the first main-branch ruleset audit proved that a repository `GITHUB_TOKEN` cannot read the organization-administration endpoint (`HTTP 403 Resource not accessible by integration`). The audit uses the least-privilege inherited-ruleset endpoint, logs `RULESET_SCOPE` for each enumerated repository, and validates the complete workflow and pull-request rule payload through `naruon`. The original public-only scope and its historical `.github`/`argos`/`noema` exclusions were superseded by the 2026-07-23 audit below.
 - On 2026-07-13 22:37 KST, xtrmLLMBatchPython current-head evidence proved that Semgrep 1.169.0 reports zero blocking findings while retaining 23 source-suppressed results in raw SARIF. The central gate now logs the suppressed count, removes only SARIF results carrying explicit in-source suppressions before upload, and fails from the remaining SARIF finding count even when Semgrep's SARIF-mode exit code is zero.
-- On 2026-07-16 14:18 KST, `ContextualWisdomLab/clearfolio#161` proved the independent reviewer on exact current head `4512fb9e9b56ab95df3acd85ebec2e6b849335a7`: `cwl-noema-review[bot]` submitted an App-authored `APPROVED` review whose body records the same Head SHA and cites the clean SARIF, dependency, test, and diff evidence.
+- On 2026-07-16 14:18 KST, `ContextualWisdomLab/clearfolio#161` proved the independent reviewer on exact current head `4512fb9e9b56ab95df3acd85ebec2e6b849335a7`: `cwl-noema-review[bot]` submitted an `APPROVED` review whose body records the same Head SHA and cites the clean SARIF, dependency, test, and diff evidence.
 - On 2026-07-23 06:35 KST, ruleset `18156473` was updated to require `.github/workflows/noema-review.yml`, making seven central required workflows while preserving exactly two approvals, stale-review dismissal, last-push approval, review-thread resolution, and merge/squash-only policy. The all-repository scope excludes only `.github`, `noema`, and private `IRT-bibliography-set`; `argos` now inherits the ruleset. The scheduled audit now enumerates every organization repository visible to its credential (`type=all`), rather than only public repositories, so the private exclusion and all other visible private-repository inheritance are verified. Existing open PRs may need a new PR event or branch update before GitHub creates the newly required Noema run.
 - `.github` PR `#225` raised high reasoning effort for all reasoning-capable OpenCode review model definitions and merged at `50c6ef82f52af3eeb0e58c174902fc9855c36682`.
 - `.github` PR `#226` stopped the merge scheduler from treating old deterministic fallback approval bodies as current-head approval evidence and merged at `57a1fa580731a0f76b31dcf29a597c5715dba2fd`.
