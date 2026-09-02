@@ -1564,7 +1564,7 @@ def call_llm(
                     },
                     separators=(",", ":"),
                 ),
-                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test/workflow changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
