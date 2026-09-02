@@ -3,8 +3,7 @@ name: Temporary PR1669 live-head cancellation repair
 
 on:
   push:
-    branches:
-      - fix/scheduler-stale-headrefoid-cancellation
+    branches: [fix/scheduler-stale-headrefoid-cancellation]
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
       - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
@@ -22,13 +21,12 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  repair:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/fix/scheduler-stale-headrefoid-cancellation'
     runs-on: ubuntu-slim
-    timeout-minutes: 60
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -56,12 +54,7 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v6.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v7.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v8.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v9.py
-          test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
+          for f in scripts/ci/temp_pr1669_live_head_revalidation_v5.py scripts/ci/temp_pr1669_live_head_revalidation_v6.py scripts/ci/temp_pr1669_live_head_revalidation_v7.py scripts/ci/temp_pr1669_live_head_revalidation_v8.py scripts/ci/temp_pr1669_live_head_revalidation_v9.py; do test -f "$f"; done
 
       - name: Apply exact-RED guarded source repair
         run: |
@@ -70,91 +63,31 @@ jobs:
           python scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           python scripts/ci/temp_pr1669_live_head_revalidation_v8.py
           python scripts/ci/temp_pr1669_live_head_revalidation_v9.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v7.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v8.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v9.py
-          test ! -e tests/test_pr1669_parallel_stale_cancellation.py
-          test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
+          for f in \
+            scripts/ci/temp_pr1669_live_head_revalidation_repair.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v2.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v3.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v4.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v5.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v6.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v7.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v8.py \
+            scripts/ci/temp_pr1669_live_head_revalidation_v9.py \
+            tests/test_pr1669_parallel_stale_cancellation.py \
+            .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml; do test ! -e "$f"; done
           git diff --check
 
-      - name: Verify focused cancellation contracts
+      - name: Verify cancellation contracts and complete repository quality
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest \
-            tests/test_pr_review_merge_scheduler.py \
-            tests/test_pr1669_cancel_stale_opencode_runs.py \
-            -q
-
-      - name: Verify complete repository coverage and docstrings
-        run: |
-          set -euo pipefail
+          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py tests/test_pr1669_cancel_stale_opencode_runs.py -q
           PYTHONPATH=. python -m coverage run -m pytest tests -q
           python -m coverage report --show-missing --fail-under=100
           python -m interrogate scripts/ci
           python -m compileall -q scripts tests
           git diff --check
 
-  publish:
-    needs: verify
-    if: >-
-      github.repository == 'ContextualWisdomLab/.github' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/fix/scheduler-stale-headrefoid-cancellation'
-    runs-on: ubuntu-slim
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact verified writer head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up the verified Python toolchain
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install hash-locked review dependencies for deterministic materialization
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
-
-      - name: Revalidate and materialize canonical successor
-        env:
-          EXPECTED_HEAD: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
-          test -n "$remote_head"
-          test "$remote_head" = "$EXPECTED_HEAD"
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v6.py
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v7.py
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v8.py
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v9.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v7.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v8.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v9.py
-          test ! -e tests/test_pr1669_parallel_stale_cancellation.py
-          test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
-          git diff --check
-
-      - name: Publish one fast-forward canonical successor
+      - name: Publish one exact non-force canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
