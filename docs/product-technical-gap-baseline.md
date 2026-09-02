@@ -2020,6 +2020,38 @@ merge commit `ff8807a`, 2026-09-02 14:50 UTC). 이 PR을 감시하던 전용 체
 영구적이지 않고 결국 자연 해소되었다(대기 시간: 약 9시간 33분, 04:01→13:34 UTC). 다음 pass는
 이 해소가 일회성 완화인지 주기적 패턴인지 몇 차례 더 관찰해 확인해야 한다.
 
+### 5.6 2026-09-02 16:xx UTC — naruon#1525: "GitHub Actions vs 제품 runtime" 경계 오적용 정정
+
+owner가 naruon#1525의 정확한 head(`badf985e`)에 직접 코멘트를 남겨, 이 세션이 같은 PR에서
+이전에 도입한 `ORCHESTRATOR_POOL_MODEL = "orchestrator/free"` 하드코딩 자체가 경계 위반임을
+지적했다. 근본 원인은 **`.github` ADR-0003의 `orchestrator/free` 고정은 GitHub Actions
+model-backed workflow 경계에서만 유효한 운영 규칙**(`docs/product-goal-directive.md` 8항
+"GitHub Actions Workflow 이용에 관해")인데, naruon의 제품 runtime 서비스
+(`backend/services/project_graph/extractor_registry.py`)가 이를 자신도 같은 풀 선택 권한을
+가진 것처럼 오적용해 복제했다는 것이다. 게다가 2026-09-03 기준
+`ContextualWisdomLab/contextual-orchestrator`의 GitHub Releases API가 빈 배열을
+반환함을 이 세션이 직접 재확인했다 — naruon이 따를 수 있는 불변 released consumer contract
+자체가 없다.
+
+**일반화 가능한 교훈(다른 저장소에도 적용 가능):** `orchestrator/free` 고정은 "GitHub Actions
+CI 리뷰 워크플로(Strix/OpenCode/Noema, `.github` ADR-0003)"에만 유효한 결정이며, 어떤
+제품 runtime 서비스가 contextual-orchestrator를 소비할 때 동일한 상수를 자체 코드에 복제해도
+된다는 근거가 아니다. §9 core-foundation 경계 원칙("Consumers never duplicate/bypass an
+immature owner or missing API... guard the boundary with ports/ACL/feature-flags/
+test-doubles")이 정확히 이 상황을 다룬다 — contextual-orchestrator에 released contract가
+없는 한, 소비자는 provider/model/pool을 자체 선택하지 말고 fail closed해야 한다. 다른
+ecosystem 소비 저장소(예: naruon의 `batch_embedding_service.py` 별도 orchestrator
+batch-embedding 경로, ADR-0005가 이미 범위 밖으로 명시)도 같은 하드코딩 패턴이 있는지
+다음 pass에서 점검할 가치가 있다.
+
+정정: `ORCHESTRATOR_POOL_MODEL` 상수 완전 제거, `KgExtractorContext`에 `model`(직접 공급자
+전용)과 분리된 `orchestrator_model` 필드 신설, orchestrator 경로는 오늘 어떤 caller도
+`orchestrator_model`을 채우지 않으므로 항상 keyword fallback으로 fail closed. ADR-0005에
+Revision 7 기록, Status를 "Accepted"→"Proposed"로 되돌림(PR 미병합 상태에서의 조기
+Accepted 표기 정정, repair-not-close 정책). 전체 backend suite 1812 passed/32 skipped,
+`ruff check` clean. PR 제목·본문도 갱신된 최종 상태를 반영하도록 고쳤다(commit `0ab23b5`,
+issuecomment-5512856366). 리뷰(Devin/CodeRabbit)는 새 head에서 진행 중.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
