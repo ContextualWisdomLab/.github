@@ -2,7 +2,8 @@
 """Enforce the CWL Pingora-only edge runtime policy on pull-request changes.
 
 The checker never executes pull-request content. It reads changed-file metadata and
-bounded UTF-8 file content through the GitHub REST API, then rejects active Nginx
+bounded file evidence through the GitHub REST API, decodes textual runtime candidates
+as UTF-8, and structurally verifies inert binary assets before rejecting active Nginx
 runtime artifacts while allowing documentation, license text, and source-level
 negative test fixtures.
 """
@@ -44,6 +45,8 @@ BINARY_DOCUMENT_MAGIC = {
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
+WAVE_CONTAINER_SIGNATURE = b"RIFF"
+WAVE_FORM_TYPE = b"WAVE"
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -234,6 +237,18 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     )
 
 
+def _is_wave_audio_asset(changed: ChangedFile) -> bool:
+    """Return whether *changed* can be verified as an inert RIFF/WAVE asset."""
+
+    if changed.patch_available:
+        return False
+    changed_path = PurePosixPath(changed.path)
+    return (
+        changed_path.suffix.lower() == ".wav"
+        and _runtime_path_rule(changed.path) is None
+    )
+
+
 def _runtime_path_rule(path: str) -> str | None:
     """Return a path-level violation rule for active Nginx runtime artifacts."""
 
@@ -418,6 +433,41 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
+
+
+def _is_complete_wave_audio(wave_bytes: bytes) -> bool:
+    """Validate a bounded RIFF/WAVE container without interpreting sample data."""
+
+    if (
+        len(wave_bytes) < 12
+        or wave_bytes[:4] != WAVE_CONTAINER_SIGNATURE
+        or wave_bytes[8:12] != WAVE_FORM_TYPE
+    ):
+        return False
+    declared_container_size = int.from_bytes(wave_bytes[4:8], "little")
+    return declared_container_size == len(wave_bytes) - 8
+
+
+def _wave_audio_evidence_confirms(
+    changed: ChangedFile,
+    *,
+    api_url: str,
+    repository: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+) -> bool:
+    """Return whether a patchless ``.wav`` candidate is a complete RIFF/WAVE asset."""
+
+    wave_bytes = _load_raw_file_bytes(
+        api_url,
+        repository,
+        changed.path,
+        head_sha,
+        token,
+        opener,
+    )
+    return _is_complete_wave_audio(wave_bytes)
 
 
 def _binary_documentation_evidence_confirms(
@@ -650,17 +700,21 @@ def evaluate_pull_request(
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
-        # A claimed binary documentation asset gets its own network-verified
-        # check ahead of _needs_content_scan's patch-presence-only signal:
-        # a missing patch does not by itself prove binary content (GitHub
-        # also omits one for an oversized textual diff), so this confirms
-        # the format's magic prefix whenever the bytes can be fetched at
-        # all, falling back to the path+suffix convention only when the
-        # content genuinely exceeds the Contents API's size ceiling. A
-        # removed file has no head content to fetch at all -- _needs_content_scan
-        # already special-cases this the same way for every other file.
+        # Claimed inert binary assets get their own network-verified checks
+        # ahead of UTF-8 runtime scanning. Patch absence is only a candidate
+        # signal; the final head bytes must establish the declared container.
         if changed.status != "removed" and _is_binary_documentation_asset(changed):
             if _binary_documentation_evidence_confirms(
+                changed,
+                api_url=api_url.rstrip("/"),
+                repository=repository,
+                head_sha=head_sha,
+                token=token,
+                opener=opener,
+            ):
+                continue
+        elif changed.status != "removed" and _is_wave_audio_asset(changed):
+            if _wave_audio_evidence_confirms(
                 changed,
                 api_url=api_url.rstrip("/"),
                 repository=repository,
