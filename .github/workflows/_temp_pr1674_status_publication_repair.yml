@@ -40,10 +40,12 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install hash-locked review dependencies
+      - name: Install hash-locked review and Strix test dependencies
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt \
+            -r requirements-strix-ci-hashes.txt
 
       - name: Revalidate exact writer head
         env:
