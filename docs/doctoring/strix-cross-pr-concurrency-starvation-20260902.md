@@ -235,12 +235,17 @@ guessed at under time pressure.
    confirmed above. The actual, still-open gap in the safety-net path is
    the check-then-act race between independent scheduler invocations (see
    "The claimed safety net does not reliably close the gap either" above),
-   which a wider status filter cannot touch. Closing it needs either a real
+   which a wider status filter cannot touch. **Correction (Devin Review,
+   second pass): a tighter recheck immediately before the POST is not a
+   fix, only a narrower window on the same race** — another scheduler
+   invocation can still win the same check-then-act gap no matter how
+   short it is; TOCTOU races are not resolved by shrinking the window, only
+   by removing it. Closing this gap for real needs an actual
    mutual-exclusion primitive around the busy-check-then-dispatch sequence
-   (e.g. re-verify busy immediately before the POST, inside as tight a
-   window as possible, or a genuine lock rather than a read-then-act check)
-   or folding this path into whatever bounded-and-fair mechanism (2)
-   produces, so it is not a separate, independently racy check at all.
+   (e.g. a real distributed lock, or delegating the whole sequence to a
+   single serialized actor) rather than any read-then-act check, however
+   tight — or folding this path into whatever bounded-and-fair mechanism
+   (2) produces, so it is not a separate, independently racy check at all.
 4. Consider whether repository_dispatch-triggered re-evidence dispatches
    should be prioritized by how long a PR has been waiting (oldest-starved
    first) rather than effectively randomly by dispatch order, once (2) or
