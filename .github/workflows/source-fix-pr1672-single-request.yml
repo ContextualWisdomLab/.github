@@ -78,6 +78,16 @@ jobs:
               end = marker_pos + len(marker)
               return source[:end] + "\n" + addition + source[end:]
 
+          old_span = "        start = node.lineno - 1\n        end = node.end_lineno or node.lineno\n"
+          new_span = (
+              "        decorator_lines = [decorator.lineno for decorator in node.decorator_list]\n"
+              "        start = min([node.lineno, *decorator_lines]) - 1\n"
+              "        end = node.end_lineno or node.lineno\n"
+          )
+          if text.count(old_span) != 1:
+              raise SystemExit('PR1672 remove_functions span contract moved; refusing rewrite')
+          text = text.replace(old_span, new_span, 1)
+
           gate_call = '''    source = replace_once(
               source,
               r'    try:\\n        verdict = call_llm\\(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths\\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\("Pull request head changed during review; Noema review skipped before repair retry\\."\\)\\n        return 0\\n',
