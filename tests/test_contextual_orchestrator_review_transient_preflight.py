@@ -1,4 +1,4 @@
-"""Regression tests for transient review preflight and reasoning deadlines."""
+"""Regression tests for provider-neutral preflight recovery and inference deadlines."""
 
 from __future__ import annotations
 
@@ -41,12 +41,13 @@ def _openai_text(content: str) -> dict[str, object]:
     }
 
 
-def _agent() -> SimpleNamespace:
-    """Return the DeepSeek route shape observed in the failing workflow."""
+def _agent(*, reasoning_effort_supported: bool | None = None) -> SimpleNamespace:
+    """Return a provider-neutral route with optional reasoning capability evidence."""
     return SimpleNamespace(
-        id="nvidia_nim_deepseek_v4_flash",
-        provider_name="nvidia_nim",
-        model="deepseek-ai/deepseek-v4-flash-0731",
+        id="provider_route",
+        provider_name="provider",
+        model="arbitrary-chat-model",
+        reasoning_effort_supported=reasoning_effort_supported,
     )
 
 
@@ -59,6 +60,7 @@ class _RetryingProbeClient:
         self.retrying_calls = 0
         self.one_shot_calls = 0
         self.transport_attempts = 0
+        self.payloads: list[dict[str, object]] = []
 
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
@@ -72,7 +74,8 @@ class _RetryingProbeClient:
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
         """Retry one transient outcome and leave permanent failures terminal."""
-        del agent, endpoint, payload
+        del agent, endpoint
+        self.payloads.append(dict(payload))
         self.retrying_calls += 1
         retries_left = 1
         while True:
@@ -109,10 +112,13 @@ def _review_model_client_calls() -> list[ast.Call]:
     ]
 
 
-def test_preflight_recovers_deepseek_route_after_transient_502() -> None:
-    """A single upstream 502 must not permanently discard a healthy route."""
+@pytest.mark.parametrize("reasoning_effort_supported", [None, False, True])
+def test_preflight_recovers_transient_502_independent_of_reasoning_capability(
+    reasoning_effort_supported: bool | None,
+) -> None:
+    """Transport retry follows failure taxonomy, never model names or capability flags."""
     namespace = _load_launcher()
-    agent = _agent()
+    agent = _agent(reasoning_effort_supported=reasoning_effort_supported)
     client = _RetryingProbeClient([_http_error(502), _openai_text("OK")])
 
     viable, report = namespace["_preflight_review_agents"]([agent], client=client)
@@ -144,8 +150,42 @@ def test_preflight_does_not_retry_permanent_auth_failure() -> None:
     assert route["transport_retry_budget"] == 1
 
 
+def test_reasoning_budget_escalation_uses_response_evidence_not_model_name() -> None:
+    """Reasoning-specific token recovery follows the response, not an identifier list."""
+    namespace = _load_launcher()
+    agent = _agent(reasoning_effort_supported=None)
+    client = _RetryingProbeClient(
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "reasoning": "internal reasoning consumed the base budget",
+                            "content": "",
+                        },
+                    }
+                ]
+            },
+            _openai_text("OK"),
+        ]
+    )
+
+    viable, report = namespace["_preflight_review_agents"]([agent], client=client)
+
+    assert viable == [agent]
+    assert client.retrying_calls == 2
+    assert client.one_shot_calls == 0
+    assert [payload["max_tokens"] for payload in client.payloads] == [16, 4096]
+    route = report["routes"][0]
+    assert route["status"] == "ready"
+    assert route["attempts"] == 2
+    assert route["escalated"] is True
+    assert route["reasoning_without_content"] is False
+
+
 def test_review_clients_have_no_inference_deadline_and_one_transient_retry() -> None:
-    """Both inference clients are unbounded; only preflight retries once."""
+    """Every model is deadline-free; only idempotent preflight retries once."""
     namespace = _load_launcher()
     assert namespace["REVIEW_PREFLIGHT_TRANSIENT_RETRIES"] == 1
 
