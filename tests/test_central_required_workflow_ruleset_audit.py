@@ -7,16 +7,13 @@ from scripts.ci import audit_central_required_workflows as audit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
-    workflow_paths = (
-        "close-empty-pr.yml",
-        "noema-review.yml",
-        "opencode-review.yml",
-        "pr-review-merge-scheduler.yml",
-        "security-scan.yml",
-        "strix.yml",
-        "sast-semgrep.yml",
+    workflow_paths = tuple(
+        path.removeprefix(".github/workflows/")
+        for path in audit.REQUIRED_WORKFLOW_PATHS
     )
     return {
         "id": 18156473,
@@ -113,7 +110,7 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 7 central required workflows"
+        "PASS: ruleset 18156473 enforces 10 central required workflows"
         in capsys.readouterr().out
     )
 
@@ -301,9 +298,12 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset does not target every default branch",
         "expected one workflows rule, found 0",
         "missing central required workflow .github/workflows/close-empty-pr.yml",
+        "missing central required workflow .github/workflows/codeql-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
+        "missing central required workflow .github/workflows/osv-scanner-pr.yml",
         "missing central required workflow .github/workflows/pr-review-merge-scheduler.yml",
+        "missing central required workflow .github/workflows/scorecard-pr.yml",
         "missing central required workflow .github/workflows/security-scan.yml",
         "missing central required workflow .github/workflows/strix.yml",
         "missing central required workflow .github/workflows/sast-semgrep.yml",
@@ -381,7 +381,10 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert "audit_central_required_workflows.py --stacked" in workflow
     assert "CWL Stacked OpenCode required workflow" in rollout
     assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
+    assert "- `.github/workflows/codeql-pr.yml`" in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
+    assert "- `.github/workflows/osv-scanner-pr.yml`" in rollout
+    assert "- `.github/workflows/scorecard-pr.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
 
 
