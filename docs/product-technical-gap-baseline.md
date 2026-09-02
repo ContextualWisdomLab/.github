@@ -2595,13 +2595,14 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 External review on `.github#1629` demonstrated a real operational false negative:
 full evidence admission had been coupled to sequential startup probing, so a large
 set of individually slow provider routes could consume the review deadline before
-Noema/OpenCode began serving. The repair keeps evidence admission complete, starts
-per-route readiness probes concurrently with no provider preference, preserves
-input-order/source evidence, and keeps each candidate's budget escalation local.
-`tests/test_contextual_orchestrator_review_preflight_concurrency.py` is the durable
-barrier-based regression: the old sequential implementation cannot pass it, while
-the GREEN implementation proves all admitted routes can enter transport before any
-route completes. Explicit legacy `--limit`/`--account-cap` CLI configuration now
+Noema/OpenCode began serving. The repair keeps evidence admission complete, starts independent
+provider-account lanes concurrently, serializes routes sharing one provider account,
+preserves input-order/source evidence, and keeps each candidate's budget escalation
+local. `tests/test_contextual_orchestrator_review_preflight_concurrency.py` is the
+durable barrier-based regression: the old globally sequential implementation cannot
+pass it, while the GREEN implementation proves every independent provider-account lane
+can enter transport before either lane completes. It deliberately does not claim that
+routes sharing one provider account start simultaneously. Explicit legacy `--limit`/`--account-cap` CLI configuration now
 emits diagnostics while remaining decision-inert. The pinned contextual-orchestrator
 ranking contract was also re-audited: `_static_rank_key` ends in `agent.id`, so equal
 neutral priorities do not inherit discovery/list order as a routing tiebreak.
