@@ -148,6 +148,20 @@
     {"repository": "contextual-orchestrator", "issue": 1009, "type": "feature"},
     {"repository": "pg-llm-batch", "issue": 323, "type": "feature"},
     {"repository": "scopeweave", "issue": 653, "type": "bug"},
-    {"repository": "naruon", "issue": 1349, "type": "documentation"}
+    {"repository": "naruon", "issue": 1349, "type": "documentation"},
+    {"repository": "appguardrail", "issue": 999, "type": "documentation"},
+    {"repository": "naruon", "issue": 1322, "type": "documentation"},
+    {"repository": "RankWeave", "issue": 41, "type": "documentation"},
+    {"repository": "pg-erd-cloud", "issue": 737, "type": "documentation"},
+    {"repository": "kaefa", "issue": 75, "type": "documentation"},
+    {"repository": "semantic-data-portal", "issue": 64, "type": "documentation"},
+    {"repository": "newsdom-api", "issue": 672, "type": "documentation"},
+    {"repository": "clearfolio", "issue": 485, "type": "documentation"},
+    {"repository": "pg-erd-cloud", "issue": 942, "type": "documentation"},
+    {"repository": "aFIPC", "issue": 208, "type": "documentation"},
+    {"repository": "aFIPC", "issue": 210, "type": "documentation"},
+    {"repository": "feelanet-adfs", "issue": 17, "type": "documentation"},
+    {"repository": "inkspan", "issue": 154, "type": "documentation"},
+    {"repository": "newsdom-api", "issue": 577, "type": "documentation"}
   ]
 }
