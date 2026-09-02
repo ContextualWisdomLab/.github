@@ -3,10 +3,14 @@
 The central automation separates **product cadence** from the **reusable repair
 engine**.
 
-- `clearfolio-hourly-review-repair.yml` owns Clearfolio's heartbeat at minute 23
-  of every hour.
-- `orgmetra-hourly-review-repair.yml` owns Orgmetra's heartbeat at minute 58
-  of every hour against protected `develop`.
+- `hourly-review-repair.yml` owns every product's heartbeat, including
+  Clearfolio's at minute 23 and Orgmetra's at minute 58 (against protected
+  `develop`), as one file: an `on.schedule` list plus a lookup table keyed on
+  `github.event.schedule` that resolves the repository, base branch, and
+  retry floor for whichever minute fired. It replaced 18 near-identical
+  per-repository caller files (`clearfolio-hourly-review-repair.yml`,
+  `orgmetra-hourly-review-repair.yml`, and 16 others); see
+  [`docs/doctoring/hourly-review-repair-single-file-consolidation.md`](../doctoring/hourly-review-repair-single-file-consolidation.md).
 - `pr-review-fix-scheduler.yml` is the reusable, product-neutral scheduler
   module. It has no product-specific timer and can be called by naruon,
   contextual-orchestrator, Inkspan, or another CWL service with an explicit

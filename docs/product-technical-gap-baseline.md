@@ -2591,28 +2591,51 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
 
+## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
+
+**Problem.** `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the script every central required review workflow (Strix, OpenCode Review, Noema Review, the PR-review autofix sidecar) provisions to talk to `contextual-orchestrator` — read an operator-settable `CONTEXTUAL_ORCHESTRATOR_POOL` environment variable, defaulted it to `free`, and validated it against exactly two accepted values: `free` or `auto` (`case "$orchestrator_pool" in free|auto) ...`). `auto` is a real, load-bearing value one layer down: `scripts/ci/contextual_orchestrator_review_launcher.py --pool auto` admits *priced* discovered routes as a fallback stage once the free pool is exhausted (`build_zdr_prioritized_catalog(..., pool="auto")`), by design, for callers that want that behavior. Nothing in this repository's own review-provisioning code path currently sets `CONTEXTUAL_ORCHESTRATOR_POOL=auto` — the only workflow that sets the variable at all, `strix.yml`, sets it to `free`; every other central review workflow simply relies on the script's own `:-free` default — so this was not a live incident, it was an unaudited, structurally-reachable escape hatch: a future edit to any of the four workflows above, or a manually-triggered `workflow_dispatch` with a custom env override, could set `CONTEXTUAL_ORCHESTRATOR_POOL=auto` and the sidecar would accept it silently, with no cost ceiling, no budget/authorization gate, and no reviewer visibility that priced models were now in scope for a required check.
+
+**Why this matters now, not hypothetically.** The org's explicit standing operating directive (the perpetual PR review→fix→merge→develop loop this session runs under) states plainly that the free+ZDR routing combination is not yet solved reliably in central CI — this exact gap-baseline document's own accumulated 2026-08-30/08-31 entries above record a real `orchestrator/free` exhaustion incident, a crowding-out bug between shared-endpoint credentials, and multiple rounds of Devin-Review-caught admission-priority defects in `contextual_orchestrator_review_policy.py`, all specifically about getting the *free* pool right. Admitting a priced-inclusive `auto` pool into required review workflows before that work is solid would let one misconfiguration or one well-intentioned "let's widen coverage" workflow edit start spending real provider credit on every PR's required Strix/OpenCode/Noema review, with no operator-visible signal that this had happened — the sidecar's own `log` lines print the resolved pool, but nothing downstream alerts on it, and there is no spend cap in this repository's own review-provisioning path (unlike `contextual-orchestrator`'s own cost-ledger, which this vendored sidecar path does not call into for CI review spend).
+
+**Alternatives considered.**
+1. *Leave `auto` accepted but never set it.* Rejected: this is the status quo, and the status quo is exactly the unaudited escape hatch described above — "nobody currently sets it" is not a control, it is an absence of one.
+2. *Remove the `CONTEXTUAL_ORCHESTRATOR_POOL` environment variable entirely, hard-coding `--pool free` with no override mechanism.* Considered and rejected in favor of the fail-closed `case` statement kept below: removing the variable removes the ability to reason about *why* an override was rejected (a caller setting `auto` would instead see an unrelated "unrecognized flag" or `--pool` argparse error further downstream, or silently fall through to whatever the launcher's own default resolves to, depending on how the removal was implemented) and removes a natural place to extend validation later (e.g. if the org ever explicitly re-authorizes `auto` for CI with a budget gate, only this one `case` arm needs to change). A `case` statement that explicitly names and rejects `auto` with a clear diagnostic is this repository's own established idiom (see the sibling `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR` validation two lines above it in the same file) and is more auditable, not less.
+3. *Narrow the launcher's own `--pool` argparse choices to just `("free",)`.* Rejected: the launcher (`contextual_orchestrator_review_launcher.py`) is a general-purpose CLI, not GitHub-Actions-specific — it is invoked directly (outside any workflow) for local testing and by other, non-CI-review callers that may have a legitimate reason to exercise the `auto` pool's priced-fallback behavior. Narrowing it there would remove functionality the tool's own design intentionally provides, contradicting the directive's explicit scoping ("GitHub Actions Workflow 이용에 관해" — regarding GitHub Actions Workflow *usage* specifically, not the tool in general). `test_launcher_uses_orchestrator_discovery_and_governed_pools`'s existing pin of `choices=("free", "auto")` on the launcher was therefore left unchanged.
+
+**Fix.** `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s `case "$orchestrator_pool" in` now accepts only `free`; every other value (`auto` included, and any typo/unexpected value) falls to the `*)` arm and calls `fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"`, matching this script's own existing fail-closed idiom for `CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`. The variable's default (`${CONTEXTUAL_ORCHESTRATOR_POOL:-free}`) is unchanged, so every existing caller (all of which already resolve to `free`, explicitly or by default) is unaffected — this is a pure narrowing of previously-unused surface, not a behavior change for any current workflow run.
+
+**Developer experience.** New `test_sidecar_pins_the_pool_to_free_for_github_actions` in `tests/test_contextual_orchestrator_review_sidecar_contract.py` extracts the sidecar's own `case "$orchestrator_pool" in ... esac` block as text and *executes* it (not just string-matches it) in a minimal bash harness against four inputs — `free` (must succeed, `pool_args=--pool free`), `auto` (must fail closed with the new diagnostic), empty string (must resolve to the `:-free` default and succeed, since bash's `:-` operator treats empty and unset identically), and an arbitrary bogus value (must fail closed) — so a future edit that silently re-widens the accepted set back to include `auto` (or any other value) breaks this test rather than passing unnoticed. Static assertions confirm the exact new source text (`case "$orchestrator_pool" in\n  free)` and the new fail message) and the absence of the old text (`free|auto`, `must be free or auto`).
+
+**Verified before touching anything.** Grepped every `.github/workflows/*.yml` for `CONTEXTUAL_ORCHESTRATOR_POOL` and any `--pool auto`/`pool.*auto` pattern: only `strix.yml` sets the variable, and it sets `free`. Grepped `scripts/ci/contextual_orchestrator_review_launcher.py`'s own `--pool` argparse and its one internal `pool="auto"` use (the priced-fallback stage, gated on `args.pool == "auto"` already being true from the CLI flag) to confirm that stage is reachable only when a caller explicitly requests `--pool auto` on the launcher directly — never as a side effect of the sidecar's own resolved value once this fix lands, since the sidecar can no longer produce `--pool auto`.
+
+**Risk of this fix itself.** Low and one-directional: this can only ever cause a caller that was setting `CONTEXTUAL_ORCHESTRATOR_POOL=auto` to start failing closed with a clear diagnostic instead of silently proceeding with priced routes; grep confirms no current caller does this, so no existing workflow run's behavior changes. The failure mode if this fix is ever wrong (e.g. a legitimate future need for `auto` in CI) is a clear, immediate `fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"` diagnostic in the workflow log, not a silent behavior change — trivially reversible by widening the one `case` arm back, with the new regression test updated in the same PR to match.
+
+**Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
+
+**Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
 ## 2026-09-02 contextual-orchestrator#1010 repair-not-close recheck: valid explicit-user-instruction closure, no successor PR opened
 
 **Task.** The org's repair-not-close policy ("close is reserved for: explicit user instruction, no
 diff, a malicious change, or all valid delta verified as inherited by a successor/merged PR")
 was applied to `ContextualWisdomLab/contextual-orchestrator#1010` ("per-model LLM timeout
-view/set/clear/restore admin surface", closed same-day by the repo owner pointing at `#971` as
-the canonical timeout owner) to determine whether `#971` actually inherited `#1010`'s delta and,
+view/set/clear/restore admin surface", closed same-day by the repo owner pointing at `contextual-orchestrator#971` as
+the canonical timeout owner) to determine whether `contextual-orchestrator#971` actually inherited `contextual-orchestrator#1010`'s delta and,
 if not, whether that delta needed to move to a new successor PR.
 
-**File-level re-verification (independent, against a fresh clone: `main` `8839081`, `#971` head
-`92ff90b`, `#1010` head `56a6e45`).** `#971` inherits none of `#1010`'s delta at the file level.
+**File-level re-verification (independent, against a fresh clone: `main` `8839081`, `contextual-orchestrator#971` head
+`92ff90b`, `contextual-orchestrator#1010` head `56a6e45`).** `contextual-orchestrator#971` inherits none of `contextual-orchestrator#1010`'s delta at the file level.
 `git diff main...971` (53 files, +3328/-318) contains zero case-insensitive occurrences of
 `model_timeout` anywhere in the diff. `admin.py` is untouched; `api_contract.py`'s one changed
 line is an unrelated `provider_readiness` summary-string edit; `server.py`'s 53 changed lines are
 DNS/cancellation plumbing, not `/api/v1/model_timeouts` routing; `orchestrator.py`'s 406 changed
 lines add cancellation/ZDR-pinning/provider-probe-timeout removal, not
 `MIN/MAX_MODEL_TIMEOUT_SECONDS`, `model_timeout_resolver`, or any `TaskOrchestrator.*_model_timeout`
-method. `tests/test_model_timeouts.py` and `docs/planning/adrs/0042-*.md` do not exist on `#971`
-at all. `#971` is open, unapproved (84 `COMMENTED` reviews, zero `APPROVED`), `mergeable_state:
+method. `tests/test_model_timeouts.py` and `docs/planning/adrs/0042-*.md` do not exist on `contextual-orchestrator#971`
+at all. `contextual-orchestrator#971` is open, unapproved (84 `COMMENTED` reviews, zero `APPROVED`), `mergeable_state:
 behind`, and most required checks still `queued` — not an imminent landing either. So the
 "successor inherited" branch of the close policy does not apply here, and a naive reading would
-conclude `#1010`'s ~995 lines of delta were silently orphaned by a misidentified successor.
+conclude `contextual-orchestrator#1010`'s ~995 lines of delta were silently orphaned by a misidentified successor.
 
 **But the closure is independently valid under the policy's separate "explicit user instruction"
 ground, and re-litigating it would be wrong.** `gh api issues/1010` confirms `closed_by:
@@ -2623,7 +2646,7 @@ unverified "looks superseded" inference. That comment's objection is broader tha
 current manual timeout-setting semantics must not become production authority", cites four
 distinct unresolved implementation findings in the enforcement wiring itself (local queue path
 ignores the override, passthrough/tool requests bypass it, failed persistence can leave the live
-timeout mutated, admin refresh races can misreport/stale audit state), names `#971`'s
+timeout mutated, admin refresh races can misreport/stale audit state), names `contextual-orchestrator#971`'s
 no-implicit-inference-timeout contract as the canonical policy owner, and explicitly scopes reuse
 to the future: "If a research-/standard-backed timeout allocator with executable provenance is
 later implemented, the UI/persistence work can be selectively reused behind that owner rather than
@@ -2635,13 +2658,91 @@ exactly the mechanism this same-day, first-person ruling rejected, and would sti
 unresolved correctness findings — overriding the repo owner's own explicit prior ruling rather than
 repairing an agent's mistaken closure. No successor PR was opened for that reason.
 
-**Delta is preserved, not orphaned.** `#1010`'s two commits (`523867fa`, `56a6e45f`) remain fully
+**Delta is preserved, not orphaned.** `contextual-orchestrator#1010`'s two commits (`523867fa`, `56a6e45f`) remain fully
 intact on the closed PR's branch, and the closer's own comment already records the exact reuse
 condition — selective reuse of the admin/persistence/API exploration once a research-/standard-backed
 timeout allocator exists. A comment recording this file-level evidence, the quoted closing
-rationale, and this determination was posted on `#1010` itself
-(`contextual-orchestrator#1010#issuecomment-5505968844`) so the closed PR's history correctly shows
+rationale, and this determination was posted on `contextual-orchestrator#1010` itself
+(https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1010#issuecomment-5505968844)
+so the closed PR's history correctly shows
 why no successor PR carries its delta forward yet, rather than leaving it silently unaccounted for.
 
-**Owner**: `ContextualWisdomLab/contextual-orchestrator`, `#1010` / `#971`.
-**Status**: closure confirmed valid; no code action taken; traceability comment posted on `#1010`.
+**Owner**: `ContextualWisdomLab/contextual-orchestrator`, `contextual-orchestrator#1010` / `contextual-orchestrator#971`.
+**Status**: closure confirmed valid; no code action taken; traceability comment posted on `contextual-orchestrator#1010`.
+
+## 2026-09-02 context-graph-contracts#23 repair-not-close: work completed and pushed, then the repository's own "Context Fabric single-writer boundary" superseded the close policy live
+
+**Task and fresh re-verification.** The org's repair-not-close policy was applied to
+`context-graph-contracts#23` ("register enterprise org-hierarchy and membership contract"), closed
+2026-09-02T05:34:29Z. Every load-bearing claim in the handed-off investigation was re-verified
+independently before acting, via fresh `gh api` calls and a full clone (not reused from the
+investigation): `state: closed`, `merged: false`, head frozen at `1de0f58` (two real PR commits, both
+predating the close), the branch tip already three commits ahead at `c37c465` (an orphan SCIM/OIDC/SAML
+addendum pushed six minutes *after* the close, invisible to the closed PR's review). Canonical stack
+confirmed fresh: PR #4 (`cursor/bc-4f046e35-...`, open, `mergeable_state: blocked`, defines
+`ContextAssertion`/`ContextMembership`, owns `docs/adr/0001`-`0007`) plus 13 chained draft PRs through
+#21 (tip owning `0008`-`0015`, `0015` itself still `Proposed`). `develop`/`main` unchanged since the
+close, `develop` still bare (zero ADR files, zero package code). No successor PR anywhere in the org
+carried the delta forward (`git grep` across the full chain and both integration branches: zero
+`org-hierarchy`/`org_member`/`OrgHierarchy` hits outside #23's own branch).
+
+**Repair executed and pushed, all four cited gaps closed with real evidence, verified locally before
+each push.** PR #23 reopened, marked Draft, base retargeted `develop` → PR #4's branch (the actual
+owner of the types this ADR reuses). ADR `Status` downgraded `Accepted` → `Proposed`; file renumbered
+`docs/adr/0001-...` → `docs/adr/0016-...` (first number the canonical stack does not already claim).
+The existing branch was merged with PR #4's branch via a plain non-force `git merge` (fast-forward
+verified with `git merge-base --is-ancestor` before every push; no `--force`, no history discarded, the
+orphan SCIM commit kept as-is). Added `tests/fixtures/{valid,invalid}-org-membership.json`, a packaged
+`org-hierarchy-membership-semantics.v1.json` conformance profile, and `tests/test_org_hierarchy_membership.py`
+(14 tests): a predicate-conditioned `assert_ancestor_closure_chain` check proving, then closing, the
+wire-interpretation ambiguity between ADR-0006's cross-classification `memberships[]` reading and this
+ADR's ancestor-closure reading; bitemporal-replay tests against the real `BitemporalInterval.is_valid_at`/
+`was_known_at` split (confirmed no `.covers()` method exists); an `assert_single_primary_membership_per_subject`
+cardinality guard; and the multi-root / reversed regional_hq-business_division-direction cases from the
+ADR's own Verification section, committed as tests instead of a one-off scratch script. Verified before
+every push: `pytest tests/` 231/231 passed, `coverage report` 100% on `src/cwl_context_contracts`,
+`ruff check` clean.
+
+**What actually determined the final outcome was not this session's policy application -- it was the
+repository's own live, explicit, first-person governance ruling, discovered only by reading the PR's
+comments and timeline, not visible in a diff-only investigation.** Six minutes after this session's
+reopen, `#23` was closed again with a fresh, reasoned comment: "Context Fabric single-writer boundary:
+this PR was created/modified by a second source writer while the dedicated CGC/EA owner loop is
+enabled. Its org-hierarchy design and executable cases are retained as read-only product-gap/acceptance
+evidence, but this branch cannot become CGC source or PR-state authority... The live repository is also
+mid-transition from obsolete protected/default `develop` to intended protected/default `main`, and the
+canonical CGC dependency stack is not yet rebuilt on that protected truth... No evidence from this PR
+will be treated as passing predecessor evidence." That `develop`→`main` transition claim is independently
+grounded, not asserted alone: `.github#1137` ("[Context Fabric governance] Protect and adopt `main` as
+the integration/default branch") is open and confirms `context-graph-contracts`'s `default_branch` is
+still `develop` while the org has already converged on `main` as the intended protected branch for both
+`context-graph-contracts` and `enterprise-architecture-core`. This is exactly the "explicit user
+instruction" ground the repair-not-close policy itself reserves for closing -- it just arrived live, in
+reaction to this session's own reopen, rather than being visible in the original investigation. A
+same-identity, same-repository automated pass (matching the comment's own description of "the dedicated
+CGC/EA owner loop") then pushed further commits onto the same branch within minutes (`f999492a`,
+`635ae0ae`, both parented on this session's last push, `ae95a2a`), and the PR's open/closed state kept
+changing live during this session's own work -- direct evidence of a separate, standing, authoritative
+loop actively co-managing this exact repository concurrently with this session, using the same GitHub
+identity every actor in the PR timeline shares.
+
+**Action taken once this was discovered: stop, not escalate further.** This session posted one comment
+on `#23` acknowledging the boundary, summarizing the pushed repair commits (`ecec6dc`, `50b0fad`,
+`a8e89bd`, `ae95a2a`), and stating explicitly that it would not reopen the PR again
+(https://github.com/ContextualWisdomLab/context-graph-contracts/pull/23#issuecomment-5506147352). No
+further reopen/close/draft/base mutation was attempted after that discovery, deliberately, to avoid
+contending with the live owner-loop process already active on the same PR. The branch and every commit
+this session pushed remain intact and undeleted, exactly as the owner's ruling asked ("Closing unmerged
+without deleting the branch"), available as the read-only reference evidence the ruling itself calls for.
+
+**Correction to how this should be read going forward.** This is not a settled or retired outcome this
+session can vouch for -- the PR's final disposition (open, closed, or superseded by a fresh
+owner-controlled PR once `.github#1137` lands and the CGC stack rebuilds on protected `main`) is
+currently owned by that live loop, not by this entry. Do not treat `#23`'s state at any single snapshot
+read during this window as authoritative; re-read it fresh before acting on it again.
+
+**Owner**: `ContextualWisdomLab/context-graph-contracts`, `context-graph-contracts#23` (restacked onto
+`context-graph-contracts#4`); governance dependency `.github#1137`.
+**Status**: repair code complete and pushed (four cited gaps closed with executable evidence); PR
+disposition superseded live by the repository's own single-writer-boundary ruling and an actively
+co-managing owner loop; this session stopped intervening and is not the authority on final state.
