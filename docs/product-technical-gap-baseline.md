@@ -2667,3 +2667,29 @@ organization-wide Actions queue saturation — without that incident itself bein
 (see item 15's entry above, and the earlier floating-runner-image and `orchestrator/free` entries in
 this file). If a third unrelated backlog item traces to the same root cause, it's worth escalating queue
 saturation itself as its own tracked item rather than re-diagnosing it from a different angle each time.
+
+## 2026-09-02 backlog item 32 verification: batch-endpoint capability gate already root-cause fixed, pending merge
+
+**Task.** Verify whether `contextual-orchestrator/pull/1021` already fixes backlog item 32 (whether the
+real Batch API should be gated to agents that actually support it, rather than any general chat
+model), before doing any new investigation.
+
+**Verified: yes, it does, correctly.** PR `#1021` (`fix(batch): gate real Batch API on declared
+batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`) adds an explicit
+`ModelAgent.batch_endpoint_supported: bool | None` field — mirroring the existing
+`reasoning_effort_supported` capability-declaration pattern — and changes `batch_chat()`'s routing so
+the real async Batch API (`/files`, `/batches`, `/files/{id}/content`) is only ever addressed when
+`agent.batch_endpoint_supported is True`. Previously, `batch_chat()` would route *any* configured
+chat-capable agent (Anthropic-shaped, NVIDIA NIM, OpenRouter, a self-hosted OpenAI-compatible gateway,
+...) straight into the real Batch API based only on `is_chat_compatible_model_id()` — a pure model-id
+shape heuristic that says nothing about whether that provider actually implements `/v1/batches`. An
+agent with `batch_endpoint_supported` unset or `False` now falls back to the same per-item emulation
+(`_local_batch_chat`) local providers already use, rather than either mis-routing into a call that
+would 404 or hard-failing the whole batch group for a provider that was never asked to declare support.
+83 lines of new/changed test coverage in `tests/test_batch_api.py`, plus a `CHANGELOG.d` fragment.
+
+**Conclusion.** No new code needed for this item — the root-cause fix already exists, is well-scoped,
+and is fail-safe by construction (unproven support degrades to emulation, never a guess). It simply
+hasn't merged yet (open, behind `main`, same queue/scheduler backlog every other PR referenced in this
+document is also waiting on). Re-open only if `#1021` is closed without merging, or if its merged form
+diverges from what's described above.
