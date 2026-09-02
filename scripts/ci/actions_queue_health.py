@@ -32,6 +32,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
 TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled")
+TARGET_TERMINAL_DIAGNOSTIC_STATUSES = ("cancelled",)
 TERMINAL_DIAGNOSTIC_MAX_API_PAGES = MAX_API_PAGES
 
 
@@ -254,7 +255,7 @@ def collect_snapshot(
                         )
                     terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
 
-            for terminal_status in TERMINAL_DIAGNOSTIC_STATUSES:
+            for terminal_status in TARGET_TERMINAL_DIAGNOSTIC_STATUSES:
                 target_workflow_runs = _list_payload(
                     github_json(
                         f"repos/{repository_name}/actions/runs?status={terminal_status}"
