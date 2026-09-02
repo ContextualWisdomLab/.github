@@ -2699,3 +2699,17 @@ four come up empty does the PR need actual repair (reopen, or an explicit succes
 09-02 KST), not a standing process — a future session encountering a *new* unexplained closure should re-run
 the same four-step method rather than assume this entry's "no repair needed" conclusion still holds for
 PRs closed after this entry's timestamp.
+
+## Noema single-request model-control ownership — PR #1672 (2026-09-02)
+
+**Status:** Merged into protected `main` as `a28fc2f4e185df7847e2f2f5f6ec561d1e84805d`; fresh exact-head hosted evidence remains an operational acceptance item.
+
+**Root cause.** Noema duplicated contextual-orchestrator structured-output repair by making a second model request and wrapped that request in an unmeasured 900-second repository wall-clock deadline. This created a self-hosting admission failure: valid long inference could be terminated by a policy that the gateway already owns.
+
+**Context Map / responsibility boundary.** `.github` owns CI review orchestration, exact-revision evidence, deterministic verdict validation, and publication. `contextual-orchestrator` owns provider discovery, capability routing, `orchestrator/free`, structured-output repair/failover, and provider completion. No provider/model-specific fallback or caller wall-clock timeout crosses that boundary.
+
+**Action delivered.** The recursive caller repair and fixed deadline/signal machinery were removed. Noema now sends one structured-output request, keeps exact-head checks before and after model work, sanitizes serving-model telemetry, restores exact changed-line diagnostics, and retains bounded non-heuristic evidence cardinality with strict local JSON parsing.
+
+**900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
+
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
