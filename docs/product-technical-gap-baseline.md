@@ -94,7 +94,7 @@ core foundation은 전 제품의 공통 설치물이 아니라, 여러 제품에
 | Identity·보안·runtime | `EgressWeave` | 안전한 outbound HTTP |
 | Identity·보안·runtime | `OriginWeave` | governed browser |
 | Identity·보안·runtime | `pingora-gateway` | Rust edge |
-| Identity·보안·runtime | `quarantine-sandbox-runtime` | 격리 |
+| Identity·보안·runtime | `quarantine-sandbox-runtime` | 격리[^sandbox-ownership] |
 | Identity·보안·runtime | `appguardrail` | scan·SARIF·remediation |
 | Identity·보안·runtime | `wardnet` | gateway·WAF·IDS·SOC |
 | 재사용 기능 | `fast-mlsirm` | IRT·MLSIRM |
@@ -108,6 +108,8 @@ core foundation은 전 제품의 공통 설치물이 아니라, 여러 제품에
 owner가 미성숙하거나 API가 없어도 소비 저장소는 복제·우회하지 않는다. owner 저장소에서 RED test → 기능/문서/release를 개발해 CI GREEN과 immutable version을 낸 뒤 소비측이 채택한다. 그 전에는 port·ACL·feature flag·test double로 경계를 지키고 owner의 source·DB·임시 branch를 직접 읽지 않는다.
 
 이 지도는 저장소 신설·기능 배치 결정의 기준이며, 이름이 아니라 제품 책임·재사용 경계·문서·구현·소비 관계로 저장소를 선택한다(§1). 표에 없는 신규 core 필요가 확인되면 이 표에 행을 추가하고 해당 오너 저장소에 ADR을 남긴다.
+
+[^sandbox-ownership]: **미해결 소유권 충돌 (Devin Review, based_on_repo_rules).** 이 표는 격리를 `quarantine-sandbox-runtime`의 단일 책임으로 배정하지만, mandatory master context [`docs/CWL-MASTER-CONTEXT.md:36`](https://github.com/ContextualWisdomLab/.github/blob/main/docs/CWL-MASTER-CONTEXT.md)은 noema를 "agent runtime... + the lightweight quarantine sandbox"로 설명해 동일 책임을 다른 저장소에도 배정한다. 두 출처 중 하나가 오래됐거나, noema의 것은 자체 실행 경로용 경량 내장 격리이고 `quarantine-sandbox-runtime`은 조직 전체가 소비하는 전용 격리 서비스라는 실제 계층 분리가 있을 수 있다 — 이 문서는 그 구분을 확인할 권한이 없으므로 단정하지 않는다. 해결 전까지: (1) 새 소비자는 두 구현 중 하나를 임의로 골라 병행 구현하지 않는다, (2) 실제 소유자와 noema·wardnet·naruon·quarantine-sandbox-runtime 간 관계(추출·release된 contract 여부)를 확정하는 ADR을 오너 저장소에 남긴다, (3) 확정 후 `docs/CWL-MASTER-CONTEXT.md`와 이 표를 동일 PR에서 함께 갱신한다.
 
 ## 3. Gap register
 
