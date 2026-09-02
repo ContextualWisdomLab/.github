@@ -36,28 +36,28 @@ def test_declares_workflow_call_with_three_inputs_and_recorded_defaults() -> Non
     assert "default: false" in workflow
 
 
-def test_step_order_is_checkout_then_preflight_then_gated_steps() -> None:
-    """checkout -> dependency-graph preflight -> conditional gate/note, in that order."""
+def test_step_order_is_checkout_then_preflight_then_dependency_review() -> None:
+    """Checkout, capability preflight, then the gated action must remain ordered."""
     workflow = _workflow_text()
     order = [
         "actions/checkout@",
         "Check dependency graph availability",
         "Dependency review",
-        "Dependency graph unavailable note",
     ]
     positions = [workflow.index(marker) for marker in order]
     assert positions == sorted(positions), "steps are out of order"
 
 
-def test_dependency_review_and_note_steps_are_mutually_exclusive_on_availability() -> None:
-    """The gate and the fallback note must never both run."""
+def test_dependency_review_runs_only_after_a_confirmed_successful_comparison() -> None:
+    """The action must execute only after the compare endpoint returned HTTP 200."""
     workflow = _workflow_text()
     assert (
         "if: steps.dependency_graph.outputs.available == 'true'\n"
         "        continue-on-error: ${{ inputs.continue_on_error }}"
         in workflow
     )
-    assert "if: steps.dependency_graph.outputs.available != 'true'" in workflow
+    assert 'if [ "$status" = "200" ]; then' in workflow
+    assert 'echo "available=true" >>"$GITHUB_OUTPUT"' in workflow
 
 
 def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:
@@ -96,19 +96,23 @@ def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
     assert "github.event.repository.private" not in workflow
 
 
-def test_availability_check_distinguishes_unavailable_from_genuine_failure() -> None:
-    """403/404 means 'unavailable, skip gracefully'; any other status must hard-fail
-    the job instead of silently treating a real error the same as unavailability."""
+def test_pull_request_http_403_and_404_are_not_normalized_to_unavailable() -> None:
+    """Authorization-shaped HTTP responses are ambiguous and must remain blocking.
+
+    GitHub may use 403 or 404 for permission/policy failures as well as feature
+    availability boundaries. A reusable security gate therefore cannot turn
+    either response into success or delegate coverage to another scanner.
+    """
     workflow = _workflow_text()
-    assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' in workflow
-    assert "available=false" in workflow
-    assert "::error::Dependency graph availability check failed with HTTP" in workflow
+    assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' not in workflow
+    assert "skipping the dependency-review hard gate" not in workflow
+    assert "Dependency graph unavailable note" not in workflow
+    assert "::error::Dependency graph comparison failed with HTTP" in workflow
     assert "exit 1" in workflow
 
 
 def test_availability_check_only_runs_the_gate_for_pull_request_events() -> None:
-    """A non-pull_request trigger (e.g. workflow_dispatch) must skip the gate, not error,
-    since base/head SHAs only exist on a pull_request event."""
+    """A non-pull_request trigger may skip because it has no PR base/head identity."""
     workflow = _workflow_text()
     assert '"${{ github.event_name }}" != "pull_request"' in workflow
 
