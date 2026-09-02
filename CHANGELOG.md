@@ -5,6 +5,29 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Add Noema repair-attempt telemetry; declare an OpenAI structured-output
+  request; add a lossless local JSON repair fallback.** `html4tree` run
+  `33560972491`, job `100033086428` failed with only a bare "exceeded
+  900-second absolute wall-clock deadline" -- no attempt count, no timing
+  breakdown, no served-model attribution. `call_llm` now times every attempt
+  (primary and repair), tracks the furthest phase reached
+  (connecting/reading/decoding/validating), and best-effort records which
+  `orchestrator/free` candidate served the response, emitting a
+  `::notice::`/`::warning::` per attempt and folding the same breakdown into
+  the raised exception message -- never logging raw model content. Both
+  calls now declare `NOEMA_VERDICT_RESPONSE_FORMAT`, an OpenAI Chat
+  Completions `response_format: json_schema` envelope matching the verdict
+  schema, so a compliant candidate is asked for structured output directly.
+  `extract_json_object` makes one additional lossless local repair attempt
+  (stripping a trailing comma before a closing `}`/`]` outside any string)
+  before falling back to the network repair path. None of this reimplements
+  the gateway-owned JSON-validation/candidate-exclusion/retry policy PR
+  #1602 ruled belongs to `contextual-orchestrator`. Separately: the
+  900-second repair deadline itself is confirmed, per the repo owner, to be
+  an unauthorized/arbitrary value with no data behind it (not merely
+  under-documented) and is left explicitly flagged unresolved rather than
+  re-justified after the fact -- see
+  `docs/doctoring/noema-repair-attempt-telemetry.md`.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
