@@ -62,7 +62,16 @@ all five, and auto-optimize routing by cost.
    `.github` central-review consumer routes through `orchestrator/auto`
    as of the 2026-09-02 owner confirmation below (see amendment history) —
    this pool remains available in the gateway for a future consumer that
-   needs priced fallback, but Strix does not use it today.
+   needs priced fallback, but Strix does not use it today. Note that
+   `scripts/ci/contextual_orchestrator_review_sidecar.sh` (the GitHub
+   Actions sidecar every current `.github` central-review consumer shares)
+   hard-rejects any `CONTEXTUAL_ORCHESTRATOR_POOL` value other than `free`
+   at its own launcher-argument-parsing stage (`fail "CONTEXTUAL_ORCHESTRATOR_POOL
+   must be free"`), independent of and prior to whatever the gateway itself
+   would otherwise accept -- a future consumer that needs `orchestrator/auto`
+   cannot simply pass a different pool value through this same sidecar; it
+   needs a deliberate, reviewed change to the sidecar's own pool gate (or a
+   separate entry path), not just a caller-side configuration change.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
    of time"; zero retention also implies no training) and is deliberately

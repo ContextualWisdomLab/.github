@@ -72,7 +72,11 @@ note below) targets — logged as a non-fatal warning, not silently absorbed
 into a false "all providers healthy" claim.
 
 **What then failed, and how, matters for item 2.** The Strix scanner
-process itself (the `ghcr.io/usestrix/strix-sandbox:1.3.0` container),
+process itself (`strix-agent==1.5.3`, pip-installed with `--require-hashes`
+from `requirements-strix-ci-hashes.txt` and run as a local executable
+directly on the GitHub-hosted runner -- not a `ghcr.io/usestrix/strix-sandbox`
+container, which this document previously and incorrectly claimed; `strix.yml`
+never references that image),
 calling the *same, already-verified-healthy* gateway for its actual security
 analysis, could not connect ("LLM CONNECTION FAILED / Could not establish
 connection to the language model") on all 3 of its own retry attempts
