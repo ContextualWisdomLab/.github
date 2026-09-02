@@ -1961,7 +1961,50 @@ shallow clone 한계와 뒤섞여 있어 tag 존재 여부의 독립 확인(예:
    않는다 — 다음 pass 전에 owner가 실제 스코프(SBOM consumption? dependency graph? release evidence
    통합?)를 결정해야 첫 PR을 만들 수 있다.
 
-## 6. Compliance and data boundary
+### 5.5 2026-09-02 13:xx UTC — 동시 세션 스냅샷과 병목 악화 재확인
+
+이 세션은 `SendMessage`(로컬/클라우드 피어 메시징)로 다른 세션을 조회했으나 이 계정의 다른
+Claude Code 세션은 현재 "reachable agents"로 나타나지 않았다(피어 메시징 자체는 가용하나 대상이
+없음). 대신 `mcp__Claude_Code_Remote__list_sessions`로 계정 전체의 최근 세션 30개를 확인해
+동시 작업 취지를 기록한다 — directive §2("동시 작업을 경합으로 단정하지 말고 취지를 확인해
+이어간다")의 실행 방법을 GitHub PR 코멘트/이 문서 자체로 대체한다(직접 세션 간 메시징 채널이
+막혀 있으므로).
+
+**현재 RUNNING/IDLE 세션 중 `.github`에서 겹치는 작업(중복 착수 방지용 기록):**
+
+- `session_011eZkbJYBvhNkN1tbRnTWuK`(RUNNING) → `#1683`
+  (`claude/zealous-pare-876b64`) "8개 `*-quality-ci.yml` 중 2개만 안전하게 reusable workflow로
+  추출" — 나머지 6개는 정책이 서로 달라 통합하지 않기로 명시적으로 판단한 근거가 PR 본문에 있음.
+  이 세션은 이 PR을 건드리지 않는다(중복 회피).
+- `session_014ZrjKi7tSqmsYrT6ndVLGX`(RUNNING) → `#1661`
+  (`claude/contextual-orchestrator-integration-8ec7f8`) "orchestrator/free 핀 확인, 게이트웨이
+  강제 감사" — PR 본문이 스스로 밝힌 미해결 항목: `.github`의 `main` 브랜치 보호 규칙이
+  `required_status_checks`에 `strix`를 포함하지 않고 `enforce_admins`가 꺼져 있어, admin 권한
+  머지가 리뷰 게이트를 우회할 수 있다는 것 — "owner가 별도로 검토할 follow-up"으로만 표시되어
+  있다. 이 세션은 branch-protection을 읽거나 쓰는 GitHub MCP 도구가 없어(`get_file_contents`류
+  뿐, repo-admin API 없음) 독립적으로 재검증하지 못했다 — 그래서 위 서술은 그 PR 저자 세션의
+  자체 보고를 그대로 인용한 것이며, 이 문서에 새 gap 항목으로 "검증됨"이라 기록하지 않는다.
+  같은 PR에서 CodeRabbit도 별도로 "conflicting Strix configuration guidance"와 "overstates the
+  strength of OpenCode verification evidence"를 merge 전 수정 필요 항목으로 표시했다(2026-09-02
+  01:29 UTC, 이후 갱신 없음 — 그 세션이 RUNNING 상태이므로 자체 처리 중일 가능성이 높아 이 세션은
+  중복 코멘트를 달지 않았다). **owner 후속 조치가 필요한 것은 branch protection 설정
+  자체이며(repo admin 권한 필요, 어느 세션의 GitHub MCP 도구도 이를 노출하지 않음), 이 항목은
+  다음 pass가 `gh api repos/ContextualWisdomLab/.github/branches/main/protection`(또는 동등한
+  admin 경로)에 접근 가능하면 최우선으로 재검증해야 한다.**
+- `session_01NuADX45VW78ASWWomZZi61`(IDLE) → 브랜치
+  `claude/contextualwisdomlab-repo-classification-41b589`(outcome:
+  `claude/item30-opencode-head-race-verification`) → `#1730` "gap-baseline backlog 8/9, 10/11,
+  30, 32 검증" — 이 PR 본문 자체가 "peer session이 초기 큐-포화 프레이밍이 과장됐다고 재검증해
+  정정했다"고 기록하고 있어, 이 생태계에서 세션 간 교차검증이 이미 GitHub PR 코멘트/커밋을 통해
+  실제로 작동 중임을 확인한다.
+
+**naruon#1501 병목 악화(신규 근거):** 13:01 UTC 재확인 시 head `d7e5d2d3`(04:01 UTC 푸시)의 4개
+필수 체크(Bandit Security Scan, Application CI, Dependency Review, Build and Publish Docker
+Images)가 전부 `status=queued`로 9시간 이상 진행 0%였다 — §5.3에서 확정한 "중앙 scheduler 자신도
+굶주림" 가설이 시간이 지날수록 완화가 아니라 악화되고 있다는 첫 정량 재확인이다(01:40 UTC 시점
+1시간 정체 → 13:01 UTC 시점 9시간+ 정체). mergeable_state는 `unstable`(충돌 아님)이고 Devin
+Review는 정확히 이 head에서 clean(미해결 스레드 0개)이므로, 병합 차단 원인은 오로지 Actions
+용량이다. 다음 재확인은 15:10 UTC.
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
 - 모델·리뷰·sandbox·Checks·merge·release는 서로 다른 authority다. 하나의 PASS를 approval이나 release로 승격하지 않는다.
