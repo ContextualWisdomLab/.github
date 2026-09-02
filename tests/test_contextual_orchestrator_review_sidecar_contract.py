@@ -353,13 +353,14 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert not has_text_output(SimpleNamespace())
 
     # Pin the exemption's real boolean outcome, not just source-text
-    # presence: an OpenRouter row carrying today's blanket evidence_only=True
-    # bug signature must still be routable, while a same-shaped row from any
-    # other provider must not -- so a reversed comparison (``!=`` instead of
-    # ``==``) or a disconnected/no-op exemption (e.g. the OpenRouter branch
-    # never actually reached, or applied unconditionally regardless of
-    # provider) fails this assertion even though the source fragment above
-    # would still be present verbatim.
+    # presence: an OpenRouter row carrying the pre-#949 blanket
+    # evidence_only=True bug signature must still be routable, while a
+    # same-shaped row from any other provider must not -- so a reversed
+    # comparison (``!=`` instead of ``==``) or a disconnected/no-op
+    # exemption (e.g. the OpenRouter branch never actually reached, or
+    # applied unconditionally regardless of provider) fails this
+    # assertion even though the source fragment above would still be
+    # present verbatim.
     routable_discovered_models = launcher["_routable_discovered_models"]
     openrouter_blanket_marked = SimpleNamespace(
         provider_name="openrouter", model_id="some/model", evidence_only=True

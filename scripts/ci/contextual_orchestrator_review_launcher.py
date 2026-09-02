@@ -208,9 +208,11 @@ def _openrouter_reports_per_model_evidence(discovered: list[object]) -> bool:
         ``True`` once at least one discovered OpenRouter row reports
         ``evidence_only=False`` (real per-model evidence observed this
         run); ``False`` when there are no OpenRouter rows at all, or every
-        OpenRouter row is ``evidence_only=True`` (today's confirmed bug
-        signature, or an indistinguishable run where OpenRouter discovery
-        itself produced no rows).
+        OpenRouter row is ``evidence_only=True`` (the blanket bug
+        signature from a vendored pin predating
+        ``ContextualWisdomLab/contextual-orchestrator#949``, or an
+        indistinguishable run where OpenRouter discovery itself produced
+        no rows).
     """
     return any(
         getattr(model, "provider_name", None) == "openrouter"
@@ -231,34 +233,38 @@ def _routable_discovered_models(discovered: list[object] | None) -> list[object]
 
     OpenRouter rows are conditionally exempt from this exclusion --
     see ``_openrouter_reports_per_model_evidence`` for the full rationale
-    and its documented limitation. In short: ``contextual-orchestrator``'s
-    OpenRouter ``ProviderModelSource`` currently hardcodes
-    ``evidence_only=True`` for every discovered model unconditionally (a
-    confirmed bug, fixed upstream at
-    ``ContextualWisdomLab/contextual-orchestrator#949``, merged at
-    ``8cd99f139915131ba0239bce12a5d6a5fd85394e`` -- pinned in this repo by
-    ``ContextualWisdomLab/.github#1477``, merged 2026-08-31, whose current
-    ``ORCHESTRATOR_PIN_SHA`` (``045d17da5e2aea56a97e241ee158ab1628d78660``)
-    is confirmed to descend from that fix commit) --
-    not computed per model from real evidence, even though
-    genuine per-model ZDR evidence is fetched and parsed for OpenRouter in
-    that same module. Applying this filter to OpenRouter verbatim while
-    that bug is live would strip every OpenRouter row, including genuinely
-    servable, chat-capable ones, before ``zdr_policy.is_zdr_model()``'s
-    purpose-built, per-route OpenRouter ZDR-feed check (``openrouter_
-    endpoints_feed``) ever gets a chance to evaluate them -- making that
-    already-correct, already-wired mechanism dead code for OpenRouter
-    specifically. So the exemption applies only while this run's own
-    OpenRouter rows still match that exact blanket-``True`` bug signature;
-    the moment any OpenRouter row in a run reports real per-model evidence
-    (``evidence_only=False``), OpenRouter rows go back through the same
-    ``evidence_only`` contract every other provider already gets --
-    automatically, with no pin bump or manual edit needed here. A
-    genuinely non-servable OpenRouter row is still excluded downstream by
-    the same provider-agnostic chat-capability check every other provider's
-    rows already go through (``is_general_chat_agent_model_id`` +
-    ``_has_text_output``, in ``main()``) regardless of which branch this
-    function takes.
+    and its documented limitation. In short: a vendored pin predating
+    ``ContextualWisdomLab/contextual-orchestrator#949`` (merged at
+    ``8cd99f139915131ba0239bce12a5d6a5fd85394e``) has
+    ``contextual-orchestrator``'s OpenRouter ``ProviderModelSource``
+    hardcode ``evidence_only=True`` for every discovered model
+    unconditionally -- not computed per model from real evidence, even
+    though genuine per-model ZDR evidence is fetched and parsed for
+    OpenRouter in that same module. This repo's current pin
+    (``ContextualWisdomLab/.github#1477``, merged 2026-08-31,
+    ``ORCHESTRATOR_PIN_SHA`` ``045d17da5e2aea56a97e241ee158ab1628d78660``)
+    is confirmed to descend from the ``#949`` fix commit, so the blanket
+    bug is not live in this run's actual pin -- the exemption below exists
+    as regression protection against a future pin that reverts to a
+    pre-``#949`` state, not a workaround for a currently-live bug.
+    Applying this filter to OpenRouter verbatim while that pre-``#949``
+    shape is in effect would strip every OpenRouter row, including
+    genuinely servable, chat-capable ones, before
+    ``zdr_policy.is_zdr_model()``'s purpose-built, per-route OpenRouter
+    ZDR-feed check (``openrouter_endpoints_feed``) ever gets a chance to
+    evaluate them -- making that already-correct, already-wired mechanism
+    dead code for OpenRouter specifically. So the exemption applies only
+    while this run's own OpenRouter rows still match that exact
+    blanket-``True`` bug signature (i.e. only under a reverted,
+    pre-``#949`` pin); the moment any OpenRouter row in a run reports real
+    per-model evidence (``evidence_only=False``), OpenRouter rows go back
+    through the same ``evidence_only`` contract every other provider
+    already gets -- automatically, with no pin bump or manual edit needed
+    here. A genuinely non-servable OpenRouter row is still excluded
+    downstream by the same provider-agnostic chat-capability check every
+    other provider's rows already go through
+    (``is_general_chat_agent_model_id`` + ``_has_text_output``, in
+    ``main()``) regardless of which branch this function takes.
 
     This exemption has real, live effect as of this merge, on two
     timelines that were originally expected to be sequential but have both

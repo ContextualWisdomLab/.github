@@ -22,7 +22,7 @@ Semantic Versioning where the repository publishes a release.
   reach `orchestrator/auto`'s served catalog.
 - **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
   scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
-  heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
+  heartbeat was changed from a half-hourly `cron: "*/30 * * * *"` to an hourly
   `cron: "30 * * * *"` (see `docs/doctoring/actions-queue-saturation-hourly-sweep.md`),
   and the Python regression `tests/test_actions_queue_saturation_scheduler_cadence.py`
   was updated to match at the time — but the parallel bash contract in

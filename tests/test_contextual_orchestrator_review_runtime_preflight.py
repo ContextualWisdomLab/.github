@@ -115,22 +115,23 @@ def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
 def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_evidence_only() -> None:
     """OpenRouter rows are exempt from evidence_only while every row still shows it.
 
-    Regression for a confirmed bug, fixed upstream at
+    Regression for a bug fixed upstream at
     ``ContextualWisdomLab/contextual-orchestrator#949`` and pinned in this
     repo by ``ContextualWisdomLab/.github#1477`` (merged 2026-08-31):
     ``contextual-orchestrator``'s
-    OpenRouter ``ProviderModelSource`` currently hardcodes
-    ``evidence_only=True`` for every discovered model unconditionally (not
-    computed per model from real evidence) -- so today's real signature is
-    that *every* discovered OpenRouter row carries ``evidence_only=True``,
-    with no exceptions, even genuinely servable ones. If this filter
-    applied to OpenRouter like every other provider while that bug is
-    live, it would strip every OpenRouter row, including genuinely
-    servable ones, before ``zdr_policy.is_zdr_model()``'s purpose-built
-    per-route OpenRouter ZDR-feed check ever runs on them. Both OpenRouter
-    rows here carry ``evidence_only=True`` (today's real bug shape) and
-    both must still pass through; a same-shaped row from a different
-    provider must not.
+    OpenRouter ``ProviderModelSource`` hardcoded
+    ``evidence_only=True`` for every discovered model unconditionally in
+    any pin predating ``#949`` (not computed per model from real
+    evidence) -- so that pin's real signature was that *every* discovered
+    OpenRouter row carried ``evidence_only=True``, with no exceptions,
+    even genuinely servable ones. If this filter applied to OpenRouter
+    like every other provider under such a pin, it would strip every
+    OpenRouter row, including genuinely servable ones, before
+    ``zdr_policy.is_zdr_model()``'s purpose-built per-route OpenRouter
+    ZDR-feed check ever runs on them. Both OpenRouter rows here carry
+    ``evidence_only=True`` (the pre-``#949`` bug shape) and both must
+    still pass through; a same-shaped row from a different provider must
+    not.
     """
     namespace = _load_launcher()
     routable = namespace["_routable_discovered_models"]
@@ -237,11 +238,11 @@ def test_routable_discovered_models_excludes_spend_blocked_rows() -> None:
 def test_routable_discovered_models_excludes_spend_blocked_openrouter_row_even_while_evidence_only_exempt() -> None:
     """The ``spend_admitted`` exclusion applies independently of the ``evidence_only`` exemption.
 
-    A spend-blocked OpenRouter row that also still carries today's blanket
-    ``evidence_only=True`` bug signature -- so the OpenRouter ``evidence_
-    only`` exemption would otherwise let it through -- must still be
-    excluded: the two filters are independent conditions, and neither
-    exemption weakens the other.
+    A spend-blocked OpenRouter row that also still carries the pre-``#949``
+    blanket ``evidence_only=True`` bug signature -- so the OpenRouter
+    ``evidence_only`` exemption would otherwise let it through -- must
+    still be excluded: the two filters are independent conditions, and
+    neither exemption weakens the other.
     """
     namespace = _load_launcher()
     routable = namespace["_routable_discovered_models"]

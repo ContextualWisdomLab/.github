@@ -2860,14 +2860,14 @@ scripts/ci/test_strix_quick_gate.sh` against the exact PR head) was failing on
 multiple, unrelated open PRs (observed directly on `.github#1476`, a PR whose own
 diff never touches this script or the scheduler workflow) with:
 
-```
+```text
 FAIL: scheduler wakes frequently enough to clear auto-merge PRs that become stale
 after their initial PR events (missing 'cron: "*/30 * * * *"')
 ```
 
 **Root cause.** `#1630` (referenced in `docs/doctoring/actions-queue-saturation-hourly-sweep.md`)
 deliberately lengthened `pr-review-merge-scheduler.yml`'s repository-local heartbeat
-from a quarter-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
+from a half-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
 reduce Actions-capacity pressure during the sustained organization-wide queue
 saturation this session repeatedly documented. The Python regression
 `tests/test_actions_queue_saturation_scheduler_cadence.py` was correctly updated at
@@ -2906,7 +2906,9 @@ that evidence.
 
 **Risk of this fix itself.** Essentially none: a one-line literal-string update in
 a test assertion, verified to both fail before and pass after against the exact
-same unmodified `main` checkout. No workflow, script, or other test file changed.
+same unmodified `main` checkout. Only `scripts/ci/test_strix_quick_gate.sh` (a
+bash test script) changed -- no workflow YAML and no Python production or test
+code changed.
 
 **Expected effect.** `exact-head-path-policy` stops failing organization-wide PRs
 on this assertion once this fix reaches protected `main`; any PR whose branch has
