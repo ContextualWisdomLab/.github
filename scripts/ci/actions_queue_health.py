@@ -319,6 +319,17 @@ def collect_snapshot(
                 runs_by_id[workflow_run_id] = _normalise_run(
                     repository_name, workflow_run, workflow_jobs
                 )
+
+            post_evidence_pull_requests = _read_pull_request_snapshot(
+                pulls_endpoint, runner=runner
+            )
+            if (
+                _pull_request_identity_view(final_pull_requests)
+                != _pull_request_identity_view(post_evidence_pull_requests)
+            ):
+                raise QueueHealthError(
+                    "pull-request identity snapshot changed during evidence collection"
+                )
         except QueueHealthError as collection_error:
             collection_errors.append(
                 {"repository": repository_name, "error": str(collection_error)}
