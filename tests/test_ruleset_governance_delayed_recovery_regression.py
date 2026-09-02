@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts" / "ci" / "reconcile_ruleset_governance.py"
 
@@ -110,3 +112,80 @@ def test_delayed_recovery_acceptance_settles_before_any_second_put(monkeypatch) 
 
     assert history_reads == 2
     assert put_count == 1
+
+
+def test_recovery_chain_exhaustion_fails_closed_after_bounded_attempts(monkeypatch) -> None:
+    """A perpetual collision chain reaches the bounded terminal error, never an unbounded loop."""
+
+    module = load_module()
+    target = repository_target(module)
+    live_state = live_payload()
+    history_reads = 0
+    put_count = 0
+
+    def payload_for(version: int) -> dict:
+        return {
+            **live_payload(),
+            "name": f"Administrator predecessor {version}",
+            "enforcement": "evaluate",
+        }
+
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+
+    def fake_history_state(_target, version):
+        if version >= 100:
+            return live_state
+        return payload_for(version)
+
+    def fake_history(*_args):
+        nonlocal history_reads
+        index = history_reads
+        history_reads += 1
+        return [
+            {"version_id": 100 + index},
+            {"version_id": 8 - index},
+        ]
+
+    def fake_api(method, endpoint, *, body=None):
+        nonlocal live_state, put_count
+        if method == "GET" and endpoint == target.endpoint:
+            return live_state
+        if method == "PUT" and endpoint == target.endpoint:
+            assert body is not None
+            put_count += 1
+            live_state = body
+            return {}
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_history_version_state", fake_history_state)
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+
+    with pytest.raises(module.RulesetGovernanceError, match="exceeded bounded attempts"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(live_state),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+    assert history_reads == module.COLLISION_RECOVERY_LIMIT
+    assert put_count == module.COLLISION_RECOVERY_LIMIT
+
+
+def test_verify_only_reconcile_dispatches_without_mutation_sha(monkeypatch) -> None:
+    """Read-only reconciliation keeps its documented no-mutation-SHA path covered."""
+
+    module = load_module()
+    target = repository_target(module)
+    calls: list[tuple[str, bool, str | None]] = []
+
+    def fake_reconcile_target(seen_target, *, verify_only, expected_main_sha=None):
+        calls.append((seen_target.scope, verify_only, expected_main_sha))
+        return False
+
+    monkeypatch.setattr(module, "_reconcile_target", fake_reconcile_target)
+
+    assert module.reconcile((target,), verify_only=True) == 0
+    assert calls == [("repository", True, None)]
