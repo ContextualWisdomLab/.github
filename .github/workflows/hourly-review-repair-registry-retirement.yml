@@ -1,0 +1,143 @@
+name: Hourly Review Repair Registry Retirement
+
+# One-shot control-plane migration for the single-file hourly review-repair
+# consolidation. GitHub may retain workflow registry identities after YAML paths
+# are removed, so deleting the 18 legacy caller files alone is not retirement
+# evidence. This workflow runs only from reviewed source on protected main after
+# the replacement is present. For each legacy path it accepts either absence
+# from the complete paginated registry (already retired) or one visible identity,
+# which must be disabled and read back. It then disables its own registry identity
+# last. After hosted success, remove this source file in a follow-up cleanup; its
+# own registry identity will already be disabled.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/hourly-review-repair.yml
+      - .github/workflows/hourly-review-repair-registry-retirement.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retire-legacy-identities:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      REPLACEMENT_PATH: .github/workflows/hourly-review-repair.yml
+      SELF_PATH: .github/workflows/hourly-review-repair-registry-retirement.yml
+    steps:
+      - name: Verify replacement and retire legacy registry identities
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          legacy_paths=(
+            ".github/workflows/accounting-information-platform-hourly-review-repair.yml"
+            ".github/workflows/afipc-hourly-review-repair.yml"
+            ".github/workflows/bandscope-hourly-review-repair.yml"
+            ".github/workflows/clearfolio-hourly-review-repair.yml"
+            ".github/workflows/contextual-orchestrator-hourly-review-repair.yml"
+            ".github/workflows/disksage-hourly-review-repair.yml"
+            ".github/workflows/fast-mlsirm-hourly-review-repair.yml"
+            ".github/workflows/github-hourly-review-repair.yml"
+            ".github/workflows/governance-risk-compliance-hourly-review-repair.yml"
+            ".github/workflows/inkspan-hourly-review-repair.yml"
+            ".github/workflows/lineageweave-hourly-review-repair.yml"
+            ".github/workflows/metering-billing-platform-hourly-review-repair.yml"
+            ".github/workflows/nonnest2-hourly-review-repair.yml"
+            ".github/workflows/orgmetra-hourly-review-repair.yml"
+            ".github/workflows/originweave-hourly-review-repair.yml"
+            ".github/workflows/psychometrics-commons-hourly-review-repair.yml"
+            ".github/workflows/quarantine-sandbox-hourly-review-repair.yml"
+            ".github/workflows/semantic-data-portal-hourly-review-repair.yml"
+          )
+
+          workflow_inventory="$({
+            gh api --paginate "/repos/${REPOSITORY}/actions/workflows?per_page=100"
+          } | jq -s '[.[].workflows[]]')"
+
+          workflow_identity_count() {
+            local path="$1"
+            jq --arg path "$path" '[.[] | select(.path == $path)] | length' <<<"$workflow_inventory"
+          }
+
+          require_single_workflow_id() {
+            local path="$1"
+            local count
+            count="$(workflow_identity_count "$path")"
+            if [[ "$count" != "1" ]]; then
+              echo "::error::Expected exactly one workflow registry identity for ${path}; found ${count}." >&2
+              return 1
+            fi
+            jq -r --arg path "$path" '.[] | select(.path == $path) | .id' <<<"$workflow_inventory"
+          }
+
+          replacement_id="$(require_single_workflow_id "$REPLACEMENT_PATH")"
+          replacement_state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${replacement_id}" --jq '.state')"
+          if [[ "$replacement_state" != "active" ]]; then
+            echo "::error::Replacement workflow ${REPLACEMENT_PATH} is not active; refusing retirement." >&2
+            exit 1
+          fi
+
+          disable_and_verify_present() {
+            local path="$1"
+            local workflow_id
+            local state
+            workflow_id="$(require_single_workflow_id "$path")"
+            state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${workflow_id}" --jq '.state')"
+            case "$state" in
+              active)
+                gh api --method PUT "/repos/${REPOSITORY}/actions/workflows/${workflow_id}/disable" >/dev/null
+                ;;
+              disabled_manually)
+                ;;
+              *)
+                echo "::error::Workflow ${path} has unexpected state ${state}; refusing partial retirement." >&2
+                return 1
+                ;;
+            esac
+            state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${workflow_id}" --jq '.state')"
+            if [[ "$state" != "disabled_manually" ]]; then
+              echo "::error::Workflow ${path} did not reach disabled_manually; observed ${state}." >&2
+              return 1
+            fi
+            printf 'retired %s (%s)\n' "$path" "$workflow_id"
+          }
+
+          retire_legacy_if_present() {
+            local path="$1"
+            local count
+            count="$(workflow_identity_count "$path")"
+            if [[ "$count" == "0" ]]; then
+              printf 'already absent from registry %s\n' "$path"
+              return 0
+            fi
+            if [[ "$count" != "1" ]]; then
+              echo "::error::Expected zero or one workflow registry identity for legacy path ${path}; found ${count}." >&2
+              return 1
+            fi
+            disable_and_verify_present "$path"
+          }
+
+          for path in "${legacy_paths[@]}"; do
+            retire_legacy_if_present "$path"
+          done
+
+          # The one-shot migration identity is disabled only after every legacy
+          # caller is either absent from the complete registry or verified disabled,
+          # and the replacement remains active.
+          replacement_state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${replacement_id}" --jq '.state')"
+          if [[ "$replacement_state" != "active" ]]; then
+            echo "::error::Replacement workflow changed state during retirement; preserving the migration identity." >&2
+            exit 1
+          fi
+          disable_and_verify_present "$SELF_PATH"
