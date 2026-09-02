@@ -30,8 +30,14 @@ calling repository's own `.github/workflows/R-CMD-check.yaml` keeps its
 existing `on: push` / `on: pull_request` trigger block (untouched -- a
 `workflow_call` target cannot itself be what GitHub triggers on push/PR)
 and adds one job that does
-`uses: ContextualWisdomLab/.github/.github/workflows/r-package-check.yml@main`
-with only that repository's non-default `with:` values.
+`uses: ContextualWisdomLab/.github/.github/workflows/r-package-check.yml@<commit-sha>`
+with only that repository's non-default `with:` values. Pin `<commit-sha>`
+to this file's exact commit, not `@main` — see
+`docs/doctoring/dependency-review-reusable-workflow-consolidation.md`'s
+"Post-merge corrections" section for why an unpinned mutable ref is a real
+security gap (Devin caught it on that consolidation's caller PRs) and for
+the separate required-status-check-name gotcha to check for in each caller
+repo's branch protection before merging.
 
 ## Non-uniform fields found while auditing
 

@@ -12,7 +12,17 @@
 # workflow file -- a workflow_call target cannot also be the thing GitHub
 # triggers directly on push/PR.
 #
-# Example caller (.github/workflows/R-CMD-check.yaml in a product repo):
+# Example caller (.github/workflows/R-CMD-check.yaml in a product repo).
+# Pin `uses:` to this file's exact commit SHA, not @main: an unpinned mutable
+# ref would run an unreviewed central change against every PR check in the
+# calling repo (see dependency-review.yml's own header comment and
+# docs/doctoring/dependency-review-reusable-workflow-consolidation.md for the
+# incident that established this as the required pattern for every reusable
+# workflow caller in this org). If the calling repo's branch protection
+# requires a status check literally named after the old standalone job,
+# converting to `uses:` here will rename the published check to
+# "<calling job> / R-CMD-check" and silently break that required check --
+# check for this before or immediately after merging a caller.
 #
 #   name: R-CMD-check
 #   on:
@@ -22,7 +32,7 @@
 #       branches: [main, master]
 #   jobs:
 #     R-CMD-check:
-#       uses: ContextualWisdomLab/.github/.github/workflows/r-package-check.yml@main
+#       uses: ContextualWisdomLab/.github/.github/workflows/r-package-check.yml@<commit-sha>
 #       with:
 #         needs_tinytex: true   # only if the package builds a PDF vignette
 #
