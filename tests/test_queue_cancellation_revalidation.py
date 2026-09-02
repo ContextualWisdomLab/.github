@@ -322,7 +322,7 @@ def test_unassociated_aged_pr_uses_live_ref_not_stale_listing_sha(
         run_sha=current,
     )
     assert result.returncode == 0, result.stderr
-    assert "authoritative current-head evidence" in result.stdout
+    assert "associated with an open PR at its authoritative current head" in result.stdout
     assert not cancelled
 
 

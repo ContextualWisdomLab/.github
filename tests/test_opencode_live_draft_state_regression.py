@@ -134,11 +134,22 @@ def test_stale_draft_request_event_does_not_exempt_live_ready_pr(
 def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
     tmp_path: Path,
 ) -> None:
-    """A stale draft verdict snapshot cannot publish a success for a ready PR."""
+    """A stale draft verdict snapshot cannot publish a success for a ready PR.
+
+    Unlike ``request_review_script()``'s single unguarded live-PR fetch, this
+    step's post-draft-check Reviews API poll retries a transport failure up
+    to ``max_poll_transport_failures`` times (with a real backoff sleep
+    between attempts) before failing closed with its own exit 1 and
+    diagnostic -- so the fixture's synthetic unmocked-call sentinel exit code
+    never reaches this script's own exit status, unlike the sibling test
+    above. The "stale" continuation message is still emitted first, proving
+    the step did not silently exempt the live-ready PR from verdict polling.
+    """
     result = _run_step(tmp_path, fail_closed_script(), live_draft=False)
 
-    assert result.returncode == 19
+    assert result.returncode == 1
     assert "Event draft snapshot is stale" in result.stdout
+    assert "Reviews API read failed 3 consecutive times" in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
