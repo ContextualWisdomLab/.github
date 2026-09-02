@@ -37,23 +37,47 @@ def test_noema_remints_repository_scoped_app_token_after_model_before_publicatio
     assert "steps.noema_prepare.outputs.prepared == 'true'" in publish
 
 
-def test_publication_step_uses_fresh_app_token_without_authority_fallback() -> None:
-    """Publication selects the refreshed App token and fails closed for unknown sources."""
+def test_publication_step_uses_fresh_app_and_oidc_tokens_without_authority_fallback() -> None:
+    """Publication selects freshly minted scoped authority and rejects central fallback."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    refresh = _step_block(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    app_refresh = _step_block(workflow, "Refresh repository-scoped Noema GitHub App token for publication")
+    oidc_refresh = _step_block(workflow, "Refresh repository-scoped Noema OIDC app token for publication")
+    live_publish = _step_block(workflow, "Revalidate live Noema target before publication")
     publish = _step_block(workflow, "Publish prepared Noema verdict on the exact live head")
 
-    assert "owner: ContextualWisdomLab" in refresh
-    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in refresh
-    assert "permission-pull-requests: write" in refresh
-    assert "permission-contents: read" in refresh
-    assert "permission-actions: read" in refresh
-    assert "steps.noema_github_app_publication_token.outputs.token" in publish
-    assert "steps.noema_github_app_token.outputs.token" not in publish
-    assert "secrets.NOEMA_REVIEW_TOKEN" in publish
-    assert "steps.noema_oidc_token.outputs.token" in publish
-    assert "github.token" not in publish
+    assert "owner: ContextualWisdomLab" in app_refresh
+    assert "repositories: ${{ steps.noema_credential.outputs.repository }}" in app_refresh
+    assert "permission-pull-requests: write" in app_refresh
+    assert "permission-contents: read" in app_refresh
+    assert "permission-actions: read" in app_refresh
+    assert "steps.noema_prepare.outputs.prepared == 'true'" in oidc_refresh
+    assert "steps.noema_credential.outputs.source == 'oidc'" in oidc_refresh
+    assert "id: noema_oidc_publication_token" in oidc_refresh
+    assert "target_repository" in oidc_refresh
+
+    for step in (live_publish, publish):
+        assert "steps.noema_github_app_publication_token.outputs.token" in step
+        assert "steps.noema_oidc_publication_token.outputs.token" in step
+        assert "steps.noema_github_app_token.outputs.token" not in step
+        assert "steps.noema_oidc_token.outputs.token" not in step
+        assert "secrets.NOEMA_REVIEW_TOKEN" in step
+        assert "github.token" not in step
+
+    assert "refusing any GITHUB_TOKEN fallback" in live_publish
     assert "refusing any GITHUB_TOKEN or author fallback" in publish
+
+
+def test_publication_authority_refresh_precedes_private_sibling_live_revalidation() -> None:
+    """Fresh scoped App/OIDC authority must exist before the private live-PR lookup."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    app_marker = "      - name: Refresh repository-scoped Noema GitHub App token for publication\n"
+    oidc_marker = "      - name: Refresh repository-scoped Noema OIDC app token for publication\n"
+    live_marker = "      - name: Revalidate live Noema target before publication\n"
+    publish_marker = "      - name: Publish prepared Noema verdict on the exact live head\n"
+
+    assert workflow.index(app_marker) < workflow.index(live_marker)
+    assert workflow.index(oidc_marker) < workflow.index(live_marker)
+    assert workflow.index(live_marker) < workflow.index(publish_marker)
 
 
 def test_prepare_and_publish_are_the_only_model_verdict_execution_path() -> None:
