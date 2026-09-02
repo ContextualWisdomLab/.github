@@ -2907,4 +2907,65 @@ NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRout
 
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
+## 2026-09-02 scheduler target-list drift — item 16/17 scoping, found live-broken (fixed) and structurally closed
+
+**Task.** Scoping item 16/17 ("GitHub Actions 파일 최대한 통합" — consolidate GitHub Actions files as much as
+possible) surfaced a `ci-monitor-event` autofix task first: PR #1687's `noema-review` check was failing
+with `NoemaRepairDeadlineExceeded: ... exceeded 900-second absolute wall-clock deadline` — the exact
+class of bug the entry above documents as already fixed on `main` (PR #1672). Root cause: PR #1687's
+branch (`mergeStateStatus: BEHIND`) simply predated that fix, so its copy of
+`scripts/ci/noema_review_gate.py` still had the retired `NOEMA_REPAIR_DEADLINE_SECONDS = 15 * 60`/
+`signal.setitimer` machinery. Fixed by merging `main` into the branch (no code change needed — the fix
+already existed) and pushing; full suite 2644 passed, 1 skipped after the merge. This is a live instance
+of a general risk this org's own PR-governance model already documents ("old checks are not merge
+evidence after the head SHA changes") — a stale branch doesn't just risk merge conflicts, it can silently
+re-run already-retired buggy code.
+
+**A second, distinct, more actionable finding emerged while scoping item 16/17 itself.** File-level
+workflow duplication was already audited and found mostly absent (see the "CI workflow duplication audit"
+entry's cross-reference above). But item 16/17's underlying complaint — configuration fragmentation across
+Actions files — has a real, live instance one layer down from file duplication: `hourly-review-repair.yml`'s
+per-cron `target_repository` matrix (18 repositories, the ADR-0021 consolidation's own canonical list,
+mirrored in `tests/test_hourly_review_repair_callers.py::_EXPECTED_TARGETS`) and the
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in
+`pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`, and the agent-mention dispatch allowlist)
+are two independently hand-maintained lists with no structural link. Tracing the incident chain: a run the
+repository owner cited (`actions/runs/33524178483/job/99910668839`, 2026-09-01, still live — not the 404
+initially guessed) showed `governance-risk-compliance`'s hourly heartbeat failing with `##[error]Scheduler
+target repository is not allowlisted` because it had been added to the hourly matrix but not the variable;
+a prior session's fix (commit `7bf98d0`) hardcoded the repository name directly into both scheduler
+workflows as a stopgap, which violated this repo's own thin-caller convention and broke
+`test_no_target_repository_is_hard_coded_in_the_shared_scheduler` on `main` — fixed properly the same day
+in `.github#1743` (added to the variable, hardcode removed). Diffing the hourly matrix's 18 repositories
+against the variable's then-current 51-entry live value while scoping this item found **two more
+repositories in the identical broken state, live, right now**: `nonnest2` and `quarantine-sandbox-runtime`
+— present in the hourly matrix since the original consolidation, absent from the variable, meaning their
+hourly heartbeat had been silently failing closed every hour, undetected. Fixed immediately via
+`gh variable set` (same safe, narrow mechanism already validated by `#1743`'s live fix), independently
+confirmed applied by a peer session.
+
+**Structural fix.** `.github#1747` adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
+hand-maintained mirror of the variable's live value (no GitHub API commits a repository variable's value
+to source control, so this is deliberately a mirror a human updates alongside `gh variable set`, not a
+generator), and a new contract test
+(`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller
+`target_repository` is present in the mirror — so a future PR that adds a repository to the hourly matrix
+without also updating the mirror (and, per the mirror's own documented discipline, the live variable) now
+fails at review time instead of at the next silent hourly failure. Deliberately does not add a new
+auto-mutating workflow to keep the live variable in sync automatically — matches this org's established
+preference (used throughout this repo's `test_*.py` suite) for a loud, human-resolved contract-test
+failure over a workflow that "magically" fixes drift, per explicit peer review of the approach before
+implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` for the full incident
+writeup and root-cause argument.
+
+**Conclusion.** Item 16/17's literal framing ("reduce the number of workflow files") is separately valid
+and already substantially addressed by the earlier duplication audit; this finding is a different axis
+(configuration-source fragmentation between two files that both remain necessary) and is tracked here as
+its own item rather than folded into 16/17's close-out. **Residual, explicitly not done:** verifying the
+mirror file against the *live* variable's actual current value needs a step in an existing,
+regularly-running workflow (checking a live org/repo variable requires network access unavailable to this
+repo's offline `pytest tests` suite) — left as an open follow-up in the doctoring record rather than
+implemented, to keep this fix a pure test-and-mirror addition with zero risk to production scheduler
+workflows.
+
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
