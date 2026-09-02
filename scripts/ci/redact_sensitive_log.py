@@ -13,7 +13,7 @@ KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|"
-    r"storage[_-]?key)",
+    r"storage[_-]?key(?![A-Za-z0-9_-]))",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -34,8 +34,16 @@ PROVIDER_TOKEN_RE = re.compile(
 )
 
 
+def _redact_token_patterns(text: str) -> str:
+    """Redact bearer/basic headers, JWTs, and provider-token shapes in place."""
+    cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", text)
+    cleaned = JWT_RE.sub(REDACTED, cleaned)
+    cleaned = PROVIDER_TOKEN_RE.sub(REDACTED, cleaned)
+    return cleaned
+
+
 def _redact_json(value: Any) -> Any:
-    """Recursively replace values whose JSON keys identify credentials."""
+    """Recursively replace credentials identified by JSON keys or value shape."""
     if isinstance(value, dict):
         return {
             key: REDACTED if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(item)
@@ -43,6 +51,8 @@ def _redact_json(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_token_patterns(value)
     return value
 
 
@@ -140,11 +150,7 @@ def _redact_assignments(text: str) -> str:
 
 def _redact_unstructured(text: str) -> str:
     """Redact credential-shaped values from non-JSON diagnostic text."""
-    cleaned = _redact_assignments(text)
-    cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
-    cleaned = JWT_RE.sub(REDACTED, cleaned)
-    cleaned = PROVIDER_TOKEN_RE.sub(REDACTED, cleaned)
-    return cleaned
+    return _redact_token_patterns(_redact_assignments(text))
 
 
 def _redact_line(line: str) -> str:

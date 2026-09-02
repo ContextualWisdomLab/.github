@@ -137,6 +137,36 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
     assert cleaned.count(redactor.REDACTED) == 6
 
 
+def test_sensitive_log_redaction_scrubs_provider_tokens_inside_structured_values() -> None:
+    """Provider-token-shaped values are scrubbed even under an innocuous JSON key."""
+    source = json.dumps(
+        {
+            "message": "leaked classic ghp_" + ("A" * 24) + " during the run",
+            "note": "no secret here",
+        }
+    )
+    cleaned = redactor.redact_text(source)
+    parsed = json.loads(cleaned)
+
+    assert "ghp_" not in cleaned
+    assert parsed["message"] == f"leaked classic {redactor.REDACTED} during the run"
+    assert parsed["note"] == "no secret here"
+
+
+def test_sensitive_log_redaction_storage_key_requires_an_exact_field_name() -> None:
+    """`storage_key`-shaped fields are redacted; unrelated metrics keep their values."""
+    cleaned = redactor.redact_text(
+        json.dumps({"AZURE_STORAGE_KEY": "fixture-storage-secret", "storage_key_count": 3})
+    )
+    parsed = json.loads(cleaned)
+
+    assert parsed["AZURE_STORAGE_KEY"] == redactor.REDACTED
+    assert parsed["storage_key_count"] == 3
+
+    assert redactor.redact_text("storage_key_count=3") == "storage_key_count=3"
+    assert redactor.redact_text("storage_key=hunter2") == f"storage_key={redactor.REDACTED}"
+
+
 def test_sensitive_log_redaction_requires_context_for_fixed_length_secrets() -> None:
     """Generic fixed-length values need a secret label so evidence stays usable."""
     commit_sha = "a" * 40

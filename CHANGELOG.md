@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+### Security: structured-log secret redaction gaps
+
+- Fixed `scripts/ci/redact_sensitive_log.py`'s recursive JSON redaction (`_redact_json`)
+  only ever inspecting dict *keys* against `SENSITIVE_KEY_RE`; a provider-token-shaped
+  secret (`ghp_...`, `sk-...`, a Bearer header, a JWT) sitting in a string *value* under
+  an innocuous key (e.g. `"message"`) survived redaction unchanged when the log line was
+  valid JSON. `_redact_json` now also runs the same bearer/JWT/provider-token scrubbing
+  already used for unstructured text against every string value, factored into a shared
+  `_redact_token_patterns` helper.
+- Narrowed the `storage[_-]?key` sensitive-key pattern so it only matches when `key` ends
+  the field name (e.g. `AZURE_STORAGE_KEY`), not merely contains it — `storage_key_count`
+  and similar diagnostic-metric field names are no longer over-redacted.
+
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
 ## 2026-09-02 — Noema single-request gateway ownership
 
