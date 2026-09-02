@@ -11,6 +11,9 @@ why.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import textwrap
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/dependency-review.yml")
@@ -22,6 +25,70 @@ _DEPENDENCY_REVIEW_PIN = "a1d282b36b6f3519aa1f3fc636f609c47dddb294"
 def _workflow_text() -> str:
     """Read the reusable Dependency Review workflow as UTF-8 text."""
     return _WORKFLOW.read_text(encoding="utf-8")
+
+
+def _availability_probe_script() -> str:
+    """Extract the dependency-graph preflight shell body for executable tests."""
+    workflow = _workflow_text()
+    step = "      - name: Check dependency graph availability\n"
+    start = workflow.index(step)
+    end = workflow.index("\n      - name:", start + len(step))
+    block = workflow[start:end]
+    run_marker = "        run: |\n"
+    run_start = block.index(run_marker) + len(run_marker)
+    script = textwrap.dedent(block[run_start:])
+    return script.replace('${{ github.event_name }}', "pull_request")
+
+
+def _run_availability_probe(
+    tmp_path: Path,
+    repository: str,
+    *,
+    base_sha: str = "a" * 40,
+    head_sha: str = "b" * 40,
+    http_status: str = "200",
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """Execute the real preflight shell against a marker-only fake curl."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    curl_marker = tmp_path / "curl-called"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "authorized=false\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$arg\" == Authorization:* ]]; then authorized=true; fi\n"
+        "done\n"
+        "printf '%s\\n' \"$authorized\" >>\"${CURL_MARKER}\"\n"
+        "printf '%s' \"${HTTP_STATUS:-200}\"\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    output = tmp_path / "github-output"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env.get('PATH', '')}",
+            "GH_TOKEN": "test-token",
+            "BASE_SHA": base_sha,
+            "HEAD_SHA": head_sha,
+            "REPOSITORY": repository,
+            "GITHUB_API_URL": "https://api.github.invalid",
+            "GITHUB_OUTPUT": str(output),
+            "CURL_MARKER": str(curl_marker),
+            "HTTP_STATUS": http_status,
+        }
+    )
+    result = subprocess.run(
+        ["bash", "-c", _availability_probe_script()],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, curl_marker, output
 
 
 def test_declares_workflow_call_with_four_inputs_and_recorded_defaults() -> None:
@@ -126,6 +193,7 @@ def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
     workflow = _workflow_text()
     assert "dependency-graph/compare" in workflow
     assert "github.event.repository.private" not in workflow
+    assert '-H "Authorization: Bearer ${GH_TOKEN}"' in workflow
 
 
 def test_pull_request_http_403_and_404_are_not_normalized_to_unavailable() -> None:
@@ -142,6 +210,54 @@ def test_availability_check_only_runs_the_gate_for_pull_request_events() -> None
     """A non-pull_request trigger may skip because it has no PR base/head identity."""
     workflow = _workflow_text()
     assert '"${{ github.event_name }}" != "pull_request"' in workflow
+
+
+def test_preflight_rejects_named_revisions_before_transport(tmp_path: Path) -> None:
+    """Named or malformed revisions never reach the dependency-graph endpoint."""
+    for index, (base_sha, head_sha) in enumerate(
+        (("main", "b" * 40), ("a" * 40, "develop"), ("a" * 39, "b" * 40))
+    ):
+        case_dir = tmp_path / f"revision-{index}"
+        case_dir.mkdir()
+        result, curl_marker, _output = _run_availability_probe(
+            case_dir,
+            "ContextualWisdomLab/Orgmetra",
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
+        assert result.returncode != 0, (base_sha, head_sha)
+        assert not curl_marker.exists(), (base_sha, head_sha)
+        assert "exact 40- or 64-character hexadecimal" in result.stdout.lower()
+
+
+def test_preflight_rejects_malformed_repository_before_transport(tmp_path: Path) -> None:
+    """Only one non-dot owner/name repository identity may reach transport."""
+    repositories = (
+        "ContextualWisdomLab",
+        "ContextualWisdomLab/Orgmetra/extra",
+        "/Orgmetra",
+        "../.github",
+        "ContextualWisdomLab/..",
+        "ContextualWisdomLab/.",
+        "./.github",
+    )
+    for index, repository in enumerate(repositories):
+        case_dir = tmp_path / f"repository-{index}"
+        case_dir.mkdir()
+        result, curl_marker, _output = _run_availability_probe(case_dir, repository)
+        assert result.returncode != 0, repository
+        assert not curl_marker.exists(), repository
+        assert "repository identity" in result.stdout.lower(), repository
+
+
+def test_preflight_accepts_dotgithub_and_uses_job_token(tmp_path: Path) -> None:
+    """The legitimate .github repository reaches exactly one authenticated compare."""
+    result, curl_marker, output = _run_availability_probe(
+        tmp_path, "ContextualWisdomLab/.github"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert curl_marker.read_text(encoding="utf-8") == "true\n"
+    assert output.read_text(encoding="utf-8") == "available=true\n"
 
 
 def test_dependency_review_comment_summary_defaults_to_on_failure() -> None:
