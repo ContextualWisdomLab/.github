@@ -3,7 +3,7 @@
 The regression corpus remains byte-for-byte in the adjacent non-collectable
 case module. This collection shim re-exports every existing test except the
 obsolete constructor-text assertion, then replaces that assertion with the
-provider-neutral bounded-retry and universal deadline-free inference contract.
+provider-neutral one-shot and universal deadline-free inference contract.
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ for _name, _value in _CASES.items():
         globals()[_name] = _value
 
 
-def test_preflight_transport_has_no_inference_timeout_and_uses_bounded_retry() -> None:
-    """Review inference is deadline-free while preflight retries once."""
+def test_preflight_transport_has_no_inference_timeout_or_transport_retry() -> None:
+    """Review inference is deadline-free and every transport payload is one-shot."""
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
     assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
     assert "REVIEW_TEMPERATURE = 1.0" in launcher
     assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
-    assert "REVIEW_PREFLIGHT_TRANSIENT_RETRIES = 1" in launcher
+    assert "REVIEW_PREFLIGHT_TRANSIENT_RETRIES" not in launcher
     assert launcher.count("timeout=None") == 2
-    assert "max_retries=REVIEW_PREFLIGHT_TRANSIENT_RETRIES" in launcher
+    assert launcher.count("max_retries=0") == 2
     assert "temperature=REVIEW_TEMPERATURE" in launcher
