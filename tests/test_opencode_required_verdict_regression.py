@@ -303,6 +303,7 @@ def _run_fail_closed_step(
     pr_draft: str = "false",
     pr_number: str = "1437",
     head_sha: str = HEAD,
+    live_head_sha: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the "Fail closed without a current-head OpenCode verdict" step body.
 
@@ -312,6 +313,10 @@ def _run_fail_closed_step(
     ``while :; do ... sleep "$poll_interval_seconds"; done`` never naturally terminates on a
     non-matching review, so a real ``gh`` fixture serving no match would hang
     a test rather than fail it).
+
+    ``live_head_sha`` defaults to ``head_sha`` (an exact-head snapshot) but
+    can be set independently to simulate a push landing between the event
+    snapshot (``HEAD_SHA``) and this step's own live re-fetch.
     """
     bash = shutil.which("bash")
     jq = shutil.which("jq")
@@ -334,7 +339,7 @@ def _run_fail_closed_step(
             "LIVE_PR_JSON": json.dumps(
                 {
                     "draft": pr_draft.lower() == "true",
-                    "head": {"sha": head_sha},
+                    "head": {"sha": live_head_sha if live_head_sha is not None else head_sha},
                     "state": "open",
                 }
             ),
@@ -370,6 +375,7 @@ def _run_request_review_step(
     tmp_path: Path,
     *,
     pr_draft: str = "false",
+    live_head_sha: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the "Request current-head OpenCode review execution" step body.
 
@@ -377,6 +383,10 @@ def _run_request_review_step(
     early exit that reaches any API call at all -- fetching the receipt-gate
     helper source, or the Reviews API it wraps -- fails the test
     immediately.
+
+    ``live_head_sha`` defaults to the fixed ``HEAD_SHA`` event snapshot but
+    can be set independently to simulate a push landing between the event
+    snapshot and this step's own live re-fetch.
     """
     bash = shutil.which("bash")
     if bash is None:
@@ -401,7 +411,7 @@ def _run_request_review_step(
             "LIVE_PR_JSON": json.dumps(
                 {
                     "draft": pr_draft.lower() == "true",
-                    "head": {"sha": HEAD},
+                    "head": {"sha": live_head_sha if live_head_sha is not None else HEAD},
                     "state": "open",
                 }
             ),
@@ -442,6 +452,93 @@ def test_request_review_step_still_dispatches_for_a_non_draft_pr(
     result = _run_request_review_step(tmp_path, pr_draft="false")
     assert result.returncode == 17, result.stderr
     assert "unexpected gh invocation after live-state validation" in result.stderr
+
+
+def test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved(
+    tmp_path: Path,
+) -> None:
+    """Reproduces the production failure this fix targets, verbatim.
+
+    contextual-orchestrator PR #1000 was -- and remained -- a draft the
+    whole time, but a push landed between the `pull_request_target` event
+    snapshot and this step's own live re-fetch, so the live head no longer
+    matched `HEAD_SHA`. The old check order ran the head-SHA-match check
+    before the draft exemption, so it failed hard with `::error::Pull
+    request head moved while validating live review state.` and exit 1
+    (https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33548447878/job/100066104033)
+    even though no review was ever actually being requested against a
+    stable target. Draft/closed must be checked before head-match so a
+    still-iterating draft PR always exits 0, no matter how many pushes
+    race the event snapshot.
+    """
+    result = _run_request_review_step(
+        tmp_path, pr_draft="true", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "PR is still a draft on the live exact head; a current-head OpenCode review is not requested"
+        in result.stdout
+    )
+    assert "head moved" not in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_request_review_step_exits_gracefully_when_open_nondraft_head_moved(
+    tmp_path: Path,
+) -> None:
+    """An open, ready PR whose live head has already advanced must not error.
+
+    A newer push already fired its own fresh `pull_request_target` event and
+    its own fresh run of this workflow, which will validate *that* head
+    correctly -- failing this now-superseded dispatch attempt would only add
+    red-X noise for a benign race, not prevent anything.
+    """
+    result = _run_request_review_step(
+        tmp_path, pr_draft="false", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Pull request head moved on the live open, ready-for-review PR; "
+        "a fresh dispatch will fire for the current head." in result.stdout
+    )
+    assert "::error::" not in result.stdout
+
+
+def test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved(
+    tmp_path: Path,
+) -> None:
+    """The sibling "Fail closed" gate has the identical production race.
+
+    This step independently re-fetches live PR state right after the
+    "Request current-head OpenCode review execution" step exits, so a draft
+    PR whose head moves between the two steps' own live lookups must still
+    exempt here too, not just in the sibling step above.
+    """
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="synchronize", pr_draft="true", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required"
+        in result.stdout
+    )
+    assert "head moved" not in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_fail_closed_step_exits_gracefully_when_open_nondraft_head_moved(
+    tmp_path: Path,
+) -> None:
+    """An open, ready PR whose live head has advanced retires this poll quietly."""
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="synchronize", pr_draft="false", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Pull request head moved on the live open, ready-for-review PR; "
+        "a fresh poll will start for the current head." in result.stdout
+    )
+    assert "::error::" not in result.stdout
 
 
 def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
