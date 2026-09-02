@@ -261,6 +261,34 @@ def test_reject_private_llm_url_rejects_reserved_embedded_ipv4(
         noema.reject_private_llm_url("https://llm.example.test/v1/chat")
 
 
+@pytest.mark.parametrize("cgn_ip", ["100.64.0.1", "100.127.255.254"])
+def test_reject_private_llm_url_rejects_rfc6598_shared_address_space(
+    monkeypatch, cgn_ip
+):
+    """RFC 6598 shared/CGN address space (100.64.0.0/10) stays closed.
+
+    ``is_private``/``is_loopback``/``is_link_local``/``is_multicast``/
+    ``is_unspecified``/``is_reserved`` all read ``False`` for this range --
+    only ``not ip.is_global`` catches it (CodeRabbit; confirmed directly
+    against ``ipaddress.ip_address("100.64.0.1")`` before fixing, and
+    independently re-derived by peer review, `cool-jackson-3a6130-78`, who
+    flagged that this exact regression case -- the only address shape the
+    ``or not ip.is_global`` addition actually rejects -- had no dedicated
+    test despite the parametrized ``is_reserved`` test above and the public-
+    DNS test elsewhere already satisfying branch coverage on the same
+    ``if`` statement).
+    """
+    monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
+
+    def resolves_to_cgn(host, port):
+        return [(0, 0, 0, "", (cgn_ip, 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", resolves_to_cgn)
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.reject_private_llm_url("https://llm.example.test/v1/chat")
+
+
 def test_pinned_connection_handlers_selects_by_scheme():
     """The handler list is empty with no pinned IPs, else a pinned HTTPS handler.
 
