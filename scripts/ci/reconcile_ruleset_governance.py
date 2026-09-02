@@ -9,12 +9,14 @@ than a compare-and-swap guarantee. Privileged mutation is additionally bound to
 the exact protected-main revision, serialized owner-plane execution, and the
 immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
 overwritten, the reconciler restores the newest displaced administrator state
-before failing; recovery re-checks immutable history and protected-main identity
-before every recovery write. Ambiguous mutation and recovery results are settled
-from live state plus immutable history instead of being treated as ordinary
-request failures or retried blindly. The canonical audit is executed against
-projected and live state so this narrow reconciler never reports broader policy
-drift as converged.
+before failing. Protected-main freshness gates every new reviewed mutation;
+once a PUT has been issued, immutable-history settlement and compensating
+collision recovery finish even if protected main advances so an already-issued
+write cannot strand an overwritten administrator state. Ambiguous mutation and
+recovery results are settled from live state plus immutable history instead of
+being treated as ordinary request failures or retried blindly. The canonical
+audit is executed against projected and live state so this narrow reconciler
+never reports broader policy drift as converged.
 """
 
 from __future__ import annotations
@@ -555,11 +557,13 @@ def _recover_displaced_history_state(
     verifies immutable history immediately afterward. If an administrator write
     slipped between the recovery GET and PUT, that displaced history version
     becomes the next recovery target. A newer live state observed before a
-    recovery write is never overwritten. Privileged recovery revalidates the
-    reviewed protected-main SHA immediately before every PUT. Ambiguous recovery
-    results settle across one complete client-timeout horizon before any later
-    recovery write is considered, so a delayed request cannot be duplicated.
-    The recovery chain remains bounded and fails closed.
+    recovery write is never overwritten. When ``expected_main_sha`` is supplied,
+    recovery revalidates protected main before every PUT; post-write compensation
+    deliberately omits that source-freshness guard because its sole purpose is to
+    undo state displaced by an already-issued write using immutable predecessor
+    evidence. Ambiguous recovery results settle across one complete client-timeout
+    horizon before any later recovery write is considered, so a delayed request
+    cannot be duplicated. The recovery chain remains bounded and fails closed.
     """
 
     for _attempt in range(COLLISION_RECOVERY_LIMIT):
@@ -638,6 +642,9 @@ def _verify_ruleset_history_transition(
     predecessor must be the version sampled before the final live read. If a
     version intervened, recovery follows immutable history and verifies every
     restore write so a second administrator edit cannot be silently overwritten.
+    ``expected_main_sha`` guards recovery only when the caller is still before a
+    new mutation boundary; callers validating an already-issued PUT omit it so
+    compensating restoration cannot be stranded by a later main advance.
     """
 
     history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=3")
@@ -683,9 +690,12 @@ def _confirm_ambiguous_put(
     a baseline-only observation nor an intervening administrator version proves
     rejection of the delayed reviewed PUT. Acceptance must become visible as the
     exact reviewed payload in immutable history and live state; collision
-    recovery follows the same predecessor contract. If no decisive transition is
-    visible by the end of the bounded window, the run fails as unresolved and
-    never retries the desired mutation blindly.
+    recovery follows the same predecessor contract. Once the PUT is in flight,
+    settlement and any compensating restoration finish even when protected main
+    advances; source freshness is checked only after a clean, collision-free
+    settlement. If no decisive transition is visible by the end of the bounded
+    window, the run fails as unresolved and never retries the desired mutation
+    blindly.
     """
 
     if expected_main_sha is None:
@@ -694,13 +704,12 @@ def _confirm_ambiguous_put(
         )
 
     for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
-        _assert_current_main(expected_main_sha)
         try:
             _verify_ruleset_history_transition(
                 target,
                 baseline_version,
                 desired,
-                expected_main_sha=expected_main_sha,
+                expected_main_sha=None,
             )
         except (RulesetMutationNotVisibleError, RulesetMutationStillSettlingError):
             live = _gh_api("GET", target.endpoint)
@@ -783,11 +792,14 @@ def _reconcile_target(
         raise RulesetGovernanceError(f"{target.scope} ruleset did not converge")
     _assert_canonical_governance(after, target)
     if baseline_version is not None and not history_verified:
+        # The write already happened. History verification may need to compensate
+        # a displaced administrator version even if protected main advanced in the
+        # meantime; final source freshness is checked only after clean settlement.
         _verify_ruleset_history_transition(
             target,
             baseline_version,
             desired,
-            expected_main_sha=expected_main_sha,
+            expected_main_sha=None,
         )
     if expected_main_sha is not None:
         _assert_current_main(expected_main_sha)
