@@ -557,3 +557,38 @@ fixed:
 - **Verification:** `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
   → 5 passed; `grep -n "�"` → no matches (no corruption).
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 fourth restatement: verified duplicate, no edit made
+
+- **Date:** 2026-09-02.
+- **Subject:** the owner sent the full nine-section directive a fourth time this session, as another
+  genuine chat-turn message with the same "1. 실행 목표와 지속 Loop..." structure as the prior same-day
+  restatement (the "third revision," commit `b3f96812`, reconciled earlier in this same session).
+- **Method:** rather than assume duplication, did a section-by-section comparison against the then-current
+  stored text (grep for distinguishing phrases per section, then full manual read-through of every
+  section). Findings:
+  - §1, §2, §3, §5, §6, §7: every sentence already present verbatim or in already-reconciled substance.
+  - §9: the five-domain repo regrouping block and the "immature core" waiting-period sentence both
+    matched the stored text **character-for-character** — strong evidence this is a genuine repeat send,
+    not independently re-authored paraphrase.
+  - §4 and §8 each contained one or two surface reword candidates worth individually checking rather
+    than waved through: §4's "shadcn/ui는 제품 소유 component source, Storybook은 검증 환경이다"
+    (explicitly labels shadcn/ui "product-owned" and Storybook "the verification environment") versus
+    the stored "shadcn/ui는 component source로 Storybook과 대체 관계가 아니다" (component source, not a
+    Storybook substitute); §4's "측정 성능" (measured performance) versus stored bare "성능"; §8's "LLM
+    작업은... CO Agent로 만든다" (LLM work generally) versus stored "LLM이 필요한 테스트는... OpenCode
+    Agent로 만든다" (tests needing LLM specifically). None of the three appear as literal text in the
+    stored file (confirmed by `grep -n "측정 성능\|제품 소유\|검증 환경\|LLM 작업은"` — no matches), but
+    each is a positive restatement/labeling of a relationship or scope already thoroughly established by
+    surrounding already-stored sentences (Storybook's role as the state-documentation/audit environment
+    is already spelled out in detail two sentences earlier in the same blockquote; §8's own later
+    test-time-compute/Fugu-Conductor-TRINITY content already applies to "LLM 사용 소프트웨어" broadly, not
+    a narrower "tests" scope) — judged non-substantive paraphrase, not a new obligation, consistent with
+    this file's established policy for condensed re-authored sections.
+- **Action:** none. No edit to `docs/product-goal-directive.md`'s quoted sections or notes. This entry
+  exists so a future pass that receives what looks like the same restatement again can check this record
+  first rather than re-deriving the same section-by-section comparison from scratch.
+- **Not a `/loop` invocation:** unlike some earlier restatements in this session, this one arrived as a
+  plain chat-turn message with no `/loop` prefix or scheduling instruction — handled identically to a
+  `/loop`-delivered restatement per this file's own directive-reconciliation convention, which does not
+  distinguish delivery mechanism.
