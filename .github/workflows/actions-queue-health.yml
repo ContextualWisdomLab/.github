@@ -11,7 +11,6 @@ concurrency:
 permissions:
   contents: read
   actions: read
-  pull-requests: read
 
 jobs:
   collect:
@@ -21,7 +20,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      pull-requests: read
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
