@@ -2671,3 +2671,21 @@ range), not a defect introduced here.
 `IdentityProviderRegistration`, ADR-0009's exact text, and PR #103's
 `org_authorization.py`/`ORG_PATH_LEVELS`, all fetched from the live repositories in this
 pass, not recalled from a prior summary.
+
+**Upstream status, discovered mid-pass, not before starting.** `context-graph-contracts#23`
+(ADR-0001, the PR this design's field shapes were read from) was **closed, not merged**,
+by a concurrent review during this same pass — its closing comment cites unresolved
+executable-contract defects (wire interpretation, bitemporal/replay semantics,
+primary-membership cardinality, reproducibility), premature `Accepted` status ahead of
+its own schema dependency (`context-graph-contracts#4`, itself still open and `blocked`),
+and ADR-numbering collision with that repository's separate `chatgpt/*` PR stack (#4, #6,
+#7, #8, #12-#14, #16-#21), which is building the same contract test-first and remains
+unmerged as well. The closer's own words: the branch "is preserved for evidence" and
+"any org-membership contract should be rebuilt test-first on the current CGC owner stack
+after the foundation/Context Assertion dependency is protected." This does not
+invalidate the SCIM/OIDC/SAML *protocol mapping itself* (its field shapes came from #4's
+actual schema files, still the live dependency), but it does mean ADR-0001's governance
+status is no longer settled ground — Keyverse ADR-0014 was updated in the same pass to
+say so plainly and must be re-validated once the org-membership contract is rebuilt on
+whichever PR the `chatgpt/*` stack lands as. Flagging this rather than letting a closed
+upstream PR read as a landed dependency is the point of this entry existing at all.
