@@ -239,6 +239,24 @@
       "deepwiki": true,
       "pages": true
     },
+    "noema": {
+      "description": "Noema — evidence-producing credential and maintenance control plane for governed GitHub automation.",
+      "topics": [
+        "automation",
+        "code-review",
+        "control-plane",
+        "github-actions",
+        "github-app",
+        "llm",
+        "oidc",
+        "python",
+        "security",
+        "typescript",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "mhtml-etl-gateway": {
       "description": "Enterprise MHTML ingestion gateway that converts browser, SAP ALV, and Excel Web Archive exports into governed PostgreSQL data assets.",
       "topics": [

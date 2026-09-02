@@ -79,6 +79,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "DiagramWeave": ("diagram-editor", "plantuml"),
         "semantic-data-portal": ("data-catalog", "semantic-search"),
         "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "noema": ("control-plane", "oidc"),
         "mhtml-etl-gateway": ("mhtml", "etl"),
         "PolicyWeave": ("privacy-policy", "typescript"),
         "supply-chain-control-plane": ("supply-chain", "rust"),
