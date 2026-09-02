@@ -48,6 +48,17 @@ def _formal_review(author: str, state: str, body: str) -> dict[str, object]:
     }
 
 
+def _policy_programs() -> tuple[str, str, str]:
+    """Return direct admission, scheduler reconciliation, and scheduler workflow text."""
+    required_text = REQUIRED_WORKFLOW_PATH.read_text(encoding="utf-8")
+    scheduler_text = SCHEDULER_WORKFLOW_PATH.read_text(encoding="utf-8")
+    admission_program = _embedded_jq_program(required_text, "verdict", "HEAD_SHA")
+    reconciliation_program = _embedded_jq_program(
+        scheduler_text, "latest_review", "PR_HEAD_SHA"
+    )
+    return admission_program, reconciliation_program, scheduler_text
+
+
 def test_github_actions_formal_change_request_matches_all_verdict_surfaces() -> None:
     """A publisher accepted by the receipt gate must reconcile and admit the same verdict."""
     review = _formal_review(
@@ -58,17 +69,61 @@ def test_github_actions_formal_change_request_matches_all_verdict_surfaces() -> 
     accepted, reason = receipt_gate.is_formal_receipt(review, HEAD_SHA, is_draft=False)
     assert accepted, reason
 
-    required_text = REQUIRED_WORKFLOW_PATH.read_text(encoding="utf-8")
-    scheduler_text = SCHEDULER_WORKFLOW_PATH.read_text(encoding="utf-8")
-    admission_program = _embedded_jq_program(required_text, "verdict", "HEAD_SHA")
-    reconciliation_program = _embedded_jq_program(
-        scheduler_text, "latest_review", "PR_HEAD_SHA"
-    )
-
+    admission_program, reconciliation_program, _scheduler_text = _policy_programs()
     assert _run_selector(admission_program, review) == "CHANGES_REQUESTED"
     assert _run_selector(reconciliation_program, review).startswith(
         "CHANGES_REQUESTED\t"
     )
+
+
+def test_github_actions_formal_approval_requires_full_evidence_markers() -> None:
+    """APPROVED evidence has one publisher/marker policy on receipt, wake, and admission."""
+    complete = _formal_review(
+        "github-actions[bot]",
+        "APPROVED",
+        "**OpenCode automated review**\n\n**Evidence recap**\nvalidated exact head",
+    )
+    incomplete = _formal_review(
+        "github-actions[bot]",
+        "APPROVED",
+        "**OpenCode automated review**\nmissing evidence recap marker",
+    )
+    complete_ok, complete_reason = receipt_gate.is_formal_receipt(
+        complete, HEAD_SHA, is_draft=False
+    )
+    incomplete_ok, _incomplete_reason = receipt_gate.is_formal_receipt(
+        incomplete, HEAD_SHA, is_draft=False
+    )
+    assert complete_ok, complete_reason
+    assert not incomplete_ok
+
+    admission_program, reconciliation_program, _scheduler_text = _policy_programs()
+    assert _run_selector(admission_program, complete) == "APPROVED"
+    assert _run_selector(reconciliation_program, complete).startswith("APPROVED\t")
+    assert _run_selector(admission_program, incomplete) == ""
+    assert _run_selector(reconciliation_program, incomplete) == ""
+
+
+def test_unrecognized_reviewer_cannot_admit_or_wake_required_verdict() -> None:
+    """Human or unrelated-bot reviews must not become OpenCode admission authority."""
+    review = _formal_review(
+        "unrelated-reviewer",
+        "CHANGES_REQUESTED",
+        "**OpenCode automated review**\n**Evidence recap**",
+    )
+    accepted, _reason = receipt_gate.is_formal_receipt(review, HEAD_SHA, is_draft=False)
+    assert not accepted
+
+    admission_program, reconciliation_program, _scheduler_text = _policy_programs()
+    assert _run_selector(admission_program, review) == ""
+    assert _run_selector(reconciliation_program, review) == ""
+
+
+def test_scheduler_accepts_same_second_formal_receipt_for_failed_run() -> None:
+    """Second-precision GitHub timestamps must not lose a receipt concurrent with run start."""
+    _admission_program, _reconciliation_program, scheduler_text = _policy_programs()
+    assert "($review | fromdateiso8601) >= ($started | fromdateiso8601)" in scheduler_text
+    assert "($review | fromdateiso8601) > ($started | fromdateiso8601)" not in scheduler_text
 
 
 def test_fallback_marker_invalidates_approval_only_not_change_request() -> None:
@@ -86,13 +141,7 @@ def test_fallback_marker_invalidates_approval_only_not_change_request() -> None:
     assert change_ok, change_reason
     assert not approval_ok
 
-    required_text = REQUIRED_WORKFLOW_PATH.read_text(encoding="utf-8")
-    scheduler_text = SCHEDULER_WORKFLOW_PATH.read_text(encoding="utf-8")
-    admission_program = _embedded_jq_program(required_text, "verdict", "HEAD_SHA")
-    reconciliation_program = _embedded_jq_program(
-        scheduler_text, "latest_review", "PR_HEAD_SHA"
-    )
-
+    admission_program, reconciliation_program, _scheduler_text = _policy_programs()
     assert _run_selector(admission_program, change_request) == "CHANGES_REQUESTED"
     assert _run_selector(reconciliation_program, change_request).startswith(
         "CHANGES_REQUESTED\t"
