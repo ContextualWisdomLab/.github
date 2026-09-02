@@ -2681,11 +2681,11 @@ of this item's (corrected) queue observation.
 
 ## 2026-09-02 backlog item 32 verification: batch-endpoint capability gate already root-cause fixed, pending merge
 
-**Task.** Verify whether `contextual-orchestrator/pull/1021` already fixes backlog item 32 (whether the
+**Task.** Verify whether `ContextualWisdomLab/contextual-orchestrator#1021` already fixes backlog item 32 (whether the
 real Batch API should be gated to agents that actually support it, rather than any general chat
 model), before doing any new investigation.
 
-**Verified: yes, it does, correctly.** PR `#1021` (`fix(batch): gate real Batch API on declared
+**Verified: yes, it does, correctly.** PR `ContextualWisdomLab/contextual-orchestrator#1021` (`fix(batch): gate real Batch API on declared
 batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`) adds an explicit
 `ModelAgent.batch_endpoint_supported: bool | None` field — mirroring the existing
 `reasoning_effort_supported` capability-declaration pattern — and changes `batch_chat()`'s routing so
@@ -2702,7 +2702,7 @@ would 404 or hard-failing the whole batch group for a provider that was never as
 **Conclusion.** No new code needed for this item — the root-cause fix already exists, is well-scoped,
 and is fail-safe by construction (unproven support degrades to emulation, never a guess). It simply
 hasn't merged yet (open, behind `main`, same queue/scheduler backlog every other PR referenced in this
-document is also waiting on). Re-open only if `#1021` is closed without merging, or if its merged form
+document is also waiting on). Re-open only if `ContextualWisdomLab/contextual-orchestrator#1021` is closed without merging, or if its merged form
 diverges from what's described above.
 
 ## 2026-09-02 backlog items 8/9 verification: Bytez and OpenRouter already included in orchestrator/free auto-discovery
@@ -2907,6 +2907,8 @@ NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRout
 
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
 ## 2026-09-02 scheduler target-list drift — item 16/17 scoping, found live-broken (fixed) and structurally closed
 
 **Task.** Scoping item 16/17 ("GitHub Actions 파일 최대한 통합" — consolidate GitHub Actions files as much as
@@ -2944,7 +2946,8 @@ hourly heartbeat had been silently failing closed every hour, undetected. Fixed 
 `gh variable set` (same safe, narrow mechanism already validated by `#1743`'s live fix), independently
 confirmed applied by a peer session.
 
-**Structural fix.** `.github#1747` adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
+**Structural fix (proposed, not yet on `main`).** `ContextualWisdomLab/.github#1747` (open, not yet
+merged, at time of writing) adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
 hand-maintained mirror of the variable's live value (no GitHub API commits a repository variable's value
 to source control, so this is deliberately a mirror a human updates alongside `gh variable set`, not a
 generator), and a new contract test
@@ -2955,8 +2958,9 @@ fails at review time instead of at the next silent hourly failure. Deliberately 
 auto-mutating workflow to keep the live variable in sync automatically — matches this org's established
 preference (used throughout this repo's `test_*.py` suite) for a loud, human-resolved contract-test
 failure over a workflow that "magically" fixes drift, per explicit peer review of the approach before
-implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` for the full incident
-writeup and root-cause argument.
+implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` (added by the same
+unmerged `#1747`, not yet on `main`) for the full incident writeup and root-cause argument once that
+PR lands.
 
 **Conclusion.** Item 16/17's literal framing ("reduce the number of workflow files") is separately valid
 and already substantially addressed by the earlier duplication audit; this finding is a different axis
@@ -2967,5 +2971,3 @@ regularly-running workflow (checking a live org/repo variable requires network a
 repo's offline `pytest tests` suite) — left as an open follow-up in the doctoring record rather than
 implemented, to keep this fix a pure test-and-mirror addition with zero risk to production scheduler
 workflows.
-
-**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
