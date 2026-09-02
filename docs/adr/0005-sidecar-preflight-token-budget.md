@@ -27,11 +27,15 @@ historical evidence only and must not be restored.
 ## 2026-09-02 startup-latency amendment
 
 Admission evidence and runtime readiness are distinct. The central free-only
-catalog retains every evidence-eligible route. Startup probes those admitted
-routes concurrently, with identical per-route base/escalation semantics and
-deterministic input-order evidence, so one slow provider cannot serialize the
-whole catalog and consume the review workflow deadline. Concurrency changes no
-route membership, priority, cost/ZDR decision, or provider preference; it only
-removes additive startup latency. The regression uses a synchronization barrier
-rather than a wall-clock threshold, proving that all admitted routes enter the
-probe before any one route is allowed to complete.
+catalog retains every evidence-eligible route. Startup probes independent
+provider-account lanes concurrently, while routes sharing one provider account
+remain serialized to avoid a same-credential burst. Every route retains the
+same per-route base/escalation semantics, and published evidence is restored to
+deterministic input order, so one slow provider account cannot serialize
+unrelated provider-account lanes. Concurrency changes no route membership,
+priority, cost/ZDR decision, or provider preference; it only removes additive
+startup latency across independent account lanes. The regression uses a
+synchronization barrier across independent provider-account lanes rather than a
+wall-clock threshold, proving those lanes can enter probing before either lane
+is allowed to complete; it deliberately does not claim simultaneous probing of
+routes that share one provider account.

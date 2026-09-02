@@ -17,6 +17,7 @@ _CASES_PATH = Path(__file__).with_name(
     "_contextual_orchestrator_review_runtime_preflight_cases.py"
 )
 _CASES = runpy.run_path(str(_CASES_PATH))
+_LAUNCHER = Path(__file__).resolve().parents[1] / "scripts/ci/contextual_orchestrator_review_launcher.py"
 _OBSOLETE_TEST = "test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral"
 
 for _name, _value in _CASES.items():
