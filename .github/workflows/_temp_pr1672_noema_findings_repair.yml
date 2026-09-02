@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Reproduce reviewed replacement-escape defect and harden generator
+      - name: Reproduce generator defects and harden generator
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -55,20 +55,35 @@ jobs:
           except re.error:
               pass
           else:
-              raise SystemExit("RED regression unexpectedly passed")
+              raise SystemExit("RED replacement regression unexpectedly passed")
+
+          # RED from run 33593258285: the old concatenation leaves a blank line at EOF.
+          old_generated = "base\n\n".rstrip() + "\n\nextra\n" + "\n"
+          if not old_generated.endswith("\n\n"):
+              raise SystemExit("RED EOF regression unexpectedly passed")
 
           path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
           text = path.read_text(encoding="utf-8")
-          old = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
-          new = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
-          if text.count(old) != 1:
+          old_replace = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
+          new_replace = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
+          if text.count(old_replace) != 1:
               raise SystemExit("temporary generator replacement anchor drifted")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          text = text.replace(old_replace, new_replace, 1)
 
-          # GREEN: callable replacement preserves generated source literally.
+          old_eof = 'TELEMETRY_TEST.write_text(text.rstrip() + additions + "\\n", encoding="utf-8")'
+          new_eof = 'TELEMETRY_TEST.write_text((text.rstrip() + additions).rstrip() + "\\n", encoding="utf-8")'
+          if text.count(old_eof) != 1:
+              raise SystemExit("temporary generator EOF anchor drifted")
+          text = text.replace(old_eof, new_eof, 1)
+          path.write_text(text, encoding="utf-8")
+
+          # GREEN: callable replacement preserves source and generated tests end in one LF.
           updated, count = re.subn(r"x", lambda _match: r"\d", "x", count=1, flags=re.DOTALL)
           if count != 1 or updated != r"\d":
               raise SystemExit("callable replacement did not preserve generated source")
+          normalized = ("base\n\n".rstrip() + "\n\nextra\n").rstrip() + "\n"
+          if not normalized.endswith("extra\n") or normalized.endswith("\n\n"):
+              raise SystemExit("generated regression EOF normalization failed")
           PY
 
       - name: Revalidate exact writer head and apply reviewed repair
@@ -140,11 +155,16 @@ jobs:
 
           path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
           text = path.read_text(encoding="utf-8")
-          old = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
-          new = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
-          if text.count(old) != 1:
+          old_replace = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
+          new_replace = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
+          if text.count(old_replace) != 1:
               raise SystemExit("temporary generator replacement anchor drifted")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          text = text.replace(old_replace, new_replace, 1)
+          old_eof = 'TELEMETRY_TEST.write_text(text.rstrip() + additions + "\\n", encoding="utf-8")'
+          new_eof = 'TELEMETRY_TEST.write_text((text.rstrip() + additions).rstrip() + "\\n", encoding="utf-8")'
+          if text.count(old_eof) != 1:
+              raise SystemExit("temporary generator EOF anchor drifted")
+          path.write_text(text.replace(old_eof, new_eof, 1), encoding="utf-8")
           PY
           python3 scripts/ci/temp_pr1672_noema_findings_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
