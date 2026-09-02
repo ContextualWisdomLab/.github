@@ -120,6 +120,26 @@ def test_location_only_class_evidence_cannot_relabel_generic_probes() -> None:
         noema.validate_substantive_verdict(_verdict(observations=False), DIFF, ["src/tool.py"])
 
 
+def test_class_evidence_requires_exact_observed_field_set() -> None:
+    """A defect-class label cannot omit one of its schema-defined witness roles."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    verdict["adversarial_validation"]["probes"][0]["class_evidence"].pop("mutation_attempt")
+
+    with pytest.raises(noema.NoemaModelOutputError, match="must contain exactly"):
+        noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+
+def test_empty_class_observation_is_rejected() -> None:
+    """Exact source coordinates and excerpts do not substitute for an observation."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    verdict["adversarial_validation"]["probes"][0]["class_evidence"]["mutation_attempt"][
+        "observation"
+    ] = ""
+
+    with pytest.raises(noema.NoemaModelOutputError, match="non-empty observation"):
+        noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+
 def test_repeated_generic_observations_do_not_satisfy_class_specific_witnesses() -> None:
     """A probe must provide distinct observations for its class-specific witness fields."""
     with pytest.raises(noema.NoemaModelOutputError, match="distinct class-specific observations"):
