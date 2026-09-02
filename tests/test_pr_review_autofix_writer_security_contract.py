@@ -96,21 +96,31 @@ def test_read_only_steps_do_not_prefer_mutation_credentials() -> None:
         assert "OPENCODE_APPROVE_TOKEN" not in header
 
 
-def test_autofix_job_has_a_bounded_runtime() -> None:
-    """The autofix job must not fall back to GitHub's 360-minute platform default.
+def test_autofix_job_has_no_job_level_timeout() -> None:
+    """The autofix job must not carry a job-level timeout-minutes.
 
-    Without a job-level timeout-minutes, a stuck OpenCode CLI invocation (a
-    rate-limited provider, a hung agent loop) could occupy a shared runner for
-    up to six hours. The job runs a single `opencode run` call against one
-    fixed model with a bounded 12-step agent budget -- not the multi-provider
-    fallback pool that justifies opencode-review-dispatch.yml's much longer
-    review job -- so it needs a much shorter bound than that job's default.
+    This job's body IS a synchronous `opencode run` call (up to two
+    invocations: the main autofix pass and a base-merge conflict-resolution
+    pass) -- a job-level wall-clock bound here directly caps the model's own
+    reasoning/tool-use time once elapsed, which
+    docs/product-goal-directive.md #8 prohibits ("Model timeout은
+    application·Agent·Gateway 공통 상한 없이 기본 null이다"). An earlier version
+    of this job set timeout-minutes: 25, reasoning it gave the model call
+    "generous room" -- that reasoning was itself the mistake: any fixed cap
+    on a job whose body is the model call is exactly the forbidden
+    inference-time cap, not a bound on a step that merely waits on a
+    separate async verdict (contrast opencode-review.yml's
+    poll_deadline_epoch, which bounds a step polling GitHub for a verdict a
+    *different* process prepares, not the model call itself). See
+    docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = _workflow_text()
     job = workflow.split("  autofix:\n", maxsplit=1)[1]
     job_header = job.split("    steps:\n", maxsplit=1)[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job_header, flags=re.MULTILINE)
-    assert match is not None, "autofix must declare a job-level timeout-minutes"
-    autofix_timeout = int(match.group(1))
-    assert 5 <= autofix_timeout <= 60
+    assert match is None, (
+        "autofix must not declare a job-level timeout-minutes -- its body is "
+        "a synchronous model call, so any job-level bound caps model "
+        "inference time, which this org's model-timeout policy forbids"
+    )
