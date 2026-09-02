@@ -5,8 +5,8 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 
-# Publication bridge retrigger: source semantics remain deterministic; the V3
-# workflow now publishes only non-workflow files with its branch-scoped token.
+# Publication bridge retrigger 2: source semantics remain deterministic; the V3
+# workflow restores every workflow-file deletion before publishing source.
 PRIMARY = Path("scripts/ci/source_fix_pr1672_v2.py")
 SELF = Path("scripts/ci/source_fix_pr1672_v3.py")
 WORKFLOW_V2 = Path(".github/workflows/source-fix-pr1672-single-request-v2.yml")
