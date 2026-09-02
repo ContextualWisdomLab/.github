@@ -16,7 +16,6 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/hourly-review-repair.yml
-      - .github/workflows/hourly-review-repair-registry-retirement.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
@@ -34,7 +33,6 @@ on:
       - docs/product-technical-gap-baseline.md
       - CHANGELOG.md
       - tests/test_hourly_review_repair_callers.py
-      - tests/test_hourly_review_repair_registry_retirement.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_hourly_autofix_context_quality_gate.py
@@ -72,7 +70,6 @@ on:
       - scripts/ci/pr_review_fix_scheduler.py
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/hourly-review-repair.yml
-      - .github/workflows/hourly-review-repair-registry-retirement.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
@@ -90,7 +87,6 @@ on:
       - docs/product-technical-gap-baseline.md
       - CHANGELOG.md
       - tests/test_hourly_review_repair_callers.py
-      - tests/test_hourly_review_repair_registry_retirement.py
       - tests/test_github_hourly_conflict_repair.py
       - tests/test_hourly_scheduler_runtime_budget.py
       - tests/test_hourly_autofix_context_quality_gate.py
@@ -181,7 +177,6 @@ jobs:
             tests/test_contextual_orchestrator_review_policy.py \
             tests/test_contextual_orchestrator_review_sidecar_contract.py \
             tests/test_hourly_review_repair_callers.py \
-            tests/test_hourly_review_repair_registry_retirement.py \
             tests/test_github_hourly_conflict_repair.py \
             tests/test_hourly_scheduler_runtime_budget.py \
             tests/test_pr_review_conflict_scope_control_files.py \
