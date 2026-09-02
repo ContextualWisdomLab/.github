@@ -254,6 +254,34 @@ def collect_snapshot(
                         )
                     terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
 
+            for terminal_status in TERMINAL_DIAGNOSTIC_STATUSES:
+                target_workflow_runs = _list_payload(
+                    github_json(
+                        f"repos/{repository_name}/actions/runs?status={terminal_status}"
+                        "&event=pull_request_target"
+                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                        paginate=True,
+                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+                        runner=runner,
+                    ),
+                    "workflow_runs",
+                    max_items=(
+                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
+                    ),
+                )
+                for workflow_run in target_workflow_runs:
+                    normalized_candidate = _normalise_run(
+                        repository_name, workflow_run, []
+                    )
+                    identity_state, _ = _run_identity(
+                        normalized_candidate, pull_requests_by_number
+                    )
+                    if identity_state != "current_head":
+                        continue
+                    terminal_diagnostic_snapshot[normalized_candidate["id"]] = (
+                        workflow_run
+                    )
+
             observed_snapshot = dict(second_snapshot)
             observed_snapshot.update(terminal_diagnostic_snapshot)
             runs_by_id: dict[int, dict[str, Any]] = {}
@@ -399,6 +427,7 @@ def build_report(
             report_row["identity_state"] == "current_head"
             and report_row["run_conclusion"] == "CANCELLED"
             and matching_job is not None
+            and matching_job.get("conclusion") == "CANCELLED"
             and not report_row["runner_assigned"]
             and matching_job.get("steps_count", 0) == 0
         ):
