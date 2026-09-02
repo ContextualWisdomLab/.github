@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   materialize:
@@ -80,10 +80,16 @@ jobs:
 
       - name: Publish only after fresh remote-head validation
         env:
-          PUSH_TOKEN: ${{ github.token }}
+          PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-}}"
+          if [ -z "$workflow_push_token" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
           test ! -e scripts/ci/source_fix_pr1672_v3.py
           test ! -e scripts/ci/source_fix_pr1672_v2.py
           test ! -e scripts/ci/source_fix_pr1672_single_request.py
@@ -99,5 +105,5 @@ jobs:
           git commit -m "fix(noema): delegate repair ownership to orchestrator"
           remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
-          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${workflow_push_token}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:refs/heads/fix/noema-repair-attempt-telemetry
