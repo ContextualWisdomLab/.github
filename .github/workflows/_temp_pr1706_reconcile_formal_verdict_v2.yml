@@ -36,6 +36,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          driver = Path("scripts/ci/source_fix_pr1706_formal_verdict.py")
+          text = driver.read_text(encoding="utf-8")
+          old = '''    if TEST.exists():
+              raise SystemExit(f"refusing to overwrite existing {TEST}")
+          TEST.write_text(TEST_CONTENT, encoding="utf-8")'''
+          new = '''    if TEST.exists():
+              if TEST.read_text(encoding="utf-8") != TEST_CONTENT:
+                  raise SystemExit(f"existing {TEST} drifted from the expected RED regression")
+          else:
+              TEST.write_text(TEST_CONTENT, encoding="utf-8")'''
+          if text.count(old) != 1:
+              raise SystemExit("transition driver test-existence guard drifted; refusing to patch")
+          driver.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           PYTHONPATH=. python3 scripts/ci/source_fix_pr1706_formal_verdict.py
           PYTHONPATH=. python3 -m pytest -q \
             tests/test_opencode_required_verdict_reconciliation_contract.py \
