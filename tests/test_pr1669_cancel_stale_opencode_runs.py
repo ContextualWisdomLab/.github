@@ -97,3 +97,25 @@ def test_cancel_stale_pr_runs_preserves_failed_cancellation(monkeypatch):
     )
 
     assert run_ids == ["202"]
+
+
+def test_cancel_revalidated_review_run_refs_preserves_failed_cancellation(monkeypatch):
+    """Keep a review ref busy when GitHub rejects its destructive cancellation."""
+    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    preserved, cancelled = sched._cancel_revalidated_review_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        {"number": 7, "headRefOid": "a" * 40},
+        stale_refs,
+    )
+
+    assert preserved == [("owner/repo", "101")]
+    assert cancelled == [("owner/repo", "202")]
