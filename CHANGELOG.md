@@ -42,6 +42,23 @@ Semantic Versioning where the repository publishes a release.
   Left untouched, matching the precedent already set for ruling out the agent-mention
   dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
   2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
+- **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
+  invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
+  every non-draft PR before any eligibility gate, and several other call sites
+  (`active_review_run_refs`, `dispatch_strix_evidence`'s busy check) ask the
+  identical unfiltered `(repo, ("queued", "in_progress"))` question again --
+  all against the one repository a scheduler invocation ever targets, with zero
+  caching anywhere in the file. At the default `MAX_PRS=100` this reissued the
+  same repository-wide, paginated `gh api .../actions/runs` fetch well over a
+  hundred times per run. `active_workflow_runs` now memoizes its result keyed on
+  the full `(repo, statuses, event, created, head_sha)` call shape for one
+  `main()` invocation, with explicit cache invalidation immediately after the
+  four places that mutate GitHub Actions run state
+  (`force_cancel_workflow_runs`, `rerun_actions_job`, `dispatch_opencode_review`,
+  `dispatch_strix_evidence`) so a later read in the same run can never replay a
+  pre-mutation snapshot. The four pre-existing `ThreadPoolExecutor` sites and the
+  correctly-sequential per-PR mutation-budget loop are untouched. See
+  ADR-0022.
 - **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
   At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
   `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
