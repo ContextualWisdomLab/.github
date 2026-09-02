@@ -1,4 +1,5 @@
 # One-shot PR #1672 current-head remediation. Self-deletes after verified publication.
+# retriggered to materialize owner-side current-head repairs after the prior marker-only push was excluded by this workflow's paths filter.
 name: Temporary PR1672 current findings repair v2
 
 on:
