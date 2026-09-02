@@ -1,8 +1,28 @@
 # Product goal directive — autonomous PR/merge/development loop
 
-**Status:** active standing directive · **Owner intent recorded:** 2026-08-30 · **Scope:** the full
-ContextualWisdomLab ecosystem (every repo an agent can reach from this org, leveraged in order of
-product responsibility / reuse boundary / docs / implementation / consumption — not by name).
+**Status:** active standing directive · **Owner intent recorded:** 2026-08-30, revised 2026-09-01 ·
+**Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from this org,
+leveraged in order of product responsibility / reuse boundary / docs / implementation / consumption —
+not by name).
+
+**2026-09-01 revision:** the owner re-issued the full directive via a `/loop` invocation. Sections 1, 2,
+4, 5, 6, and 9 were re-authored in largely the same words (cosmetic rephrasing only — no new
+obligation); this file's existing verbatim text for those sections already carries the same
+substance and was left as-is to avoid needless churn. Three sections gained genuinely new,
+substantive requirements not previously recorded here, and were updated in place (see
+`docs/doctoring/product-goal-directive.md` for the full record): §3 gained an explicit
+decision-traceability standard (write every decision so a reader with no context, or the author
+having forgotten it, can reconstruct the problem/constraints/alternatives/reasons/risks/expected
+effects/follow-ups, with vivid concrete scenarios and links to exact-head/logs/issues/PRs/ADRs/
+experiments); §7 gained a concrete, testable E2E acceptance criterion (p95 ≤ 20ms per page, every
+page, re-verify after removing any bottleneck); §8 gained two new principles — never hardcode an
+LLM provider *group* name in code/config/tests/routing (treat it as a display alias only, and drive
+selection/fallback from auto-discovered model characteristics instead), and never impose a uniform
+hardcoded LLM request timeout (default unlimited/`null`; timeouts are an admin-configurable,
+audited, per-model setting with units/priority/inheritance, never a bare elapsed-time cutoff on an
+in-progress reasoning/streaming/tool-call turn). A follow-up `/loop` invocation the same day added a
+new §10, crystallizing an already-implemented decision (Strix pinned to `orchestrator/free`,
+previously recorded only in a §8 annotation) into the primary numbered directive.
 
 ## Why this file exists
 
@@ -21,7 +41,7 @@ GitHub Project #1, `docs/product-technical-gap-baseline.md`, or `docs/agent-gith
 Where this directive and those documents conflict, resolve the conflict and update whichever document
 is wrong — do not silently pick one.
 
-The directive is recorded verbatim (Korean, as authored) in the nine sections below, each given a short
+The directive is recorded verbatim (Korean, as authored) in the ten sections below, each given a short
 English heading for navigability. Do not paraphrase or shorten these sections when copying them
 elsewhere; link to this file instead.
 
@@ -35,7 +55,7 @@ elsewhere; link to this file instead.
 
 ## 3. Research, standards, and documentation traceability
 
-> 연구·표준·문서 추적성 모든 개발은 최신 권위 국제 표준·논문을 조사해 APA 7th로 인용하고 doctoring에 기록하며 누락 근거를 보충한다. Local Zotero API가 되면 기존 자료를 읽거나 OA 논문을 추가한다. 논문·표준은 exact-head·전체 PR·내부 모듈·API에 모순 없이 결합하고 충돌을 수정한다. AGENTS.md, CLAUDE.md, ARCHITECTURE.md, CHANGELOG.md 등 ADR 문서를 상시 갱신하고 Core ERD, UML, PRD, TRD, user stories, storyboard, wireframes, Storybook inventory, security·test·operability baseline 및 필요한 그림을 포함한다. 릴리즈 가능하면 버전을 올려 배포하고 CHANGELOG.md를 갱신한다. GitHub.io를 언급하려면 페이지를 실제 출판한다.
+> 연구·표준·문서 추적성 모든 개발은 최신 권위 국제 표준·논문을 조사해 APA 7th로 인용하고 doctoring에 기록하며 누락 근거를 보충한다. Local Zotero API가 되면 기존 자료를 읽거나 OA 논문을 추가한다. 논문·표준은 exact-head·전체 PR·내부 모듈·API에 모순 없이 결합하고 충돌을 수정한다. AGENTS.md, CLAUDE.md, ARCHITECTURE.md, CHANGELOG.md 등 ADR 문서를 상시 갱신하고 Core ERD, UML, PRD, TRD, user stories, storyboard, wireframes, Storybook inventory, security·test·operability baseline 및 필요한 그림을 포함한다. 릴리즈 가능하면 버전을 올려 배포하고 CHANGELOG.md를 갱신한다. GitHub.io를 언급하려면 페이지를 실제 출판한다. 모든 의사결정은 작성자 자신이 맥락을 잊었거나 처음 보는 사람이 읽더라도 문제, 제약, 검토한 대안, 선택·기각 이유, 근거, 위험, 기대 효과와 후속 조치를 재구성할 수 있게 구체적이고 자세히 기록한다. 결론만 적거나 암묵적 전제를 생략하지 말고, 실제 사용자·운영·장애 장면이 떠오를 만큼 생생한 사례와 증거를 남긴다. 기록은 exact-head, 로그, 이슈·PR·ADR·실험 결과에 연결해 다른 Agent가 같은 판단을 검증·수정·계속할 수 있어야 한다.
 
 ## 4. UX/UI and customer-facing expression
 
@@ -58,11 +78,11 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 ## 7. Realistic verification, load, and container testing
 
-> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
+> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
 ## 8. LLM, orchestration, and embedding
 
-> LLM·오케스트레이션·Embedding LLM이 필요한 테스트는 contextual-orchestrator 기반 OpenCode Agent로 만든다. contextual-orchestrator는 GitHub Secrets의 BYTEZ_API_KEY, NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, OPENROUTER_API_KEY, OPENAI_API_KEY를 모두 써 auto model discovery로 최적 모형을 제공한다. embedding·responses·completions, audio, video, image, ommi-modal 등 가용 모델을 폭넓게 지원한다. 가능하면 반입해 쓰고 발견한 해당 저장소 문제도 함께 수정한다. LLM 사용 소프트웨어와 contextual-orchestrator는 Fugu·Conductor·TRINITY 연구를 근거로 단일 모델 라우팅과 심층 다중 Agent 오케스트레이션 사이의 계산량을 배분한다. 워크플로 단계, 재귀 깊이, 작업 분해, 접근 목록으로 test-time compute를 조절하고 역할별 reasoning effort를 다르게 하며 추론 수준 ablation을 수행한다. 속도는 핵심 고려사항이 아니며 정확성을 우선한다. 중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다. LLM Chat model은 chat completion API와 responses API를 모두 지원하고 json_object와 json_schema를 모두 처리한다. Embedding은 문단·구문·DOM·송수신자 등 의미 단위를 식별해 chunking한다. 본문에 base64 이미지가 있으면 텍스트 인식, 객체 인식, 태그 설명, 이미지 별도 검색 방법을 연구 근거와 함께 DB 설계에 넣고 원래 삽입 위치를 보존해 그림 맥락까지 검색·표현한다. GitHub Actions scheduler는 contextual-orchestrator 기반 OpenCode Agent로 전환한다. COPILOT_GITHUB_TOKEN은 쓰지 않고 기존 리뷰 Agent 키 체계를 유지한다.
+> LLM·오케스트레이션·Embedding LLM이 필요한 테스트는 contextual-orchestrator 기반 OpenCode Agent로 만든다. contextual-orchestrator는 GitHub Secrets의 BYTEZ_API_KEY, NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, OPENROUTER_API_KEY, OPENAI_API_KEY를 모두 써 auto model discovery로 최적 모형을 제공한다. embedding·responses·completions, audio, video, image, ommi-modal 등 가용 모델을 폭넓게 지원한다. 가능하면 반입해 쓰고 발견한 해당 저장소 문제도 함께 수정한다. LLM Provider group 이름을 코드·설정·테스트·라우팅 조건에 하드코딩하지 않는다. 그룹명은 관리·표시용 별칭으로만 취급하고, modality, context window, reasoning capability·effort, tool calling, structured output, streaming, 가격·지연·가용성·정확도 등 자동 발견·검증된 모델 특성에 따라 선택·fallback·개발 적용을 결정한다. 공급자나 그룹명이 바뀌어도 기능 분기가 깨지지 않게 한다. LLM Model에는 애플리케이션·Agent·Gateway 공통의 획일적 timeout 상한을 두지 않는다. 통신 장애는 upstream LLM provider가 자체 timeout과 오류로 종료하므로 기본값은 무제한(null)로 둔다. 관리자 Web에서 모델별 timeout을 조회·설정·해제·복원할 수 있게 하고 단위, 우선순위, 상속, 입력 검증, 감사 이력과 API 계약을 구현한다. 관리자 설정이 있을 때만 해당 값으로 제한하며 reasoning·streaming·tool call이 진행 중인 요청을 단순 경과시간으로 취소하지 않는다. 사용자 취소, provider 종료, 관리자 timeout을 구분해 기록한다. LLM 사용 소프트웨어와 contextual-orchestrator는 Fugu·Conductor·TRINITY 연구를 근거로 단일 모델 라우팅과 심층 다중 Agent 오케스트레이션 사이의 계산량을 배분한다. 워크플로 단계, 재귀 깊이, 작업 분해, 접근 목록으로 test-time compute를 조절하고 역할별 reasoning effort를 다르게 하며 추론 수준 ablation을 수행한다. 속도는 핵심 고려사항이 아니며 정확성을 우선한다. 중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다. LLM Chat model은 chat completion API와 responses API를 모두 지원하고 json_object와 json_schema를 모두 처리한다. Embedding은 문단·구문·DOM·송수신자 등 의미 단위를 식별해 chunking한다. 본문에 base64 이미지가 있으면 텍스트 인식, 객체 인식, 태그 설명, 이미지 별도 검색 방법을 연구 근거와 함께 DB 설계에 넣고 원래 삽입 위치를 보존해 그림 맥락까지 검색·표현한다. GitHub Actions scheduler는 contextual-orchestrator 기반 OpenCode Agent로 전환한다. COPILOT_GITHUB_TOKEN은 쓰지 않고 기존 리뷰 Agent 키 체계를 유지한다.
 
 **Note (flagged by CodeRabbit on this PR, 2026-08-30):** section 8's quoted text describes `contextual-orchestrator`'s general product capability — broad model/modality support and all-five-secret auto model discovery as a *design principle for the orchestrator itself*. It does not specify, and must not be read as overriding, which pool each CI consumer routes through: that is governed exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and its doctoring records — `OpenCode` and `Noema` use the fail-closed, ZDR-prioritized `orchestrator/free` pool; only `Strix` security analysis uses the provider-diverse `orchestrator/auto` pool; private/internal review targets require an attested ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen any CI consumer's pool or credential scope on the strength of this section's general wording alone.
 
@@ -82,13 +102,33 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 - **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline.
 - **LineageWeave** — https://github.com/ContextualWisdomLab/LineageWeave — 명시적 선후행 링크 없는 짧은 timestamped record에서 git-branch식 lineage DAG를 재구성해 평면 자료를 탐색 가능한 branching thread로 바꾼다. 수리 연산은 소관이 아니므로 다른 라이브러리로 이관한다.
 
+## 10. Contextual-orchestrator pool pin
+
+> orchestrator/free 로 고정.
+
+**Context (added 2026-09-01):** this one-line item crystallizes, into the primary numbered directive
+itself, a decision that previously lived only in an annotation below §8 (the "Note (2026-08-30,
+superseded...)" above). That note already recorded that `.github/workflows/strix.yml` hardcodes
+`STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` and fails closed on any other
+value — confirmed still true by direct inspection of `strix.yml` at the time of this revision (the
+`case` statements gating `STRIX_MODEL_REQUESTED`/`STRIX_MODEL` accept only
+`orchestrator/free`/`contextual-orchestrator/orchestrator/free` and `::error::` on anything else).
+This item makes that pin an explicit standing instruction rather than something an agent could only
+discover by reading a superseded-vs-superseding note pair below §8. It does not introduce a new
+technical requirement — `OpenCode`, `Noema`, and `Strix` are now all pinned to the fail-closed,
+ZDR-prioritized `orchestrator/free` pool, superseding the older "Strix uses the provider-diverse
+`orchestrator/auto` pool" framing in §8's first (CodeRabbit) note above, which itself predates the
+correction in the second note. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains
+the authoritative record for *why*; this item and the §8 notes together are the authoritative record
+for *what is currently pinned*.
+
 ## How to point a `/goal` session at this directive
 
 Because `/goal` truncates at 4000 characters, do not paste the sections above into it. Instead use a
 short pointer, e.g. (Korean, ~260 chars, well under the cap):
 
 ```text
-/goal ContextualWisdomLab/.github의 docs/product-goal-directive.md 전문을 지침으로 삼아 실행하라. 열린 PR마다 리뷰 확인→수정→Checks 재검증→병합→다음 개발을 중간 보고 없이 반복하고, PR·Issue 소진 후에도 Gap 기반 개발을 계속한다. 이 문서의 9개 절 전체(실행 루프, 동시작업/근본수정, 연구추적성, UX/UI, 아키텍처/DB, 언어/측정, 검증/부하, LLM/오케스트레이션, 참고 라이브러리)를 매 사이클 적용 대상으로 취급하고, 이 문서와 docs/CWL-MASTER-CONTEXT.md §7이 상충하면 상충을 해소하고 두 문서를 함께 갱신하라. 한 시간 간격으로 재예약하라.
+/goal ContextualWisdomLab/.github의 docs/product-goal-directive.md 전문을 지침으로 삼아 실행하라. 열린 PR마다 리뷰 확인→수정→Checks 재검증→병합→다음 개발을 중간 보고 없이 반복하고, PR·Issue 소진 후에도 Gap 기반 개발을 계속한다. 이 문서의 10개 절 전체(실행 루프, 동시작업/근본수정, 연구추적성, UX/UI, 아키텍처/DB, 언어/측정, 검증/부하, LLM/오케스트레이션, 참고 라이브러리, orchestrator/free 고정)를 매 사이클 적용 대상으로 취급하고, 이 문서와 docs/CWL-MASTER-CONTEXT.md §7이 상충하면 상충을 해소하고 두 문서를 함께 갱신하라. 한 시간 간격으로 재예약하라.
 ```
 
 When this directive itself changes (the user revises a section, or an agent finds it conflicts with

@@ -2590,3 +2590,47 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Validation.** Full suite `2407 passed, 1 skipped, 21 subtests`; `coverage` 100% on `scripts/ci`; `interrogate` 100%; all four touched/added workflow files re-parse as valid YAML; `test_opencode_workflow_shell_syntax.py` and related shell-syntax tests pass unchanged.
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
+
+**Independent corroboration (this session, same day).** `ContextualWisdomLab/naruon#1486`'s `strix` required check sat `queued` for 40 minutes on `ubuntu-latest` before GitHub auto-cancelled it (workflow run `33494728480`, job started `09:55:18Z`, cancelled `10:35:22Z` with the parent run's own `status` still reported as `queued` at cancellation time — it never got a runner at all). A `rerun_failed_jobs` attempt was rejected (`403 This workflow is already running`), consistent with this entry's diagnosis: the floating-image starvation, not a scan failure or a code defect in the PR under review. No further action was taken on that PR beyond noting the cause; this fix (once merged, if not already) is expected to resolve it without any naruon-side change.
+
+## 2026-09-01 product-goal-directive.md revision: two new tracked, unimplemented product gaps
+
+The owner re-issued the full nine-section `docs/product-goal-directive.md` directive verbatim via a
+`/loop` invocation (see `docs/doctoring/product-goal-directive.md`'s 2026-09-01 entry for the full
+diff-against-prior-text reasoning). Two of the three genuinely new requirements introduced are
+concrete, testable product gaps with no owning repository or implementation yet, recorded here per
+directive §1's own instruction to derive gap/status entries from ADRs, research, current data, and PRs.
+
+**Gap 1 — E2E load-test acceptance gate (directive §7).** New requirement: every page's p95
+end-to-end processing time must be ≤ 20ms under k6 load test, checked across *all* pages (not a
+sample), with any bottleneck removed and the page re-verified before the gate can pass. None of this
+session's four in-scope repositories (`.github`, `noema`, `contextual-orchestrator`, `naruon`) has a
+k6 E2E suite wired into CI today. `naruon` is the most plausible first owner — it is the only one of
+the four with a customer-facing web surface (`frontend/`, Next.js) and an existing FastAPI backend
+whose async request path this gate would exercise directly — but this has not been scoped, estimated,
+or started. Needs, at minimum: a k6 script enumerating every page/route, a CI job running it against a
+built `frontend`+`backend` stack, a p95-per-page assertion (not an aggregate/average), and a documented
+bottleneck-triage procedure so a first failure has a defined remediation path rather than an
+open-ended investigation each time.
+
+**Gap 2 — Admin-configurable per-model LLM timeout (directive §8).** New requirement: no application/
+agent/gateway layer may impose a single hardcoded timeout ceiling on LLM calls (default: unlimited/
+`null`); a per-model timeout becomes active only through an admin-facing web surface with full CRUD
+(query/set/clear/restore), explicit units, priority, inheritance, input validation, and an audit
+trail as a documented API contract, and even an admin-configured timeout must never fire as a bare
+elapsed-time cutoff against an in-progress reasoning/streaming/tool-call turn — logs must distinguish
+user-cancelled, provider-terminated, and admin-timed-out outcomes as three separate recorded states.
+`contextual-orchestrator`'s existing `/admin` console (`contextual_orchestrator/admin.py`) is the
+natural owner, since per-model/pool configuration already lives there and `orchestrator.py` already
+has no fixed per-call timeout on its own primary inference path (this session's
+`scripts/ci/noema_review_gate.py` transport-fix work this same day, reconciled in the 2026-09-01
+`naruon#1486` entry above, independently confirms the "no uniform hardcoded timeout" direction is
+already the accepted design elsewhere in the ecosystem — this gap is about giving admins an explicit,
+audited *override* surface, not about reintroducing a default timeout). Not started: no ADR, no KV
+schema for per-model timeout records, no `/admin` UI, no API contract. Needs an ADR before
+implementation begins, given the audit-trail and priority/inheritance semantics it must get right the
+first time (a later redesign would mean migrating live admin-set timeout records).
+
+Neither gap blocks any currently open PR; both are recorded so a future pass of this loop (or a
+`spawn_task` suggestion) picks them up once the open-PR queue is exhausted, per directive §1's "PR·
+Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다."
