@@ -272,6 +272,20 @@ def test_contract_workflow_tracks_scheduler_implementation() -> None:
     assert text.count("scripts/ci/pr_review_fix_scheduler.py") == 2
 
 
+def test_contract_workflow_tracks_its_own_test_tooling_lock() -> None:
+    """The lock the contract job installs from always reruns the gate.
+
+    The job runs bare ``pytest -q``, which collects every test under
+    ``tests/`` (not just the contract-scoped ones), so a change that drops a
+    transitive dependency from this lock silently breaks collection unless
+    the workflow reruns on that change too.
+    """
+    text = _read(_CONTRACT_WORKFLOW)
+
+    assert text.count("requirements-opencode-review-ci.txt") == 2
+    assert text.count("requirements-opencode-review-ci-hashes.txt") == 3
+
+
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:
     """The writer must diagnose the exact-head cause before it edits the tree."""
     text = _read(_AUTOFIX_WORKFLOW)

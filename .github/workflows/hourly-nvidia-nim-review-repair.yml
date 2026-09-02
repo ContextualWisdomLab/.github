@@ -18,6 +18,8 @@ on:
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
+      - requirements-opencode-review-ci.txt
+      - requirements-opencode-review-ci-hashes.txt
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - scripts/ci/zdr_policy.py
@@ -72,6 +74,8 @@ on:
       - .github/workflows/pr-review-autofix.yml
       - .github/workflows/hourly-review-repair.yml
       - .github/workflows/hourly-nvidia-nim-review-repair.yml
+      - requirements-opencode-review-ci.txt
+      - requirements-opencode-review-ci-hashes.txt
       - scripts/ci/pr_review_conflict_scope.py
       - scripts/ci/pr_review_autofix_context.py
       - scripts/ci/zdr_policy.py
