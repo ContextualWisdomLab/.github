@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - fix/opencode-poll-wall-clock-bound
+    paths:
+      - .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml
 
 permissions:
   contents: write
