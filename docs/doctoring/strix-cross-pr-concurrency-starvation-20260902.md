@@ -140,7 +140,13 @@ merged code never loses evidence."* Verified against
   and the hourly `org-queue-sweep` can all independently decide to dispatch
   for *different* PRs in the same repository within a narrow window) can
   each read "not busy" before either dispatch has registered with the GitHub
-  API, then both fire — and only one survives the shared concurrency group.
+  API, then both fire. **Correction (CodeRabbit): "only one survives" stated
+  the group's actual behavior too strongly.** `cancel-in-progress: false`
+  keeps one *running* job protected plus one *replaceable pending* job —
+  when two dispatches race, one becomes the running job (and completes
+  normally) while the other becomes the pending one; that pending one is
+  what a later, third dispatch can then evict. It is the pending slot that
+  is contested and evictable, not necessarily both entrants at once.
   `#1492`'s repeated 100%-cancelled history over 37+ hours is consistent
   with `.github`'s own high concurrent-PR volume making this race land
   against it repeatedly, not with a single deterministic logic bug.
@@ -153,9 +159,12 @@ merged code never loses evidence."* Verified against
   control for the path that actually causes the storm risk.
 
 Net: the documented guarantee ("merged code never loses evidence") is not
-currently reliable — it is *usually* true (most PRs eventually get through,
-per the `#1438`/`#1176` evidence) but is not guaranteed, and `#1492` is a
-live counterexample.
+currently reliable — **correction (CodeRabbit): "most PRs" overstated what
+two examples can support.** `#1438` and `#1176` show *some* PRs eventually
+get through despite repeated cancellations (not a majority claim — this
+record does not have an organization-wide denominator or sampling
+methodology to support "most"), and `#1492` is a live counterexample where
+none ever did.
 
 ## Why this was not fixed in the same tick that found it
 

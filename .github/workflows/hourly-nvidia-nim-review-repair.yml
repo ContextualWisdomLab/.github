@@ -168,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          while IFS= read -r line; do
+          while IFS= read -r line || [[ -n ${line:-} ]]; do
             case "$line" in
               ''|'#'*) continue ;;
             esac
