@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
@@ -85,38 +86,60 @@ def _fake_getaddrinfo(host, port, type=None):
     return [(2, 1, 6, "", ("93.184.216.34", port))]
 
 
+def _install_fake_client(monkeypatch, fake: _FakeClient) -> None:
+    """Route the public opener through one test-owned transport double."""
+    monkeypatch.setattr(opener, "_default_client", lambda: fake)
+
+
+def test_public_opener_does_not_expose_a_client_injection_seam():
+    """Production callers cannot replace the EgressWeave-pinned transport."""
+    assert "client" not in inspect.signature(opener.github_open_json).parameters
+
+
 def test_github_open_json_requires_a_token():
     """An empty token fails closed before any client is touched."""
     with pytest.raises(opener.EgressAdapterError, match="token is required"):
         opener.github_open_json("https://api.github.com/repos/o/r", "")
 
 
-def test_github_open_json_rejects_non_github_scheme():
-    """A plaintext http:// URL is refused before any client is touched."""
-    fake = _FakeClient(response=_FakeResponse(json_value={}))
+def test_github_open_json_rejects_non_github_scheme(monkeypatch):
+    """A plaintext http:// URL is refused before any client is built."""
+    monkeypatch.setattr(
+        opener,
+        "_default_client",
+        lambda: pytest.fail("client must not be built for a rejected URL"),
+    )
     with pytest.raises(opener.EgressAdapterError, match="non-GitHub-API URL"):
-        opener.github_open_json(
-            "http://api.github.com/repos/o/r", "tok", client=fake
-        )
-    assert fake.calls == []
+        opener.github_open_json("http://api.github.com/repos/o/r", "tok")
 
 
-def test_github_open_json_rejects_non_github_host():
-    """A URL targeting a different host is refused before any client is touched."""
-    fake = _FakeClient(response=_FakeResponse(json_value={}))
+def test_github_open_json_rejects_non_github_host(monkeypatch):
+    """A URL targeting a different host is refused before any client is built."""
+    monkeypatch.setattr(
+        opener,
+        "_default_client",
+        lambda: pytest.fail("client must not be built for a rejected URL"),
+    )
     with pytest.raises(opener.EgressAdapterError, match="non-GitHub-API URL"):
-        opener.github_open_json(
-            "https://evil.example/repos/o/r", "tok", client=fake
-        )
-    assert fake.calls == []
+        opener.github_open_json("https://evil.example/repos/o/r", "tok")
 
 
-def test_github_open_json_returns_parsed_json_on_success():
+def test_github_open_json_maps_malformed_url_syntax(monkeypatch):
+    """Malformed authority syntax is normalized to the adapter's typed failure."""
+    monkeypatch.setattr(
+        opener,
+        "_default_client",
+        lambda: pytest.fail("client must not be built for a malformed URL"),
+    )
+    with pytest.raises(opener.EgressAdapterError, match="malformed GitHub API URL"):
+        opener.github_open_json("https://[not-an-ip/repos/o/r", "tok")
+
+
+def test_github_open_json_returns_parsed_json_on_success(monkeypatch):
     """A 200 response with a valid JSON body is returned as-is."""
     fake = _FakeClient(response=_FakeResponse(status_code=200, json_value={"ok": True}))
-    result = opener.github_open_json(
-        "https://api.github.com/repos/o/r/pulls/1", "tok", client=fake
-    )
+    _install_fake_client(monkeypatch, fake)
+    result = opener.github_open_json("https://api.github.com/repos/o/r/pulls/1", "tok")
     assert result == {"ok": True}
     [(url, headers)] = fake.calls
     assert url == "https://api.github.com/repos/o/r/pulls/1"
@@ -125,46 +148,70 @@ def test_github_open_json_returns_parsed_json_on_success():
     assert headers["X-GitHub-Api-Version"] == "2022-11-28"
 
 
-def test_github_open_json_maps_egress_denial():
+def test_github_open_json_maps_client_construction_egress_denial(monkeypatch):
+    """A policy denial while constructing the pinned client is typed and closed."""
+    def _deny_client():
+        raise EgressNotAllowedError("denied")
+
+    monkeypatch.setattr(opener, "_default_client", _deny_client)
+    with pytest.raises(opener.EgressAdapterError, match="construct pinned GitHub API client"):
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
+
+
+def test_github_open_json_maps_client_construction_http_error(monkeypatch):
+    """An HTTPX setup failure while constructing the client is typed and closed."""
+    def _fail_client():
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(opener, "_default_client", _fail_client)
+    with pytest.raises(opener.EgressAdapterError, match="construct pinned GitHub API client"):
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
+
+
+def test_github_open_json_maps_egress_denial(monkeypatch):
     """A policy denial from EgressWeave is mapped to EgressAdapterError."""
     fake = _FakeClient(raise_exc=EgressNotAllowedError("denied"))
+    _install_fake_client(monkeypatch, fake)
     with pytest.raises(opener.EgressAdapterError, match="denied the GitHub API request"):
-        opener.github_open_json(
-            "https://api.github.com/repos/o/r", "tok", client=fake
-        )
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
 
 
-def test_github_open_json_maps_http_status_error():
+def test_github_open_json_maps_http_status_error(monkeypatch):
     """A non-2xx GitHub response is mapped to EgressAdapterError with its status."""
     fake = _FakeClient(response=_FakeResponse(status_code=404))
+    _install_fake_client(monkeypatch, fake)
     with pytest.raises(opener.EgressAdapterError, match="status 404"):
-        opener.github_open_json(
-            "https://api.github.com/repos/o/r", "tok", client=fake
-        )
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
 
 
-def test_github_open_json_maps_generic_http_error():
+def test_github_open_json_maps_generic_http_error(monkeypatch):
     """A transport-level httpx error is mapped to EgressAdapterError."""
     fake = _FakeClient(raise_exc=httpx.ConnectError("boom"))
+    _install_fake_client(monkeypatch, fake)
     with pytest.raises(opener.EgressAdapterError, match="ConnectError"):
-        opener.github_open_json(
-            "https://api.github.com/repos/o/r", "tok", client=fake
-        )
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
 
 
-def test_github_open_json_maps_malformed_json():
+def test_github_open_json_maps_unexpected_transport_exception(monkeypatch):
+    """The adapter boundary does not leak an untyped client exception."""
+    fake = _FakeClient(raise_exc=RuntimeError("unexpected client fault"))
+    _install_fake_client(monkeypatch, fake)
+    with pytest.raises(opener.EgressAdapterError, match="RuntimeError"):
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
+
+
+def test_github_open_json_maps_malformed_json(monkeypatch):
     """A successful response whose body is not valid JSON fails closed."""
     fake = _FakeClient(
         response=_FakeResponse(status_code=200, json_error=ValueError("bad json"))
     )
+    _install_fake_client(monkeypatch, fake)
     with pytest.raises(opener.EgressAdapterError, match="malformed JSON"):
-        opener.github_open_json(
-            "https://api.github.com/repos/o/r", "tok", client=fake
-        )
+        opener.github_open_json("https://api.github.com/repos/o/r", "tok")
 
 
 def test_build_client_pins_the_github_api_authority(monkeypatch):
-    """The real (non-fake) client construction path pins api.github.com:443."""
+    """The real client construction path pins api.github.com:443."""
     monkeypatch.setattr(egressweave_validation.socket, "getaddrinfo", _fake_getaddrinfo)
     client = opener._build_client()
     try:
@@ -196,10 +243,10 @@ def test_default_client_reuses_an_already_built_client(monkeypatch):
     assert opener._default_client() is sentinel
 
 
-def test_github_open_json_uses_the_default_client_when_none_is_injected(monkeypatch):
-    """Omitting client= routes through _default_client(), not a bare None call."""
+def test_github_open_json_uses_the_default_client(monkeypatch):
+    """The public opener always routes through the pinned default-client boundary."""
     fake = _FakeClient(response=_FakeResponse(status_code=200, json_value={"ok": 1}))
-    monkeypatch.setattr(opener, "_default_client", lambda: fake)
+    _install_fake_client(monkeypatch, fake)
     result = opener.github_open_json("https://api.github.com/repos/o/r", "tok")
     assert result == {"ok": 1}
     assert fake.calls
