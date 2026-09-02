@@ -43,11 +43,6 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-# Startup probes are idempotent and route-local. Reuse the orchestrator's
-# transient classifier and jittered backoff for one recovery attempt; do not
-# turn preflight into an unbounded retry loop or duplicate provider status
-# policy in this central launcher.
-REVIEW_PREFLIGHT_TRANSIENT_RETRIES = 1
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -321,36 +316,32 @@ def _response_has_reasoning_without_content(response: object) -> bool:
 def _send_preflight_request(
     client: Any, agent: object, payload: dict[str, object]
 ) -> object:
-    """Use the client's bounded transient-retry path for an idempotent probe.
+    """Send exactly one provider request for one semantic preflight payload.
 
-    The vendored ``ModelClient`` exposes retry policy through ``proxy_send``.
-    The one-shot fallback exists only for deterministic compatibility clients
-    and legacy test doubles that predate that seam; production review clients
-    always take the retry-enabled branch.
+    Retry quantity is not inferred from a transient failure classification.
+    ``proxy_send_once`` is the causal boundary: token-budget escalation may
+    create a second *different* payload only when response evidence proves
+    starvation, but transport failures never manufacture another identical
+    inference attempt in this launcher.
     """
-    retrying_send = getattr(client, "proxy_send", None)
-    if callable(retrying_send):
-        return retrying_send(agent, "chat/completions", payload)
     return client.proxy_send_once(agent, "chat/completions", payload)
 
 
 def _preflight_review_agent(
     agent: object, *, client: Any
 ) -> tuple[object | None, dict[str, object], int]:
-    """Probe one route using bounded transport retry and token escalation.
+    """Probe one route with one-shot transport and evidence-driven token escalation.
 
     ``attempts`` counts distinct semantic payloads (base budget and, only when
-    evidenced, one larger token budget). Transient HTTP retries stay inside
-    ``ModelClient.proxy_send`` and are reported separately through
-    ``transport_retry_budget`` so the two recovery mechanisms are never
-    conflated.
+    evidenced, one larger token budget). Each payload is sent exactly once;
+    provider/HTTP failure taxonomy remains evidence only and does not allocate
+    a transport retry budget.
     """
     row: dict[str, object] = {
         "agent_id": str(getattr(agent, "id", "")),
         "provider": str(getattr(agent, "provider_name", "") or "unknown"),
         "model": str(getattr(agent, "model", "")),
         "attempts": 1,
-        "transport_retry_budget": REVIEW_PREFLIGHT_TRANSIENT_RETRIES,
     }
     base_payload: dict[str, object] = {
         "model": getattr(agent, "model", ""),
@@ -489,6 +480,7 @@ def _preflight_review_agents(
             "no provider route passed the Strix plain-chat preflight", report
         )
     return viable, report
+
 
 def _preflight_with_fallback(
     primary_agents: list[object], fallback_agents: list[object], *, client: Any
@@ -762,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
     client = ModelClient(
         timeout=None,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
-        max_retries=REVIEW_PREFLIGHT_TRANSIENT_RETRIES,
+        max_retries=0,
         temperature=REVIEW_TEMPERATURE,
     )
     try:
@@ -776,6 +768,7 @@ def main(argv: list[str] | None = None) -> int:
     client = ModelClient(
         timeout=None,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
+        max_retries=0,
         temperature=REVIEW_TEMPERATURE,
     )
     orchestrator = TaskOrchestrator(agents, client=client)
