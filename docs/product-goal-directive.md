@@ -124,18 +124,18 @@ changed in a way that affects it):** section 8's quoted text describes `contextu
 general product capability — broad model/modality support and all-five-secret auto model discovery as
 a *design principle for the orchestrator itself*. It does not specify, and must not be read as
 overriding, which pool each CI consumer routes through: that is governed exclusively by
-`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and its doctoring records — `OpenCode` and
-`Noema` use the fail-closed, ZDR-prioritized `orchestrator/free` pool; only `Strix` security analysis
-uses the provider-diverse `orchestrator/auto` pool; private/internal review targets require an attested
-ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen any CI consumer's pool or
-credential scope on the strength of this section's general wording alone.
+`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`, the merged workflow source, and executable
+contract coverage — `OpenCode` and `Noema` use the fail-closed, ZDR-prioritized `orchestrator/free`
+pool, and `Strix` is likewise hard-pinned to `orchestrator/free`. Private/internal review targets
+still require an attested ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen
+any CI consumer's pool or credential scope on the strength of this section's general wording alone.
 
 **Note (2026-08-30/08-31, superseded by the merged pin flip):** an earlier draft of this note said
 Strix stayed on `orchestrator/auto` pending `free_family_diversity` reaching `>= 2`. That is no longer
 true: `.github/workflows/strix.yml` now hardcodes `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to
-`orchestrator/free` and fails closed on any other value — confirmed by the owner on 2026-09-02 (see
-[[project-orchestrator-free-pin-confirmed]] in this repo's agent-memory record and ADR-0003's own
-Decision section). `free_account_diversity`
+`orchestrator/free` and fails closed on any other value. This is established by merged repository
+source, its executable contract coverage, the CHANGELOG, and ADR-0003; it is an implementation fact,
+not a claim that the owner accepted the remaining availability trade-off. `free_account_diversity`
 (`scripts/ci/contextual_orchestrator_review_policy.py`) remains useful as ongoing monitoring evidence,
 not as a gate blocking the pin.
 
