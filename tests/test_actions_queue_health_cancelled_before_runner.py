@@ -76,6 +76,10 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment() ->
             payload = {"total_count": 1, "workflow_runs": [cancelled_run]}
         elif path == f"repos/{repository_name}/actions/runs/1701/jobs?per_page=100":
             payload = {"total_count": 2, "jobs": [cancelled_job, skipped_job]}
+        elif "status=startup_failure" in path:
+            raise AssertionError(
+                "GitHub workflow-run status filtering does not accept startup_failure"
+            )
         elif path.startswith(f"repos/{repository_name}/actions/runs?status="):
             payload = {"total_count": 0, "workflow_runs": []}
         else:  # pragma: no cover - unexpected API expansion must fail loudly.
@@ -155,10 +159,6 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
         f"repos/{repository_name}/actions/runs?status=cancelled"
         "&event=pull_request_target&per_page=50"
     )
-    target_startup_path = (
-        f"repos/{repository_name}/actions/runs?status=startup_failure"
-        "&event=pull_request_target&per_page=50"
-    )
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Model GitHub target runs whose run-level SHA is the base commit."""
@@ -171,8 +171,10 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
             payload = {"total_count": 0, "workflow_runs": []}
         elif path == target_cancelled_path:
             payload = {"total_count": 1, "workflow_runs": [cancelled_run]}
-        elif path == target_startup_path:
-            payload = {"total_count": 0, "workflow_runs": []}
+        elif "status=startup_failure" in path:
+            raise AssertionError(
+                "GitHub workflow-run status filtering does not accept startup_failure"
+            )
         elif path == f"repos/{repository_name}/actions/runs/2301/jobs?per_page=100":
             payload = {"total_count": 1, "jobs": [cancelled_job]}
         elif path.startswith(f"repos/{repository_name}/actions/runs?status="):
