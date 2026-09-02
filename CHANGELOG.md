@@ -5,40 +5,31 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- **Add Noema repair-attempt telemetry; declare an OpenAI structured-output
-  request; add a lossless local JSON repair fallback.** `html4tree` run
-  `33560972491`, job `100033086428` failed with only a bare "exceeded
-  900-second absolute wall-clock deadline" -- no attempt count, no timing
-  breakdown, no served-model attribution. `call_llm` now times every attempt
-  (primary and repair), tracks the furthest phase reached
-  (connecting/reading/decoding/validating), and best-effort records which
-  `orchestrator/free` candidate served the response, emitting a
-  `::notice::`/`::warning::` per attempt and folding the same breakdown into
-  the raised exception message -- never logging raw model content. Both
-  calls now declare an OpenAI Chat Completions `response_format: json_schema`
-  envelope (`_noema_verdict_response_format`) matching the verdict schema,
-  so a compliant candidate is asked for structured output directly. Its
-  `adversarial_validation.probes.minItems` is built per request from a new
-  shared `_required_probe_count(diff, changed_paths)` -- the exact same
-  computation `validate_substantive_verdict` uses -- so the two can never
-  drift apart: this closes a second, independently-discovered gap where
-  `ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480`
-  hit a schema-valid verdict with too few probes and failed outright with
-  no earlier, cheaper structural catch. Per ADR-0035
-  (`contextual-orchestrator`), the gateway validates returned content
-  against the declared schema and performs one governed same-provider
-  repair call on a violation before this now reaches Noema's own
-  Python-side check at all. `extract_json_object` makes one additional
-  lossless local repair attempt
-  (stripping a trailing comma before a closing `}`/`]` outside any string)
-  before falling back to the network repair path. None of this reimplements
-  the gateway-owned JSON-validation/candidate-exclusion/retry policy PR
-  #1602 ruled belongs to `contextual-orchestrator`. Separately: the
-  900-second repair deadline itself is confirmed, per the repo owner, to be
-  an unauthorized/arbitrary value with no data behind it (not merely
-  under-documented) and is left explicitly flagged unresolved rather than
-  re-justified after the fact -- see
-  `docs/doctoring/noema-repair-attempt-telemetry.md`.
+- **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
+  At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
+  `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
+  `contextual-orchestrator-`, `disksage-`, `fast-mlsirm-`, `github-`,
+  `governance-risk-compliance-`, `inkspan-`, `lineageweave-`,
+  `metering-billing-platform-`, `nonnest2-`, `orgmetra-`, `originweave-`,
+  `psychometrics-commons-`, `quarantine-sandbox-`, and
+  `semantic-data-portal-hourly-review-repair.yml` with one file,
+  `.github/workflows/hourly-review-repair.yml`: a single `on.schedule` list (all 17
+  distinct minutes, staggering comments preserved) plus a `github.event.schedule`
+  lookup table that resolves each minute's repository, base branch, and retry floor,
+  fanned out through a `strategy.matrix` job that keeps every repository's own
+  independent, non-cancelling `concurrency.group`. `pr-review-fix-scheduler.yml`,
+  the reusable engine every caller dispatches to, is unchanged. Auditing the 18
+  originals for this consolidation found `fast-mlsirm` and `metering-billing-platform`
+  had independently collided on the same minute (49) and that
+  `clearfolio-hourly-review-repair.yml` was the only one of the 18 missing its
+  job-level `id-token: write` grant; both are called out and the latter closed
+  uniformly across the consolidated matrix. 13 dedicated per-repository test files
+  are replaced by `tests/test_hourly_review_repair_callers.py`, which extracts and
+  executes the lookup script for every schedule against the exact parameters the
+  deleted files used; four other test files that used a since-deleted caller as a
+  representative example were updated in place. See
+  `docs/doctoring/hourly-review-repair-single-file-consolidation.md` and
+  ADR-0021.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several

@@ -4,8 +4,9 @@ from pathlib import Path
 
 
 REUSABLE = Path(".github/workflows/pr-review-fix-scheduler.yml")
-CLEARFOLIO = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
-DISKSAGE = Path(".github/workflows/disksage-hourly-review-repair.yml")
+# Clearfolio and DiskSage (like all 18 former per-repository callers) are now
+# both resolved from the one consolidated caller file.
+CONSOLIDATED_CALLER = Path(".github/workflows/hourly-review-repair.yml")
 QUALITY = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
 REPLACEMENT_QUALITY = Path(
     ".github/workflows/contextual-orchestrator-review-repair-quality.yml"
@@ -28,16 +29,16 @@ def test_queue_scanner_has_a_bounded_superseding_runtime() -> None:
 
 
 def test_product_callers_do_not_cancel_an_in_flight_rca() -> None:
-    """Clearfolio and DiskSage preserve the non-cancelling product lease."""
-    for caller_path in (CLEARFOLIO, DISKSAGE):
-        caller = _read(caller_path)
-        assert "cancel-in-progress: false" in caller
-        assert "cancel-in-progress: true" not in caller
+    """Every consolidated product caller preserves the non-cancelling lease."""
+    caller = _read(CONSOLIDATED_CALLER)
+
+    assert "cancel-in-progress: false" in caller
+    assert "cancel-in-progress: true" not in caller
 
 
 def test_disksage_caller_grants_oidc_permission_to_reusable_scheduler() -> None:
     """The called scheduler must be able to exchange its OpenCode OIDC token."""
-    caller = _read(DISKSAGE)
+    caller = _read(CONSOLIDATED_CALLER)
     job = caller.split("  dispatch-review-repair:\n", maxsplit=1)[1]
 
     assert "    permissions:\n      contents: read\n      id-token: write\n" in job
