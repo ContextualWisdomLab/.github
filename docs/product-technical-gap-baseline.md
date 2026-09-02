@@ -2969,3 +2969,44 @@ implemented, to keep this fix a pure test-and-mirror addition with zero risk to 
 workflows.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## 2026-09-03 backlog items 4/39 verification: fixed Noema/OpenCode repair timeout already removed, not a live gap
+
+**Task.** Items 4 and 39 flagged a fixed ~900-second (later described as up to a few hundred minutes)
+wall-clock cap on Noema/OpenCode repair work as a bug: `docs/product-goal-directive.md` #8 states "Model
+timeout은 application·Agent·Gateway 공통 상한 없이 기본 null이다" (no common upper bound across the
+application/agent/gateway stack; defaults to null) and "정확성을 우선하고 OpenCode·Strix·Noema의 모델당 2시간
+이상을 수용한다" (prioritize accuracy; accommodate over two hours per model) — a fixed cap that could cut a
+model call off mid-repair violates both. The plan going in was to replace any such cap with a Fugu
+(Sakana AI, 2026-04-24)-style recursive-refinement mechanism: treat recursion depth as an inference-time
+dial, detect first-pass shortfall, and spin a corrective pass, rather than an arbitrary wall-clock cutoff.
+
+**Already fixed, and by a simpler, more directly policy-compliant change than the one planned here.**
+`.github#1727` ("fix(workflows): remove job-level timeouts that cap model inference," merged 2026-09-02
+11:12 UTC, commit `8eaa650`) removed `timeout-minutes: 25` from `pr-review-autofix.yml`'s `autofix` job
+and `timeout-minutes: 210` from `noema-review.yml`'s `noema-review` job — both jobs whose dominant,
+synchronous step body *is* the model call (`opencode run` for autofix; `two_phase.py`'s
+`NOEMA_LLM_MODEL=orchestrator/free` call for Noema review), so any job-level cap on either directly
+truncates the model's own reasoning/tool-use time. No replacement bound was added; both now default to
+null, matching the policy exactly rather than rounding "over two hours" up to a new hard ceiling. Full
+root-cause writeup: `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md` — notably,
+this was originally caught by this org's own autonomous self-repair loop (a Devin review on
+`.github#1661` flagged leftover debris from an in-flight but never-landed autofix attempt), so the
+finding this task set out to make had already been made and fixed by the ecosystem itself, one day
+before this verification pass started.
+
+**Not the same as `opencode-review-dispatch.yml`'s `timeout --kill-after=20 900 ...` sandbox wrapper.**
+Re-checked to be sure this task wasn't looking at the wrong "900": that wrapper bounds how long an
+*untrusted PR's own test/PoC suite* may run inside the isolated `setpriv` sandbox during evidence
+gathering — a resource/security control on adversarial input, not a cap on the review model's reasoning
+time — and is correctly out of scope for this policy. `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`
+itself independently re-checked every other `timeout-minutes` in the org's required workflows
+(`opencode-review.yml`'s `poll_deadline_epoch`, `pr-review-merge-scheduler.yml`'s `scan-pr-queue`,
+`strix.yml`'s bookkeeping jobs) and confirmed none of them bound a step whose body is itself a
+synchronous model call.
+
+**Conclusion.** Items 4/39 are closed as already fixed. The Fugu/TRINITY/Thompson-Sampling test-time-compute
+allocation work item 8's directive text asks for remains live, but scoped to `contextual-orchestrator`'s
+model-routing layer (`_select_agent`'s deterministic top-1 selection, `ReasoningEffortProfile`'s existing
+role-effort catalog) — not to this repository's CI timeouts, which needed no recursive-refinement
+mechanism, only the null default the policy already specifies.
