@@ -2634,3 +2634,55 @@ first time (a later redesign would mean migrating live admin-set timeout records
 Neither gap blocks any currently open PR; both are recorded so a future pass of this loop (or a
 `spawn_task` suggestion) picks them up once the open-PR queue is exhausted, per directive §1's "PR·
 Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다."
+
+## 2026-09-02 owner-supplied control-plane facts: three more merges into the runner-queue picture
+
+The owner supplied fresh, directly-observed control-plane facts on `.github#1659` (this directive/
+baseline reconciliation PR) while protected `main` kept moving underneath it, with an explicit
+instruction to preserve them here rather than let them get lost in a PR comment thread, and *not* to
+treat any of this as license to rewrite the directive text itself (that's `docs/product-goal-directive.md`'s
+job, already reconciled separately) or to transfer any predecessor check result across these SHAs.
+Recorded verbatim-in-substance, each independently spot-checked against the named commit before
+being written here:
+
+- **`#1658` (`69e80bdf...`)** — Strix's trusted job now exports `LLM_TIMEOUT=0` (this session
+  independently confirmed this exact line during the prior PR-merge pass on `.github#1659`, before
+  the owner's comment arrived — a real, concrete instance of the "no uniform hardcoded LLM timeout"
+  principle this same PR just added to directive §8, landing in the wild the same day the directive
+  text was updated to require it).
+- **`#1656` (`6a25bc11...`)** — ten PR-close workflows no longer allocate a runner-backed job for
+  their `cancel-closed-pr-runs` step when it would be an echo-only no-op; new permanent regression
+  contracts distinguish those native-concurrency-group PR-stable lanes (which GitHub itself resolves
+  without spending a runner) from the real Noema/Strix jobs that must actually reach the GitHub API to
+  cancel a stale run. This is a second, independent contributor to the organization-wide queuing
+  problem this file's adjacent 2026-09-01 entry (floating `ubuntu-latest` image) already tracks — a
+  distinct root cause (wasted runner allocation for a job that never needed one at all, vs. a starved
+  floating image for jobs that do need one), fixed in a separate PR the same day.
+- **`#1651` (`2792b964...`)** — the Bytez sidecar-integration fix this session merged into the
+  `contextual-orchestrator` ZDR-vendored review path: an exact-zero provider-native `meterPrice` can
+  now admit a Bytez route into `orchestrator/free` on explicit non-token price evidence, without
+  fabricating a token-based price to justify it; malformed, missing, nonzero, partial, or
+  contradictory pricing evidence still fails closed. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+  and a new focused doctoring record (`docs/doctoring/bytez-provider-meter-free-evidence-20260902.md`)
+  were updated in that same merge — this entry only cross-references it; the ADR/doctoring pair is
+  the authoritative record for *why* and *how*, not this line.
+
+**Queue-depth data point (do not extrapolate past what it actually shows):** `.github`'s queued
+Actions depth was reported as 1,252 immediately before `#1658`/`#1656` merged, 1,280 immediately
+after, and 1,282 immediately after `#1651`. Read plainly, that is *not* evidence the fixes made
+things worse — the owner's own framing, preserved here rather than reinterpreted, is that **existing
+queued runs are not retroactively removed by a source-level fix that only changes future behavior**:
+a run already sitting in GitHub's queue when `#1658`/`#1656`/`#1651` merged keeps its old
+runs-on/allocation shape regardless of what the workflow file now says, so the visible depth number
+keeps climbing on its own inertia for a while even after the root causes stop adding *new* waste.
+The owner's own stated acceptance criterion, recorded here so a future pass doesn't invent a
+different one: measure the **future stale/no-op admission rate** and **current-head throughput**
+going forward from these three merges, not the raw queue-depth number at any single point in time —
+an instantaneous depth drop was never the right signal to wait for.
+
+**Cross-reference, not a duplicate:** this entry supplements, and does not restate or supersede, the
+2026-09-01 "floating runner image" entry above (still the record for the `ubuntu-latest` → 
+`ubuntu-24.04` pin across `strix.yml`/`opencode-review.yml`/`noema-review.yml`) and the "independent
+corroboration" paragraph appended to it (`naruon#1486`'s `strix` check queued-then-cancelled
+observation). Together the two entries are the current, most-complete picture of why Actions runners
+across this organization were saturated through early 2026-09-01/02, and what has been fixed so far.
