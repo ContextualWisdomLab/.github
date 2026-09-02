@@ -1313,6 +1313,7 @@ def call_llm(
                         "findings": [
                             {
                                 "severity": "high|medium|low",
+                                "confidence": "high|medium|low",
                                 "file": location_example["path"],
                                 "line": location_example["line"],
                                 "side": location_example["side"],
@@ -1324,6 +1325,7 @@ def call_llm(
                 ),
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+                "Every finding also needs a confidence label distinct from severity: severity is the blast radius if the finding is real, confidence is how sure you are it IS real. Use high when a probe in adversarial_validation directly confirms the defect against source or test evidence; medium when the evidence is strong but not exhaustively traced (e.g. one plausible execution path was not fully walked); low when it is a plausible concern raised without a confirming probe. Do not use confidence as a second severity scale.",
                 *(
                     [
                         "Your prior verdict was rejected by the trusted validator: "
@@ -1387,6 +1389,7 @@ def call_llm(
             for finding in findings:
                 if (
                     finding.get("severity") not in {"high", "medium", "low"}
+                    or finding.get("confidence") not in {"high", "medium", "low"}
                     or not isinstance(finding.get("file"), str)
                     or not finding["file"].strip()
                     or type(finding.get("line")) is not int
@@ -1451,13 +1454,15 @@ def format_findings(findings: Any) -> list[str]:
         if not isinstance(finding, dict):
             continue
         severity = str(finding.get("severity") or "info")
+        confidence = finding.get("confidence")
+        label = f"{severity}, confidence: {confidence}" if confidence in {"high", "medium", "low"} else severity
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
         side = str(finding.get("side") or "")
         location = f"{file_name}:{line} ({side})" if isinstance(line, int) and line > 0 else file_name
         message = str(finding.get("message") or "").strip()
         if message:
-            lines.append(f"- [{severity}] {location}: {message}")
+            lines.append(f"- [{label}] {location}: {message}")
     return lines
 
 
