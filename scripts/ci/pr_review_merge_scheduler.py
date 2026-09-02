@@ -2677,6 +2677,30 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
         return
     require_github_actions_control_actor(action)
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
+    # A rerun brings a completed run back to queued/in_progress; invalidate
+    # any cached active_workflow_runs snapshot so it is not read as stale.
+    reset_active_workflow_runs_cache()
+
+
+_active_workflow_runs_cache: dict[
+    tuple[str, tuple[str, ...], str | None, str | None, str | None], list[dict[str, Any]]
+] = {}
+
+
+def reset_active_workflow_runs_cache() -> None:
+    """Clear the per-invocation cache backing :func:`active_workflow_runs`.
+
+    ``main`` calls this once at the top of every scheduler run so the cache
+    never survives across separate invocations sharing a process (tests
+    calling ``main`` more than once, most notably). It must also be called
+    immediately after anything that changes GitHub Actions run state --
+    force-cancelling, rerunning, or dispatching a run -- so a later read in
+    the same run observes that mutation instead of a stale pre-mutation
+    snapshot; :func:`force_cancel_workflow_runs`, :func:`rerun_actions_job`,
+    :func:`dispatch_opencode_review`, and :func:`dispatch_strix_evidence` all
+    do this immediately after their mutating call.
+    """
+    _active_workflow_runs_cache.clear()
 
 
 def active_workflow_runs(
@@ -2699,7 +2723,20 @@ def active_workflow_runs(
     run history only grows, such as a same-head dispatch search, or one
     scoped to a single known commit -- should pass them to avoid paginating
     history it can never use.
+
+    Results are memoized per exact ``(repo, statuses, event, created,
+    head_sha)`` combination for the life of the cache (cleared by
+    :func:`reset_active_workflow_runs_cache`). The scheduler's queue sweep
+    calls the unfiltered ``(repo, ("queued", "in_progress"))`` shape from
+    every non-draft PR's unconditional stale-run check plus every review
+    dispatch check, all against the one repository a scheduler invocation
+    ever targets -- without memoization that is up to two redundant,
+    repository-wide, paginated REST calls per PR for identical data.
     """
+    cache_key = (repo, tuple(statuses), event, created, head_sha)
+    cached = _active_workflow_runs_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
     runs: list[dict[str, Any]] = []
     for status in statuses:
         args = [
@@ -2725,7 +2762,8 @@ def active_workflow_runs(
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
-    return runs
+    _active_workflow_runs_cache[cache_key] = runs
+    return list(runs)
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
@@ -2741,15 +2779,7 @@ def stale_pr_run_ids(
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> list[str]:
     """Return active run ids for older heads of the same pull request."""
-    raw_head = pr.get("headRefOid")
-    try:
-        head = validate_git_sha(str(raw_head or "")).lower()
-    except (TypeError, ValueError) as exc:
-        print(
-            f"::warning::stale_pr_run_ids: PR #{pr.get('number')} in {repo} has an "
-            f"invalid or unresolved headRefOid; preserving active runs ({exc})."
-        )
-        return []
+    head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     stale: list[str] = []
     for run_data in active_workflow_runs(repo, statuses):
@@ -2786,15 +2816,7 @@ def active_review_run_refs(
     centralized_dispatch = bool(
         (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
     )
-    raw_head = pr.get("headRefOid")
-    try:
-        head = validate_git_sha(str(raw_head or "")).lower()
-    except (TypeError, ValueError) as exc:
-        print(
-            f"::warning::active_review_run_refs: PR #{pr.get('number')} in {target_repo} has an "
-            f"invalid or unresolved headRefOid; preserving review runs ({exc})."
-        )
-        return [], []
+    head = str(pr.get("headRefOid") or "").lower()
     number = int(pr["number"])
     dispatch_title_prefixes = tuple(
         f"{title} {target_repo}#{number}@"
@@ -2972,6 +2994,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
 
+    # A cancelled run is no longer queued/in_progress; drop any cached
+    # active_workflow_runs snapshot so the next read (this same PR's later
+    # checks, or a later PR sharing this repository) sees the change instead
+    # of replaying it from before the cancellation.
+    reset_active_workflow_runs_cache()
+
     failures = {run_id: reason for run_id, reason in results if reason is not None}
     for run_id, reason in failures.items():
         print(
@@ -2982,142 +3010,33 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     return failures
 
 
-def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
-    """Return fresh open PR authority, including explicitly identified draft state."""
-    payload = gh_api_json(f"repos/{repo}/pulls/{number}")
-    if not isinstance(payload, dict) or str(payload.get("state") or "").lower() != "open":
-        raise ValueError(f"PR #{number} in {repo} is not a resolvable open pull request")
-    if payload.get("draft") not in {True, False}:
-        raise ValueError(f"PR #{number} in {repo} has no authoritative live draft state")
-    validate_git_sha(str(((payload.get("head") or {}).get("sha")) or ""))
-    return payload
-
-
-def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
-    """Return fresh active workflow-run evidence immediately before cancellation."""
-    payload = gh_api_json(f"repos/{run_repo}/actions/runs/{run_id}")
-    if not isinstance(payload, dict) or str(payload.get("status") or "").lower() not in {
-        "queued",
-        "in_progress",
-    }:
-        raise ValueError(f"workflow run {run_repo}#{run_id} is not active")
-    return payload
-
-
-def _fresh_pr_head_for_cancellation(repo: str, number: int) -> str:
-    """Return the validated head SHA from fresh ready/open PR authority."""
-    payload = _fresh_open_pr_for_cancellation(repo, number)
-    return validate_git_sha(str(((payload.get("head") or {}).get("sha")) or "")).lower()
-
-
-def _direct_pr_run_still_superseded(repo: str, number: int, run_id: str) -> bool:
-    """Return whether a direct PR run is still older than the freshly fetched live head."""
-    try:
-        run_data = _fresh_active_run_for_cancellation(repo, run_id)
-        if run_data.get("event") == "repository_dispatch" or not workflow_run_mentions_pr(
-            run_data, number
-        ):
-            raise ValueError("workflow run no longer has direct pull-request authority")
-        run_head = validate_git_sha(str(run_data.get("head_sha") or "")).lower()
-        live_head = _fresh_pr_head_for_cancellation(repo, number)
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
-        print(
-            f"::warning::Preserving workflow run {run_id} in {repo}: "
-            f"live stale-run revalidation failed closed ({exc})."
-        )
-        return False
-    return run_head != live_head
-
-
-def _review_run_target_head(
-    run_data: dict[str, Any], repo: str, workflow: str, number: int
-) -> str:
-    """Return a validated target head for one direct or trusted central review run."""
-    if run_data.get("event") == "repository_dispatch":
-        titles = {"Required OpenCode Review", workflow, *OPENCODE_WORKFLOW_NAMES}
-        display_title = str(run_data.get("display_title") or "")
-        prefixes = tuple(
-            f"{title} {repo}#{number}@" for title in sorted(titles, key=len, reverse=True)
-        )
-        prefix = next((candidate for candidate in prefixes if display_title.startswith(candidate)), None)
-        if prefix is None:
-            raise ValueError("repository_dispatch run has no trusted target identity")
-        return validate_git_sha(display_title.removeprefix(prefix)).lower()
-    if not workflow_run_mentions_pr(run_data, number):
-        raise ValueError("review run no longer belongs to the target pull request")
-    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
-
-
-def _review_run_still_superseded(
-    repo: str,
-    workflow: str,
-    number: int,
-    run_repo: str,
-    run_id: str,
-) -> bool:
-    """Return whether one review run remains stale against fresh ready/open PR authority."""
-    try:
-        run_data = _fresh_active_run_for_cancellation(run_repo, run_id)
-        run_head = _review_run_target_head(run_data, repo, workflow, number)
-        live_head = _fresh_pr_head_for_cancellation(repo, number)
-    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
-        print(
-            f"::warning::Preserving review run {run_repo}#{run_id}: "
-            f"live stale-run revalidation failed closed ({exc})."
-        )
-        return False
-    return run_head != live_head
+def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> None:
+    """Force-cancel repository-qualified runs while retaining bounded batches."""
+    runs_by_repo: dict[str, list[str]] = {}
+    for run_repo, run_id in run_refs:
+        runs_by_repo.setdefault(run_repo, []).append(run_id)
+    for run_repo, run_ids in runs_by_repo.items():
+        force_cancel_workflow_runs(run_repo, run_ids)
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel only direct-run candidates still proven stale at the destructive boundary."""
+    """Force-cancel queued or running workflows for older heads of the same PR."""
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-pr-runs")
-    number = int(pr["number"])
-    candidates = [str(run_id) for run_id in stale_pr_run_ids(repo, pr)]
-
-    def cancel_one(run_id: str) -> str | None:
-        """Revalidate and cancel one direct workflow-run candidate when still stale."""
-        if not _direct_pr_run_still_superseded(repo, number, run_id):
-            return None
-        force_cancel_workflow_runs(repo, [run_id])
-        return run_id
-
-    if len(candidates) <= 1:
-        results = [cancel_one(run_id) for run_id in candidates]
-    else:
-        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(candidates))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(cancel_one, candidates))
-    return [run_id for run_id in results if run_id is not None]
+    run_ids = stale_pr_run_ids(repo, pr)
+    force_cancel_workflow_runs(repo, run_ids)
+    return run_ids
 
 
 def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel only review candidates still proven stale at the destructive boundary."""
+    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-opencode-review")
-    number = int(pr["number"])
     _, stale_refs = active_opencode_run_refs(repo, workflow, pr)
-
-    def cancel_one(run_ref: tuple[str, str]) -> str | None:
-        """Revalidate and cancel one review-run candidate when still stale."""
-        run_repo, run_id = run_ref
-        if not _review_run_still_superseded(repo, workflow, number, run_repo, run_id):
-            return None
-        force_cancel_workflow_runs(run_repo, [run_id])
-        return run_id
-
-    if len(stale_refs) <= 1:
-        results = [cancel_one(run_ref) for run_ref in stale_refs]
-    else:
-        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(stale_refs))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(cancel_one, stale_refs))
-    return [run_id for run_id in results if run_id is not None]
-
-
+    force_cancel_workflow_run_refs(stale_refs)
+    return [run_id for _, run_id in stale_refs]
 
 
 def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
@@ -3170,42 +3089,6 @@ def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
     return newest_id
 
 
-def _cancel_revalidated_review_run_refs(
-    repo: str,
-    workflow: str,
-    pr: dict[str, Any],
-    run_refs: list[tuple[str, str]],
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Cancel only review refs still proven stale immediately before each destructive call.
-
-    A failed/malformed live read is preservation authority, not permission to
-    dispatch a duplicate review. The returned first list therefore contains
-    every active candidate that could not be proven stale; callers fold those
-    refs into their current/busy set. Multiple candidates retain the scheduler's
-    existing bounded executor and deterministic input ordering.
-    """
-    if not run_refs:
-        return [], []
-    number = int(pr["number"])
-
-    def cancel_one(run_ref: tuple[str, str]) -> tuple[str, tuple[str, str]]:
-        """Revalidate one candidate and cancel it only while it remains stale."""
-        run_repo, run_id = run_ref
-        if not _review_run_still_superseded(repo, workflow, number, run_repo, run_id):
-            return "preserved", run_ref
-        force_cancel_workflow_runs(run_repo, [run_id])
-        return "cancelled", run_ref
-
-    if len(run_refs) == 1:
-        outcomes = [cancel_one(run_refs[0])]
-    else:
-        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_refs))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            outcomes = list(executor.map(cancel_one, run_refs))
-    preserved = [run_ref for state, run_ref in outcomes if state == "preserved"]
-    cancelled = [run_ref for state, run_ref in outcomes if state == "cancelled"]
-    return preserved, cancelled
-
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch trusted OpenCode for the PR head, or report an active run.
 
@@ -3218,10 +3101,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
-        preserved_run_refs, _cancelled_run_refs = _cancel_revalidated_review_run_refs(
-            repo, workflow, pr, stale_run_refs
-        )
-        current_run_refs = [*current_run_refs, *preserved_run_refs]
+        force_cancel_workflow_run_refs(stale_run_refs)
         if current_run_refs:
             print(
                 "OpenCode review dispatch skipped: active same-head workflow run(s) "
@@ -3267,6 +3147,9 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
 
 
@@ -3295,10 +3178,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
     )
-    preserved_run_refs, _cancelled_run_refs = _cancel_revalidated_review_run_refs(
-        repo, workflow, pr, stale_run_refs
-    )
-    current_run_refs = [*current_run_refs, *preserved_run_refs]
+    force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:
         print(
             "Strix evidence dispatch skipped: active same-head workflow run(s) "
@@ -3351,6 +3231,9 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
 
 
@@ -5502,6 +5385,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     """Run the scheduler CLI."""
+    # Each invocation is a fresh look at GitHub; never reuse another
+    # invocation's active_workflow_runs cache (relevant when a process
+    # calls main() more than once, tests included).
+    reset_active_workflow_runs_cache()
     args = parse_args(argv)
     if args.self_test:
         self_test()

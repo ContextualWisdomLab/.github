@@ -2613,8 +2613,3 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
-
-
-## 2026-09-02 scheduler destructive-boundary stale-run repair
-
-A live `ContextualWisdomLab/naruon#1528` incident proved the shared merge scheduler could classify current evidence as stale from unresolved snapshot head authority. The canonical repair validates snapshot SHA evidence and revalidates live PR/run identity inside every destructive cancellation path, including direct OpenCode and Strix dispatch cleanup. Fail-closed preservation also blocks duplicate dispatch when fresh authority is unavailable. Exact RED proof rejects collection/environment failures, and all one-shot publisher artifacts are removed from the final tree.

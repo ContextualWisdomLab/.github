@@ -1,0 +1,112 @@
+name: Source Fix PR 1669 Current Main
+
+on:
+  push:
+    branches:
+      - fix/scheduler-stale-headrefoid-cancellation
+    paths:
+      - scripts/ci/source_fix_pr1669_current_main.py
+      - .github/workflows/source-fix-pr1669-current-main.yml
+
+concurrency:
+  group: source-fix-pr1669-current-main-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate writer head and detect retired one-shot
+        id: owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin refs/heads/fix/scheduler-stale-headrefoid-cancellation | cut -f1)"
+          test -n "$remote_head"
+          test "$remote_head" = "$GITHUB_SHA"
+          if [ ! -e scripts/ci/source_fix_pr1669_current_main.py ]; then
+            echo "active=false" >>"$GITHUB_OUTPUT"
+            echo "PR1669 reconciliation helper already retired."
+            exit 0
+          fi
+          echo "active=true" >>"$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.14
+        if: steps.owner.outputs.active == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install exact hash-verified scheduler test toolchain
+        if: steps.owner.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Materialize protected-main reconciliation and RED-to-GREEN repair
+        if: steps.owner.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/source_fix_pr1669_current_main.py
+          git diff --check
+
+      - name: Verify scheduler regressions and complete repository contract
+        if: steps.owner.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_pr1669_cancel_stale_opencode_runs.py tests/test_pr_review_merge_scheduler.py -q
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing
+          python -m interrogate -c pyproject.toml scripts/ci
+          python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Verify exact intended scope and retirement
+        if: steps.owner.outputs.active == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed='^(CHANGELOG.md|docs/product-technical-gap-baseline.md|scripts/ci/pr_review_merge_scheduler.py|tests/test_pr_review_merge_scheduler.py|scripts/ci/source_fix_pr1669_current_main.py|.github/workflows/source-fix-pr1669-current-main.yml)$'
+          bad="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
+          test -z "$bad"
+          test ! -e scripts/ci/source_fix_pr1669_current_main.py
+          test ! -e .github/workflows/source-fix-pr1669-current-main.yml
+          remote_head="$(git ls-remote origin refs/heads/fix/scheduler-stale-headrefoid-cancellation | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+
+      - name: Publish normal non-force exact-head successor
+        if: steps.owner.outputs.active == 'true'
+        env:
+          PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-}}"
+          if [ -z "$workflow_push_token" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
+          remote_head="$(git ls-remote origin refs/heads/fix/scheduler-stale-headrefoid-cancellation | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(scheduler): preserve failed cancellations and central authority"
+          git remote set-url origin "https://x-access-token:${workflow_push_token}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/scheduler-stale-headrefoid-cancellation
