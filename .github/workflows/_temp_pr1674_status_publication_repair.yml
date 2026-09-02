@@ -7,8 +7,11 @@ on:
     paths:
       - .github/workflows/_temp_pr1674_status_publication_repair.yml
       - scripts/ci/pr1674_status_publication_repair.py
+      - scripts/ci/pr1674_exact_findings_repair.py
       - .github/workflows/strix.yml
+      - .github/workflows/noema-review.yml
       - tests/test_strix_repository_dispatch_live_state.py
+      - tests/test_noema_live_target_admission.py
 
 concurrency:
   group: temp-pr1674-status-publication-${{ github.repository }}-${{ github.ref_name }}
@@ -52,7 +55,16 @@ jobs:
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
           test -f scripts/ci/pr1674_status_publication_repair.py
+          test -f scripts/ci/pr1674_exact_findings_repair.py
           test -f .github/workflows/_temp_pr1674_status_publication_repair.yml
+
+      - name: Materialize exact-head review finding repairs
+        run: |
+          set -euo pipefail
+          python scripts/ci/pr1674_exact_findings_repair.py
+          test ! -e scripts/ci/pr1674_exact_findings_repair.py
+          python -m py_compile scripts/ci/pr1674_status_publication_repair.py
+          git diff --check
 
       - name: Materialize late-bound Strix publication authority
         run: |
@@ -62,14 +74,21 @@ jobs:
           test ! -e .github/workflows/_temp_pr1674_status_publication_repair.yml
           git diff --check
 
-      - name: Verify executable Strix live-state contracts
+      - name: Verify executable live-state and transport contracts
         run: |
           set -euo pipefail
           PYTHONPATH=. python -m pytest \
             tests/test_strix_repository_dispatch_live_state.py \
+            tests/test_noema_live_target_admission.py \
             tests/test_required_workflow_queue_contract.py \
             -q
-          python -m compileall -q tests/test_strix_repository_dispatch_live_state.py
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          for path in (Path('.github/workflows/strix.yml'), Path('.github/workflows/noema-review.yml')):
+              yaml.safe_load(path.read_text(encoding='utf-8'))
+          PY
+          python -m compileall -q tests/test_strix_repository_dispatch_live_state.py tests/test_noema_live_target_admission.py
           git diff --check
 
       - name: Publish one exact non-force canonical successor
@@ -86,6 +105,6 @@ jobs:
           git add -A
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
-          git commit -m "fix(strix): revalidate live target before status publication"
+          git commit -m "fix(review): close live authority and OIDC transport races"
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
