@@ -117,4 +117,12 @@ drift sources, not repo-specific contracts" principle
   uses, closing that drift too.
 
 See `docs/doctoring/dependency-review-reusable-workflow-consolidation.md` for
-the full per-repo audit and the exact diffs each caller received.
+the full per-repo audit and the exact diffs each caller received, including
+two post-merge corrections found by Devin's review on the caller PRs: (1)
+every caller now pins `uses:` to this file's exact commit SHA rather than
+the mutable `@main`, since a mutable central-workflow reference runs
+unreviewed against every caller's PR checks; (2) converting a job to
+`uses: <reusable workflow>` renames its published check-run to a combined
+`<caller job> / <called job>` name, which broke `newsdom-api`'s branch
+protection (it required the old standalone name) until that required-check
+name was updated to match.

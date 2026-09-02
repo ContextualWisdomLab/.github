@@ -18,7 +18,15 @@
 # adopts the dynamic detection as the common, more-correct behavior for
 # every caller, so no per-repo public/private input is needed.
 #
-# Example caller (.github/workflows/dependency-review.yml in a product repo):
+# Example caller (.github/workflows/dependency-review.yml in a product repo).
+# Pin `uses:` to this file's exact commit SHA, not @main: an unpinned mutable
+# ref would run an unreviewed central change against every PR check in the
+# calling repo (Devin flagged this on the first four callers; fixed in all of
+# them). If the calling repo's branch protection requires a status check
+# literally named after the old standalone job, converting to `uses:` here
+# will rename the published check to "<calling job> / dependency-review" and
+# silently break that required check -- update the branch protection's
+# required-check name to match before or immediately after merging a caller.
 #
 #   name: Dependency Review
 #   on:
@@ -28,7 +36,7 @@
 #     cancel-in-progress: true
 #   jobs:
 #     dependency-review:
-#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<commit-sha>
 #       with:
 #         fail_on_severity: high
 #         allow_ghsas: "GHSA-69w3-r845-3855"
