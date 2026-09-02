@@ -51,6 +51,26 @@ def test_quality_gate_tracks_runtime_budget_contract() -> None:
     assert quality.count("tests/test_hourly_scheduler_runtime_budget.py") == 3
 
 
+def test_quality_gate_close_event_retires_prior_pr_run_without_runner() -> None:
+    """Closing a PR must supersede queued work without allocating a cleanup runner."""
+    quality = _read(QUALITY)
+    pull_request_trigger = quality.split("  pull_request:\n", maxsplit=1)[1].split(
+        "  push:\n", maxsplit=1
+    )[0]
+    contract_job = quality.split("  contract:\n", maxsplit=1)[1]
+
+    assert "    types: [opened, synchronize, reopened, closed]\n" in pull_request_trigger
+    assert (
+        "  group: contextual-orchestrator-review-repair-quality-"
+        "${{ github.event.pull_request.number || github.ref }}\n"
+    ) in quality
+    assert "  cancel-in-progress: true\n" in quality
+    assert (
+        "    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}\n"
+        in contract_job
+    )
+
+
 def test_review_repair_quality_workflow_has_truthful_identity() -> None:
     """Keep the stable workflow ID while retiring its direct-NIM identity."""
     assert QUALITY.is_file()

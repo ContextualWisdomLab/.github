@@ -1,3 +1,21 @@
+### Contextual-orchestrator pin refresh
+
+- Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `464da4715b495b5eaaa593eba3796e2d976ee0c9` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
+
+### Scheduler target admission
+
+- Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
+
+## [Unreleased]
+
+- Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
+## 2026-09-02 — Noema single-request gateway ownership
+
+- Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
+- Hardened serving-model telemetry against control-character/workflow-command injection and lone-surrogate encoding failures, restored actionable exact changed-line diagnostics, and constrained local trailing-comma repair to complete JSON values.
+- Added permanent single-request/no-fixed-timeout regressions and retired obsolete deadline/retry fixtures.
+- Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
+
 # Changelog
 
 All notable changes to the organization automation repository are documented in
