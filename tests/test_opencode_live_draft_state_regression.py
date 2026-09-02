@@ -34,14 +34,6 @@ def _write_live_state_gh(
     for exercising a missing/null/non-string/unexpected ``state`` field that
     the convenience ``live_draft``/``live_head``/``live_state`` parameters
     cannot express.
-
-    Also stubs ``sleep`` to return instantly: ``fail_closed_script()``'s
-    transport-failure retry path really does ``sleep "$poll_interval_seconds"``
-    (60s) between attempts, and this fixture's later-call sentinel exit code
-    drives that path to its 3-failure fail-closed threshold in
-    ``test_stale_draft_verdict_event_does_not_exempt_live_ready_pr`` -- without
-    this stub that test performs two genuine 60s sleeps (~120s real
-    wall-clock time per run) instead of running fast.
     """
     payload = json.dumps(
         live_payload_override
@@ -78,9 +70,6 @@ def evaluate_receipts(reviews, head_sha, *, is_draft):
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
-    fake_sleep = bin_dir / "sleep"
-    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_sleep.chmod(fake_sleep.stat().st_mode | 0o111)
 
 
 def _run_step(
@@ -149,13 +138,12 @@ def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
 
     Unlike ``request_review_script()``'s single unguarded live-PR fetch, this
     step's post-draft-check Reviews API poll retries a transport failure up
-    to ``max_poll_transport_failures`` times (with a stubbed, instant backoff
-    "sleep" between attempts -- see ``_write_live_state_gh``) before failing
-    closed with its own exit 1 and diagnostic -- so the fixture's synthetic
-    unmocked-call sentinel exit code never reaches this script's own exit
-    status, unlike the sibling test above. The "stale" continuation message
-    is still emitted first, proving the step did not silently exempt the
-    live-ready PR from verdict polling.
+    to ``max_poll_transport_failures`` times (with a real backoff sleep
+    between attempts) before failing closed with its own exit 1 and
+    diagnostic -- so the fixture's synthetic unmocked-call sentinel exit code
+    never reaches this script's own exit status, unlike the sibling test
+    above. The "stale" continuation message is still emitted first, proving
+    the step did not silently exempt the live-ready PR from verdict polling.
     """
     result = _run_step(tmp_path, fail_closed_script(), live_draft=False)
 
