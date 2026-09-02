@@ -2738,3 +2738,39 @@ into `orchestrator/free` discovery, each with fail-closed, provider-appropriate 
 rather than a shared generic heuristic. Re-open only if a specific model or route from either provider
 is observed being admitted to the free pool without genuine zero-cost evidence, or excluded despite
 having it.
+
+## 2026-09-02 backlog items 10/11 verification: ZDR filtering is already a union, models.dev/OpenRouter synthesis is a deliberate exception
+
+**Item 10 — does a non-ZDR-restricted request still include ZDR-capable models (union), or does it
+wrongly exclude them?** Verified: union, correctly. The canonical eligibility check,
+`TaskOrchestrator._zdr_agent_allowed()` (`orchestrator.py`), reads `return not
+_REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags` — when `zdr_only=False` (the default, and what
+an unrestricted or explicitly `orchestrator/free` request uses), the check is unconditionally `True`
+regardless of whether the agent happens to carry the ZDR tag, so ZDR-capable models are never excluded
+by this policy. Only `zdr_only=True` narrows the pool to ZDR-tagged agents. This predicate gates 14
+call sites across agent selection, model-group membership, and `orchestrator/free` candidate filtering
+(`self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)`, several occurrences)
+— confirmed via `grep -n "_zdr_agent_allowed("`, not assumed from the one definition alone.
+
+**Item 11 — is models.dev catalog data actually synthesized with OpenRouter's own data?** Verified: no,
+deliberately not, and that's correct rather than a gap. `_merge_models_dev_metadata()` only runs for a
+`ProviderModelSource` that declares a `models_dev_provider_id` — currently `openai`, `opencode_zen`,
+`nvidia_nim`, and `nvidia_nim_sub`. The `openrouter` source has no `models_dev_provider_id`. This is a
+tested design choice, not an omission:
+`test_default_sources_request_openrouter_full_modality_catalog` confirms OpenRouter is instead queried
+directly with `?output_modalities=all`, and the code independently reads `context_length`/
+`context_window` and `output_modalities` straight from OpenRouter's own response (`model_discovery.py`
+lines ~1265-1344) — OpenRouter's own API is already a complete pricing/context/modality source, so
+models.dev enrichment would be redundant for it specifically, unlike `opencode_zen`/`nvidia_nim`, whose
+own APIs have sparser metadata and genuinely benefit from the models.dev join. The same exclusion
+applies to `bytez` for a different, explicitly tested reason:
+`test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev`'s own docstring — "Bytez has no
+Models.dev coverage; it must never trigger the shared fetch" — models.dev simply doesn't list Bytez as
+a provider, so a merge attempt would be a guaranteed no-op that only wastes a fetch.
+
+**Conclusion.** No code change needed for either item. Item 10's union semantics are correct and
+well-covered. Item 11's apparent "non-synthesis" for OpenRouter/Bytez is intentional and tested, not a
+missing integration — each provider already gets its complete metadata from the source best positioned
+to provide it, and models.dev is reserved for providers whose own APIs are comparatively sparse. Re-open
+only if a specific OpenRouter or Bytez model is observed missing pricing/context/modality data that
+models.dev has and neither provider's own API exposes.
