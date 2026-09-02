@@ -269,6 +269,9 @@ def test_ambiguous_put_rejects_history_success_without_live_convergence(monkeypa
     module = load_module()
     target = repository_target(module)
     live = repository_payload()
+    live["bypass_actors"] = [
+        {"actor_id": None, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}
+    ]
     desired = module._desired_payload(live, target)
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
     monkeypatch.setattr(module, "_verify_ruleset_history_transition", lambda *_args, **_kwargs: None)
