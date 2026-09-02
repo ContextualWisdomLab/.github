@@ -1902,6 +1902,27 @@ shallow clone 한계와 뒤섞여 있어 tag 존재 여부의 독립 확인(예:
    실제로 무엇에 기반해 일정 충돌을 계산하는지(자체 스텁인지 `CalendarWeave` 부재를 우회한 임시
    구현인지) `naruon` 쪽에서 먼저 확인한다 — G-06(E1/E2/E3 killer workflow, "일정 충돌"이 구매자
    영향으로 명시된 바로 그 항목)과 직결.
+
+   **후속 확인(같은 세션, 위 항목 착수 직후)**: 확인했다 — 우회가 아니라 **완전히 독립된 로컬
+   구현**이다. `naruon`의 `backend/services/calendar_conflict_{ics,policy,judgment_service}.py`,
+   `backend/api/calendar_conflicts.py`, alembic `0018_calendar_conflict_judgments.py`/
+   `0021_calendar_correction_rationale.py`, `docs/adr/0004-status-weighted-calendar-conflicts.md`
+   (2026-08-17, "Naruon-local scheduling policy") 전체와 `backend/tests/test_calendar_conflict_*.py`
+   4개 파일(ICS fixture 6개 포함) 어디에도 `CalendarWeave` 문자열이 단 한 번도 등장하지 않는다(grep
+   확인, 대소문자 무관). ADR-0004는 RFC 5545/5546·Allen(1983) interval algebra를 인용해 이 기능
+   자체의 상태-가중 충돌 정책을 정당화하지만, 이 로직이 왜 `CalendarWeave`가 아니라 `naruon`
+   로컬에 있어야 하는지는 전혀 논하지 않는다 — 즉 §2가 요구하는 "경계가 틀리거나 공통 수요가
+   없을 때만 ADR 근거로 제외" 요건을 이 ADR은 충족하지 않는다. 그리고 이번 세션에서 직접 clone해
+   읽은 `CalendarWeave` README 원문은 "LineageWeave, naruon, and Outlook consume it fail-closed"라고
+   **`naruon`을 명시적으로 지목**한다 — owner 저장소 자신이 공통 수요를 이미 선언했으므로 "공통
+   수요가 없다"는 예외 사유도 성립하지 않는다. 결론: 이것은 §2가 명시적으로 금지하는 "core가
+   미성숙하다고 consumer에서 복제"의 실제 사례로 확인됐다. **다만 이미 배포되고 광범위하게
+   테스트된(migration 2개, ICS fixture 6개, API 계약, ADR) 고객 대면 기능을 이 pass에서 바로
+   재작성/이관하지 않는다** — blast radius가 크고 `CalendarWeave` 자체가 아직 코드 0줄이라
+   이관할 대상이 없다. 올바른 순서는 §2 자신이 명시한 대로다: `CalendarWeave`에 RED test·계약·
+   API·문서·release를 owner PR로 먼저 만들어 통합 CI GREEN을 확보한 뒤, `naruon`이 로컬 구현을
+   `CalendarWeave`의 versioned release/API 호출로 교체하는 별도 후속 PR을 진행한다. 이 두 PR
+   순서 자체가 다음 pass 이후의 최우선 순위 후보다 — 코드 변경은 이번 pass에서 하지 않았다.
 2. `psychometrics-commons` — 저장소 자신의 `docs/product-technical-gap-baseline.md`(2026-08-25)가
    이미 "item-delivery와 response-submission HTTP가 아직 protected main에 없다"고 명시했고, 이번
    서베이도 OpenAPI spec이 `sessions.yaml`/`results.yaml` 둘뿐임을 확인했다 — Measure→Understand
