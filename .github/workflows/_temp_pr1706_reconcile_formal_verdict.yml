@@ -10,7 +10,7 @@ on:
       - tests/test_opencode_formal_verdict_authority_contract.py
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: temp-pr1706-formal-verdict-repair
@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify live writer head
         shell: bash
         run: |
@@ -42,15 +43,44 @@ jobs:
           git diff --check
       - name: Publish exact repaired tree and retire temporary machinery
         shell: bash
+        env:
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error::A workflow-starting publication credential is required; github.token is intentionally not accepted."
+            exit 1
+          fi
+
           rm .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
           rm scripts/ci/source_fix_pr1706_formal_verdict.py
+          if find .github/workflows scripts/ci -type f \( -name '*temp_pr1706*' -o -name '*source_fix_pr1706*' \) -print -quit | grep -q .; then
+            echo "::error::PR 1706 temporary repair machinery remains in the candidate tree."
+            find .github/workflows scripts/ci -type f \( -name '*temp_pr1706*' -o -name '*source_fix_pr1706*' \) -print
+            exit 1
+          fi
+
           git add .github/workflows/opencode-review.yml .github/workflows/pr-review-merge-scheduler.yml tests/test_opencode_formal_verdict_authority_contract.py tests/test_opencode_required_verdict_reconciliation_contract.py docs/product-technical-gap-baseline.md .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml scripts/ci/source_fix_pr1706_formal_verdict.py
           git diff --cached --check
           git config user.name 'ContextualWisdomLab repair bot'
           git config user.email 'actions@users.noreply.github.com'
           git commit -m 'fix(opencode): reconcile exact-head formal verdicts'
+
           git fetch origin fix/opencode-poll-wall-clock-bound
           test "$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)" = "$GITHUB_SHA"
-          git push origin HEAD:fix/opencode-poll-wall-clock-bound
+
+          askpass="$(mktemp)"
+          trap 'rm -f "$askpass"' EXIT
+          cat >"$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' "$GIT_USERNAME" ;;
+            *) printf '%s\n' "$GIT_PASSWORD" ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" \
+            GIT_TERMINAL_PROMPT=0 \
+            GIT_USERNAME=x-access-token \
+            GIT_PASSWORD="$PUSH_TOKEN" \
+            git -c credential.helper= push origin HEAD:fix/opencode-poll-wall-clock-bound
