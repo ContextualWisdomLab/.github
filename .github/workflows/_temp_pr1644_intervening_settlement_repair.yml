@@ -1,0 +1,230 @@
+name: Temporary PR 1644 intervening settlement repair
+
+on:
+  push:
+    branches:
+      - fix/ruleset-owner-plane-reconciler
+    paths:
+      - .github/workflows/_temp_pr1644_intervening_settlement_repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore(governance): run one-shot intervening-settlement repair'
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Check out triggering revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+          check-latest: false
+
+      - name: Repair, validate, and self-retire
+        shell: bash
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+          WRITER_BRANCH: fix/ruleset-owner-plane-reconciler
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/_temp_pr1644_intervening_settlement_repair.yml'
+          source_file='scripts/ci/reconcile_ruleset_governance.py'
+
+          cleanup_failed_repair() {
+            status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ]; then
+              git reset --hard "$TRIGGER_SHA"
+              git rm -f "$workflow"
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git commit -m 'chore(governance): retire failed one-shot settlement repair' || true
+              git fetch origin "$WRITER_BRANCH"
+              remote_sha="$(git rev-parse FETCH_HEAD)"
+              if [ "$remote_sha" = "$TRIGGER_SHA" ]; then
+                git push origin "HEAD:$WRITER_BRANCH" || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_failed_repair EXIT
+
+          test "$(git rev-parse HEAD)" = "$TRIGGER_SHA"
+          grep -q 'test_initial_ambiguous_put_waits_through_intervening_admin_version' tests/test_ruleset_governance_delayed_recovery_regression.py
+          grep -q 'test_recovery_ambiguous_put_waits_through_intervening_admin_version' tests/test_ruleset_governance_delayed_recovery_regression.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/ci/reconcile_ruleset_governance.py')
+          text = path.read_text(encoding='utf-8')
+
+          class_old = '''class RulesetMutationNotVisibleError(RulesetGovernanceError):
+              """Raised while an ambiguous PUT has not yet appeared in immutable history."""
+          '''
+          class_new = '''class RulesetMutationNotVisibleError(RulesetGovernanceError):
+              """Raised while an ambiguous PUT has not yet appeared in immutable history."""
+
+
+          class RulesetMutationStillSettlingError(RulesetGovernanceError):
+              """Raised when history changed but the ambiguous reviewed PUT is not visible yet."""
+          '''
+          if text.count(class_old) != 1:
+              raise SystemExit('expected mutation-not-visible class anchor exactly once')
+          text = text.replace(class_old, class_new, 1)
+
+          settle_old = '''def _settle_ambiguous_recovery_history(
+              target: RulesetTarget,
+              *,
+              current_version: int,
+          ) -> list[Any]:
+              """Wait one bounded client horizon for an ambiguous recovery PUT to appear."""
+
+              for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
+                  history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
+                  if not history:
+                      raise RulesetGovernanceError(
+                          "ambiguous ruleset recovery PUT exposed no history"
+                      )
+                  if _history_version_id(history[0]) != current_version:
+                      return history
+                  if poll_index < AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
+                      time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+              raise RulesetGovernanceError(
+                  "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
+              )
+          '''
+          settle_new = '''def _settle_ambiguous_recovery_history(
+              target: RulesetTarget,
+              *,
+              current_version: int,
+              expected_payload: dict[str, Any],
+          ) -> list[Any]:
+              """Observe the full bounded horizon until the ambiguous recovery PUT appears.
+
+              An administrator version can become visible before a delayed recovery request.
+              That intervening version is evidence of concurrency, not evidence that the
+              delayed request was rejected. Settlement therefore waits for the exact restore
+              payload and lets the caller recover its actual immutable predecessor.
+              """
+
+              for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
+                  history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
+                  if not history:
+                      raise RulesetGovernanceError(
+                          "ambiguous ruleset recovery PUT exposed no history"
+                      )
+                  newest_version = _history_version_id(history[0])
+                  if newest_version != current_version:
+                      newest_state = _history_version_state(target, newest_version)
+                      if _editable_projection(newest_state) == expected_payload:
+                          return history
+                  if poll_index < AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
+                      time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+              raise RulesetGovernanceError(
+                  "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
+              )
+          '''
+          if text.count(settle_old) != 1:
+              raise SystemExit('expected recovery settlement function exactly once')
+          text = text.replace(settle_old, settle_new, 1)
+
+          call_old = '''                history = _settle_ambiguous_recovery_history(
+                      target,
+                      current_version=current_version,
+                  )
+          '''
+          call_new = '''                history = _settle_ambiguous_recovery_history(
+                      target,
+                      current_version=current_version,
+                      expected_payload=displaced_payload,
+                  )
+          '''
+          if text.count(call_old) != 1:
+              raise SystemExit('expected recovery settlement call exactly once')
+          text = text.replace(call_old, call_new, 1)
+
+          mismatch_old = '''    newest_state = _history_version_state(target, newest_id)
+              if _editable_projection(newest_state) != desired:
+                  raise RulesetGovernanceError("latest ruleset history does not match reviewed mutation")
+          '''
+          mismatch_new = '''    newest_state = _history_version_state(target, newest_id)
+              if _editable_projection(newest_state) != desired:
+                  raise RulesetMutationStillSettlingError(
+                      "latest ruleset history changed before the reviewed mutation became visible"
+                  )
+          '''
+          if text.count(mismatch_old) != 1:
+              raise SystemExit('expected history mismatch block exactly once')
+          text = text.replace(mismatch_old, mismatch_new, 1)
+
+          catch_old = '''        except RulesetMutationNotVisibleError:
+                  live = _gh_api("GET", target.endpoint)
+          '''
+          catch_new = '''        except (RulesetMutationNotVisibleError, RulesetMutationStillSettlingError):
+                  live = _gh_api("GET", target.endpoint)
+          '''
+          if text.count(catch_old) != 1:
+              raise SystemExit('expected ambiguous settlement catch exactly once')
+          text = text.replace(catch_old, catch_new, 1)
+
+          doc_old = '''    A timeout, connection loss, nonzero transport result, or malformed successful
+              response can occur after GitHub accepted the update. Three observations span
+              one additional full client timeout horizon: start, midpoint, and end. A
+              baseline-only first observation is therefore never represented as rejection.
+              Acceptance must become visible in immutable history and live state; collision
+          '''
+          doc_new = '''    A timeout, connection loss, nonzero transport result, or malformed successful
+              response can occur after GitHub accepted the update. Three observations span
+              one additional full client timeout horizon: start, midpoint, and end. Neither
+              a baseline-only observation nor an intervening administrator version proves
+              rejection of the delayed reviewed PUT. Acceptance must become visible as the
+              exact reviewed payload in immutable history and live state; collision
+          '''
+          if text.count(doc_old) != 1:
+              raise SystemExit('expected ambiguous PUT docstring anchor exactly once')
+          text = text.replace(doc_old, doc_new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          export COVERAGE_RCFILE=/dev/null
+          python -m coverage run --branch --include=scripts/ci/reconcile_ruleset_governance.py -m pytest -q \
+            tests/test_ruleset_governance_reconciliation.py \
+            tests/test_ruleset_governance_review_regressions.py \
+            tests/test_ruleset_governance_review_round2.py \
+            tests/test_ruleset_governance_review_round3.py \
+            tests/test_ruleset_governance_timeout_regression.py \
+            tests/test_ruleset_governance_delayed_recovery_regression.py \
+            tests/test_central_required_workflow_ruleset_audit.py \
+            tests/test_ruleset_audit_completeness_regression.py \
+            tests/test_ruleset_merge_method_shape_regression.py \
+            tests/test_solo_maintainer_ruleset_policy.py
+          python -m coverage report --fail-under=100 --show-missing --include=scripts/ci/reconcile_ruleset_governance.py
+          python -m interrogate --fail-under 100 scripts/ci/reconcile_ruleset_governance.py
+          git diff --check
+
+          git rm "$workflow"
+          git add "$source_file"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(governance): settle delayed writes across intervening versions'
+
+          git fetch origin "$WRITER_BRANCH"
+          remote_sha="$(git rev-parse FETCH_HEAD)"
+          if [ "$remote_sha" != "$TRIGGER_SHA" ]; then
+            echo "Writer branch advanced concurrently; refusing non-fast-forward push." >&2
+            exit 1
+          fi
+          git push origin "HEAD:$WRITER_BRANCH"
+          trap - EXIT
