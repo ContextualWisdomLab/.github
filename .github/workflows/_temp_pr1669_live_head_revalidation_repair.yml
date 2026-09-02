@@ -6,6 +6,7 @@ on:
       - fix/scheduler-stale-headrefoid-cancellation
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
+      - scripts/ci/temp_pr1669_live_head_revalidation_v2.py
   workflow_dispatch:
 
 concurrency:
@@ -18,7 +19,7 @@ permissions:
 jobs:
   repair:
     if: github.repository == 'ContextualWisdomLab/.github' && github.ref_name == 'fix/scheduler-stale-headrefoid-cancellation'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 60
     env:
       WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
@@ -49,13 +50,15 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
+          test -f scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test -f scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
 
       - name: Apply guarded source and regression repair
         run: |
           set -euo pipefail
-          python scripts/ci/temp_pr1669_live_head_revalidation_repair.py
+          python scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
@@ -82,6 +85,7 @@ jobs:
           test -n "${WORKFLOW_PUSH_TOKEN:-}"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git config user.name github-actions[bot]
@@ -89,6 +93,6 @@ jobs:
           git add -A
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
-          git commit -m "fix(scheduler): revalidate live head before cancellation"
+          git commit -m "fix(scheduler): revalidate live state before cancellation"
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
