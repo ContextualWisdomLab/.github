@@ -8,6 +8,7 @@ on:
       - .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml
       - scripts/ci/temp_pr1706_one_shot_runner_release.py
       - scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
+      - scripts/ci/temp_pr1706_one_shot_runner_release_v3.py
       - tests/test_opencode_required_verdict_runner_release.py
 
 permissions:
@@ -64,98 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          driver = Path("scripts/ci/temp_pr1706_one_shot_runner_release_v2.py")
-          text = driver.read_text(encoding="utf-8")
-          start_token = 'workflow = WORKFLOW.read_text(encoding="utf-8")\n'
-          end_token = 'WORKFLOW.write_text(workflow, encoding="utf-8")\n'
-          start = text.find(start_token)
-          end_start = text.find(end_token, start + len(start_token))
-          if start < 0 or end_start < 0:
-              raise SystemExit("v2 bounded-transport repair block drifted")
-          end = end_start + len(end_token)
-          replacement = r'''workflow = WORKFLOW.read_text(encoding="utf-8")
-          step_start = "      - name: Fail closed without a current-head OpenCode verdict\n"
-          step_end = "\n  cancel-superseded-opencode-review-runs:\n"
-          if workflow.count(step_start) != 1 or workflow.count(step_end) != 1:
-              raise SystemExit("OpenCode required-verdict step boundaries drifted before bounded transport repair")
-          before, rest = workflow.split(step_start, 1)
-          target, after = rest.split(step_end, 1)
-          target = replace_once(
-              target,
-              '          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"\n',
-              '          if ! live_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then\n'
-              '            echo "::error::Live pull request API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."\n'
-              '            exit 1\n'
-              '          fi\n',
-              "bounded live PR read",
-          )
-          target = replace_once(
-              target,
-              '          if ! reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then\n',
-              '          if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then\n'
-              '            echo "::error::Reviews API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."\n'
-              '            exit 1\n'
-              '          fi\n',
-              "bounded Reviews read",
-          )
-          WORKFLOW.write_text(before + step_start + target + step_end + after, encoding="utf-8")
-          '''
-          text = text[:start] + replacement + text[end:]
-
-          old_lookup = '''          for attempt in $(seq 1 12); do
-            run="$(timeout 30s gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-            required_run="$(printf '%s\\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --arg pr "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '\n'''
-          new_lookup = '''          for attempt in $(seq 1 12); do
-            if ! run="$(timeout 30s gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"; then
-              echo "::warning::Exact required-run lookup attempt ${attempt}/12 failed; retrying before wake."
-              if [ "$attempt" -lt 12 ]; then
-                sleep 5
-                continue
-              fi
-              break
-            fi
-            required_run="$(printf '%s\\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --arg pr "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '\n'''
-          if text.count(old_lookup) != 1:
-              raise SystemExit("v2 exact-run lookup boundary drifted")
-          text = text.replace(old_lookup, new_lookup, 1)
-
-          old_parse = '''            ')"
-            IFS=$'\\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
-            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
-'''
-          new_parse = '''            ')" || required_run=""
-            if [ -z "$required_run" ]; then
-              echo "::warning::Exact required-run lookup attempt ${attempt}/12 returned malformed or nonmatching evidence; retrying before wake."
-              if [ "$attempt" -lt 12 ]; then
-                sleep 5
-                continue
-              fi
-              break
-            fi
-            IFS=$'\\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
-            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
-'''
-          if text.count(old_parse) != 1:
-              raise SystemExit("v2 exact-run parse boundary drifted")
-          text = text.replace(old_parse, new_parse, 1)
-
-          old_assertion = '    assert "rerun-failed-jobs" in dispatched\n'
-          new_assertion = (
-              old_assertion
-              + '    assert \'if ! run="$(timeout 30s gh api \' in dispatched\n'
-              + '    assert "Exact required-run lookup attempt ${attempt}/12 failed" in dispatched\n'
-              + '    assert "continue" in dispatched\n'
-          )
-          if text.count(old_assertion) != 1:
-              raise SystemExit("v2 wake retry regression insertion boundary drifted")
-          text = text.replace(old_assertion, new_assertion, 1)
-          driver.write_text(text, encoding="utf-8")
-          PY
-          PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
-          # Product baseline has its own single-writer lane; do not compete with it here.
+          PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release_v3.py
           git restore --source=HEAD -- docs/product-technical-gap-baseline.md
 
       - name: Verify focused GREEN and exact-run identity contracts
@@ -185,10 +95,12 @@ jobs:
           rm -f \
             .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml \
             scripts/ci/temp_pr1706_one_shot_runner_release.py \
-            scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
+            scripts/ci/temp_pr1706_one_shot_runner_release_v2.py \
+            scripts/ci/temp_pr1706_one_shot_runner_release_v3.py
           test ! -e .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml
           test ! -e scripts/ci/temp_pr1706_one_shot_runner_release.py
           test ! -e scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
+          test ! -e scripts/ci/temp_pr1706_one_shot_runner_release_v3.py
           git diff --check
           while IFS= read -r changed; do
             case "$changed" in
@@ -197,6 +109,7 @@ jobs:
               .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml|\
               scripts/ci/temp_pr1706_one_shot_runner_release.py|\
               scripts/ci/temp_pr1706_one_shot_runner_release_v2.py|\
+              scripts/ci/temp_pr1706_one_shot_runner_release_v3.py|\
               tests/test_opencode_required_verdict_runner_release.py|\
               tests/test_opencode_poll_rate_budget.py|\
               tests/test_opencode_poll_self_retirement.py|\
@@ -230,6 +143,7 @@ jobs:
             .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml \
             scripts/ci/temp_pr1706_one_shot_runner_release.py \
             scripts/ci/temp_pr1706_one_shot_runner_release_v2.py \
+            scripts/ci/temp_pr1706_one_shot_runner_release_v3.py \
             tests/test_opencode_required_verdict_runner_release.py \
             tests/test_opencode_poll_rate_budget.py \
             tests/test_opencode_poll_self_retirement.py \
