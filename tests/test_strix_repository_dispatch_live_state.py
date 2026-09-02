@@ -30,7 +30,7 @@ def _run_preflight(tmp_path: Path, pull_request: dict[str, object] | None, *, gh
     script = script.split('trusted_workspace="$RUNNER_TEMP/trusted-workspace"', 1)[0]
 
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(parents=True)
     fake_gh = fake_bin / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
