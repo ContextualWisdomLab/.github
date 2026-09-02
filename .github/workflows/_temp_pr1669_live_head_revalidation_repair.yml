@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
@@ -90,7 +90,7 @@ jobs:
       - name: Publish one exact non-force canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
-          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          WORKFLOW_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$WORKFLOW_PUSH_TOKEN"
