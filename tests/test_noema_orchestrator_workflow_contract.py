@@ -398,11 +398,13 @@ def test_noema_review_job_has_a_bounded_runtime_above_the_two_hour_model_allowan
     noema_review_gate.py's own module comment says "remains governed by
     contextual-orchestrator rather than a fixed inference timeout" -- so
     nothing upstream of this job bounds that call. docs/product-goal-directive.md
-    section 8 documents that "중앙 OpenCode, Strix, Noema는 모델당 두 시간
-    이상 걸릴 수 있음을 수용한다" (central OpenCode, Strix, and Noema accept
-    that a model call may legitimately take over two hours), so the bound
-    must clear two hours (120 minutes) without falling back to GitHub's
-    360-minute job default.
+    section 8 documents that "OpenCode·Strix·Noema의 모델당 2시간 이상을
+    수용한다" (OpenCode, Strix, and Noema accept that a model call may
+    legitimately take 2+ hours per model -- reworded from an earlier
+    revision's "모델당 두 시간 이상 걸릴 수 있음을 수용한다" during the
+    owner's 2026-09-02 directive restatement, same substantive commitment),
+    so the bound must clear two hours (120 minutes) without falling back to
+    GitHub's 360-minute job default.
     """
     workflow = workflow_text("noema-review.yml")
     job = workflow.split("  noema-review:\n", 1)[1]
@@ -413,7 +415,7 @@ def test_noema_review_job_has_a_bounded_runtime_above_the_two_hour_model_allowan
     assert 120 < timeout < 360
 
     assert (
-        "모델당 두 시간 이상 걸릴 수 있음을 수용한다"
+        "모델당 2시간 이상을 수용한다"
         in (Path(__file__).resolve().parents[1] / "docs" / "product-goal-directive.md").read_text(
             encoding="utf-8"
         )
