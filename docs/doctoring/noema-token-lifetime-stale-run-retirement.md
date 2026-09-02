@@ -27,9 +27,13 @@ This quality gate executes deterministic token-lifetime tests rather than a long
 
 The workflow remains `pull_request`-scoped with the same path filter, `contents: read`, `ubuntu-24.04`, exact source checkout, hash-locked CI dependency installation, token-lifetime/two-phase/App-identity pytest targets, compile verification, and `git diff --check`. This change does not alter Noema verdict semantics, contextual-orchestrator routing, provider/model selection, protected branch requirements, or review authority.
 
+## Live repair-PR evidence
+
+`ContextualWisdomLab/.github#1726` was opened from repair head `3751cd3b82e48f0131689ab18fbea16ff741f37d`. GitHub admitted `Noema Reviewer Token Lifetime CI` run `33622880158` for that head. This doctoring update intentionally advances the same PR once more so the repaired native concurrency contract can be observed retiring that predecessor run rather than merely asserted from YAML.
+
 ## Verification required before merge
 
 1. Re-read the exact PR head and workflow text.
 2. Prove the regression is GREEN on that exact head.
-3. Confirm a subsequent synchronize retires the older `Noema Reviewer Token Lifetime CI` queued/in-progress run and leaves only the current-head authoritative lineage.
+3. Confirm this synchronize retires predecessor `Noema Reviewer Token Lifetime CI` run `33622880158` and leaves only the current-head authoritative lineage.
 4. Re-fetch reviews, unresolved threads, and required/security Checks; merge only through ordinary protection unless the strict independently verified `QUEUE_SATURATION_CHICKEN_EGG` boundary is freshly satisfied.
