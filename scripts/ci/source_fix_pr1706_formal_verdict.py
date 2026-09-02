@@ -265,8 +265,10 @@ def main() -> None:
         "OpenCode cleanup comment",
     )
     if TEST.exists():
-        raise SystemExit(f"refusing to overwrite existing {TEST}")
-    TEST.write_text(TEST_CONTENT, encoding="utf-8")
+        if TEST.read_text(encoding="utf-8") != TEST_CONTENT:
+            raise SystemExit(f"existing {TEST} drifted from expected RED regression")
+    else:
+        TEST.write_text(TEST_CONTENT, encoding="utf-8")
     baseline = BASELINE.read_text(encoding="utf-8")
     if "### OpenCode required-verdict reconciliation race repair — 2026-09-02" not in baseline:
         BASELINE.write_text(baseline.rstrip() + "\n" + RECORD, encoding="utf-8")
