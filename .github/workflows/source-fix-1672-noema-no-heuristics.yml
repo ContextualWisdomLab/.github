@@ -1,0 +1,69 @@
+name: Source fix PR1672 Noema no-heuristics
+
+on:
+  push:
+    branches:
+      - fix/noema-repair-attempt-telemetry
+    paths:
+      - .github/source-fix-1672-noema-no-heuristics.trigger
+
+jobs:
+  repair:
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          ref: fix/noema-repair-attempt-telemetry
+          persist-credentials: true
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: '0.12.5'
+      - name: Validate repair driver syntax
+        run: python -m py_compile scripts/source_fix_1672_noema_no_heuristics.py
+      - name: Prove no-heuristics contract is RED before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          if uv run --group dev python -m pytest -q tests/test_noema_no_heuristic_evidence_policy.py; then
+            echo '::error::Noema no-heuristics regression was not RED before production repair'
+            exit 1
+          fi
+      - name: Apply causal shared-owner repair
+        run: python scripts/source_fix_1672_noema_no_heuristics.py
+      - name: Verify repaired Noema contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --group dev python -m pytest -q tests/test_noema*.py
+          uv run --group dev ruff check scripts/ci/noema_review_gate.py tests/test_noema_no_heuristic_evidence_policy.py
+          git diff --check
+      - name: Commit repair, reconcile current main, self-remove, and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/source-fix-1672-noema-no-heuristics.yml .github/source-fix-1672-noema-no-heuristics.trigger scripts/source_fix_1672_noema_no_heuristics.py
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo '::error::repair produced no tracked change'
+            exit 1
+          fi
+          git config user.name 'opencode-agent[bot]'
+          git config user.email '219766164+opencode-agent[bot]@users.noreply.github.com'
+          git commit -m 'fix(noema): remove caller inference and evidence heuristics'
+          git fetch --no-tags origin main fix/noema-repair-attempt-telemetry
+          remote_head="$(git rev-parse origin/fix/noema-repair-attempt-telemetry)"
+          if [ "$remote_head" != "$(git rev-parse HEAD)" ] && ! git merge-base --is-ancestor "$remote_head" HEAD; then
+            git merge --no-edit "$remote_head"
+          fi
+          main_head="$(git rev-parse origin/main)"
+          if ! git merge-base --is-ancestor "$main_head" HEAD; then
+            git merge --no-edit "$main_head"
+          fi
+          uv run --group dev python -m pytest -q tests/test_noema*.py
+          uv run --group dev ruff check scripts/ci/noema_review_gate.py tests/test_noema_no_heuristic_evidence_policy.py
+          git diff --check
+          git push origin HEAD:fix/noema-repair-attempt-telemetry
