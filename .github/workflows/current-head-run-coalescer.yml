@@ -1,0 +1,44 @@
+name: Current Head Run Coalescer
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+
+concurrency:
+  group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  coalesce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted control-plane source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Retire redundant queued exact-head runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COALESCE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/current_head_run_coalescer.py \
+            --repo "$COALESCE_REPO" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-repo "$EXPECTED_HEAD_REPO" \
+            --expected-head-ref "$EXPECTED_HEAD_REF" \
+            --expected-head "$EXPECTED_HEAD"
