@@ -28,13 +28,18 @@ def replace_exact(text: str, old: str, new: str, *, expected: int, label: str) -
 def repair_strix_materializer() -> None:
     """Make the existing Strix transformer executable and fail-closed."""
     text = STRIX_HELPER.read_text(encoding="utf-8")
-    text = replace_exact(
-        text,
-        "steps.dispatch_validation.outputs.should_scan != 'false' && github.event_name == 'repository_dispatch'",
-        "steps.dispatch_validation.outputs.should_scan == 'true' && github.event_name == 'repository_dispatch'",
-        expected=2,
-        label="late repository_dispatch admission conditions",
-    )
+    old_admission = "steps.dispatch_validation.outputs.should_scan != 'false' && github.event_name == 'repository_dispatch'"
+    new_admission = "steps.dispatch_validation.outputs.should_scan == 'true' && github.event_name == 'repository_dispatch'"
+    # The helper intentionally contains three copies: FRESH_TOKEN_STEP,
+    # SCAN_REVALIDATION_STEP, and the old scan_publish_anchor used by the
+    # second-stage materializer. Only the first two are executable admission
+    # conditions; preserving the third is required so the second materializer
+    # can still locate and replace the predecessor publisher exactly once.
+    if text.count(old_admission) != 3:
+        raise RuntimeError(
+            "late repository_dispatch admission conditions: expected three ordered anchors"
+        )
+    text = text.replace(old_admission, new_admission, 2)
     text = replace_exact(
         text,
         "if: github.event_name != 'repository_dispatch' || steps.dispatch_validation.outputs.should_scan != 'false'\\n",
