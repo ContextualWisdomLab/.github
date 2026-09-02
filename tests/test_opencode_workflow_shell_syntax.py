@@ -301,3 +301,84 @@ esac
     assert malformed_head.returncode == 1
     assert "malformed live PR metadata" in malformed_head.stdout
     assert not output.exists()
+
+
+def _run_noema_validate_head(tmp_path, *, live_state: str, live_head_sha: str, expected_head_sha: str):
+    """Execute noema-review.yml's ``Validate current pull request head`` step."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    assert bash is not None and jq is not None
+
+    workflow_text = (REPO_ROOT / ".github/workflows/noema-review.yml").read_text(
+        encoding="utf-8"
+    )
+    script = _extract_run_block(workflow_text, "Validate current pull request head")
+
+    fake_bin = tmp_path / f"bin-{live_state}-{live_head_sha}-{expected_head_sha}"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = api
+printf '%s\\n' "$FAKE_PULL_JSON"
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    pull = {"state": live_state, "head": {"sha": live_head_sha}}
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_PULL_JSON": json.dumps(pull),
+        "TARGET_REPOSITORY": "ContextualWisdomLab/newsdom-api",
+        "PR_NUMBER": "1",
+        "EXPECTED_HEAD_SHA": expected_head_sha,
+    }
+    return subprocess.run(
+        [bash], input=script, text=True, capture_output=True, check=False, env=env
+    )
+
+
+def test_noema_validate_head_distinguishes_closed_from_stale(tmp_path):
+    """A closed PR on its current head is not the same failure as a stale head.
+
+    Regression test: an async Noema review job that finishes after
+    the target PR was merged/closed through another path (e.g. the merge
+    scheduler) must skip cleanly, not report a spurious job failure. A PR
+    whose head actually moved past what this job was reviewing must still
+    fail loudly.
+    """
+    if sys.platform == "win32":
+        return
+    if shutil.which("bash") is None or shutil.which("jq") is None:
+        return
+
+    head = "a" * 40
+    other_head = "b" * 40
+
+    open_current = _run_noema_validate_head(
+        tmp_path, live_state="open", live_head_sha=head, expected_head_sha=head
+    )
+    assert open_current.returncode == 0
+    assert "::error::" not in open_current.stdout
+    assert "::notice::" not in open_current.stdout
+
+    closed_current = _run_noema_validate_head(
+        tmp_path, live_state="closed", live_head_sha=head, expected_head_sha=head
+    )
+    assert closed_current.returncode == 0, closed_current.stderr
+    assert "::error::" not in closed_current.stdout
+    assert "nothing left to review" in closed_current.stdout
+
+    genuinely_stale = _run_noema_validate_head(
+        tmp_path, live_state="open", live_head_sha=other_head, expected_head_sha=head
+    )
+    assert genuinely_stale.returncode == 1
+    assert "review target is stale" in genuinely_stale.stdout
+
+    closed_and_stale = _run_noema_validate_head(
+        tmp_path, live_state="closed", live_head_sha=other_head, expected_head_sha=head
+    )
+    assert closed_and_stale.returncode == 1
+    assert "review target is stale" in closed_and_stale.stdout

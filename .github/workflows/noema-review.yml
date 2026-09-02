@@ -495,10 +495,24 @@ jobs:
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-            printf '::error::Noema review target is closed or stale. expected head=%s; live state=%s head=%s.\n' \
+          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then
+            echo "::error::Could not validate live pull request state before Noema review."
+            exit 1
+          fi
+          if [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+            printf '::error::Noema review target is stale. expected head=%s; live state=%s head=%s.\n' \
               "$EXPECTED_HEAD_SHA" "${live_state:-missing}" "${live_head_sha:-missing}"
             exit 1
+          fi
+          if [ "$live_state" != "open" ]; then
+            # The head SHA still matches exactly (checked above); this PR was
+            # simply merged or closed through another path (e.g. the merge
+            # scheduler) before this async review job reached this gate. There
+            # is nothing stale about the target and nothing left to review --
+            # exiting non-zero here would report a spurious failure for
+            # already-resolved, expected work.
+            printf '::notice::Noema review target closed on its current head (state=%s); nothing left to review, skipping.\n' "$live_state"
+            exit 0
           fi
 
       - name: Resolve Noema target repository visibility
