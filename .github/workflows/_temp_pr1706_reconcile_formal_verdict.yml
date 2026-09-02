@@ -1,0 +1,198 @@
+name: Temporary PR 1706 formal-verdict reconciliation repair
+
+on:
+  push:
+    branches:
+      - fix/opencode-poll-wall-clock-bound
+    paths:
+      - .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1706-formal-verdict-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor_id == '8172694'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact writer head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/opencode-poll-wall-clock-bound
+          test "$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)" = "$GITHUB_SHA"
+      - name: Repair current-head formal verdict reconciliation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scheduler = Path('.github/workflows/pr-review-merge-scheduler.yml')
+          text = scheduler.read_text(encoding='utf-8')
+          old_filter = '''                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                | select((.body // "" | ascii_downcase | contains("deterministic current-head evidence")) | not)
+                | select((.body // "" | ascii_downcase | contains("deterministic fallback approval")) | not)
+                | select((.body // "" | ascii_downcase | contains("model-unavailable evidence fallback")) | not)
+                | select((.body // "" | ascii_downcase | contains("did not emit a usable current-head control block")) | not)
+                | select((.body // "" | ascii_downcase | contains("scope: `unsupported`")) | not)
+                | select((.body // "" | ascii_downcase | contains("model-pool outcome: `unknown`")) | not)]'''
+          new_filter = '''                | select(
+                    .state == "CHANGES_REQUESTED"
+                    or (
+                        .state == "APPROVED"
+                        and ((.body // "" | ascii_downcase | contains("deterministic current-head evidence")) | not)
+                        and ((.body // "" | ascii_downcase | contains("deterministic fallback approval")) | not)
+                        and ((.body // "" | ascii_downcase | contains("model-unavailable evidence fallback")) | not)
+                        and ((.body // "" | ascii_downcase | contains("did not emit a usable current-head control block")) | not)
+                        and ((.body // "" | ascii_downcase | contains("scope: `unsupported`")) | not)
+                        and ((.body // "" | ascii_downcase | contains("model-pool outcome: `unknown`")) | not)
+                    )
+                  )]'''
+          if text.count(old_filter) != 1:
+              raise SystemExit('formal-verdict filter drifted; refusing ambiguous repair')
+          text = text.replace(old_filter, new_filter, 1)
+          old_time = '''          new_evidence="$(jq -nr --arg review "$review_submitted_at" --arg started "$REQUIRED_RUN_STARTED_AT" 'try (($review | fromdateiso8601) > ($started | fromdateiso8601)) catch false')"'''
+          new_time = '''          # GitHub review/run timestamps are second-granularity. Equality can mean the review\n          # arrived later within the same second, so accept equality for exact-head evidence;\n          # older seconds remain ineligible and all PR/head/state checks above still fail closed.\n          new_evidence="$(jq -nr --arg review "$review_submitted_at" --arg started "$REQUIRED_RUN_STARTED_AT" 'try (($review | fromdateiso8601) >= ($started | fromdateiso8601)) catch false')"'''
+          if text.count(old_time) != 1:
+              raise SystemExit('review timestamp comparison drifted; refusing ambiguous repair')
+          scheduler.write_text(text.replace(old_time, new_time, 1), encoding='utf-8')
+
+          workflow = Path('.github/workflows/opencode-review.yml')
+          wtext = workflow.read_text(encoding='utf-8')
+          old_comment = '''    # `converted_to_draft` is included so a PR going draft mid-poll fires a
+    # fresh run of this same workflow: the head-scoped concurrency group below
+    # (`cancel-in-progress: true`) cancels any in-flight non-draft
+    # "Fail closed without a current-head OpenCode verdict" poll for that
+    # exact same head. Every non-closed admission path revalidates the live
+    # PR/head/state before dispatching, exempting, or polling so out-of-order
+    # draft/ready/closed events cannot publish stale evidence or wait on an
+    # impossible verdict.'''
+          new_comment = '''    # `converted_to_draft` is included so a PR going draft after a ready event
+    # gets a fresh same-head execution. The head-scoped concurrency group below
+    # (`cancel-in-progress: true`) retires any superseded same-head admission run.
+    # Every non-closed path revalidates the live PR/head/state before dispatch,
+    # exemption, or one-shot verdict admission, so out-of-order draft/ready/closed
+    # events cannot publish stale evidence. Required verdict continuation is
+    # event-driven by the authenticated exact-run wake path; this entrypoint does
+    # not hold a runner in a polling loop.'''
+          if wtext.count(old_comment) != 1:
+              raise SystemExit('OpenCode trigger comment drifted; refusing ambiguous repair')
+          workflow.write_text(wtext.replace(old_comment, new_comment, 1), encoding='utf-8')
+
+          test = Path('tests/test_opencode_required_verdict_reconciliation_contract.py')
+          if test.exists():
+              raise SystemExit('formal-verdict regression path already exists; refusing overwrite')
+          test.write_text(r'''"""Executable regressions for event-driven OpenCode required-verdict reconciliation."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+import textwrap
+
+
+WORKFLOW = Path(".github/workflows/pr-review-merge-scheduler.yml")
+HEAD = "a" * 40
+
+
+def _jq_filter() -> str:
+    """Extract the exact jq review selector used by the production reconciler."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    anchor = text.index('latest_review="$(printf')
+    start = text.index("            (add // [])", anchor)
+    end_marker = "            | @tsv"
+    end = text.index(end_marker, start) + len(end_marker)
+    return textwrap.dedent(text[start:end])
+
+
+def _select(reviews: list[dict[str, object]]) -> str:
+    """Execute the production jq selector against a synthetic exact-head review list."""
+    proc = subprocess.run(
+        ["jq", "-r", "-s", "--arg", "sha", HEAD, _jq_filter()],
+        input=json.dumps(reviews),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def _review(state: str, body: str, submitted_at: str = "2026-09-02T12:00:00Z") -> dict[str, object]:
+    """Build one exact-head OpenCode review fixture."""
+    return {
+        "id": 42,
+        "user": {"login": "opencode-agent[bot]"},
+        "commit_id": HEAD,
+        "state": state,
+        "body": body,
+        "submitted_at": submitted_at,
+    }
+
+
+def test_marker_bearing_change_request_remains_a_formal_verdict() -> None:
+    """Fallback markers invalidate approvals only, never a real change request."""
+    result = _select([_review("CHANGES_REQUESTED", "deterministic fallback approval: defect remains")])
+    assert result.startswith("CHANGES_REQUESTED\t")
+
+
+def test_marker_bearing_approval_is_not_admitted() -> None:
+    """Synthetic/fallback approval markers must still block APPROVED evidence."""
+    assert _select([_review("APPROVED", "deterministic fallback approval")]) == ""
+
+
+def test_clean_approval_is_admitted() -> None:
+    """A clean exact-head approval remains a formal verdict."""
+    result = _select([_review("APPROVED", "real model review")])
+    assert result.startswith("APPROVED\t")
+
+
+def test_same_second_review_is_eligible_for_reconciliation() -> None:
+    """Second-granularity timestamps must not strand a later review in the same second."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "fromdateiso8601) >= ($started | fromdateiso8601" in text
+    proc = subprocess.run(
+        ["jq", "-nr", "--arg", "review", "2026-09-02T12:00:00Z", "--arg", "started", "2026-09-02T12:00:00Z", "try (($review | fromdateiso8601) >= ($started | fromdateiso8601)) catch false"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "true"
+
+
+if __name__ == "__main__":
+    test_marker_bearing_change_request_remains_a_formal_verdict()
+    test_marker_bearing_approval_is_not_admitted()
+    test_clean_approval_is_admitted()
+    test_same_second_review_is_eligible_for_reconciliation()
+''', encoding='utf-8')
+
+          baseline = Path('docs/product-technical-gap-baseline.md')
+          btext = baseline.read_text(encoding='utf-8')
+          record = '''\n### OpenCode required-verdict reconciliation race repair — 2026-09-02\n\n- **Owner / PR:** `ContextualWisdomLab/.github#1706`.\n- **Root cause:** the workflow-run reconciler applied fallback-approval marker exclusions to `CHANGES_REQUESTED` reviews even though the admission gates accept every exact-head change request, and strict greater-than timestamp ordering could drop a later review that shared GitHub's second-granularity timestamp with the required run start.\n- **Repair:** marker exclusions now apply only to `APPROVED`; exact-head `CHANGES_REQUESTED` remains a formal verdict. Same-second evidence uses `>=` after live open/ready/head revalidation. Polling-era trigger comments were replaced with the event-driven one-shot contract.\n- **Regression:** `tests/test_opencode_required_verdict_reconciliation_contract.py` executes the production jq selector for marker-bearing change requests, rejected fallback approvals, clean approvals, and same-second timestamp ordering.\n- **Status:** Proposed until this exact branch head receives fresh CI/security/review evidence and integrates through ordinary protected admission.\n'''
+          if '### OpenCode required-verdict reconciliation race repair — 2026-09-02' not in btext:
+              baseline.write_text(btext.rstrip() + '\n' + record, encoding='utf-8')
+          PY
+          PYTHONPATH=. python3 tests/test_opencode_required_verdict_reconciliation_contract.py
+          git diff --check
+      - name: Publish repaired exact-head tree and retire helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
+          git add .github/workflows/opencode-review.yml .github/workflows/pr-review-merge-scheduler.yml tests/test_opencode_required_verdict_reconciliation_contract.py docs/product-technical-gap-baseline.md .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
+          git diff --cached --check
+          git config user.name 'ContextualWisdomLab repair bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'fix(opencode): reconcile exact-head formal verdicts'
+          git fetch origin fix/opencode-poll-wall-clock-bound
+          test "$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)" = "$GITHUB_SHA"
+          git push origin HEAD:fix/opencode-poll-wall-clock-bound
