@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ def load_module():
     spec = importlib.util.spec_from_file_location("ruleset_governance_round2", SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -123,7 +125,7 @@ def test_owner_plane_is_serial_and_disabled_schedule_does_not_consume_runner() -
     """Mutation is non-cancellable while disabled hourly validation skips shared capacity."""
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
-    validate_block = text.split("jobs:\n  validate:\n", 1)[1].split("\n  apply:\n", 1)[0]
+    validate_block = text.split("\n  validate:\n", 1)[1].split("\n  apply:\n", 1)[0]
     assert "github.event_name != 'schedule'" in validate_block
     assert "vars.CWL_RULESET_RECONCILE_ENABLED == 'true'" in validate_block
     assert "runs-on: ubuntu-slim" in validate_block
