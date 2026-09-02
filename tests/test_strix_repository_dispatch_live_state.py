@@ -159,17 +159,21 @@ def test_repository_dispatch_revalidates_live_state_and_head_before_scan(tmp_pat
 
 
 def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effect() -> None:
-    """A resolved/draft dispatch performs no later target admission or publication work."""
+    """Resolved/draft dispatches require explicit true authority before early scan work."""
     guarded_names = {
         "Resolve target repository visibility",
         "Fetch pull request head for trusted scan",
         "Self-test Strix required workflow contract",
         "Gate Strix secrets",
-        "Publish same-head manual Strix status",
     }
     for name in guarded_names:
         condition = str(_step(name).get("if", ""))
-        assert "steps.dispatch_validation.outputs.should_scan != 'false'" in condition, name
+        assert "steps.dispatch_validation.outputs.should_scan == 'true'" in condition, name
+
+    # Status publication intentionally uses a second, later live-state authority
+    # because a PR can close, become draft, or move heads while a long scan runs.
+    publish_condition = str(_step("Publish same-head manual Strix status").get("if", ""))
+    assert "steps.dispatch_publish_validation.outputs.publish_status == 'true'" in publish_condition
 
 
 def test_repository_dispatch_revalidates_live_state_again_before_status_publication(tmp_path: Path) -> None:
@@ -182,7 +186,9 @@ def test_repository_dispatch_revalidates_live_state_again_before_status_publicat
     validation = _step(validation_name)
     assert refresh.get("id") == "status_target_app_token"
     refresh_condition = str(refresh.get("if", ""))
-    assert "steps.dispatch_validation.outputs.should_scan != 'false'" in refresh_condition
+    # Exact `true` is fail-closed: absent/malformed outputs must not be treated as
+    # permission to refresh credentials or proceed toward status publication.
+    assert "steps.dispatch_validation.outputs.should_scan == 'true'" in refresh_condition
     assert "github.event_name == 'repository_dispatch'" in refresh_condition
 
     assert validation.get("id") == "dispatch_publish_validation"
