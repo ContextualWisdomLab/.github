@@ -60,7 +60,7 @@ merge authorization이 아니며, 병합 직전에는 각 PR의 live API를 다�
 3. CO의 full OpenAI SDK parity, chat↔responses conversion, provider API-version negotiation, Files/S3, batch-only endpoint policy, OpenCode Go Responses/Anthropic Messages 지원은 모두 보호된 main의 완료 조건이 아니다.
 4. Keyverse as KV + product ABAC/RBAC + login credential store, Naruon REST login/signup, OpenAI json_schema, SCIM/OIDC/SAML flexible hierarchy and multi-membership는 현재 cross-repository executable evidence가 없다.
 5. 103 workflow 감사에서 확인한 P0 direct-provider caller(`keyverse`, `EgressWeave`, `appguardrail`)와 repository별 concurrency 누락은 남아 있다. #1736은 canonical boundary를 제공하지만 모든 caller가 thin reusable caller로 바뀐 것은 아니다.
-6. GitHub App token parser에는 고정 최대 길이 검사가 발견되지 않았고 organization loop는 non-empty string을 검증하지만, legacy workflow의 `.token // empty` 추출을 typed shared contract로 통일하고 약 520자 `ghs_` fixture를 추가하는 후속 조치가 필요하다.
+6. GitHub App token parser에는 고정 최대 길이 검사가 발견되지 않았다. 이번 checkpoint PR은 central review/scheduler/rebase/SBOM/mention workflow의 `.token` 추출을 non-empty string 계약으로 통일하고 약 520자 `ghs_` fixture 계약을 추가한다. 외부 consumer repository가 별도 token parser를 소유하는 경우에는 해당 owner에서 같은 계약을 검증해야 한다.
 7. 새 repository의 CodeQL 자동 PR은 org ruleset/installation 권한의 live proof가 없어 완료로 판정하지 않는다.
 
 ## 1. 근거와 범위
