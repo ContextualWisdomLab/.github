@@ -592,3 +592,48 @@ fixed:
   plain chat-turn message with no `/loop` prefix or scheduling instruction — handled identically to a
   `/loop`-delivered restatement per this file's own directive-reconciliation convention, which does not
   distinguish delivery mechanism.
+
+## 2026-09-02 Devin Review, round 3: two real findings (whitespace, §10 owner-authorization gap), one real precision correction to this session's own prior verification note
+
+- **Date:** 2026-09-02.
+- **Subject:** a third Devin Review pass on this PR (after commit `77f16947`, the second merge from
+  `main`) found 3 new items — 1 `ANALYSIS`-severity, 2 `BUG`-severity — all verified against source
+  before acting, and all three real.
+  1. **"Whitespace validation fails" (real, fixed).** `git diff --check origin/main` flagged trailing
+     whitespace on `docs/product-goal-directive.md:161` (inside this session's own §1/§2 reconciliation
+     note from the round-2 fix) and `docs/product-technical-gap-baseline.md:2684` (inside an
+     already-merged `main`-side paragraph that this PR's diff still carries against its older base).
+     **Fix:** stripped trailing whitespace from both exact lines with a scoped `sed`, re-verified
+     `git diff --check` clean on all three touched files.
+  2. **"Owner authorization remains contradictory" (real, fixed).** `AGENTS.md` and ADR-0003's
+     2026-08-31 correction both still say the *original 2026-08-30 implementation* (the commit that
+     hardcoded `strix.yml` to `orchestrator/free`) was an unreviewed, non-owner-authorized agent action,
+     and that the resulting availability risk is still open/unreviewed with reversion to
+     `orchestrator/auto` explicitly "not foreclosed." Read next to §10 — which presents
+     `orchestrator/free` pinning as owner-directed — that reads as a flat contradiction without further
+     context. **Fix:** added a reconciliation note distinguishing two separate facts that don't conflict
+     once kept apart: the 2026-08-30 *implementation* event (unauthorized, unchanged by this item) versus
+     §10 itself, which *is* a separate, later, genuine owner directive (issued via `/loop` on
+     2026-09-01) authorizing the CI-workflow *policy* going forward — but that policy authorization is
+     not the same as, and does not retroactively supply, the specific documented risk-acceptance
+     ADR-0003 says is still missing. Both records stay true simultaneously: the pin is owner-authorized
+     as CI policy, and the specific availability risk it carries remains open and unreviewed.
+  3. **"Workflow-only token claim is false" (real precision correction to this session's own prior
+     verification note, not the user's verbatim directive text).** This session's own round-2 doctoring
+     entry ("Devin Review round 2") verified §10's Addition item (2) — "workflow는 provider·model·
+     group명·유료 fallback을 지정하지 않고 gateway token만 쓴다" — by pointing at `strix.yml`'s hardcoded
+     `STRIX_MODEL` and its `case`-statement override rejection, and summarized this as "the workflow has
+     no live path to specify a different provider, model, or group." That summary sentence overstated
+     it: `strix.yml:732-749`'s `Prepare Strix model input file` step does write the literal string
+     `orchestrator/free` into `STRIX_LLM_FILE` and pass that file to Strix alongside the gateway token —
+     a group/model identifier genuinely is communicated, just always the one hardcoded constant, never a
+     live choice. **Fix:** corrected the verification note's own wording to say the workflow has no live
+     path to *choose* a different provider/model/group/paid-fallback, rather than implying no
+     model/group identifier is ever communicated at all. Note this is a fix to **this session's own
+     added commentary**, not to the user's verbatim `>` blockquote text (§10's own quoted lines were
+     never touched).
+- **Verification:** `git diff --check origin/main -- docs/product-goal-directive.md
+  docs/product-technical-gap-baseline.md` → exit 0 (clean); `grep -n "�" docs/product-goal-directive.md`
+  → no matches; `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5
+  passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.

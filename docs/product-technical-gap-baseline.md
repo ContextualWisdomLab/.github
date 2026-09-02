@@ -2681,7 +2681,7 @@ going forward from these three merges, not the raw queue-depth number at any sin
 an instantaneous depth drop was never the right signal to wait for.
 
 **Cross-reference, not a duplicate:** this entry supplements, and does not restate or supersede, the
-2026-09-01 "floating runner image" entry above (still the record for the `ubuntu-latest` → 
+2026-09-01 "floating runner image" entry above (still the record for the `ubuntu-latest` →
 `ubuntu-24.04` pin across `strix.yml`/`opencode-review.yml`/`noema-review.yml`) and the "independent
 corroboration" paragraph appended to it (`naruon#1486`'s `strix` check queued-then-cancelled
 observation). Together the two entries are the current, most-complete picture of why Actions runners

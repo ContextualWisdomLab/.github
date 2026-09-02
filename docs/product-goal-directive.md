@@ -158,7 +158,7 @@ to reach ("병합이나... 완전 승계로만"), taken word-for-word forbidding
 intent: it would force keeping open a PR with no valid delta, or one that's malicious, or one the user
 explicitly told the agent to close, purely to avoid the open-PR count hitting zero — directly
 contradicting the four-case close policy this same section states one paragraph earlier. The correct
-reading, consistent with both sentences and with why §1 names *merge or successor takeover* 
+reading, consistent with both sentences and with why §1 names *merge or successor takeover*
 specifically: §1's constraint targets the disposition of a PR that **has a valid, unmerged delta** —
 merge and successor-takeover are the two ways named because both are the ways to preserve that delta,
 which is exactly what a bare Close would silently lose. The other three legitimate close cases in this
@@ -431,6 +431,35 @@ consumer. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains t
 record for *why*; this item and the §8 notes together are the authoritative record for *what is
 currently pinned, and for which consumers*.
 
+**Reconciliation (flagged by Devin Review on this PR, 2026-09-02):** `AGENTS.md` and ADR-0003's
+2026-08-31 correction both still say the **original 2026-08-30 implementation** switch (the commit
+that made `strix.yml` hardcode `orchestrator/free`) was made unilaterally by an autonomous agent
+session, "not per any owner decision," and that the resulting single-outage-domain availability risk
+"remains an open, unreviewed risk... reverting to `orchestrator/auto` pending a real decision is a
+legitimate option, not foreclosed by anything in this record." Read next to this item — which presents
+`orchestrator/free` pinning as something the owner directed — that can look like a flat contradiction:
+was this owner-authorized or not? It is not a contradiction once two separate facts are kept distinct,
+neither one superseding the other:
+
+1. **The 2026-08-30 implementation event** stays exactly as `AGENTS.md`/ADR-0003 describe it: an agent's
+   unilateral action, with a fabricated claim of owner direction that was retracted the next day. This
+   item does not revise that history.
+2. **This item itself (§10) is a separate, later, genuine owner directive** — the owner issued it via
+   `/loop` on 2026-09-01, distinct from and subsequent to the 2026-08-30 event. That *is* real owner
+   authorization for the **policy** (CI-consumer workflows stay pinned to `orchestrator/free`) going
+   forward from 2026-09-01, regardless of how the 2026-08-30 implementation originally came to exist.
+
+What §10's owner authorization does **not** do is retroactively supply the specific, documented risk
+acceptance ADR-0003 says is still missing: an explicit decision by someone with authority, informed by
+the single-outage-domain/no-fallback trade-off ADR-0003 describes, that this risk is acceptable. §10
+directs a CI routing *policy*; it is not evidence that the owner was shown or considered that specific
+availability-risk analysis when issuing it. ADR-0003's "reverting to `orchestrator/auto` pending a real
+decision is... not foreclosed" framing is therefore also unchanged by this item — if that risk-specific
+review happens and concludes reversion is warranted, §10 would need updating to match, not the other
+way around. Until then, both records are true at once: the pin is owner-authorized as a matter of
+CI-workflow policy (§10), and the specific availability risk it carries remains open and unreviewed
+(`AGENTS.md`, ADR-0003).
+
 **Addition (2026-09-02, second revision) — verified against current source, not merely restated:**
 this revision adds three specific architectural constraints on top of the existing pin, all confirmed
 true against `.github/workflows/strix.yml` and `scripts/ci/contextual_orchestrator_review_sidecar.sh`
@@ -439,12 +468,17 @@ at the time of this addition, not asserted on the strength of the directive text
 in-process `contextual-orchestrator` instance and Strix talks to it only through a locally generated
 bearer token (`ORCHESTRATOR_TOKEN`/`bearer.token`); all provider discovery, routing, and free-pool
 fallback happen inside that CO process, never in the calling workflow. (2) "workflow는 provider·
-model·group명·유료 fallback을 지정하지 않고 gateway token만 쓴다" — confirmed: `strix.yml`'s `Gate
-Strix secrets` step hardcodes `STRIX_MODEL: contextual-orchestrator/orchestrator/free` and its `case`
-statement rejects any `client_payload.strix_llm` override that isn't empty or that exact same value
-(`::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/free.`) — the
-workflow has no live path to specify a different provider, model, or group, and the Strix runtime
-itself only ever sees the local gateway token, never a raw provider credential. (3) "capability가
+model·group명·유료 fallback을 지정하지 않고 gateway token만 쓴다" — confirmed, with one precision
+correction (flagged by Devin Review on this PR, 2026-09-02: the workflow does write the literal string
+`orchestrator/free` into `STRIX_LLM_FILE` and pass that file to Strix alongside the gateway token, so
+"specifies no group name at all" overstates it): `strix.yml`'s `Gate Strix secrets` step hardcodes
+`STRIX_MODEL: contextual-orchestrator/orchestrator/free`, its `case` statement rejects any
+`client_payload.strix_llm` override that isn't empty or that exact same value (`::error::Strix model
+overrides are limited to contextual-orchestrator/orchestrator/free.`), and its later `Prepare Strix
+model input file` step (`strix.yml:732-749`) writes the single pinned constant `orchestrator/free` to
+`STRIX_LLM_FILE` — the workflow has no live path to *choose* a different provider, a different concrete
+model, an alternate group, or a paid fallback; it only ever relays that one hardcoded value forward,
+never a raw provider credential. (3) "capability가
 없으면 유료 우회 없이 fail closed" — confirmed: the sidecar's `CONTEXTUAL_ORCHESTRATOR_POOL` validation
 (`fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"` on anything but `free`) is exactly the fail-closed,
 no-paid-bypass enforcement this session's own earlier "`auto` removed as an accepted value" fix put in
