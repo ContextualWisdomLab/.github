@@ -128,12 +128,12 @@ jobs:
           \\ No newline at end of file
           """
               texts = noema.changed_diff_line_texts(diff)
-              assert texts == {{
+              assert texts == {
                   ("src/tool.py", 2, "LEFT"): marker,
                   ("src/tool.py", 2, "RIGHT"): marker,
                   ("src/tool.py", 3, "LEFT"): "old",
                   ("src/tool.py", 3, "RIGHT"): "new",
-              }}
+              }
               assert set(texts) == noema.changed_diff_locations(diff)
           ''').strip()
           text, count = parser_test.subn(new_parser_test, text, count=1)
@@ -226,11 +226,11 @@ jobs:
           text = source.read_text(encoding="utf-8")
 
           old = '            complete += f"\\n{partial[0]}{marker}"'
-          new = textwrap.dedent('''
-                      # Synthetic truncation metadata stays outside the +/- changed-line
-                      # grammar so a genuine source line with identical text remains distinct.
-                      complete += f"\\n{marker}"
-          ''').strip("\n")
+          new = (
+              '            # Synthetic truncation metadata stays outside the +/- changed-line\n'
+              '            # grammar so a genuine source line with identical text remains distinct.\n'
+              '            complete += f"\\n{marker}"'
+          )
           if text.count(old) != 1:
               raise SystemExit(f"fetch_diff marker anchor count={text.count(old)}")
           text = text.replace(old, new, 1)
