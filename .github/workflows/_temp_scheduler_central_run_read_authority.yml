@@ -75,6 +75,23 @@ jobs:
           env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/temp_scheduler_central_run_read_authority.py
           git diff --check
 
+      - name: Remove obsolete source-fix drivers from production coverage scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PR #1714 and PR #1715 are already integrated on protected main.
+          # Their original writer branches are gone and code search shows these
+          # drivers are called only by the corresponding one-shot workflows.
+          # The dedicated PR #1720 lane owns permanent retirement; this scheduler
+          # verifier removes only the dead Python drivers while measuring the
+          # production scripts, then restores them before sealing its own patch.
+          test -e scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          test -e scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          test -z "$(git ls-remote origin refs/heads/fix/autofix-job-timeout | cut -f1)"
+          test -z "$(git ls-remote origin refs/heads/fix/noema-review-job-timeout-minutes | cut -f1)"
+          rm scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          rm scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+
       - name: Verify focused and repository GREEN
         shell: bash
         run: |
@@ -84,9 +101,18 @@ jobs:
             tests/test_pr1669_cancel_stale_opencode_runs.py \
             tests/test_pr_review_merge_scheduler.py
           PYTHONPATH=. python -m coverage run -m pytest tests -q
-          python -m coverage report --show-missing
+          python -m coverage report --show-missing --fail-under=100
           python -m interrogate -c pyproject.toml scripts/ci
           python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Restore separately owned obsolete-driver cleanup before sealing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- \
+            scripts/ci/source_fix_pr1714_no_model_job_timeout.py \
+            scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           git diff --check
 
       - name: Verify successor working-tree scope
