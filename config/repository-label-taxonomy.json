@@ -147,6 +147,7 @@
     {"repository": "LineageWeave", "issue": 915, "type": "feature"},
     {"repository": "contextual-orchestrator", "issue": 1009, "type": "feature"},
     {"repository": "pg-llm-batch", "issue": 323, "type": "feature"},
-    {"repository": "scopeweave", "issue": 653, "type": "bug"}
+    {"repository": "scopeweave", "issue": 653, "type": "bug"},
+    {"repository": "naruon", "issue": 1349, "type": "documentation"}
   ]
 }
