@@ -137,6 +137,13 @@ jobs:
         github.event.client_payload.org_sweep != true
       )
     runs-on: ubuntu-24.04
+    # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
+    # 360-minute platform default. This is a single-repository queue scan
+    # (paginated GraphQL reads plus at most one review dispatch and one
+    # branch update per run) -- much lighter than org-queue-sweep's full
+    # organization walk below, so it gets a shorter bound than that job's
+    # timeout-minutes: 60.
+    timeout-minutes: 30
     permissions:
       actions: write
       checks: read
