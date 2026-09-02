@@ -162,3 +162,101 @@ def test_distinct_source_bound_class_observations_are_accepted() -> None:
         DIFF,
         ["src/tool.py"],
     )
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ({"path": "", "line": 1, "side": "RIGHT"}, "canonical changed-side path"),
+        ({"path": "src/tool.py", "line": True, "side": "RIGHT"}, "canonical positive integer line"),
+        ({"path": "src/tool.py", "line": 0, "side": "RIGHT"}, "canonical positive integer line"),
+        ({"path": "src/tool.py", "line": 1, "side": "right"}, "canonical LEFT/RIGHT side"),
+    ],
+)
+def test_canonical_changed_location_rejects_noncanonical_coordinates(
+    record: dict[str, object], message: str
+) -> None:
+    """Canonical source coordinates reject empty paths, bool/int aliases, and invalid sides."""
+    with pytest.raises(noema.NoemaModelOutputError, match=message):
+        noema._canonical_changed_location(record, "fixture")
+
+
+def test_changed_diff_line_texts_covers_context_markers_and_no_newline_marker() -> None:
+    """Exact-source extraction skips omission markers while preserving neighboring changed text."""
+    diff = """diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1,3 +1,3 @@
+ context
+-[overlong changed line content omitted]
++[overlong changed line content omitted]
+-old
++new
+\\ No newline at end of file
+"""
+    assert noema.changed_diff_line_texts(diff) == {
+        ("src/tool.py", 3, "LEFT"): "old",
+        ("src/tool.py", 3, "RIGHT"): "new",
+    }
+
+
+def test_changed_diff_line_texts_fails_closed_when_hunk_paths_are_missing() -> None:
+    """A hunk without its canonical file headers cannot manufacture source evidence."""
+    assert noema.changed_diff_line_texts("@@ -1 +1 @@\n+new\n") == {}
+    assert noema.changed_diff_line_texts("@@ -1 +1 @@\n-old\n") == {}
+
+
+def test_changed_diff_line_texts_handles_dev_null_addition() -> None:
+    """New files may have an empty old path while their RIGHT-side source remains exact."""
+    diff = """diff --git a/new.py b/new.py
+--- /dev/null
++++ b/new.py
+@@ -0,0 +1 @@
++value = 1
+"""
+    assert noema.changed_diff_line_texts(diff) == {("new.py", 1, "RIGHT"): "value = 1"}
+
+
+def test_blank_changed_source_uses_explicit_blank_marker() -> None:
+    """A blank changed line remains admissible through exact equality and the explicit marker."""
+    diff = """diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1 +1 @@
+-old = 1
++
+"""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["source_excerpt"] = ""
+            witness["observation"] = f"<blank> is exact source evidence for {probe['probe_kind']}:{field}."
+    noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
+def test_overlong_omission_marker_cannot_be_source_evidence() -> None:
+    """A bounded-diff omission marker cannot be reintroduced as an exact source excerpt."""
+    marker = "[overlong changed line content omitted]"
+    diff = f"""diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1 +1 @@
+-old = 1
++{marker}
+"""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["source_excerpt"] = marker
+            witness["observation"] = f"{marker} is exact source evidence for {probe['probe_kind']}:{field}."
+    with pytest.raises(noema.NoemaModelOutputError, match="exact changed-line source_excerpt"):
+        noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
+def test_overlong_class_observation_is_rejected_before_semantic_admission() -> None:
+    """Bounded review evidence refuses oversized witness prose without weakening source checks."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    witness = verdict["adversarial_validation"]["probes"][0]["class_evidence"]["mutation_attempt"]
+    witness["observation"] = "x" * (noema.MAX_THREAD_BODY_CHARS + 1)
+    with pytest.raises(noema.NoemaModelOutputError, match="exceeds"):
+        noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
