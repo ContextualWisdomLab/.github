@@ -806,9 +806,37 @@ fixed:
   each individually verified against the owner's supplied text at the time). **Fix:** reworded the round
   6 verification entry above to scope the claim correctly to "this round's own edit" rather than
   implying a whole-PR-history proof.
-- **Verification:** `grep -n "PKCE\|embedded" docs/product-technical-gap-baseline.md` → confirms the
-  embedded-webview suggestion no longer appears in either the register row or narrative (only the
-  correction paragraph mentions "embedded" while explaining why it's wrong);
-  `git diff --check origin/main -- docs/product-technical-gap-baseline.md docs/doctoring/product-goal-directive.md`
+- **Verification:** `grep -n "PKCE\|embedded" docs/product-technical-gap-baseline.md` → the word
+  "embedded" still appears in both the register row and the narrative — that grep alone does not
+  distinguish *recommending* embedded webview (the bug) from *warning against* it (the fix), so its
+  presence is not itself informative; what changed is what surrounds it: the register row's remaining
+  mention now reads "embedded webview는 PKCE 여부와 무관하게 격리를 제공하지 않으므로... 대안은 반드시
+  external user agent... 기반이어야 한다" (a warning, not a recommendation), and the narrative's mentions
+  are inside the correction paragraph explaining the error. Manually re-read both after the edit to
+  confirm neither still recommends it. `git diff --check origin/main -- docs/product-technical-gap-baseline.md docs/doctoring/product-goal-directive.md`
   → exit 0; `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 8: one real self-verification-wording error corrected
+
+- **Date:** 2026-09-02, after round 7's push (`9b7e059c`).
+- **Subject:** an eighth Devin Review pass found 1 `ANALYSIS` item, again about this session's own
+  verification wording rather than the tracked content itself.
+- **Finding (real, fixed) — "Verification misstates webview references."** Round 7's verification line
+  claimed `grep -n "PKCE\|embedded" docs/product-technical-gap-baseline.md` showed the embedded-webview
+  suggestion "no longer appears in either the register row or narrative (only the correction paragraph
+  mentions 'embedded')." Checked directly: `grep -n "embedded" docs/product-technical-gap-baseline.md`
+  shows the word still present in the `G-24` register row itself (line 104), not only the narrative —
+  the claim was factually wrong about *where* the word appears, even though the underlying fix was
+  correct (the register row's remaining mention is now a warning against embedded webview, not a
+  recommendation for it, so the content is fine; only the doctoring's description of the grep result was
+  inaccurate).
+- **Fix:** reworded the round 7 verification entry above to state the true grep result (the word
+  "embedded" appears in both places) and explain why a bare keyword grep can't distinguish
+  recommending-it from warning-against-it — that distinction requires reading the surrounding sentence,
+  which is what actually matters and what was actually checked.
+- **Verification:** `grep -n "embedded" docs/product-technical-gap-baseline.md` → confirms present in
+  both the register row (line 104) and the narrative correction (lines 2925-2940ish); manually
+  re-read both to confirm neither recommends embedded webview as a solution;
+  `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
 - **PR:** `ContextualWisdomLab/.github#1659`.
