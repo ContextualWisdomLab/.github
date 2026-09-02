@@ -4,7 +4,7 @@
 
 ### Scheduler target admission
 
-- Added the existing `ContextualWisdomLab/governance-risk-compliance` hourly caller to both central scheduler validation surfaces. The organization variable remains authoritative; the literal is a narrow propagation bridge so the scheduled repair loop no longer fails before it can inspect the repository.
+- Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
 
 ## [Unreleased]
 
