@@ -11,13 +11,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: temp-pr1641-source-evidence-edge-repair
+  group: temp-pr1641-source-evidence-edge-repair-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   repair:
     if: github.repository == 'ContextualWisdomLab/.github'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 45
     env:
       WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
