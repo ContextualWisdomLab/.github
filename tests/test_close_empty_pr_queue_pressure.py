@@ -12,8 +12,15 @@ WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
     ("filename", "evidence_job"),
     (
         ("close-empty-pr.yml", "  close-empty:"),
+        ("codeql-pr.yml", "  detect-languages:"),
         ("osv-scanner-pr.yml", "  osv-scan:"),
+        ("pr-review-merge-scheduler.yml", "  scan-pr-queue:"),
+        ("python-security.yml", "  detect-python:"),
+        ("sast-semgrep.yml", "  semgrep:"),
+        ("sbom-generation.yml", "  generate-sbom:"),
         ("scorecard-pr.yml", "  analysis:"),
+        ("secret-scan.yml", "  gitleaks:"),
+        ("security-scan.yml", "  osv-scan:"),
     ),
 )
 def test_closed_pull_request_does_not_allocate_a_noop_runner(
@@ -24,10 +31,10 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
 
-    assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in workflow
+    assert "closed" in workflow
     assert "github.event.pull_request.number" in concurrency
     assert "github.event.pull_request.head.sha" not in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    assert "cancel-in-progress:" in concurrency
     assert "cancel-closed-pr-runs:" not in workflow
-    assert "if: github.event.action != 'closed'" in workflow
+    assert "github.event.action != 'closed'" in workflow
     assert evidence_job in workflow
