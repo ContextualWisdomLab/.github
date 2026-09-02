@@ -1236,6 +1236,24 @@ class StaleHeadDuringRepairRetryError(RuntimeError):
     """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
 
 
+class NoemaRepairRecheckUnavailableError(StaleHeadDuringRepairRetryError):
+    """Raised when the pre-repair-retry live-head recheck itself could not run.
+
+    A subclass of ``StaleHeadDuringRepairRetryError`` on purpose: every
+    existing caller of ``call_llm`` (``two_phase.py``'s ``prepare_verdict``
+    and this module's own ``inspect_and_review``) already treats that
+    stale-head signal as "skip the repair retry and seal/publish nothing
+    this round" — a bare ``except StaleHeadDuringRepairRetryError`` keeps
+    handling this case with zero code changes at those call sites. The
+    distinct subclass
+    exists only so a caller that wants to log this specific cause (the live
+    recheck could not complete — most commonly a reviewer credential that
+    expired during a long model call, see
+    ``docs/doctoring/noema-prepare-token-lifetime-repair-recheck.md``) can
+    do so without string-matching an exception message.
+    """
+
+
 def call_llm(
     repo: str,
     number: int,
@@ -1260,6 +1278,25 @@ def call_llm(
     discard anyway once this function returns. See ``fetch_pr`` for the live
     lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
     condition is reported distinctly to the caller.
+
+    That live-head recheck itself needs a working reviewer credential and
+    network path, and it can run a long time after the caller's reviewer
+    token was minted: the first model attempt above can legitimately run for
+    tens of minutes (contextual-orchestrator free-tier routing probes
+    several candidate model routes), on top of whatever sidecar startup and
+    metadata-fetch time already preceded this call in the same job. A
+    GitHub App installation token has a fixed ~1 hour TTL that this process
+    cannot extend, so the recheck's own ``fetch_pr`` call can fail with an
+    expired-credential error that has nothing to do with the PR itself. Such
+    a failure is caught and re-raised as
+    ``NoemaRepairRecheckUnavailableError`` (a ``StaleHeadDuringRepairRetryError``
+    subclass) instead of propagating — the repair retry is skipped exactly as
+    if the head had actually moved, never as an unhandled crash. This does
+    not weaken the security model: ``prepare_verdict`` seals nothing when
+    this fires, and ``publish_verdict`` independently re-fetches and
+    re-validates the live head/base with a freshly minted token before ever
+    submitting review evidence, so a verdict can never be published on stale
+    information because this recheck alone could not complete.
 
     ``is_retry`` tracks retry state independently of ``repair_error``'s text:
     several transport exceptions (a bare ``OSError``/``TimeoutError`` or
@@ -1423,7 +1460,24 @@ def call_llm(
                 "Noema repair failed closed; "
                 f"initial failure: {initial_failure}; repair failure: {current_failure}"
             ) from exc
-        if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
+        try:
+            live_pr = fetch_pr(repo, number)
+        except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as recheck_exc:
+            # The recheck itself could not run -- most commonly an
+            # installation token that expired during the first (potentially
+            # very long) model attempt above, see this function's
+            # docstring. Fail the same way a confirmed-stale head already
+            # does (skip the repair retry cleanly) rather than crashing the
+            # whole job on a credential/network problem unrelated to this
+            # PR's content. `from recheck_exc` keeps the actual recheck
+            # failure (e.g. "gh: Bad credentials (HTTP 401)") in the
+            # traceback for operators, distinct from `exc`, the original
+            # failure that triggered this repair-retry consideration.
+            raise NoemaRepairRecheckUnavailableError(
+                "Pull request head could not be reverified before repair retry "
+                f"(treating as stale): {_stable_failure_diagnostic(recheck_exc)}"
+            ) from recheck_exc
+        if str(live_pr.get("headRefOid") or "").lower() != expected_head:
             raise StaleHeadDuringRepairRetryError(
                 "Pull request head changed during review; stale before repair retry."
             ) from exc
@@ -1559,6 +1613,9 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     review_context = build_review_context(repo, number, pr, changed_files)
     try:
         verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
+    except NoemaRepairRecheckUnavailableError as exc:
+        print(f"::warning::Noema review was not submitted: {exc}")
+        return 0
     except StaleHeadDuringRepairRetryError:
         print("Pull request head changed during review; Noema review skipped before repair retry.")
         return 0

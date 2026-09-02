@@ -7,6 +7,15 @@ verdict to a runner-local file, then a later workflow step reopens that file
 only after the reviewer credential has been refreshed. Publication always
 re-fetches the live pull request and verifies its exact head and base before
 submitting any review evidence.
+
+The prepare phase can itself still hold the *original* (job-start-minted)
+credential for its entire, potentially long, duration -- it is not refreshed
+mid-phase. ``gate.call_llm``'s own one-time repair-retry path fails that same
+way closed if its live-head recheck cannot run on an expired credential
+(``gate.NoemaRepairRecheckUnavailableError``, a
+``gate.StaleHeadDuringRepairRetryError`` subclass): the verdict is simply not
+sealed this round, exactly as if the head had genuinely moved. See
+``docs/doctoring/noema-prepare-token-lifetime-repair-recheck.md``.
 """
 
 from __future__ import annotations
@@ -178,6 +187,15 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             review_context,
             changed_paths,
         )
+    except gate.NoemaRepairRecheckUnavailableError as exc:
+        # Distinct from the plain stale-head skip below: the live head was
+        # never actually confirmed to have moved, only the recheck that
+        # would have confirmed it could not run (typically an installation
+        # token that expired mid-review). Surfaced as a warning, not a
+        # silent print, so this timing failure mode stays discoverable in
+        # job logs rather than looking identical to a routine stale skip.
+        print(f"::warning::Noema verdict preparation could not be sealed: {exc}")
+        return 0
     except gate.StaleHeadDuringRepairRetryError:
         print("Pull request head changed during model repair retry; verdict was not sealed.")
         return 0

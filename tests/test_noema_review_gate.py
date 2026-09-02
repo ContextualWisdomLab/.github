@@ -1298,6 +1298,59 @@ def test_call_llm_still_repairs_once_when_head_has_not_moved(monkeypatch):
     assert len(open_calls) == 2
 
 
+def test_call_llm_fails_closed_when_repair_recheck_credential_expires(monkeypatch):
+    """Root-cause regression for the job-ending ``gh: Bad credentials (HTTP
+    401)`` observed live in ``ContextualWisdomLab/naruon#1503`` run
+    ``33489389355`` / job ``100144610395``: the reviewer credential minted at
+    job start had exceeded its fixed ~1 hour GitHub App installation-token
+    TTL by the time the first (long-running, free-tier-routed) model attempt
+    failed and ``call_llm`` tried to reverify the live head via ``fetch_pr``
+    before firing its one-time repair retry. That recheck's own ``gh`` call
+    is what actually failed -- not a real stale-head signal -- and must not
+    crash the job: it fails closed exactly like a genuinely stale head would
+    (skip the repair retry), but as the distinct
+    ``NoemaRepairRecheckUnavailableError`` subclass so a caller can tell the
+    two situations apart, and it must never fire the second, wasted model
+    request."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    open_calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            # Malformed: missing "choices" triggers call_llm's fail-closed
+            # RuntimeError path on the very first attempt.
+            return b"[]"
+
+    def open_response(_opener, request, **_kwargs):
+        open_calls.append(request)
+        return Response()
+
+    def expired_credential(_repo, _number):
+        raise RuntimeError("Command failed (1): gh\ngh: Bad credentials (HTTP 401)")
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", expired_credential)
+
+    with pytest.raises(noema.NoemaRepairRecheckUnavailableError, match="could not be reverified") as excinfo:
+        noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+    # The unrelated credential/network failure is preserved for operators...
+    assert "Bad credentials" in str(excinfo.value)
+    # ...but the subclass relationship means every existing bare
+    # `except StaleHeadDuringRepairRetryError` keeps working unmodified.
+    assert isinstance(excinfo.value, noema.StaleHeadDuringRepairRetryError)
+    # Only the first, already-doomed request was made -- no second model
+    # call was wasted once the live-head recheck itself could not run.
+    assert len(open_calls) == 1
+
+
 def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatch):
     """``inspect_and_review`` must treat a stale-during-repair-retry signal
     exactly like its own pre-model and pre-publication stale checks: a clean
@@ -1323,6 +1376,37 @@ def test_inspect_and_review_reports_stale_before_repair_retry_cleanly(monkeypatc
     )
 
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
+
+
+def test_inspect_and_review_reports_repair_recheck_unavailable_as_warning(monkeypatch, capsys):
+    """The credential/network-failure subclass gets its own warning-level
+    message distinguishing it from a genuine stale-head skip, while still
+    exiting cleanly and never publishing."""
+    head = "a" * 40
+    pr = make_pr(headRefOid=head)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
+
+    def fake_call_llm(*args, **kwargs):
+        raise noema.NoemaRepairRecheckUnavailableError(
+            "Pull request head could not be reverified before repair retry "
+            "(treating as stale): Command failed (1): gh"
+        )
+
+    monkeypatch.setattr(noema, "call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: pytest.fail("unverifiable-head verdict must not publish"),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    output = capsys.readouterr().out
+    assert "::warning::" in output
+    assert "could not be reverified" in output
 
 
 def test_call_llm_fails_closed_after_repeated_malformed_envelope(monkeypatch):

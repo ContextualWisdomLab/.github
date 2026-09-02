@@ -5,6 +5,24 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fail closed instead of crashing when Noema's repair-retry live-head recheck outlives its own
+  reviewer token (`ContextualWisdomLab/naruon#1503`, run `33489389355`, job `100144610395`).**
+  `scripts/ci/noema_review_gate.py`'s `call_llm()` fires one repair-retry request after a malformed
+  or transport-failed first model attempt, but first re-fetches the live PR (`gh api graphql`) to
+  confirm the head has not moved before spending a second, potentially multi-hour model call. That
+  recheck reuses the job-start-minted GitHub App installation token (fixed ~1 hour TTL, not
+  refreshed mid-phase) and can itself run well past that TTL once sidecar provisioning (~17 min) and
+  a slow free-tier-routed first model attempt (~44 min in the observed run) are added together,
+  failing the whole job with an opaque `gh: Bad credentials (HTTP 401)` before any verdict was
+  prepared. `call_llm()` now catches a failure of that recheck itself and raises a new
+  `NoemaRepairRecheckUnavailableError` (a `StaleHeadDuringRepairRetryError` subclass), so both
+  `two_phase.py`'s `prepare_verdict()` and the legacy `inspect_and_review()` keep handling it via
+  their existing bare `except StaleHeadDuringRepairRetryError` -- exiting cleanly with no sealed
+  envelope and no publication, now with a distinguishing `::warning::` message instead of a crash.
+  Does not weaken the trust boundary: the recheck was already a pure cost-avoidance optimization,
+  and `publish_verdict()` independently re-validates the live head/base with a freshly minted token
+  before ever submitting review evidence regardless of how prepare's own repair-retry recheck fared.
+  See `docs/doctoring/noema-prepare-token-lifetime-repair-recheck.md`.
 - **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
   At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
   `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,

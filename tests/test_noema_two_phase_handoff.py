@@ -58,6 +58,39 @@ def test_prepare_seals_validated_verdict_without_publishing(tmp_path: Path, monk
     assert payload["expected_base"] == BASE
 
 
+def test_prepare_reports_repair_recheck_unavailable_distinctly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Root-cause regression for the naruon#1503 job-ending 401: when
+    ``call_llm``'s live-head recheck fails closed because the reviewer
+    credential expired mid-review (``gate.NoemaRepairRecheckUnavailableError``),
+    preparation must exit cleanly with no sealed envelope -- exactly like a
+    genuinely stale head -- but the emitted message must be a distinguishable
+    warning, not the plain stale-head text, so the timing failure stays
+    discoverable in job logs."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    monkeypatch.setattr(module.gate, "fetch_diff", lambda _repo, _number: ("diff", False))
+    monkeypatch.setattr(module.gate, "fetch_changed_files", lambda _repo, _number: [("src/a.py", "MODIFIED")])
+    monkeypatch.setattr(module.gate, "build_review_context", lambda *_args: "context")
+
+    def fake_call_llm(*_args: object) -> dict[str, object]:
+        raise module.gate.NoemaRepairRecheckUnavailableError(
+            "Pull request head could not be reverified before repair retry "
+            "(treating as stale): Command failed (1): gh\ngh: Bad credentials (HTTP 401)"
+        )
+
+    monkeypatch.setattr(module.gate, "call_llm", fake_call_llm)
+    monkeypatch.setattr(module.gate, "submit_review", lambda *_args: pytest.fail("must never publish"))
+    envelope = tmp_path / "verdict.json"
+
+    assert module.prepare_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
+    assert not envelope.exists()
+    output = capsys.readouterr().out
+    assert "::warning::" in output
+    assert "Bad credentials" in output
+
+
 def test_publish_refetches_exact_head_and_base_with_fresh_actor_and_removes_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Publication rebinds repository/head/base/actor and consumes the private handoff."""
     module = _load_module()
