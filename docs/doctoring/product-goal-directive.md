@@ -151,7 +151,7 @@ fixed:
   needing an out-of-band note to resolve it.
 - §9 (renamed from "Reference libraries and tool invocations" to "Core
   foundation and development/consumption boundaries") replaced the general
-  reference-library bullet list with an explicit table of 21 named
+  reference-library bullet list with an explicit table of 23 named
   core-owner repos grouped by responsibility (workflow/review/security/
   release; enterprise architecture/context contracts; ontology generation
   vs. catalog/governance; model orchestration/OIDC/evidence; identity;
@@ -166,11 +166,14 @@ fixed:
 
 ### Verification performed this revision
 
-1. **Repo-existence check.** Every one of the 29 repositories named across
-   §5 and §9 (the four ontology repos, all 21 §9 core repos, and the seven
-   §9 domain-consumer repos) was checked against a live listing of every
-   `ContextualWisdomLab` repository the operating account can reach. All 29
-   matched exactly, including case (e.g. `ConceptWeave`, `EgressWeave`,
+1. **Repo-existence check.** Every one of the 30 repositories named across
+   §5 and §9 (the §5 ontology-ownership discussion names four of these —
+   `ConceptWeave`, `semantic-data-portal`, `context-graph-contracts`,
+   `enterprise-architecture-core` — as a named subset of, not additional to,
+   the 23 §9 core repos; plus the seven §9 domain-consumer repos) was
+   checked against a live listing of every `ContextualWisdomLab` repository
+   the operating account can reach. All 30 matched exactly, including case
+   (e.g. `ConceptWeave`, `EgressWeave`,
    `OriginWeave`, `DiagramWeave`, `PolicyWeave`, `CalendarWeave` — all
    PascalCase, confirmed correct as given, not "corrected" to another
    case). None needed a spelling or case fix. This check is recorded
@@ -355,3 +358,65 @@ fixed:
   carrying both the second and third revision's commits; not superseded by
   a new PR, per this directive's own "edit this file in place... do not
   fork a second copy elsewhere" policy applied to the PR-branch level too.
+
+## 2026-09-02 Devin Review findings on PR #1692 — three confirmed, fixed
+
+Devin Review's automated pass on #1692 raised six findings; three were confirmed real and fixed in
+place (not by editing the verbatim quoted directive text), one required cross-repo verification beyond
+this directive's own file, and two were informational/no-action. Following the same pattern as the
+2026-08-30 Devin Review findings on the original PR #1429 (see above): confirm before fixing, fix in the
+notes rather than the quoted blockquotes, and record the reasoning here.
+
+1. **Confirmed — §5's "pause and confirm" rename language contradicted
+   `docs/CWL-MASTER-CONTEXT.md` §7's binding "Do NOT ask the user to decide — make the call and proceed"
+   (full autonomy) convention.** The reconciliation note added by the third revision (on breaking a
+   published contract) said such a rename was "exactly the kind of consequential, hard-to-reverse action
+   this org's own engineering conventions ask an agent to pause and confirm before taking" — that framing
+   is simply wrong; §7 forbids asking the user to decide, full stop. Fixed by replacing "pause and
+   confirm" with an autonomous, contract-safe process: preserve the existing published boundary (alias/
+   deprecation shim/versioned API), prepare a versioned migration and compatibility plan, and record the
+   rename as an ADR — proceeding without waiting on a human, with explicit approval required only where
+   some *other* already-existing policy demands it for a specific irreversible action (this repo's own
+   "never force-push over someone else's branch," for example), not as a new exception this note invents.
+2. **Confirmed — repository-count arithmetic did not reconcile.** The doctoring text for the second
+   revision (above) said §9 listed "21 named core-owner repos" and that "29" total names were verified
+   across "the four ontology repos, all 21 §9 core repos, and the seven §9 domain-consumer repos" — but
+   §9's actual list (verified by recounting it directly) has 23 entries, not 21, and the four ontology
+   repos named in §5 (`ConceptWeave`, `semantic-data-portal`, `context-graph-contracts`,
+   `enterprise-architecture-core`) are a **named subset of**, not additional to, those 23 — so treating
+   them as a fifth, separate group of "4" was double-counting on top of an already-wrong base count. The
+   correct total is 23 §9 core repos + 7 §9 domain-consumer repos = 30 unique names, not 29. Fixed both
+   this doctoring file's second-revision section (above) and `docs/product-goal-directive.md`'s own §9
+   "Verification" note to say 23 and 30, and to state the four-ontology-repos-are-a-subset relationship
+   explicitly instead of implying a fifth additive group.
+3. **Confirmed — sandbox ownership tension was left "open, not yet resolved" when it was directly
+   resolvable.** The prior revision's §9 note flagged, but deliberately did not resolve, the tension
+   between `docs/CWL-MASTER-CONTEXT.md` (`noema` owns "the lightweight quarantine sandbox") and this
+   directive's §9 (`quarantine-sandbox-runtime` as its own dedicated repo) — correctly declining to guess,
+   but Devin's finding was right that this PR could resolve it with the reading it had asked for the last
+   time, rather than deferring again. Resolved this revision by cloning both repos read-only and reading
+   `noema/README.md`, `quarantine-sandbox-runtime/README.md`, and `noema/docs/noema-agent-sandbox-plan.md`
+   directly: `quarantine-sandbox-runtime`'s README ("Source-agnostic, credential-free artifact analysis
+   runtime for the ContextualWisdomLab security ecosystem") is a near-verbatim match for
+   `CWL-MASTER-CONTEXT.md` §6's own AI-SOC sandbox spec; `noema`'s current README is an unrelated product
+   (GitHub OIDC/App-token credential exchange and review evidence, explicitly disclaiming model/provider
+   ownership) with no artifact-analysis responsibility; and `noema`'s own sandbox-planning doc states the
+   review agent "runs in a separate quarantined execution plane" that "must not run untrusted repository
+   code in the Noema Worker process" — i.e. noema's own architecture decision already separates sandbox
+   execution out of its own process. Fixed by updating `docs/CWL-MASTER-CONTEXT.md` at all four locations
+   that said "noema quarantine sandbox" (§3's noema bullet, §6's header, the P1 roadmap bullet, and the
+   ecosystem UML diagram's node label plus the `WARD -->|"quarantine detonation"|` edge target) to name
+   `quarantine-sandbox-runtime` instead, and updating this directive's §9 note from "open, not yet
+   resolved" to "resolved," while explicitly leaving open (as a coverage gap, not a contradiction) that
+   §3 still doesn't mention most of §9's other newer repos at all.
+4. **Informational, no action — empty-PR cleanup remains permitted.** Devin correctly read §2's closing
+   conditions as still permitting closure of a non-draft, zero-changed-file PR; this is consistent with
+   "no valid delta remains" and needed no change.
+5. **Informational, no action — §9's quoted blockquote doesn't restate the seven-repo consumer
+   classification verbatim.** True, but by design: the blockquote is the owner's verbatim wording (never
+   paraphrased, per this file's own established pattern above) and the classification is preserved in the
+   "Verification" note immediately below it, which is exactly what that note is for. No fix applied; the
+   quoted text is not editable for this reason without violating the file's own verbatim-preservation
+   rule.
+6. **Informational, no action — pool pin matches deployed workflows.** Devin's own check confirmed §8's
+   text already matches the four live workflow files. No action needed.

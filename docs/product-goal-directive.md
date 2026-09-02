@@ -110,10 +110,17 @@ specifically and still grandfathers existing Camel/Pascal DB objects; nothing in
 that clause. Read this section's broader identifier rule as prospective and opportunistic: apply it to
 new code, and fix existing violations incrementally when touching that code for another reason — not as
 a mandate to sweep every existing repo renaming public APIs, exported classes, or shipped DB objects in
-one pass. A rename that breaks a published contract (a public API signature, a released client, an
-external integration) is exactly the kind of consequential, hard-to-reverse action this org's own
-engineering conventions ask an agent to pause and confirm before taking, not something "위반명은
-치환한다" authorizes unilaterally at scale.
+one pass. A rename that breaks a published contract (a public API signature, a released client, an external
+integration) is not something "위반명은 치환한다" authorizes as an unversioned, unrecorded rewrite at
+scale — but `docs/CWL-MASTER-CONTEXT.md` §7's binding convention ("Do NOT ask the user to decide — make
+the call and proceed," full autonomy) still governs: an agent does not pause and wait for a human to
+confirm this. The autonomous, contract-safe process is instead: preserve the existing published
+boundary (keep the old name/signature working — an alias, a deprecation shim, a versioned API), prepare
+a versioned migration and compatibility plan for consumers, and record the rename as an ADR so the
+decision and its rationale are durable. Explicit human approval is required only where some other
+already-existing policy demands it for a specific irreversible external action (e.g. this repo's own
+"never force-push over someone else's branch," or an operation with no compensating rollback) — this
+rename note does not itself create a new ask-first exception to §7.
 
 **Note (2026-08-30, on the original wording, retained for history):** the original (2026-08-30)
 version of this section named "wardnet" as an example of an "old name" (옛 이름) to rename *away
@@ -197,24 +204,26 @@ The second revision additionally named `naruon`, `LineageWeave`, `psychometrics-
 `PolicyWeave`, `CalendarWeave`, `supply-chain-control-plane` as domain-product/composition consumers
 (not core); the third revision's §9 text above does not restate that consumer list explicitly, but its
 opening definition ("Core foundation은 전 제품의 공통 설치물이 아니다") implies the same classification.
-All 29 names across both revisions were verified to exist with matching case; none needed a spelling or
-case correction.
+All 30 names across both revisions (23 §9 core repos, of which 4 are also named in §5's ontology
+discussion, plus the 7 §9 domain-consumer repos) were verified to exist with matching case; none needed
+a spelling or case correction.
 
-**Open reconciliation item (2026-09-02, not yet resolved — do not silently pick one):**
-`docs/CWL-MASTER-CONTEXT.md` §3 ("Ecosystem components") already documents roles for a subset of these
-repos (`contextual-orchestrator`, `pg-llm-batch`, `fast-mlsirm`, `semantic-data-portal`, `noema`,
-`appguardrail`, `inkspan`, `keyverse`, `wardnet`, among others) with narrower or differently-framed
-descriptions than this section, and does not yet mention most of the repos named here (`ConceptWeave`,
-`enterprise-architecture-core`, `context-graph-contracts`, `EgressWeave`, `OriginWeave`,
-`pingora-gateway`, `quarantine-sandbox-runtime`, `EmbedRelay`, `DiagramWeave`, `mhtml-etl-gateway`) at
-all. One specific tension worth flagging rather than silently resolving: §3 currently describes `noema`
-as owning "the lightweight quarantine sandbox," while this section groups `quarantine-sandbox-runtime`
-as its own dedicated repo alongside `EgressWeave`/`OriginWeave`/`pingora-gateway` under
-"Identity·보안·runtime" — whether the sandbox responsibility moved to a dedicated repo, or the two repos
-share it, has not been verified against either repo's actual current content as of this revision. A
-future pass should read both repos' READMEs/ARCHITECTURE docs and either update §3 to match this
-section, update this section if §3 is the one that's current, or record an ADR if the split is a
-genuinely new decision — not guess.
+**Reconciliation item — sandbox ownership (resolved 2026-09-02):** an earlier draft of this note flagged
+an unresolved tension between `docs/CWL-MASTER-CONTEXT.md` §3/§6 (which said `noema` owns "the
+lightweight quarantine sandbox") and this section (which lists `quarantine-sandbox-runtime` as its own
+dedicated repo). Resolved by reading both repos' current READMEs/plans directly, not guessing:
+`quarantine-sandbox-runtime`'s README describes itself, almost verbatim, as `CWL-MASTER-CONTEXT.md`
+§6's own AI-SOC sandbox spec ("source-agnostic, credential-free artifact analysis runtime"); `noema`'s
+current README describes an unrelated product (an evidence-producing credential/maintenance control
+plane for GitHub OIDC/App-token exchange and review evidence, with no artifact-analysis responsibility),
+and `noema/docs/noema-agent-sandbox-plan.md` explicitly states the review agent "runs in a separate
+quarantined execution plane" that "must not run untrusted repository code in the Noema Worker process."
+`docs/CWL-MASTER-CONTEXT.md` §3/§6/§8/the ecosystem UML diagram were updated in this same PR to name
+`quarantine-sandbox-runtime`, not `noema`, as the sandbox owner. The remaining gap this note originally
+flagged — §3 not yet mentioning `ConceptWeave`, `enterprise-architecture-core`,
+`context-graph-contracts`, `EgressWeave`, `OriginWeave`, `pingora-gateway`, `EmbedRelay`, `DiagramWeave`,
+or `mhtml-etl-gateway` at all — is still open and left for a future pass; it is a coverage gap, not a
+contradiction, so it does not block this revision.
 
 ## How to point a `/goal` session at this directive
 
