@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
       - scripts/ci/source_fix_pr1706_formal_verdict.py
+      - tests/test_opencode_formal_verdict_authority_contract.py
 
 permissions:
   contents: write
@@ -30,12 +31,14 @@ jobs:
           set -euo pipefail
           git fetch origin fix/opencode-poll-wall-clock-bound
           test "$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)" = "$GITHUB_SHA"
-      - name: Apply owner repair and permanent regression
+      - name: Apply owner repair and permanent regressions
         shell: bash
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 scripts/ci/source_fix_pr1706_formal_verdict.py
-          PYTHONPATH=. python3 -m pytest tests/test_opencode_required_verdict_reconciliation_contract.py
+          PYTHONPATH=. python3 -m pytest \
+            tests/test_opencode_formal_verdict_authority_contract.py \
+            tests/test_opencode_required_verdict_reconciliation_contract.py
           git diff --check
       - name: Publish exact repaired tree and retire temporary machinery
         shell: bash
@@ -43,7 +46,7 @@ jobs:
           set -euo pipefail
           rm .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
           rm scripts/ci/source_fix_pr1706_formal_verdict.py
-          git add .github/workflows/opencode-review.yml .github/workflows/pr-review-merge-scheduler.yml tests/test_opencode_required_verdict_reconciliation_contract.py docs/product-technical-gap-baseline.md .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml scripts/ci/source_fix_pr1706_formal_verdict.py
+          git add .github/workflows/opencode-review.yml .github/workflows/pr-review-merge-scheduler.yml tests/test_opencode_formal_verdict_authority_contract.py tests/test_opencode_required_verdict_reconciliation_contract.py docs/product-technical-gap-baseline.md .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml scripts/ci/source_fix_pr1706_formal_verdict.py
           git diff --cached --check
           git config user.name 'ContextualWisdomLab repair bot'
           git config user.email 'actions@users.noreply.github.com'
