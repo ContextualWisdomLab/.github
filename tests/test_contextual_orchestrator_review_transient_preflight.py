@@ -1,4 +1,4 @@
-"""Regression tests for provider-neutral preflight recovery and inference deadlines."""
+"""Regression tests for provider-neutral preflight evidence and inference deadlines."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
-_TRANSIENT_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 def _load_launcher() -> dict[str, object]:
@@ -51,11 +50,11 @@ def _agent(*, reasoning_effort_supported: bool | None = None) -> SimpleNamespace
     )
 
 
-class _RetryingProbeClient:
-    """Model the orchestrator's retry-enabled and one-shot passthrough seams."""
+class _OneShotProbeClient:
+    """Model one-shot provider sends and reject retry-enabled transport use."""
 
     def __init__(self, outcomes: list[object]) -> None:
-        """Store deterministic provider outcomes in transport-attempt order."""
+        """Store deterministic provider outcomes in semantic-payload order."""
         self._outcomes = iter(outcomes)
         self.retrying_calls = 0
         self.one_shot_calls = 0
@@ -65,33 +64,24 @@ class _RetryingProbeClient:
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Fail if production preflight bypasses the retry-enabled seam."""
-        del agent, endpoint, payload
+        """Send one exact payload once and return or raise its observed outcome."""
+        del agent, endpoint
+        self.payloads.append(dict(payload))
         self.one_shot_calls += 1
-        raise AssertionError("preflight must use the retry-enabled passthrough seam")
+        self.transport_attempts += 1
+        outcome = next(self._outcomes)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert isinstance(outcome, dict)
+        return outcome
 
     def proxy_send(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Retry one transient outcome and leave permanent failures terminal."""
-        del agent, endpoint
-        self.payloads.append(dict(payload))
+        """Fail if production preflight reintroduces retry-enabled transport."""
+        del agent, endpoint, payload
         self.retrying_calls += 1
-        retries_left = 1
-        while True:
-            self.transport_attempts += 1
-            outcome = next(self._outcomes)
-            if not isinstance(outcome, BaseException):
-                assert isinstance(outcome, dict)
-                return outcome
-            status = getattr(outcome, "code", None)
-            is_transient = status in _TRANSIENT_HTTP_STATUS or isinstance(
-                outcome, (TimeoutError, ConnectionError)
-            )
-            if is_transient and retries_left:
-                retries_left -= 1
-                continue
-            raise outcome
+        raise AssertionError("preflight must use the one-shot passthrough seam")
 
 
 def _keyword(call: ast.Call, name: str) -> ast.expr | None:
@@ -113,48 +103,49 @@ def _review_model_client_calls() -> list[ast.Call]:
 
 
 @pytest.mark.parametrize("reasoning_effort_supported", [None, False, True])
-def test_preflight_recovers_transient_502_independent_of_reasoning_capability(
+def test_preflight_rejects_transient_502_after_one_attempt_independent_of_reasoning_capability(
     reasoning_effort_supported: bool | None,
 ) -> None:
-    """Transport retry follows failure taxonomy, never model names or capability flags."""
+    """Transient taxonomy is evidence only and cannot manufacture another model call."""
     namespace = _load_launcher()
     agent = _agent(reasoning_effort_supported=reasoning_effort_supported)
-    client = _RetryingProbeClient([_http_error(502), _openai_text("OK")])
+    client = _OneShotProbeClient([_http_error(502)])
 
-    viable, report = namespace["_preflight_review_agents"]([agent], client=client)
+    with pytest.raises(namespace["ReviewPreflightError"]) as excinfo:
+        namespace["_preflight_review_agents"]([agent], client=client)
 
-    assert viable == [agent]
-    assert client.retrying_calls == 1
-    assert client.one_shot_calls == 0
-    assert client.transport_attempts == 2
-    route = report["routes"][0]
-    assert route["status"] == "ready"
+    assert client.retrying_calls == 0
+    assert client.one_shot_calls == 1
+    assert client.transport_attempts == 1
+    route = excinfo.value.report["routes"][0]
+    assert route["status"] == "rejected"
+    assert route["http_status"] == 502
     assert route["attempts"] == 1
-    assert route["transport_retry_budget"] == 1
+    assert "transport_retry_budget" not in route
 
 
 def test_preflight_does_not_retry_permanent_auth_failure() -> None:
-    """Retry enablement must not turn a 401 into repeated credential traffic."""
+    """A 401 remains a single provider call with bounded typed evidence."""
     namespace = _load_launcher()
-    client = _RetryingProbeClient([_http_error(401)])
+    client = _OneShotProbeClient([_http_error(401)])
 
     with pytest.raises(namespace["ReviewPreflightError"]) as excinfo:
         namespace["_preflight_review_agents"]([_agent()], client=client)
 
-    assert client.retrying_calls == 1
-    assert client.one_shot_calls == 0
+    assert client.retrying_calls == 0
+    assert client.one_shot_calls == 1
     assert client.transport_attempts == 1
     route = excinfo.value.report["routes"][0]
     assert route["status"] == "rejected"
     assert route["http_status"] == 401
-    assert route["transport_retry_budget"] == 1
+    assert "transport_retry_budget" not in route
 
 
 def test_reasoning_budget_escalation_uses_response_evidence_not_model_name() -> None:
-    """Reasoning-specific token recovery follows the response, not an identifier list."""
+    """Semantic token recovery follows the response while each payload stays one-shot."""
     namespace = _load_launcher()
     agent = _agent(reasoning_effort_supported=None)
-    client = _RetryingProbeClient(
+    client = _OneShotProbeClient(
         [
             {
                 "choices": [
@@ -174,20 +165,22 @@ def test_reasoning_budget_escalation_uses_response_evidence_not_model_name() -> 
     viable, report = namespace["_preflight_review_agents"]([agent], client=client)
 
     assert viable == [agent]
-    assert client.retrying_calls == 2
-    assert client.one_shot_calls == 0
+    assert client.retrying_calls == 0
+    assert client.one_shot_calls == 2
+    assert client.transport_attempts == 2
     assert [payload["max_tokens"] for payload in client.payloads] == [16, 4096]
     route = report["routes"][0]
     assert route["status"] == "ready"
     assert route["attempts"] == 2
     assert route["escalated"] is True
     assert route["reasoning_without_content"] is False
+    assert "transport_retry_budget" not in route
 
 
-def test_review_clients_have_no_inference_deadline_and_one_transient_retry() -> None:
-    """Every model is deadline-free; only idempotent preflight retries once."""
+def test_review_clients_have_no_inference_deadline_or_transport_retry() -> None:
+    """Both preflight and serving clients are deadline-free and one-shot."""
     namespace = _load_launcher()
-    assert namespace["REVIEW_PREFLIGHT_TRANSIENT_RETRIES"] == 1
+    assert "REVIEW_PREFLIGHT_TRANSIENT_RETRIES" not in namespace
 
     calls = _review_model_client_calls()
     assert len(calls) == 2
@@ -195,9 +188,6 @@ def test_review_clients_have_no_inference_deadline_and_one_transient_retry() -> 
         timeout = _keyword(call, "timeout")
         assert isinstance(timeout, ast.Constant)
         assert timeout.value is None
-
-    preflight_calls = [call for call in calls if _keyword(call, "max_retries") is not None]
-    assert len(preflight_calls) == 1
-    max_retries = _keyword(preflight_calls[0], "max_retries")
-    assert isinstance(max_retries, ast.Name)
-    assert max_retries.id == "REVIEW_PREFLIGHT_TRANSIENT_RETRIES"
+        max_retries = _keyword(call, "max_retries")
+        assert isinstance(max_retries, ast.Constant)
+        assert max_retries.value == 0
