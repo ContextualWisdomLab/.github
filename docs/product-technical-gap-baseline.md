@@ -3121,3 +3121,40 @@ that point, per the same convention `.github#1728` established for `dependency-r
 `#1716` itself was deliberately left unmerged by the reviewing peer session, respecting this org's
 "OpenCode/Noema judges, GitHub Actions merges mechanically" governance model rather than bypass-merging
 without an approving review -- consistent with this session's own discipline throughout.
+
+## 2026-09-02: full org-wide workflow-duplication survey (peer session) finds naruon, no other genuine
+## duplicates in 255 files across 63 repos
+
+A peer Claude session ran a full inventory of every `.github/workflows/*.yml` file across all 63
+ContextualWisdomLab repositories (255 files total), clustered by filename into 19 groups with 2+ repos
+each, and read every file field-by-field rather than trusting name matches (`.github#1731`,
+`docs/doctoring/ci-workflow-duplication-audit-20260902.md`). Result: **18 of 19 clusters are false
+positives** -- same filename, genuinely different language/stack/security policy/thresholds/job
+structure (`ci.yml` alone spans 26 repos with no two identical even within the same language bucket;
+`codeql.yml`'s 8 repos differ in trigger scope, languages, and SARIF-upload delegation). One genuine
+byte-identical duplicate found (`hourly-pr-maintenance.yml`, DiagramWeave/ThreadWeave, differing only
+by a 5-minute cron stagger) was deliberately left alone -- already a ~20-30 line thin caller, so
+wrapping it in a reusable workflow would be a wrapper of a wrapper; revisit if a third repo adopts the
+same shape.
+
+**The one real finding: `naruon` independently carries its own `dependency-review.yml`**, missed by the
+original 4-repo survey this session's earlier `dependency-review.yml` consolidation (`.github#1724`)
+was based on. Auditing it found two genuine, non-cosmetic differences requiring a design change, not a
+copy-paste: (1) a `step-security/harden-runner` egress-audit step absent from all four already-migrated
+callers -- added uniformly to the central reusable workflow itself, since it is a hardening practice,
+not a per-repo policy; (2) `comment-summary-in-pr: never`, an explicit opt-out directly conflicting with
+this consolidation's earlier decision to hardcode `comment-summary-in-pr: on-failure` uniformly (made
+when only one of the four originals set the field at all) -- fixed by promoting it to a proper
+`workflow_call` input (default `"on-failure"`, no behavior change for the four already-migrated
+callers). Landed in `.github#1732`; `naruon`'s own caller PR (a genuine fifth caller) follows once
+`#1732` merges and a final pin SHA is available.
+
+This survey and the parallel item-verification work this same tick (items 8, 9, 10, 11, 12, 15, 25, 30,
+32 all independently re-verified or fixed by two peer Claude sessions coordinating directly with this
+one, not routed through a central queue) collectively hit the shared GitHub REST API secondary rate
+limit (`403`, all three sessions authenticate as the same account) -- all three sessions independently
+noticed and backed off rather than retrying in a tight loop, consistent with this session's established
+mitigation (`docs/CWL-MASTER-CONTEXT.md` / this repo's own prior guidance: back off, prefer REST over
+GraphQL, fall back to the browser tool for read-only checks). Worth noting for future multi-session
+coordination: three sessions running `gh api` concurrently against the same identity exhausts the
+shared secondary limit meaningfully faster than one session alone.
