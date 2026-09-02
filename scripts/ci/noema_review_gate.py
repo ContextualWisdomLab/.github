@@ -6,14 +6,12 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
-import contextlib
 import hashlib
 import http.client
 import ipaddress
 import json
 import os
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -64,28 +62,6 @@ DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
-# NOT DATA-DERIVED -- UNRESOLVED, flagged for an explicit owner decision.
-# PR #1617 picked 15 minutes for the one-shot corrective attempt's absolute
-# wall-clock deadline (open/read/decode/validate) with no measurement behind
-# it: no repair-duration telemetry existed before this constant was added,
-# so there was nothing to derive a bound from. The repo owner has since
-# confirmed (2026-09-02, in response to this exact incident) that this value
-# was never owner-specified and is exactly the kind of unresearched
-# heuristic `docs/product-goal-directive.md` SS6 prohibits ("가중치는 임의로
-# 정하지 말고 ... 어떠한 휴리스틱과 Rule of thumbs도 금지"). It also textually
-# collides with ADR-0003's 2026-08-31 amendment, which lists "repair
-# verdict" among the model-inference calls that MUST NOT carry a fixed
-# wall-clock timeout -- see docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md
-# and docs/doctoring/noema-repair-attempt-telemetry.md for the full
-# reasoning trail. Keeping a bound at all (rather than none) is deliberate:
-# an unbounded local retry loop is its own failure mode, and the repair
-# telemetry this module now emits (see ``call_llm``) exists specifically so
-# a future change can replace this placeholder with a value derived from
-# real observed repair durations instead of another guessed round number.
-# Do not treat this constant as settled/intentional; do not "fix" it by
-# swapping in a different arbitrary number without citing measured data.
-NOEMA_REPAIR_DEADLINE_SECONDS = 15 * 60
-
 # OpenAI Chat Completions structured-output envelope for the verdict shape
 # ``validate_substantive_verdict`` enforces. contextual-orchestrator's
 # ``orchestrator/free`` sidecar is proven (ADR-0003) to be an OpenAI-
@@ -227,9 +203,6 @@ class NoemaModelOutputError(RuntimeError):
 class NoemaTransportError(RuntimeError):
     """Raised when the bounded review transport cannot produce usable evidence."""
 
-
-class NoemaRepairDeadlineExceeded(TimeoutError):
-    """Raised when the corrective attempt exceeds its total wall-clock budget."""
 
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
@@ -575,31 +548,50 @@ def parse_diff_path(raw: str, prefix: str) -> str:
 def _required_probe_count(diff: str, changed_paths: Sequence[str] = ()) -> int:
     """Return the minimum adversarial-probe count a formal verdict must carry.
 
-    Single source of truth for two independent enforcement points: this
-    module's own ``validate_substantive_verdict`` (the Python-side, always-
-    correct backstop) and ``call_llm``'s per-request ``response_format``
-    JSON Schema (``adversarial_validation.probes.minItems``), so the two can
-    never silently drift apart. `ContextualWisdomLab/ConceptWeave` run
-    `33527145686`, job `99920767480` hit exactly the gap this closes: a
-    schema-valid verdict with only one probe on a source-file change failed
-    Noema's own check outright, with no earlier, cheaper structural catch.
-    Per ADR-0035 (`contextual-orchestrator`), a JSON-Schema-declared
-    constraint like ``minItems`` is validated by the gateway against the
-    actual returned content -- not merely trusted because the provider
-    accepted the request -- and one governed same-provider repair call is
-    made on a violation before this Python-side check would ever run.
-    Executable/test/workflow changes require two distinct probes; other
-    diffs require one (``changed_file_is_material``).
+    This is the single source of truth shared by the structured-output schema
+    and deterministic local validator. Executable/test/workflow changes require
+    two distinct probes; other diffs require one. The bound is cardinality-
+    based and independent of repository path count, so a near-MAX_DIFF_CHARS
+    review remains representable within the gateway output budget.
     """
     locations = changed_diff_locations(diff)
     all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
     return 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
 
 
+def _entry_ordinal(position: int, total: int) -> str:
+    """Return an unambiguous 1-based array-position label for diagnostics."""
+    return f"entry {position}/{total} (array index {position - 1}, not a source line)"
+
+
+def _format_location(path: Any, line: Any, side: Any) -> str:
+    """Format one rejected path/line/side citation without coercing its types."""
+    return f"path={path!r} line={line!r} side={side!r}"
+
+
+def _nearby_changed_locations(
+    locations: set[tuple[str, int, str]], path: Any, line: Any, *, limit: int = 5
+) -> str:
+    """Return a bounded nearest-line hint for the rejected path."""
+    if not isinstance(path, str):
+        return ""
+    same_path = [location for location in locations if location[0] == path]
+    if not same_path:
+        return ""
+    if isinstance(line, int):
+        same_path.sort(key=lambda location: (abs(location[1] - line), location[1], location[2]))
+    else:
+        same_path.sort(key=lambda location: (location[1], location[2]))
+    sample = ", ".join(f"{p}:{ln} ({s})" for p, ln, s in same_path[:limit])
+    remaining = len(same_path) - limit
+    more = f", +{remaining} more" if remaining > 0 else ""
+    return f"; nearest changed lines for {path}: {sample}{more}"
+
+
 def validate_substantive_verdict(
     verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
 ) -> None:
-    """Reject formal verdicts without changed-line and adversarial evidence."""
+    """Reject formal verdicts without exact changed-line/adversarial evidence."""
     decision = str(verdict.get("decision") or "").lower()
     if decision == "comment":
         return
@@ -610,15 +602,22 @@ def validate_substantive_verdict(
     reviewed_lines = verdict.get("reviewed_lines")
     if not isinstance(reviewed_lines, list) or not reviewed_lines:
         raise NoemaModelOutputError("Noema formal verdict requires at least one reviewed changed line")
-    for index, reviewed in enumerate(reviewed_lines, start=1):
+    reviewed_total = len(reviewed_lines)
+    for position, reviewed in enumerate(reviewed_lines, start=1):
+        entry = _entry_ordinal(position, reviewed_total)
         if not isinstance(reviewed, dict):
-            raise NoemaModelOutputError(f"Noema reviewed line {index} must be an object")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
-            raise NoemaModelOutputError(f"Noema reviewed line {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema reviewed line {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
-            raise NoemaModelOutputError(f"Noema reviewed line {index} requires concrete analysis")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} requires concrete analysis")
 
     validation = verdict.get("adversarial_validation")
     if not isinstance(validation, dict):
@@ -633,26 +632,41 @@ def validate_substantive_verdict(
     probes = validation.get("probes")
     required_probes = _required_probe_count(diff, changed_paths)
     if not isinstance(probes, list) or len(probes) < required_probes:
-        raise NoemaModelOutputError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
+        raise NoemaModelOutputError(
+            f"Noema adversarial validation requires at least {required_probes} concrete probe(s)"
+        )
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
-    for index, probe in enumerate(probes, start=1):
+    probes_total = len(probes)
+    for position, probe in enumerate(probes, start=1):
+        entry = _entry_ordinal(position, probes_total)
         if not isinstance(probe, dict):
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} must be an object")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
-                raise NoemaModelOutputError(f"Noema adversarial probe {index} requires {field}")
+                raise NoemaModelOutputError(f"Noema adversarial probe {entry} requires {field}")
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
-        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} outcome must be falsified or confirmed"
+            )
+        identity = (
+            *location,
+            probe["hypothesis"].strip().casefold(),
+            probe["attack_or_counterexample"].strip().casefold(),
+        )
         if identity in identities:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} duplicates an earlier probe")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
@@ -666,7 +680,9 @@ def validate_substantive_verdict(
             if isinstance(finding, dict)
         }
         if not confirmed or not confirmed.intersection(finding_locations):
-            raise NoemaModelOutputError("Noema request_changes requires a confirmed probe on a published finding")
+            raise NoemaModelOutputError(
+                "Noema request_changes requires a confirmed probe on a published finding"
+            )
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -968,20 +984,10 @@ MAX_JSON_NESTING_DEPTH = 100
 
 
 def _strip_trailing_commas_outside_strings(text: str) -> str:
-    """Remove a comma that appears immediately before a closing ``}``/``]``.
+    """Remove only a genuine trailing comma after a complete JSON value.
 
-    This repairs exactly one common, semantically lossless JSON
-    malformation and nothing else: ``{"a":1,}`` decodes to the identical
-    data as ``{"a":1}``, so dropping the comma can never alter or fabricate
-    verdict content the way a guess-based repair of an unrecognized
-    malformation shape could. It is a pure local string transform over
-    bytes already received from the provider -- no network call, no model
-    re-prompt, no candidate/model selection -- so it does not duplicate the
-    gateway-owned JSON-validation/repair/candidate-exclusion policy the org
-    ruled belongs to ``contextual-orchestrator`` (PR #1602's closing
-    comment). Characters inside JSON string literals are left untouched
-    using the same quote/escape state machine ``extract_json_object`` scans
-    with, so a comma that is genuine string content is never touched.
+    Missing-value forms such as ``[,]``, ``{,}``, ``[1,,]`` and ``{"a":,}``
+    remain malformed and therefore fail closed. String contents are untouched.
     """
     result: list[str] = []
     in_string = False
@@ -1009,7 +1015,12 @@ def _strip_trailing_commas_outside_strings(text: str) -> str:
             lookahead = index + 1
             while lookahead < length and text[lookahead] in " \t\r\n":
                 lookahead += 1
-            if lookahead < length and text[lookahead] in "}]":
+            previous = len(result) - 1
+            while previous >= 0 and result[previous] in " \t\r\n":
+                previous -= 1
+            prior = result[previous] if previous >= 0 else ""
+            value_ending = prior in {'"', '}', ']'} or prior.isdigit() or prior in {'e', 'l'}
+            if lookahead < length and text[lookahead] in "}]" and value_ending:
                 index += 1
                 continue
         result.append(char)
@@ -1039,10 +1050,6 @@ def extract_json_object(text: str) -> dict[str, Any]:
         if repaired == text.strip():
             raise
         verdict = _extract_json_object_once(repaired)
-        print(
-            "::notice::Noema local trailing-comma JSON repair recovered an "
-            "otherwise-malformed response; no network repair retry was needed."
-        )
         return verdict
 
 
@@ -1289,19 +1296,7 @@ def decode_llm_response_body(raw_bytes: bytes) -> str:
 
 
 def _extract_served_model(raw: str) -> str | None:
-    """Best-effort read of which model/provider actually served a response.
-
-    ``orchestrator/free`` auto-selects among discovered candidate models, so
-    the requested ``model`` string in the outgoing payload never says which
-    one actually answered (or attempted to answer) a given call -- that is
-    exactly the telemetry gap that made a bare "900-second timeout" opaque.
-    OpenAI-compatible chat-completion envelopes commonly echo the serving
-    model back in a top-level ``model`` field; this reads only that field,
-    never the untrusted ``content`` body, and returns ``None`` for any shape
-    that does not carry a usable one so a logging concern can never raise
-    and mask the real review outcome. The value is scrubbed and length-
-    bounded before use since it is still untrusted model/gateway output.
-    """
+    """Return a bounded, scrubbed, single-line UTF-8-printable serving model id."""
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -1311,7 +1306,11 @@ def _extract_served_model(raw: str) -> str | None:
     served = data.get("model")
     if not isinstance(served, str) or not served.strip():
         return None
-    return scrub_sensitive_data(served.strip()[:200])
+    scrubbed = scrub_sensitive_data(served.strip()) or ""
+    printable = scrubbed.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    printable = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in printable)
+    printable = " ".join(printable.split())
+    return printable[:200] or None
 
 
 def _truthy_env(name: str) -> bool:
@@ -1401,66 +1400,6 @@ def reject_private_llm_url(api_url: str) -> None:
             raise ValueError("URL cannot target internal IP addresses")
 
 
-@contextlib.contextmanager
-def _repair_wall_clock_deadline(seconds: float):
-    """Interrupt the entire corrective attempt after ``seconds`` of wall time.
-
-    ``urllib``'s timeout is a socket-operation timeout and can be extended by
-    trickling bytes. Required Noema Review runs on Linux, so ITIMER_REAL gives
-    the repair attempt one process-level wall-clock budget across open, read,
-    decode, and deterministic validation. An existing process alarm is not
-    overwritten; that condition fails closed instead.
-    """
-    if seconds <= 0:
-        raise ValueError("repair wall-clock deadline must be positive")
-    if not hasattr(signal, "setitimer") or not hasattr(signal, "ITIMER_REAL"):
-        raise RuntimeError("repair wall-clock deadline requires POSIX setitimer support")
-    previous_remaining, previous_interval = signal.getitimer(signal.ITIMER_REAL)
-    if previous_remaining > 0 or previous_interval > 0:
-        raise RuntimeError("repair wall-clock deadline refused to overwrite an active process alarm")
-    previous_handler = signal.getsignal(signal.SIGALRM)
-
-    def expire(_signum, _frame):
-        """Raise the typed deadline signal without reflecting response content."""
-        raise NoemaRepairDeadlineExceeded(
-            f"Noema repair exceeded {seconds:g}-second absolute wall-clock deadline"
-        )
-
-    try:
-        signal.signal(signal.SIGALRM, expire)
-    except ValueError as exc:
-        raise RuntimeError("repair wall-clock deadline must run on the process main thread") from exc
-    signal.setitimer(signal.ITIMER_REAL, seconds)
-    try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-
-
-class StaleHeadDuringRepairRetryError(RuntimeError):
-    """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
-
-
-def _classify_attempt_outcome(exc: BaseException) -> str:
-    """Return a short, stable outcome class name for attempt telemetry.
-
-    Order matters: ``NoemaRepairDeadlineExceeded`` is itself a
-    ``TimeoutError``/``OSError`` subclass, so it is checked before the
-    broader transport-error class -- otherwise every deadline-exceeded
-    attempt would misreport as an ordinary transport error and the
-    telemetry this classifies for would lose the one distinction the
-    original bare "900-second timeout" message could not make.
-    """
-    if isinstance(exc, NoemaRepairDeadlineExceeded):
-        return "deadline_exceeded"
-    if isinstance(exc, NoemaModelOutputError):
-        return "malformed_output"
-    if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
-        return "transport_error"
-    return "runtime_error"
-
-
 def call_llm(
     repo: str,
     number: int,
@@ -1470,111 +1409,40 @@ def call_llm(
     expected_head: str,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
-    repair_error: str = "",
-    is_retry: bool = False,
 ) -> dict[str, Any]:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
+    """Issue exactly one structured-output request through contextual-orchestrator.
 
-    ``expected_head`` is the same normalized (lowercase) SHA
-    ``inspect_and_review`` already checks before model work and before
-    publication. It is threaded through here so the one-time repair-retry
-    request below — fired only after the first attempt's verdict was
-    malformed — can also confirm the PR head has not moved before spending a
-    second, potentially multi-hour model call on a
-    review that ``inspect_and_review``'s own post-call stale-head check would
-    discard anyway once this function returns. See ``fetch_pr`` for the live
-    lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
-    condition is reported distinctly to the caller.
-
-    ``is_retry`` tracks retry state independently of ``repair_error``'s text:
-    several transport exceptions (a bare ``OSError``/``TimeoutError`` or
-    ``http.client.HTTPException`` raised with no message) stringify to an
-    empty string, so gating on ``repair_error``'s truthiness alone would let
-    an empty-message failure retry unboundedly instead of failing closed
-    after one attempt.
-
-    The outgoing payload declares ``_noema_verdict_response_format`` (an
-    OpenAI Chat Completions structured-output envelope, with
-    ``adversarial_validation.probes.minItems`` set from
-    ``_required_probe_count(diff, changed_paths)``) on both the primary and
-    the repair call, so a compliant candidate model is asked to emit the
-    verdict shape -- including the exact probe-count floor
-    ``validate_substantive_verdict`` will also check -- directly, instead of
-    only being told so in the prompt text.
-    Every attempt (primary or repair, success or failure) emits exactly one
-    ``::notice::``/``::warning::`` GitHub Actions annotation carrying its
-    duration, the furthest phase reached (connecting/reading/decoding/
-    validating), and -- best-effort, since ``orchestrator/free`` auto-selects
-    among discovered candidates -- which model actually served the response.
-    None of that telemetry ever includes raw model content, matching this
-    module's existing no-raw-content discipline for a public
-    ``pull_request_target`` workflow.
+    The gateway owns provider discovery, schema repair, candidate exclusion,
+    failover, and model timeouts. This caller therefore performs one request,
+    carries no fixed model wall-clock deadline or sampling temperature, and
+    fails closed if the gateway does not return a locally valid verdict.
+    Publication still performs a fresh exact-head check after model work.
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/free"
     if not api_url or not api_key:
-        raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+        raise RuntimeError(
+            "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
+        )
     reject_private_llm_url(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
         for path, line, side in sorted(changed_diff_locations(diff))
     ]
-    location_example = (
-        allowed_locations[0]
-        if allowed_locations
-        else {"path": "path", "line": 0, "side": "RIGHT"}
-    )
-
+    location_example = allowed_locations[0] if allowed_locations else {
+        "path": "path", "line": 0, "side": "RIGHT"
+    }
     prompt = {
         "role": "user",
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
-                "Return only JSON with this shape:",
-                json.dumps(
-                    {
-                        "decision": "approve|request_changes|comment",
-                        "summary": "...",
-                        "reviewed_lines": [{**location_example, "analysis": "..."}],
-                        "adversarial_validation": {
-                            "status": "passed|failed",
-                            "residual_risk": "...",
-                            "probes": [
-                                {
-                                    **location_example,
-                                    "hypothesis": "...",
-                                    "attack_or_counterexample": "...",
-                                    "evidence": "observed or source-traced result",
-                                    "outcome": "falsified|confirmed",
-                                }
-                            ],
-                        },
-                        "findings": [
-                            {
-                                "severity": "high|medium|low",
-                                "file": location_example["path"],
-                                "line": location_example["line"],
-                                "side": location_example["side"],
-                                "message": "...",
-                            }
-                        ],
-                    },
-                    separators=(",", ":"),
-                ),
+                "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
-                *(
-                    [
-                        "Your prior verdict was rejected by the trusted validator: "
-                        f"{repair_error or 'no diagnostic message was available'}",
-                        "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
-                    ]
-                    if is_retry
-                    else []
-                ),
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -1589,7 +1457,6 @@ def call_llm(
     }
     payload = {
         "model": model,
-        "temperature": 0,
         "response_format": _noema_verdict_response_format(
             _required_probe_count(diff, changed_paths)
         ),
@@ -1608,128 +1475,84 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
-    # Telemetry state for this one attempt (primary or repair). Every branch
-    # below -- success, primary failure that hands off to repair, and repair
-    # failure -- logs exactly one line covering start-relative duration,
-    # which sub-phase was reached, and (best-effort) which orchestrator/free
-    # candidate served the call. This is the breakdown that was missing from
-    # the original bare "900-second wall-clock deadline" message: it answers
-    # whether a repair attempt was still waiting on the network (phase
-    # "connecting"/"reading") or stuck in local processing after already
-    # getting bytes back (phase "decoding"/"validating"), and makes explicit
-    # that there is exactly one repair attempt here, never a hidden retry
-    # loop with its own backoff.
-    attempt_kind = "repair" if is_retry else "primary"
     attempt_started = time.monotonic()
-    phase_reached = "connecting"
+    active_phase = "connecting"
     served_model: str | None = None
     try:
-        deadline_context = (
-            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)
-            if is_retry
-            else contextlib.nullcontext()
-        )
-        with deadline_context:
-            with opener.open(request) as response:  # nosec B310
-                phase_reached = "reading"
-                raw_bytes = response.read()
-            phase_reached = "decoding"
-            raw = decode_llm_response_body(raw_bytes)
-            served_model = _extract_served_model(raw)
-            content = extract_llm_message_content(raw)
-            verdict = extract_json_object(content)
-            phase_reached = "validating"
-            decision = str(verdict.get("decision") or "").strip().lower()
-            if decision not in {"approve", "request_changes", "comment"}:
-                raise NoemaModelOutputError(f"Noema LLM returned unsupported decision: {decision!r}")
-            summary = verdict.get("summary")
-            if not isinstance(summary, str) or not summary.strip():
-                raise NoemaModelOutputError("Noema LLM response did not contain a substantive summary")
-            findings = verdict.get("findings")
-            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-                raise NoemaModelOutputError("Noema LLM response findings must be a list of objects")
-            for finding in findings:
-                if (
-                    finding.get("severity") not in {"high", "medium", "low"}
-                    or not isinstance(finding.get("file"), str)
-                    or not finding["file"].strip()
-                    or type(finding.get("line")) is not int
-                    or finding["line"] <= 0
-                    or finding.get("side") not in {"RIGHT", "LEFT"}
-                    or not isinstance(finding.get("message"), str)
-                    or not finding["message"].strip()
-                ):
-                    raise NoemaModelOutputError("Noema LLM response contained a malformed finding")
-            if decision == "request_changes" and not findings:
-                raise NoemaModelOutputError("Noema LLM request_changes response did not contain a substantive finding")
-            validate_substantive_verdict(verdict, diff, changed_paths)
-    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
-        attempt_elapsed = time.monotonic() - attempt_started
-        outcome = _classify_attempt_outcome(exc)
-        current_failure = _stable_failure_diagnostic(exc)
-        served_model_note = served_model or "unknown"
-        if is_retry:
-            print(
-                f"::warning::Noema repair attempt outcome={outcome} "
-                f"phase={phase_reached} duration={attempt_elapsed:.1f}s "
-                f"deadline={NOEMA_REPAIR_DEADLINE_SECONDS:g}s "
-                f"served_model={served_model_note}; repair attempts=1 "
-                "(one bounded corrective call -- not a retry loop)."
+        with opener.open(request) as response:  # nosec B310
+            active_phase = "reading"
+            raw_bytes = response.read()
+        active_phase = "decoding"
+        raw = decode_llm_response_body(raw_bytes)
+        served_model = _extract_served_model(raw)
+        content = extract_llm_message_content(raw)
+        verdict = extract_json_object(content)
+        active_phase = "validating"
+        decision = str(verdict.get("decision") or "").strip().lower()
+        if decision not in {"approve", "request_changes", "comment"}:
+            raise NoemaModelOutputError(
+                f"Noema LLM returned unsupported decision: {decision!r}"
             )
-            initial_failure = (
-                scrub_sensitive_data(repair_error)
-                or "no diagnostic message was available"
+        summary = verdict.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise NoemaModelOutputError(
+                "Noema LLM response did not contain a substantive summary"
             )
-            timing_suffix = (
-                f"; repair attempts=1, repair duration={attempt_elapsed:.1f}s, "
-                f"phase={phase_reached}, served_model={served_model_note}"
+        findings = verdict.get("findings")
+        if not isinstance(findings, list) or any(
+            not isinstance(finding, dict) for finding in findings
+        ):
+            raise NoemaModelOutputError(
+                "Noema LLM response findings must be a list of objects"
             )
-            if isinstance(exc, NoemaModelOutputError):
-                raise NoemaModelOutputError(
-                    "Noema model-output repair remained invalid; "
-                    f"initial failure: {initial_failure}; repair failure: {current_failure}"
-                    f"{timing_suffix}"
-                ) from None
-            if isinstance(
-                exc, (urllib.error.URLError, http.client.HTTPException, OSError)
+        for finding in findings:
+            if (
+                finding.get("severity") not in {"high", "medium", "low"}
+                or not isinstance(finding.get("file"), str)
+                or not finding["file"].strip()
+                or type(finding.get("line")) is not int
+                or finding["line"] <= 0
+                or finding.get("side") not in {"RIGHT", "LEFT"}
+                or not isinstance(finding.get("message"), str)
+                or not finding["message"].strip()
             ):
-                raise NoemaTransportError(
-                    "Noema bounded repair transport was exhausted; "
-                    f"initial failure: {initial_failure}; repair failure: "
-                    f"{type(exc).__name__}: {current_failure}"
-                    f"{timing_suffix}"
-                ) from exc
-            raise RuntimeError(
-                "Noema repair failed closed; "
-                f"initial failure: {initial_failure}; repair failure: {current_failure}"
-                f"{timing_suffix}"
-            ) from exc
-        if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
-            raise StaleHeadDuringRepairRetryError(
-                "Pull request head changed during review; stale before repair retry."
-            ) from exc
+                raise NoemaModelOutputError(
+                    "Noema LLM response contained a malformed finding"
+                )
+        if decision == "request_changes" and not findings:
+            raise NoemaModelOutputError(
+                "Noema LLM request_changes response did not contain a substantive finding"
+            )
+        validate_substantive_verdict(verdict, diff, changed_paths)
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        elapsed = time.monotonic() - attempt_started
+        current_failure = _stable_failure_diagnostic(exc)
+        model_note = served_model or "unknown"
         print(
-            f"::notice::Noema primary attempt outcome={outcome} phase={phase_reached} "
-            f"duration={attempt_elapsed:.1f}s served_model={served_model_note} "
-            f"({current_failure}); starting one bounded repair attempt "
-            f"(deadline={NOEMA_REPAIR_DEADLINE_SECONDS:g}s)."
+            f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
+            f"duration={elapsed:.1f}s served_model={model_note}; "
+            "caller attempts=1 (gateway owns repair/failover)."
         )
-        return call_llm(
-            repo,
-            number,
-            pr,
-            diff,
-            truncated,
-            expected_head,
-            review_context,
-            changed_paths,
-            current_failure,
-            is_retry=True,
+        suffix = (
+            f"; caller attempts=1, duration={elapsed:.1f}s, "
+            f"phase={active_phase}, served_model={model_note}"
         )
-    attempt_elapsed = time.monotonic() - attempt_started
+        if isinstance(exc, NoemaModelOutputError):
+            raise NoemaModelOutputError(
+                f"Noema model output failed local validation: {current_failure}{suffix}"
+            ) from None
+        if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
+            raise NoemaTransportError(
+                f"Noema gateway transport failed: {type(exc).__name__}: {current_failure}{suffix}"
+            ) from exc
+        raise RuntimeError(
+            f"Noema review failed closed: {current_failure}{suffix}"
+        ) from exc
+    elapsed = time.monotonic() - attempt_started
     print(
-        f"::notice::Noema {attempt_kind} attempt outcome=success "
-        f"duration={attempt_elapsed:.1f}s served_model={served_model or 'unknown'}"
+        f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
+        f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
+        "caller attempts=1."
     )
     return verdict
 
@@ -1819,8 +1642,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review.
 
     ``expected_head`` is normalized defensively before the stale-head
-    comparisons below, and before the one ``call_llm`` performs on its own
-    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and
+    comparisons below and the post-model publication check. The CLI and
     workflow require canonical lowercase SHA input so equivalent casing
     cannot split the workflow concurrency group.
     """
@@ -1849,11 +1671,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)
-    try:
-        verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
-    except StaleHeadDuringRepairRetryError:
-        print("Pull request head changed during review; Noema review skipped before repair retry.")
-        return 0
+    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
     try:
         require_expected_head(current_pr, expected_head)

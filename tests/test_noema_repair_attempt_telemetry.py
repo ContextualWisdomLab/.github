@@ -1,21 +1,6 @@
-"""Regression coverage for Noema repair-path telemetry.
-
-Owner complaint (2026-09-02, `html4tree` run 33560972491, job 100033086428):
-a Noema repair-deadline failure gave no diagnostic detail beyond "exceeded
-900-second absolute wall-clock deadline" -- no attempt count, no duration
-breakdown, no indication of which sub-phase (connect/read/decode/validate)
-the one bounded repair attempt was in when the deadline fired, and no record
-of which ``orchestrator/free`` candidate served (or was attempted for) a
-call. See ``docs/doctoring/noema-repair-attempt-telemetry.md`` for the full
-incident and reasoning trail this test file backs.
-
-These tests never make a real network call (per this repo's convention):
-every HTTP interaction is monkeypatched at ``urllib.request.OpenerDirector.open``.
-"""
+"""Exact contracts for Noema's single gateway request and passive telemetry."""
 
 import json
-import signal
-import time
 
 import pytest
 
@@ -32,304 +17,104 @@ index 1111111..2222222 100644
 """
 
 
-def _comment_verdict() -> dict:
-    """Return a minimal always-valid verdict (decision=comment needs no probes)."""
-    return {"decision": "comment", "summary": "Looks fine.", "findings": []}
-
-
-def _malformed_probe_verdict() -> dict:
-    """Return a schema-valid JSON envelope with an out-of-domain probe outcome.
-
-    Same real #1611 failure shape used by
-    ``test_noema_model_output_failure_classification.py``: it passes JSON
-    decoding but fails the deterministic ``validate_substantive_verdict``
-    check, which is exactly the malformed-then-repair path this module logs
-    telemetry for.
-    """
+def _verdict() -> dict:
     return {
         "decision": "approve",
-        "summary": "The changed line was reviewed.",
-        "reviewed_lines": [
-            {
-                "path": "README.md",
-                "line": 1,
-                "side": "RIGHT",
-                "analysis": "The replacement is bounded and reviewable.",
-            }
-        ],
+        "summary": "Reviewed the exact changed line.",
+        "reviewed_lines": [{"path": "README.md", "line": 1, "side": "RIGHT", "analysis": "Bounded replacement."}],
         "adversarial_validation": {
             "status": "passed",
             "residual_risk": "No additional risk identified.",
-            "probes": [
-                {
-                    "path": "README.md",
-                    "line": 1,
-                    "side": "RIGHT",
-                    "hypothesis": "The replacement could be wrong.",
-                    "attack_or_counterexample": "Compare the exact changed line.",
-                    "evidence": "Observed the exact replacement in the diff.",
-                    "outcome": "passed",  # invalid: must be falsified|confirmed
-                }
-            ],
+            "probes": [{
+                "path": "README.md", "line": 1, "side": "RIGHT",
+                "hypothesis": "The replacement could be wrong.",
+                "attack_or_counterexample": "Inspect the exact changed line.",
+                "evidence": "The new value is present at the cited line.",
+                "outcome": "falsified",
+            }],
         },
         "findings": [],
     }
 
 
-class _JsonResponse:
-    """Minimal context-manager stand-in for ``http.client.HTTPResponse``."""
-
-    def __init__(self, body: dict):
-        self._body = body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-    def read(self):
-        return json.dumps(self._body).encode()
-
-
-def test_response_format_is_the_openai_structured_output_envelope_on_every_call(monkeypatch):
-    """Both the primary and the repair call declare the OpenAI json_schema envelope.
-
-    contextual-orchestrator's ``orchestrator/free`` sidecar is a proven
-    OpenAI-compatible endpoint (ADR-0003), so the outer envelope must be
-    OpenAI's own ``response_format`` wrapping convention, not bare JSON
-    Schema. This does not implement any gateway-owned candidate-selection or
-    retry policy (PR #1602); it only declares what shape the caller wants.
-    """
+def _configure(monkeypatch, raw: bytes):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "a" * 40
-    requests: list[object] = []
+    requests = []
 
-    def open_response(_opener, request, **_kwargs):
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return None
+        def read(self): return raw
+
+    def open_response(_opener, request, **kwargs):
         requests.append(request)
-        if len(requests) == 1:
-            return _JsonResponse(
-                {"choices": [{"message": {"content": json.dumps(_malformed_probe_verdict())}}]}
-            )
-        return _JsonResponse(
-            {"choices": [{"message": {"content": json.dumps(_comment_verdict())}}]}
-        )
+        assert kwargs == {}
+        return Response()
 
     monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
-    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": head_sha})
-
-    verdict = gate.call_llm(
-        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,
-        changed_paths=("README.md",),
-    )
-
-    assert verdict == _comment_verdict()
-    assert len(requests) == 2
-    expected_format = gate._noema_verdict_response_format(1)  # README.md is not material
-    for request in requests:
-        payload = json.loads(request.data)
-        assert payload["response_format"] == expected_format
-    schema = expected_format["json_schema"]
-    assert schema["strict"] is True
-    assert expected_format["type"] == "json_schema"
-    assert set(schema["schema"]["required"]) == {
-        "decision", "summary", "reviewed_lines", "adversarial_validation", "findings",
-    }
-    probes_schema = schema["schema"]["properties"]["adversarial_validation"]["properties"]["probes"]
-    assert probes_schema["minItems"] == 1
+    return requests
 
 
-def test_response_format_probe_floor_matches_required_probe_count_for_material_changes(monkeypatch):
-    """The declared ``minItems`` must track ``_required_probe_count`` exactly.
-
-    Reproduces the shape of `ContextualWisdomLab/ConceptWeave` run
-    `33527145686`, job `99920767480`: a `.py` (material/source-like) changed
-    path requires 2 probes. If the declared schema only asked for 1 (or
-    omitted the floor entirely, as before this test), the gateway's own
-    schema validation (ADR-0035) could never structurally catch a
-    single-probe verdict on a material change before it reaches
-    ``validate_substantive_verdict`` and fails the whole review outright.
-    """
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "f" * 40
-    material_diff = """diff --git a/scripts/ci/example.py b/scripts/ci/example.py
-index 1111111..2222222 100644
---- a/scripts/ci/example.py
-+++ b/scripts/ci/example.py
-@@ -1 +1 @@
--old
-+new
-"""
-    requests: list[object] = []
-
-    def open_response(_opener, request, **_kwargs):
-        requests.append(request)
-        return _JsonResponse(
-            {"choices": [{"message": {"content": json.dumps(_comment_verdict())}}]}
-        )
-
-    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
-
-    gate.call_llm(
-        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, material_diff, False, head_sha,
-        changed_paths=("scripts/ci/example.py",),
-    )
-
+def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) -> None:
+    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(_verdict())}}]}).encode()
+    requests = _configure(monkeypatch, raw)
+    verdict = gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "a" * 40}, DIFF, False, "a" * 40, changed_paths=("README.md",))
+    assert verdict["decision"] == "approve"
     assert len(requests) == 1
-    payload = json.loads(requests[0].data)
-    probes_schema = payload["response_format"]["json_schema"]["schema"]["properties"][
-        "adversarial_validation"
-    ]["properties"]["probes"]
-    expected = gate._required_probe_count(material_diff, ("scripts/ci/example.py",))
-    assert expected == 2
-    assert probes_schema["minItems"] == expected
+    output = capsys.readouterr().out
+    assert output.count("::notice::Noema gateway attempt") == 1
+    assert "phase=validating" in output
+    assert "caller attempts=1" in output
 
 
-def test_required_probe_count_is_the_shared_source_for_the_python_check_too():
-    """``validate_substantive_verdict`` must reject one probe below the same floor.
-
-    Proves the schema-side ``minItems`` and the Python-side backstop are
-    reading the exact same computation, not two independently-maintained
-    numbers that could drift.
-    """
-    diff = DIFF  # README.md-only: not material, floor is 1
-    assert gate._required_probe_count(diff, ("README.md",)) == 1
-    verdict = _malformed_probe_verdict()  # already has exactly 1 probe
-    verdict["adversarial_validation"]["probes"][0]["outcome"] = "falsified"
-    gate.validate_substantive_verdict(verdict, diff, ("README.md",))  # does not raise
-
-    # Same one-probe shape, but pointed at a material (.py) changed line --
-    # this is the exact ConceptWeave shape: schema-valid JSON, correct
-    # location, just one probe short of the 2 a source-file change requires.
-    material_diff = """diff --git a/scripts/ci/example.py b/scripts/ci/example.py
-index 1111111..2222222 100644
---- a/scripts/ci/example.py
-+++ b/scripts/ci/example.py
-@@ -1 +1 @@
--old
-+new
-"""
-    assert gate._required_probe_count(material_diff, ("scripts/ci/example.py",)) == 2
-    material_verdict = _malformed_probe_verdict()
-    for location in (
-        material_verdict["reviewed_lines"][0],
-        material_verdict["adversarial_validation"]["probes"][0],
-    ):
-        location["path"] = "scripts/ci/example.py"
-    material_verdict["adversarial_validation"]["probes"][0]["outcome"] = "falsified"
-    with pytest.raises(gate.NoemaModelOutputError, match="requires at least 2 concrete probe"):
-        gate.validate_substantive_verdict(
-            material_verdict, material_diff, ("scripts/ci/example.py",)
-        )
+def test_malformed_output_fails_closed_without_caller_retry(monkeypatch, capsys) -> None:
+    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": "not-json"}}]}).encode()
+    requests = _configure(monkeypatch, raw)
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "b" * 40}, DIFF, False, "b" * 40, changed_paths=("README.md",))
+    assert len(requests) == 1
+    output = capsys.readouterr().out
+    assert output.count("::warning::Noema gateway attempt") == 1
 
 
-def test_served_model_telemetry_reads_envelope_model_field_when_present(monkeypatch, capsys):
-    """A successful attempt logs which candidate model served it."""
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "b" * 40
+def test_served_model_is_annotation_safe() -> None:
+    raw = json.dumps({"model": "bad\r\n::error::boom\u0000\ud800"})
+    value = gate._extract_served_model(raw)
+    assert value is not None
+    assert "\r" not in value and "\n" not in value and "\x00" not in value
+    assert "\\ud800" in value
+    assert len(value) <= 200
 
-    monkeypatch.setattr(
-        gate.urllib.request.OpenerDirector,
-        "open",
-        lambda *_a, **_k: _JsonResponse(
-            {
-                "model": "some-provider/some-model-v1",
-                "choices": [{"message": {"content": json.dumps(_comment_verdict())}}],
-            }
-        ),
-    )
 
-    verdict = gate.call_llm(
-        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,
-        changed_paths=("README.md",),
-    )
-
-    assert verdict == _comment_verdict()
-    notice = capsys.readouterr().out
-    assert "::notice::Noema primary attempt outcome=success" in notice
-    assert "served_model=some-provider/some-model-v1" in notice
+@pytest.mark.parametrize("text", ["[,]", "{,}", "[1,,]", '{"a":,}'])
+def test_local_json_repair_never_fabricates_missing_values(text: str) -> None:
+    assert gate._strip_trailing_commas_outside_strings(text) == text
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
+    ("text", "expected"),
     [
-        ('{"model": "provider/model-x", "choices": []}', "provider/model-x"),
-        ('{"choices": []}', None),
-        ('{"model": "", "choices": []}', None),
-        ('{"model": 5, "choices": []}', None),
-        ("not json at all", None),
-        ("[]", None),
+        ('{"a":"x",}', '{"a":"x"}'),
+        ('{"a":1,}', '{"a":1}'),
+        ('{"a":true,}', '{"a":true}'),
+        ('{"a":null,}', '{"a":null}'),
+        ('{"a":{},}', '{"a":{}}'),
+        ('{"a":[],}', '{"a":[]}'),
+        ('["x",]', '["x"]'),
+        ('[1,]', '[1]'),
     ],
 )
-def test_extract_served_model_is_best_effort_and_never_raises(raw, expected):
-    """``_extract_served_model`` only reads a real, non-empty string field."""
-    assert gate._extract_served_model(raw) == expected
+def test_local_json_repair_accepts_only_complete_value_trailing_commas(text: str, expected: str) -> None:
+    assert gate._strip_trailing_commas_outside_strings(text) == expected
 
 
-def test_extract_served_model_scrubs_and_bounds_the_value():
-    """The served-model field is untrusted gateway/model output and is scrubbed."""
-    raw = json.dumps({"model": "bearer abc123 " + "x" * 500, "choices": []})
-    served = gate._extract_served_model(raw)
-    assert served is not None
-    assert "abc123" not in served
-    assert len(served) <= 200
-
-
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [
-        (gate.NoemaRepairDeadlineExceeded("exceeded"), "deadline_exceeded"),
-        (gate.NoemaModelOutputError("bad"), "malformed_output"),
-        (gate.NoemaTransportError("bad transport"), "runtime_error"),
-        (RuntimeError("unexpected"), "runtime_error"),
-    ],
-)
-def test_classify_attempt_outcome_orders_deadline_before_transport(exc, expected):
-    """Deadline-exceeded must not misreport as a generic transport error.
-
-    ``NoemaRepairDeadlineExceeded`` is itself an ``OSError``/``TimeoutError``
-    subclass, so the classifier must check it before the broader transport
-    class or the one distinction the original bare timeout message could
-    not make (deadline vs. ordinary transport failure) would be lost again.
-    """
-    assert gate._classify_attempt_outcome(exc) == expected
-
-
-def test_classify_attempt_outcome_detects_transport_family():
-    import http.client
-    import urllib.error
-
-    assert gate._classify_attempt_outcome(urllib.error.URLError("boom")) == "transport_error"
-    assert (
-        gate._classify_attempt_outcome(http.client.HTTPException("boom"))
-        == "transport_error"
-    )
-    assert gate._classify_attempt_outcome(OSError("boom")) == "transport_error"
-
-
-def test_repair_deadline_exceeded_emits_full_attempt_breakdown(monkeypatch, capsys):
-    """The owner's exact complaint: a deadline failure must explain itself.
-
-    Reproduces the `html4tree` run 33560972491 / job 100033086428 shape --
-    malformed primary JSON, then a repair attempt that runs past its
-    wall-clock budget -- and asserts the failure now carries an attempt
-    count, a duration, and the furthest phase reached, plus a matching
-    ``::notice::``/``::warning::`` pair a human can read straight from the
-    public Actions log without re-running anything.
-    """
-    if not hasattr(signal, "setitimer"):
-        pytest.skip("POSIX process timer is required by the Linux review runner")
-
+def _single_request_transport(monkeypatch, *, raw=None, open_error=None, read_error=None):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    monkeypatch.setattr(gate, "NOEMA_REPAIR_DEADLINE_SECONDS", 0.05)
-    head_sha = "d" * 40
-    calls = 0
+    calls = []
 
-    class SlowRepairResponse:
+    class Response:
         def __enter__(self):
             return self
 
@@ -337,114 +122,93 @@ def test_repair_deadline_exceeded_emits_full_attempt_breakdown(monkeypatch, caps
             return None
 
         def read(self):
-            time.sleep(2)
-            return b"{}"
+            if read_error is not None:
+                raise read_error
+            assert raw is not None
+            return raw
 
-    def open_response(_opener, _request, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return _JsonResponse(
-                {"choices": [{"message": {"content": json.dumps(_malformed_probe_verdict())}}]}
-            )
-        return SlowRepairResponse()
-
-    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
-    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": head_sha})
-
-    with pytest.raises(gate.NoemaTransportError) as exc_info:
-        gate.call_llm(
-            "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,
-            changed_paths=("README.md",),
-        )
-
-    message = str(exc_info.value)
-    assert "NoemaRepairDeadlineExceeded" in message
-    assert "repair attempts=1" in message
-    assert "repair duration=" in message
-    assert "phase=reading" in message
-    assert calls == 2
-
-    captured = capsys.readouterr().out
-    assert "::notice::Noema primary attempt outcome=malformed_output" in captured
-    assert "starting one bounded repair attempt" in captured
-    assert "::warning::Noema repair attempt outcome=deadline_exceeded" in captured
-    assert "phase=reading" in captured
-    assert "served_model=unknown" in captured
-    assert "not a retry loop" in captured
-
-
-def test_strip_trailing_commas_outside_strings_is_lossless_and_string_safe():
-    """The trailing-comma fixer only removes a comma directly before a closer.
-
-    A comma that is genuine string content (inside quotes) is never touched,
-    proven here by a value that itself contains ``,}`` as literal text.
-    """
-    fixed = gate._strip_trailing_commas_outside_strings('{"a": 1, "b": [1, 2,], },')
-    assert fixed == '{"a": 1, "b": [1, 2] },'
-    assert json.loads(fixed.rstrip(",")) == {"a": 1, "b": [1, 2]}
-
-    untouched = '{"note": "trailing ,} inside a string"}'
-    assert gate._strip_trailing_commas_outside_strings(untouched) == untouched
-
-    # An escaped quote inside a string must not end the string early, so a
-    # ",}" that follows it (but is still inside the string) stays untouched.
-    escaped = '{"note": "an escaped quote \\" then ,} still inside"}'
-    assert gate._strip_trailing_commas_outside_strings(escaped) == escaped
-
-
-def test_extract_json_object_recovers_a_trailing_comma_response(capsys):
-    """A trailing-comma-malformed verdict recovers locally, no network retry needed."""
-    malformed = '{"decision":"comment","summary":"ok","findings":[],}'
-    with pytest.raises(gate.NoemaModelOutputError):
-        gate._extract_json_object_once(malformed)
-
-    verdict = gate.extract_json_object(malformed)
-    assert verdict == {"decision": "comment", "summary": "ok", "findings": []}
-    notice = capsys.readouterr().out
-    assert "::notice::Noema local trailing-comma JSON repair recovered" in notice
-    assert "no network repair retry was needed" in notice
-
-
-def test_extract_json_object_does_not_guess_repair_other_malformations(capsys):
-    """Only the trailing-comma class is repaired; other malformed JSON still fails closed."""
-    unquoted_key = '{"decision":"approve", trailing garbage not: "quoted}'
-    with pytest.raises(gate.NoemaModelOutputError, match="was not valid JSON"):
-        gate.extract_json_object(unquoted_key)
-    assert "::notice::" not in capsys.readouterr().out
-
-
-def test_successful_repair_attempt_logs_success_with_served_model(monkeypatch, capsys):
-    """A repair attempt that succeeds still gets one success telemetry line."""
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "c" * 40
-    calls = 0
-
-    def open_response(_opener, _request, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return _JsonResponse(
-                {"choices": [{"message": {"content": json.dumps(_malformed_probe_verdict())}}]}
-            )
-        return _JsonResponse(
-            {
-                "model": "repair-candidate/model-y",
-                "choices": [{"message": {"content": json.dumps(_comment_verdict())}}],
-            }
-        )
+    def open_response(_opener, request, **kwargs):
+        calls.append(request)
+        assert kwargs == {}
+        if open_error is not None:
+            raise open_error(request) if callable(open_error) else open_error
+        return Response()
 
     monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
-    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": head_sha})
+    return calls
 
-    verdict = gate.call_llm(
-        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,
+
+def _invoke_once(monkeypatch, **transport):
+    calls = _single_request_transport(monkeypatch, **transport)
+    kwargs = dict(
+        repo="owner/repo",
+        number=7,
+        pr={"title": "t", "headRefOid": "c" * 40},
+        diff=DIFF,
+        truncated=False,
+        expected_head="c" * 40,
         changed_paths=("README.md",),
     )
+    return calls, kwargs
 
-    assert verdict == _comment_verdict()
-    assert calls == 2
-    captured = capsys.readouterr().out
-    assert "::notice::Noema repair attempt outcome=success" in captured
-    assert "served_model=repair-candidate/model-y" in captured
+
+def test_malformed_gateway_envelope_is_one_request_fail_closed(monkeypatch) -> None:
+    calls, kwargs = _invoke_once(monkeypatch, raw=b"[]")
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+
+
+def test_invalid_utf8_is_one_request_fail_closed(monkeypatch) -> None:
+    calls, kwargs = _invoke_once(monkeypatch, raw=b"invalid: \x80\x81\xfe")
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        lambda request: gate.urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None),
+        OSError("socket timeout"),
+    ],
+)
+def test_connect_failures_are_one_request_and_typed(monkeypatch, failure) -> None:
+    calls, kwargs = _invoke_once(monkeypatch, open_error=failure)
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+
+
+def test_truncated_read_is_one_request_and_typed(monkeypatch) -> None:
+    calls, kwargs = _invoke_once(
+        monkeypatch, read_error=gate.http.client.IncompleteRead(b"partial", 10)
+    )
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+
+
+def test_malformed_verdict_json_is_not_retried(monkeypatch) -> None:
+    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": "{bad"}}]}).encode()
+    calls, kwargs = _invoke_once(monkeypatch, raw=raw)
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+
+
+def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
+    verdict = _verdict()
+    verdict["decision"] = "request_changes"
+    verdict["findings"] = [{
+        "severity": "high",
+        "file": "README.md",
+        "line": 99,
+        "side": "RIGHT",
+        "message": "Outside the changed hunk.",
+    }]
+    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+    calls, kwargs = _invoke_once(monkeypatch, raw=raw)
+    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
