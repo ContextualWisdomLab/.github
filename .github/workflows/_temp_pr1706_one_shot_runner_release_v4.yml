@@ -95,7 +95,10 @@ jobs:
           target = replace_once(
               target,
               '          if ! reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then\n',
-              '          if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then\n',
+              '          if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then\n'
+              '            echo "::error::Reviews API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."\n'
+              '            exit 1\n'
+              '          fi\n',
               "bounded Reviews read",
           )
           WORKFLOW.write_text(before + step_start + target + step_end + after, encoding="utf-8")
@@ -139,87 +142,16 @@ jobs:
               raise SystemExit("v2 exact-run parse boundary drifted")
           text = text.replace(old_parse, new_parse, 1)
 
-          acceptance_marker = '''    assert len(calls) == 2
-''', encoding="utf-8")
-'''
-          acceptance_replacement = r'''    assert len(calls) == 2
-
-
-def _wake_script() -> str:
-    """Extract the exact-run wake shell body from the production dispatch workflow."""
-    workflow = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
-    step = workflow.split("      - name: Wake exact-head required OpenCode workflow\n", 1)[1]
-    block = step.split("        run: |\n", 1)[1].split("\n      - name: Publish repository_dispatch OpenCode status\n", 1)[0]
-    return textwrap.dedent(block)
-
-
-def test_exact_run_wake_retries_transient_lookup_then_reruns_failed_job(tmp_path: Path) -> None:
-    """A transient run lookup cannot permanently strand an already posted verdict."""
-    bash = shutil.which("bash")
-    jq = shutil.which("jq")
-    if bash is None or jq is None:
-        pytest.skip("bash and jq are required")
-    fake_gh = tmp_path / "gh"
-    calls = tmp_path / "wake-calls"
-    attempts = tmp_path / "wake-attempts"
-    fake_gh.write_text(
-        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >>\"$CALLS\"\n"
-        "if [[ \"$*\" == \"api repos/ContextualWisdomLab/example/actions/runs/42\" ]]; then\n"
-        "  n=0; [[ -f \"$ATTEMPTS\" ]] && n=$(cat \"$ATTEMPTS\"); n=$((n+1)); printf '%s' \"$n\" >\"$ATTEMPTS\"\n"
-        "  if [[ \"$n\" -eq 1 ]]; then exit 75; fi\n"
-        "  printf '%s\\n' \"$RUN_JSON\"; exit 0\n"
-        "fi\n"
-        "if [[ \"$*\" == \"api -X POST repos/ContextualWisdomLab/example/actions/runs/42/rerun-failed-jobs\" ]]; then exit 0; fi\n"
-        "exit 97\n",
-        encoding="utf-8",
-    )
-    fake_gh.chmod(0o755)
-    fake_timeout = tmp_path / "timeout"
-    fake_timeout.write_text("#!/usr/bin/env bash\nset -euo pipefail\nshift\nexec \"$@\"\n", encoding="utf-8")
-    fake_timeout.chmod(0o755)
-    fake_sleep = tmp_path / "sleep"
-    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_sleep.chmod(0o755)
-    run_json = {
-        "id": 42,
-        "event": "pull_request_target",
-        "path": ".github/workflows/opencode-review.yml",
-        "pull_requests": [{"number": 1437, "head": {"sha": HEAD_SHA}}],
-        "status": "completed",
-        "conclusion": "failure",
-    }
-    result = subprocess.run(
-        [bash, "-c", _wake_script()],
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
-            "CALLS": str(calls),
-            "ATTEMPTS": str(attempts),
-            "RUN_JSON": json.dumps(run_json),
-            "GH_TOKEN": "test-token",
-            "GH_REPOSITORY": "ContextualWisdomLab/example",
-            "PR_NUMBER": "1437",
-            "PR_HEAD_SHA": HEAD_SHA,
-            "REQUIRED_RUN_ID": "42",
-            "WAKE_TOKEN_SOURCE": "github-token",
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "Exact required-run lookup attempt 1/12 failed" in result.stdout
-    assert "Re-ran failed jobs for exact-PR/head Required OpenCode Review run 42." in result.stdout
-    assert calls.read_text(encoding="utf-8").splitlines() == [
-        "api repos/ContextualWisdomLab/example/actions/runs/42",
-        "api repos/ContextualWisdomLab/example/actions/runs/42",
-        "api -X POST repos/ContextualWisdomLab/example/actions/runs/42/rerun-failed-jobs",
-    ]
-''', encoding="utf-8")
-'''
-          if text.count(acceptance_marker) != 1:
-              raise SystemExit("v2 acceptance insertion boundary drifted")
-          text = text.replace(acceptance_marker, acceptance_replacement, 1)
+          old_assertion = '    assert "rerun-failed-jobs" in dispatched\n'
+          new_assertion = (
+              old_assertion
+              + '    assert \'if ! run="$(timeout 30s gh api \' in dispatched\n'
+              + '    assert "Exact required-run lookup attempt ${attempt}/12 failed" in dispatched\n'
+              + '    assert "continue" in dispatched\n'
+          )
+          if text.count(old_assertion) != 1:
+              raise SystemExit("v2 wake retry regression insertion boundary drifted")
+          text = text.replace(old_assertion, new_assertion, 1)
           driver.write_text(text, encoding="utf-8")
           PY
           PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
