@@ -1843,6 +1843,86 @@ anti-starvation과 같은 계열의 fairness 설계).
    직접 남겼으므로, 지금 bypass하면 그 자체 코멘트와 모순된다. 이 판단이 유효한지 다음 pass에서
    재확인한다.
 
+### 5.4 생태계 전수 조사 (2026-09-02, 30개 저장소 병렬 서베이)
+
+**방법과 한계**: 30개 병렬 agent가 각각 조직의 core-foundation/consumer 저장소 하나씩을 clone(대부분
+`--depth 1`)해 README/ARCHITECTURE.md/CLAUDE.md/AGENTS.md/PRD·TRD/CHANGELOG와 디렉터리 구조만
+읽었다 — `gh` CLI도 GitHub API PR 목록도 쓰지 않았으므로, 이 절의 관측은 §4의 열린 PR 인벤토리와
+성격이 다른 "코드/문서 상태" 스냅샷이며 역시 merge authorization이 아니다. `--depth 1`는 기본적으로
+tag를 가져오지 않으므로 아래 "git tag 없음" 관측 다수는 "릴리스가 없다"의 확정 증거가 아니라 "이
+clone에서 보이지 않는다"는 정황 증거로 읽어야 한다 — 예외로 `mhtml-etl-gateway`는 shallow clone에서도
+`v0.4.0` 태그가 실제로 보였다(HEAD 커밋과 정확히 일치).
+
+**도달률**: 지시된 30개 저장소 전부(`accessible: true`)에 접근했다 — 실패한 저장소는 없다.
+
+**directive 역할 설명과 불일치(role_matches_directive ≠ agrees)**: 30개 중 11개(37%)에서 저장소
+자신의 문서가 조직 owner-list의 1줄 role 설명과 다르다.
+- **좁음(narrower, 6개)**: `enterprise-architecture-core`("minimal protected baseline"뿐,
+  "versioned context contracts ledger"라는 문구 자체가 어디에도 없음), `ConceptWeave`(1줄 tagline뿐,
+  "observe→discover→propose→align→validate→review→publish" 파이프라인과 semantic-release 서술이
+  전무), `OriginWeave`(Blink/V8을 재구현하지 않는다고 스스로 명시하며 "browser core"가 아니라
+  governance/destination/network/TLS/evidence Rust 통제 평면이라 규정 — TRD는 실제 브라우저 통합을
+  전부 Planned로 표시), `LineageWeave`(스스로를 "demo prototype ... synthetic sample data only"로
+  명시), `PolicyWeave`(단일 도메인 개인정보처리방침 초안 도구), `CalendarWeave`(CalDAV/iCalendar PIMS
+  한정, "Not mail. Not tasks. Not a local IdP. Not GRC policy"로 스스로 범위를 좁힘).
+- **넓음(broader, 4개)**: `contextual-orchestrator`(LLM gateway·cost-routing hub에 더해 2026-08-18부로
+  `.github`의 OpenCode/Noema/Strix 리뷰 파이프라인 자체의 공유 LLM backend로 이관 중 — 아래 다음 행동
+  4 참조), `fast-mlsirm`(MLSIRM 외 CTT/IRT/MIRT·testlet/DIF/linking/equating/G-theory·LLM-judge
+  자동채점·rubric/item-bank governance까지 소유 경계로 명시), `TEPP`(다국어/시간/이벤트/관계 측정에
+  더해 event ontology·topic measurement까지), `appguardrail`("SAST/SARIF owner" 대비
+  Rules/Scan/Review/Monitor/Fix 5축 + SBOM + 멀티테넌트 control-plane + buyer-diligence 리포트까지).
+- **다름(different, 1개)**: `supply-chain-control-plane`은 README가 "Repository bootstrap only.
+  Product changes are introduced through pull requests." 한 줄뿐이라, directive의 "consumer
+  product/domain composition" 주장과 비교할 실제 도메인 서술 자체가 없다.
+
+**성숙도 — scaffold_placeholder vs. active_substantial**: 30개 중 9개(30%)가 scaffold_placeholder다:
+`enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`, `pingora-gateway`,
+`quarantine-sandbox-runtime`, `EmbedRelay`, `PolicyWeave`, `CalendarWeave`,
+`supply-chain-control-plane`. 공통 패턴은 파일이 README 1~2개뿐이고 git 커밋이 정확히 1개("chore:
+initialize repository" 류, 9곳 중 7곳)이며 `.github/workflows/`가 없다는 것이다 — 유일한 워크플로
+예외는 `EmbedRelay`로, 범용 CI가 아니라 한 feature 브랜치의 정확한 커밋 메시지에만 반응하는 단발성
+materializer(`materialize-m1.yml`) 하나만 있다(즉 실제 M1 구현은 review-gated된 채 아직 default
+브랜치에 없다). 나머지 21개(70%)는 active_substantial로 테스트·CI·문서가 실질적이다(예: `TEPP`
+crates 111,307줄, `fast-mlsirm` CHANGELOG에 날짜 지정 릴리스 11개, `naruon` backend+frontend 테스트
+파일 178개). directive §9가 참조 라이브러리로 명명한 9개 저장소(`TEPP`, `contextual-orchestrator`,
+`fast-mlsirm`, `keyverse`, `RankWeave`, `ThreadWeave`, `disksage`, `wardnet`, `LineageWeave`)는
+전부 active_substantial로 확인됐다 — 즉 "owner에서 아직 미완성"인 것은 §9가 이미 이름을 올린 도메인
+owner들이 아니라, 조직 저장소 목록에는 있지만 §9에 아직 이름이 없는 인프라/거버넌스 계층 6곳과
+소비자 제품 3곳(`PolicyWeave`, `CalendarWeave`, `supply-chain-control-plane`)이다. 부차적으로,
+version_state를 가로질러 보면 "CHANGELOG는 날짜 지정 릴리스를 주장하지만 git tag는 shallow clone에서
+안 보인다"는 패턴이 반복돼(`EgressWeave`, `pg-llm-batch`, `RankWeave`, `TEPP`, `ThreadWeave` 등)
+G-14("release/changelog/version 증거가 각 PR에 분산")를 조직 전체 수준에서 뒷받침한다 — 다만 이는
+shallow clone 한계와 뒤섞여 있어 tag 존재 여부의 독립 확인(예: 각 저장소의 `git ls-remote --tags`)이
+필요하다.
+
+**다음 pass가 이어받을 것**:
+1. `CalendarWeave` — 유일한 파일인 README가 스스로 "consumed by LineageWeave, naruon, and Outlook
+   fail-closed"라 명시하지만 구현은 전무(커밋 1개, CalDAV/iCalendar 코드 없음)다. `naruon`의
+   CHANGELOG(0.14.4 Unreleased)는 이미 "calendar conflict evaluation" 기능을 기록했으므로, 그 기능이
+   실제로 무엇에 기반해 일정 충돌을 계산하는지(자체 스텁인지 `CalendarWeave` 부재를 우회한 임시
+   구현인지) `naruon` 쪽에서 먼저 확인한다 — G-06(E1/E2/E3 killer workflow, "일정 충돌"이 구매자
+   영향으로 명시된 바로 그 항목)과 직결.
+2. `psychometrics-commons` — 저장소 자신의 `docs/product-technical-gap-baseline.md`(2026-08-25)가
+   이미 "item-delivery와 response-submission HTTP가 아직 protected main에 없다"고 명시했고, 이번
+   서베이도 OpenAPI spec이 `sessions.yaml`/`results.yaml` 둘뿐임을 확인했다 — Measure→Understand
+   파이프라인의 첫 단계가 도메인/영속성 계층은 있는데 HTTP로 도달 불가능하다. 소유 저장소 PR에서 이
+   두 endpoint를 우선한다.
+3. `disksage` — 자체 OWL/Turtle 온톨로지(`src-tauri/resources/ontology/default.ttl`, `oxrdf` 의존)를
+   이미 구현해 파일 정리에 쓰고 있는데, directive가 명명한 "ontology generation/publish pipeline
+   owner"인 `ConceptWeave`는 scaffold_placeholder(파일 1개)다. `disksage`가 자체 온톨로지를 계속 독자
+   유지할지 `ConceptWeave`가 구현되면 그쪽으로 이관할지는 이번 서베이로 판단할 수 없다 — 코드 변경이
+   아니라 owner 판단이 필요한 질문으로 기록한다.
+4. `contextual-orchestrator` — AGENTS.md가 명시한 2026-08-18 정책 변경("OpenCode/Noema/Strix의 공유
+   LLM backend로 이관 중")이 §5.2/§5.3에서 확정한 "중앙 scheduler 자신이 GitHub-hosted runner 큐에서
+   굶주린다"는 자기강화적 병목과 맞물리는지 다음 pass에서 확인한다 — 이관이 완료되면 리뷰 호출이
+   GitHub Actions runner 큐를 얼마나 우회하는지가 병목 완화 lever가 될 수 있다(아직 검증되지 않은
+   가설).
+5. `PolicyWeave`/`supply-chain-control-plane` — 둘 다 directive owner-list에 이름이 있는 소비자
+   제품이지만 코드가 전혀 없다(각각 README 1개, 커밋 1개). 특히 `supply-chain-control-plane`은
+   README 자체에 도메인 주장이 없어("bootstrap only") 이 문서의 §3/§9 어느 항목과도 아직 연결되지
+   않는다 — 다음 pass 전에 owner가 실제 스코프(SBOM consumption? dependency graph? release evidence
+   통합?)를 결정해야 첫 PR을 만들 수 있다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
