@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "045d17da5e2aea56a97e241ee158ab1628d78660"
+ORCH_PIN_SHA = "464da4715b495b5eaaa593eba3796e2d976ee0c9"
 
 
 def _read(path: Path) -> str:
@@ -90,6 +90,49 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
     ):
         assert arg in text
     assert "https://openrouter.ai/api/v1/endpoints/zdr" in text
+
+
+def test_sidecar_pins_the_pool_to_free_for_github_actions() -> None:
+    """GitHub Actions Workflow usage of contextual-orchestrator is pinned free.
+
+    ``auto`` was removed from the sidecar's own accepted
+    ``CONTEXTUAL_ORCHESTRATOR_POOL`` values: the org has not solved cost-safe
+    free+ZDR routing well enough yet to justify a priced-inclusive pool in
+    central CI. The launcher's own ``--pool`` flag (a general-purpose CLI
+    also used outside GitHub Actions, asserted separately above) still
+    accepts ``auto`` -- only this repo's GitHub-Actions-facing sidecar script
+    is narrowed.
+    """
+    text = _read(SIDECAR)
+    assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in text
+    assert 'case "$orchestrator_pool" in\n  free)' in text
+    assert "fail \"CONTEXTUAL_ORCHESTRATOR_POOL must be free\"" in text
+    assert "free|auto" not in text
+    assert "must be free or auto" not in text
+
+    pool_case = text.split('orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"', 1)[
+        1
+    ].split("esac", 1)[0]
+    for candidate, should_fail in (("free", False), ("auto", True), ("", False), ("bogus", True)):
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'fail() { echo "FAIL: $*"; exit 7; }\n'
+                f'CONTEXTUAL_ORCHESTRATOR_POOL="{candidate}"\n'
+                'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"\n'
+                + pool_case
+                + "esac\necho \"pool_args=${pool_args[*]}\"",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if should_fail:
+            assert result.returncode == 7, (candidate, result.stdout, result.stderr)
+            assert "must be free" in result.stdout
+        else:
+            assert result.returncode == 0, (candidate, result.stdout, result.stderr)
+            assert "pool_args=--pool free" in result.stdout
 
 
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:

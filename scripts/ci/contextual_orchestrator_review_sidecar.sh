@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-045d17da5e2aea56a97e241ee158ab1628d78660}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-464da4715b495b5eaaa593eba3796e2d976ee0c9}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -279,11 +279,17 @@ esac
 
 orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
 case "$orchestrator_pool" in
-  free|auto)
+  free)
     pool_args=(--pool "$orchestrator_pool")
     ;;
   *)
-    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
+    # GitHub Actions Workflow usage of contextual-orchestrator is pinned to
+    # orchestrator/free: the org has not solved cost-safe free+ZDR routing
+    # well enough yet to justify a priced-inclusive "auto" pool in central CI,
+    # so "auto" is rejected here even though the launcher's own --pool flag
+    # (a general-purpose CLI also used outside GitHub Actions) still accepts
+    # it.
+    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"
     ;;
 esac
 
