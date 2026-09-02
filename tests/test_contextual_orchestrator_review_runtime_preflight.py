@@ -1924,3 +1924,42 @@ def test_preflight_timeout_confirmation_covers_the_escalated_stage() -> None:
     assert row["timeout_retries"] == 1
     assert row["escalated"] is True
     assert report["escalations_used"] == 1
+
+
+def test_preflight_timeout_confirmation_recovers_a_wrapped_timeout() -> None:
+    """A timeout wrapped in a transport error's ``reason`` also gets one confirmation.
+
+    Devin Review flagged that ``_is_preflight_timeout`` accepts a timeout
+    carried in an exception's ``reason`` attribute (mirroring
+    ``urllib.error.URLError(reason=TimeoutError(...))``, the real shape a
+    wrapped socket timeout takes through ``urllib``), but every other
+    timeout-confirmation regression above only ever raises a bare
+    ``TimeoutError`` directly. This exercises the wrapped branch explicitly.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    class _WrappedTimeoutError(OSError):
+        """Synthetic transport error carrying a timeout in ``reason``, not itself."""
+
+        def __init__(self, reason: BaseException) -> None:
+            super().__init__(str(reason))
+            self.reason = reason
+
+    agent = SimpleNamespace(
+        id="nvidia_wrapped_cold_route",
+        provider_name="nvidia_nim",
+        model="provider/wrapped-cold-route",
+    )
+    client = _SequencedClient(
+        [_WrappedTimeoutError(TimeoutError("wrapped transport timeout")), _openai_text("OK")]
+    )
+
+    viable, report = preflight([agent], client=client)
+
+    assert viable == [agent]
+    assert len(client.calls) == 2
+    row = report["routes"][0]
+    assert row["status"] == "ready"
+    assert row["attempts"] == 2
+    assert row["timeout_retries"] == 1
