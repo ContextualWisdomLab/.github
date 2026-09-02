@@ -1,0 +1,101 @@
+name: Source Fix PR 1672 Single Request
+
+on:
+  push:
+    branches:
+      - fix/noema-repair-attempt-telemetry
+    paths:
+      - scripts/ci/source_fix_pr1672_single_request.py
+      - .github/workflows/source-fix-pr1672-single-request.yml
+
+concurrency:
+  group: source-fix-pr1672-single-request-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail closed unless this run still owns the live writer head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
+          test -n "$remote_head"
+          test "$remote_head" = "$GITHUB_SHA"
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install exact hash-verified review test toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Materialize causal-owner repair without credentials in the script environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/source_fix_pr1672_single_request.py
+
+      - name: Verify permanent single-request contract and focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/ci/noema_review_gate.py .github/actions/noema-review/two_phase.py
+          python -m pytest \
+            tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py \
+            tests/test_noema_repair_attempt_telemetry.py \
+            tests/test_noema_model_output_failure_classification.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_review_orchestrator_ssrf.py \
+            -q
+          git diff --check
+
+      - name: Verify full repository Python contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing
+          python -m interrogate -c pyproject.toml scripts/ci
+          python -m compileall -q scripts tests .github/actions/noema-review
+
+      - name: Verify exact intended scope and unchanged remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed='^(.github/actions/noema-review/two_phase.py|.github/workflows/source-fix-pr1672-single-request.yml|CHANGELOG.md|docs/doctoring/noema-repair-attempt-telemetry.md|docs/product-technical-gap-baseline.md|scripts/ci/noema_review_gate.py|scripts/ci/source_fix_pr1672_single_request.py|tests/test_noema_model_output_failure_classification.py|tests/test_noema_repair_attempt_telemetry.py|tests/test_noema_repair_deadline_alarm_safety.py|tests/test_noema_review_gate.py)$'
+          bad="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
+          test -z "$bad"
+          remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+
+      - name: Publish normal non-force repair commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
+          test "$remote_head" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(noema): delegate structured repair to orchestrator"
+          gh auth setup-git
+          git push origin HEAD:fix/noema-repair-attempt-telemetry
