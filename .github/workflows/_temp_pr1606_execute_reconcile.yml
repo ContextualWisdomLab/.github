@@ -72,11 +72,13 @@ jobs:
           block_lines = block.splitlines(keepends=True)
           if not block_lines or 'raw = decode_llm_response_body(raw_bytes)' not in block_lines[0]:
               raise SystemExit('unexpected parse_block anchor')
+          # The first generated line intentionally carries call_llm's 12-space
+          # nesting. YAML strips the run-block's ten-space scalar indentation
+          # from following triple-quoted lines, so those lines need eight
+          # spaces restored before the generated block is spliced into source.
           repaired = [block_lines[0]]
           for line in block_lines[1:]:
-              if line.strip() and not line.startswith('  '):
-                  raise SystemExit(f'unexpected generated indentation: {line!r}')
-              repaired.append(line[2:] if line.startswith('  ') else line)
+              repaired.append(("        " + line) if line.strip() else line)
           repaired_block = ''.join(repaired)
           if repaired_block == block:
               raise SystemExit('parse_block indentation was already repaired')
