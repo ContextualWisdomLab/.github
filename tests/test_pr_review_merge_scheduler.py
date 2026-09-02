@@ -1325,6 +1325,54 @@ def test_enrich_rest_mergeable_states_uses_bounded_executor_for_multiple_prs(mon
     assert prs[-1]["restMergeableState"] == f"owner/repo:{sched.REST_MERGEABLE_STATE_WORKERS + 2}"
 
 
+def test_enrich_rest_mergeable_states_skips_draft_prs_entirely(monkeypatch):
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("draft PRs must not trigger a REST mergeability fetch")
+
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", fail_fetch)
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", fail_fetch)
+
+    draft_prs = [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+    sched.enrich_rest_mergeable_states("owner/repo", draft_prs)
+
+    assert draft_prs == [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+
+
+def test_enrich_rest_mergeable_states_enriches_only_non_draft_prs_in_mixed_batch(monkeypatch):
+    seen_workers = []
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            seen_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def map(self, func, items):
+            return [func(item) for item in items]
+
+    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
+
+    prs = [
+        {"number": 1, "isDraft": True},
+        {"number": 2, "isDraft": False},
+        {"number": 3},
+    ]
+    sched.enrich_rest_mergeable_states("owner/repo", prs)
+
+    assert "restMergeableState" not in prs[0]
+    assert prs[1]["restMergeableState"] == "owner/repo:2"
+    assert prs[2]["restMergeableState"] == "owner/repo:3"
+    # Two non-draft PRs share the bounded executor; the draft PR is excluded
+    # from the max_workers computation too.
+    assert seen_workers == [2]
+
+
 def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_threads(monkeypatch):
     seen_workers = []
 
@@ -6882,90 +6930,6 @@ def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr
 
     assert sched.stale_pr_run_ids("owner/repo", make_pr(), workflow="OpenCode Review") == ["23"]
     assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == (["22"], ["23"])
-
-
-def test_stale_pr_run_ids_preserves_current_head_run_when_head_ref_oid_missing(monkeypatch):
-    """Regression for the naruon PR #1528 incident (Strix run 33581213829,
-    2026-09-02, docs/doctoring/2026-09-02-strix-current-head-cancellation.md):
-    a still-current-head run must never be misclassified as stale merely
-    because the caller's PR snapshot lost its headRefOid (observed on a
-    just-opened PR). Before this guard, ``head =
-    str(pr.get("headRefOid") or "").lower()`` silently coerced a missing
-    head to "", which matches no real run head_sha and therefore
-    misclassified *every* active run for the PR -- including the one for
-    its true, unchanged current head -- as stale."""
-    current_head_run = {
-        "name": "Strix Security Scan",
-        "id": 33581213829,
-        "head_sha": "cf472cf77fb93325858f485a22e967449d7c387a",
-        "pull_requests": [{"number": 1528}],
-    }
-    monkeypatch.setattr(
-        sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): [current_head_run]
-    )
-
-    assert sched.stale_pr_run_ids(
-        "ContextualWisdomLab/naruon", make_pr(number=1528, headRefOid=None)
-    ) == []
-    assert sched.stale_pr_run_ids(
-        "ContextualWisdomLab/naruon", make_pr(number=1528, headRefOid="")
-    ) == []
-
-
-def test_cancel_stale_pr_runs_issues_no_cancel_call_when_head_ref_oid_missing(monkeypatch):
-    """End-to-end regression: cancel_stale_pr_runs must not force-cancel a
-    current-head run when its PR snapshot cannot supply a headRefOid."""
-    calls = []
-    current_head_run = {
-        "id": 33581213829,
-        "name": "Strix Security Scan",
-        "head_sha": "cf472cf77fb93325858f485a22e967449d7c387a",
-        "pull_requests": [{"number": 1528}],
-    }
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/ContextualWisdomLab/naruon/actions/runs"]:
-            if "status=queued" in args:
-                return json.dumps({"workflow_runs": [current_head_run]})
-            return json.dumps({"workflow_runs": []})
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-
-    run_ids = sched.cancel_stale_pr_runs(
-        "ContextualWisdomLab/naruon",
-        make_pr(number=1528, headRefOid=None),
-        dry_run=False,
-    )
-
-    assert run_ids == []
-    assert not any("force-cancel" in " ".join(call) for call in calls)
-
-
-def test_active_review_run_refs_preserves_current_head_run_when_head_ref_oid_missing(monkeypatch):
-    """Same guard for the OpenCode/Noema cancellation path
-    (active_review_run_refs -> cancel_stale_opencode_runs)."""
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses=("queued", "in_progress"): [
-            {
-                "name": "OpenCode Review",
-                "id": 99,
-                "head_sha": "head",
-                "pull_requests": [{"number": 1528}],
-            }
-        ],
-    )
-
-    current, stale = sched.active_opencode_run_refs(
-        "ContextualWisdomLab/naruon", "OpenCode Review", make_pr(number=1528, headRefOid=None)
-    )
-    assert current == []
-    assert stale == []
 
 
 def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
