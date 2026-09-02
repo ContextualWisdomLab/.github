@@ -1,0 +1,89 @@
+# One-shot review-finding repair for PR #1682; self-deletes after verified publication.
+name: Temporary PR1682 goal directive review repair
+
+on:
+  push:
+    branches:
+      - docs/sync-product-goal-directive-20260902
+    paths:
+      - .github/workflows/_temp_pr1682_goal_directive_review_repair.yml
+      - scripts/ci/temp_pr1682_goal_directive_review_repair.py
+
+concurrency:
+  group: temp-pr1682-goal-directive-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  repair-and-publish:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/docs/sync-product-goal-directive-20260902'
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact review-repair head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate exact remote head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          test -f scripts/ci/temp_pr1682_goal_directive_review_repair.py
+          test -f .github/workflows/_temp_pr1682_goal_directive_review_repair.yml
+
+      - name: Apply all exact-head review corrections
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/temp_pr1682_goal_directive_review_repair.py
+          test ! -e scripts/ci/temp_pr1682_goal_directive_review_repair.py
+          test ! -e .github/workflows/_temp_pr1682_goal_directive_review_repair.yml
+          grep -Fq 'and `Strix` is likewise hard-pinned to `orchestrator/free`' docs/product-goal-directive.md
+          ! grep -Fq 'only `Strix` security analysis' docs/product-goal-directive.md
+          ! grep -Fq 'confirmed by the owner on 2026-09-02' docs/product-goal-directive.md
+          grep -Fq '## 2026-09-02 directive sync and review reconciliation' docs/doctoring/product-goal-directive.md
+          git diff --check
+
+      - name: Verify documentation contracts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          directive = Path('docs/product-goal-directive.md').read_text(encoding='utf-8')
+          doctoring = Path('docs/doctoring/product-goal-directive.md').read_text(encoding='utf-8')
+          assert 'Strix` is likewise hard-pinned to `orchestrator/free`' in directive
+          assert 'only `Strix` security analysis\nuses the provider-diverse `orchestrator/auto` pool' not in directive
+          assert 'confirmed by the owner on 2026-09-02' not in directive
+          assert 'Private agent memory is not publication authority.' in doctoring
+          assert doctoring.count('## 2026-09-02 directive sync and review reconciliation') == 1
+          PY
+
+      - name: Publish one fast-forward canonical successor
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m "docs(goal-directive): reconcile review findings and provenance"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
