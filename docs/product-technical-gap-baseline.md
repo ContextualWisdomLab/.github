@@ -2613,3 +2613,15 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## Noema single-request model-control ownership — PR #1672 (2026-09-02)
+
+**Status:** Proposed / exact-head verification required before merge.
+
+**Root cause.** Noema duplicated `contextual-orchestrator` structured-output repair by making a second model request and wrapped that request in an unmeasured 900-second repository wall-clock deadline. This created a self-hosting admission failure: the required review could terminate valid long inference using policy that the gateway already owns.
+
+**Context Map / responsibility boundary.** `.github` owns CI review orchestration, exact-revision evidence, deterministic verdict validation and publication. `contextual-orchestrator` owns provider discovery, capability routing, `orchestrator/free`, structured-output repair/failover and provider completion. No provider/model-specific fallback or caller wall-clock timeout crosses that boundary.
+
+**Action.** Replace recursive caller repair with one structured-output gateway request; remove fixed deadline/signal machinery and sampling temperature; retain exact-head checks before and after model work; sanitize serving-model telemetry; restore exact changed-line diagnostics; retain bounded non-heuristic evidence cardinality and strict local JSON parsing.
+
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks/reviews remain the admission authority; predecessor-head evidence is not transferable.
