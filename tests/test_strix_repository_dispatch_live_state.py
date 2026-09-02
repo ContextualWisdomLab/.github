@@ -28,13 +28,8 @@ def _step(name: str) -> dict[str, object]:
     return next(step for step in _steps() if step.get("name") == name)
 
 
-def _run_preflight(tmp_path: Path, pull_request: dict[str, object] | None, *, gh_fails: bool = False) -> tuple[int, str]:
-    validation = _step("Validate repository dispatch against live pull request metadata")
-    script = str(validation["run"])
-    # Exercise the exact validation program, but stop before the open/current
-    # case performs the subsequent trusted git materialization.
-    script = script.split('trusted_workspace="$RUNNER_TEMP/trusted-workspace"', 1)[0]
-
+def _fake_gh_environment(tmp_path: Path, pull_request: dict[str, object] | None, *, gh_fails: bool) -> dict[str, str]:
+    """Build a deterministic fake-GitHub shell environment for workflow-step tests."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
     fake_gh = fake_bin / "gh"
@@ -55,20 +50,58 @@ def _run_preflight(tmp_path: Path, pull_request: dict[str, object] | None, *, gh
             "GITHUB_OUTPUT": str(output_path),
             "RUNNER_TEMP": str(tmp_path),
             "GITHUB_SERVER_URL": "https://github.com",
+            "FAKE_PR_JSON": json.dumps(pull_request or {}),
+            "FAKE_GH_FAIL": "1" if gh_fails else "0",
+        }
+    )
+    return env
+
+
+def _run_preflight(tmp_path: Path, pull_request: dict[str, object] | None, *, gh_fails: bool = False) -> tuple[int, str]:
+    """Execute the production dispatch admission shell through its live-state decision."""
+    validation = _step("Validate repository dispatch against live pull request metadata")
+    script = str(validation["run"])
+    # Exercise the exact validation program, but stop before the open/current
+    # case performs the subsequent trusted git materialization.
+    script = script.split('trusted_workspace="$RUNNER_TEMP/trusted-workspace"', 1)[0]
+
+    env = _fake_gh_environment(tmp_path, pull_request, gh_fails=gh_fails)
+    env.update(
+        {
             "REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "42",
             "SUPPLIED_BASE_REF": "main",
             "SUPPLIED_BASE_SHA": "a" * 40,
             "SUPPLIED_HEAD_SHA": "b" * 40,
-            "FAKE_PR_JSON": json.dumps(pull_request or {}),
-            "FAKE_GH_FAIL": "1" if gh_fails else "0",
         }
     )
     result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True)
-    return result.returncode, output_path.read_text(encoding="utf-8")
+    return result.returncode, Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
+
+
+def _run_status_revalidation(
+    tmp_path: Path,
+    pull_request: dict[str, object] | None,
+    *,
+    gh_fails: bool = False,
+) -> tuple[int, str]:
+    """Execute the late status-publication live-state gate against fake GitHub state."""
+    validation = _step("Revalidate repository dispatch before status publication")
+    script = str(validation["run"])
+    env = _fake_gh_environment(tmp_path, pull_request, gh_fails=gh_fails)
+    env.update(
+        {
+            "REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "42",
+            "EXPECTED_HEAD_SHA": "b" * 40,
+        }
+    )
+    result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True)
+    return result.returncode, Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
 
 
 def _live_pr(*, state: str = "open", draft: bool = False, head: str | None = None, base: str | None = None) -> dict[str, object]:
+    """Build canonical live pull-request JSON for exact-head admission tests."""
     return {
         "state": state,
         "draft": draft,
@@ -85,6 +118,7 @@ def _live_pr(*, state: str = "open", draft: bool = False, head: str | None = Non
 
 
 def test_repository_dispatch_revalidates_live_state_and_head_before_scan(tmp_path: Path) -> None:
+    """Initial dispatch admission distinguishes resolved/draft targets from stale heads."""
     validation = _step("Validate repository dispatch against live pull request metadata")
     assert validation.get("id") == "dispatch_validation"
     script = str(validation["run"])
@@ -120,7 +154,9 @@ def test_repository_dispatch_revalidates_live_state_and_head_before_scan(tmp_pat
 
 
 def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effect() -> None:
+    """A resolved/draft dispatch performs no later target admission or publication work."""
     guarded_names = {
+        "Resolve target repository visibility",
         "Fetch pull request head for trusted scan",
         "Self-test Strix required workflow contract",
         "Gate Strix secrets",
@@ -131,13 +167,44 @@ def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effec
         assert "steps.dispatch_validation.outputs.should_scan != 'false'" in condition, name
 
 
+def test_repository_dispatch_revalidates_live_state_again_before_status_publication(tmp_path: Path) -> None:
+    """Hours-long scans cannot publish after the exact target closes or becomes draft."""
+    validation = _step("Revalidate repository dispatch before status publication")
+    assert validation.get("id") == "dispatch_publish_validation"
+
+    rc, output = _run_status_revalidation(tmp_path / "ready", _live_pr())
+    assert rc == 0
+    assert "publish_status=true" in output
+
+    rc, output = _run_status_revalidation(tmp_path / "closed", _live_pr(state="closed"))
+    assert rc == 0
+    assert "publish_status=false" in output
+
+    rc, output = _run_status_revalidation(tmp_path / "draft", _live_pr(draft=True))
+    assert rc == 0
+    assert "publish_status=false" in output
+
+    rc, _ = _run_status_revalidation(tmp_path / "stale", _live_pr(head="d" * 40))
+    assert rc != 0
+
+    rc, _ = _run_status_revalidation(tmp_path / "lookup", None, gh_fails=True)
+    assert rc != 0
+
+
 def test_repository_dispatch_skip_signal_crosses_the_status_job_boundary() -> None:
-    """Closed/draft dispatches must not launch a separate privileged status publisher."""
+    """Both manual-status publishers require fresh late-bound live authority."""
     workflow = _workflow()
     scan_job = workflow["jobs"]["strix"]
     status_job = workflow["jobs"]["publish-manual-pr-evidence-status"]
 
-    assert scan_job.get("outputs", {}).get("should_scan") == "${{ steps.dispatch_validation.outputs.should_scan }}"
+    outputs = scan_job.get("outputs", {})
+    assert outputs.get("should_scan") == "${{ steps.dispatch_validation.outputs.should_scan }}"
+    assert outputs.get("publish_status") == "${{ steps.dispatch_publish_validation.outputs.publish_status }}"
+
+    in_job_condition = str(_step("Publish same-head manual Strix status").get("if", ""))
+    assert "steps.dispatch_publish_validation.outputs.publish_status == 'true'" in in_job_condition
+
     status_condition = str(status_job.get("if", ""))
     assert "needs.strix.outputs.should_scan == 'true'" in status_condition
+    assert "needs.strix.outputs.publish_status == 'true'" in status_condition
     assert "github.event_name == 'repository_dispatch'" in status_condition
