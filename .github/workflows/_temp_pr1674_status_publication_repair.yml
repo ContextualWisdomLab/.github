@@ -35,21 +35,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Python 3.14
+      - name: Set up review Python 3.14
+        id: review_python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
 
+      - name: Set up Strix Python 3.13
+        id: strix_python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
       - name: Install hash-locked test dependencies in isolated environments
         run: |
           set -euo pipefail
-          python -m venv "$RUNNER_TEMP/review-venv"
+          "${{ steps.review_python.outputs.python-path }}" -m venv "$RUNNER_TEMP/review-venv"
           "$RUNNER_TEMP/review-venv/bin/python" -m pip install \
             --disable-pip-version-check --require-hashes --only-binary=:all: \
             -r requirements-opencode-review-ci-hashes.txt
-          python -m venv "$RUNNER_TEMP/strix-venv"
+          "${{ steps.strix_python.outputs.python-path }}" -m venv "$RUNNER_TEMP/strix-venv"
+          # Match the declared Strix workflow: the generated lock fully pins and hashes
+          # transitive artifacts, while --no-deps avoids re-solving declared ranges that
+          # intentionally conflict with the reviewed exact lock.
           "$RUNNER_TEMP/strix-venv/bin/python" -m pip install \
-            --disable-pip-version-check --require-hashes --only-binary=:all: \
+            --disable-pip-version-check --require-hashes --no-deps --only-binary=:all: \
             -r requirements-strix-ci-hashes.txt
 
       - name: Revalidate exact writer head
@@ -68,15 +78,15 @@ jobs:
       - name: Materialize exact-head review finding repairs
         run: |
           set -euo pipefail
-          python scripts/ci/pr1674_exact_findings_repair.py
+          "${{ steps.review_python.outputs.python-path }}" scripts/ci/pr1674_exact_findings_repair.py
           test ! -e scripts/ci/pr1674_exact_findings_repair.py
-          python -m py_compile scripts/ci/pr1674_status_publication_repair.py
+          "${{ steps.review_python.outputs.python-path }}" -m py_compile scripts/ci/pr1674_status_publication_repair.py
           git diff --check
 
       - name: Materialize late-bound Strix publication authority
         run: |
           set -euo pipefail
-          python scripts/ci/pr1674_status_publication_repair.py
+          "${{ steps.review_python.outputs.python-path }}" scripts/ci/pr1674_status_publication_repair.py
           test ! -e scripts/ci/pr1674_status_publication_repair.py
           test ! -e .github/workflows/_temp_pr1674_status_publication_repair.yml
           git diff --check
@@ -97,7 +107,7 @@ jobs:
           for path in (Path('.github/workflows/strix.yml'), Path('.github/workflows/noema-review.yml')):
               yaml.safe_load(path.read_text(encoding='utf-8'))
           PY
-          python -m compileall -q tests/test_strix_repository_dispatch_live_state.py tests/test_noema_live_target_admission.py
+          "${{ steps.review_python.outputs.python-path }}" -m compileall -q tests/test_strix_repository_dispatch_live_state.py tests/test_noema_live_target_admission.py
           git diff --check
 
       - name: Publish one exact non-force canonical successor
