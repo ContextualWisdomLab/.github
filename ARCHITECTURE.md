@@ -183,11 +183,37 @@ sequenceDiagram
   MS->>PR: merge only on current-head approval + green checks
 ```
 
+### Publication and live-admission boundary
+
+Noema is explicitly two phase. Model preparation may outlive an installation or
+exchanged app token, so a publishable envelope does not inherit the authority
+that existed before model execution. Immediately before publication, the
+selected renewable identity is refreshed (GitHub App or OIDC exchange), then
+that fresh repository-scoped authority performs both the private-sibling live
+PR revalidation and the final exact-head verdict write; PAT remains an explicit
+selected source. The central `.github` `github.token`, a predecessor App/OIDC
+token, and PR-author authority are not publication fallbacks.
+
+Strix `repository_dispatch` admission is likewise live-authoritative. Its scan
+job emits `should_scan=false` when the exact target is closed or draft by the
+time execution begins. That output crosses the job boundary: the separate
+privileged manual-status publisher starts only for `should_scan == 'true'`, so
+resolved/non-reviewable work cannot regain write-side effects after the scan
+path has skipped it. See ADR-0021.
+
 ## Trust boundaries
 
 - Required review workflows execute **base-branch** scripts. A PR that edits
   those workflows cannot widen its own `pull_request_target` token.
 - Reviewer agents stay `edit: deny`. They judge; they do not implement.
+- Noema publication re-mints or re-exchanges renewable reviewer authority after
+  model work and before the live publication read. Private sibling revalidation
+  and final verdict publication use only that selected fresh repository-scoped
+  authority (or the explicitly selected PAT), never the central repository
+  token or predecessor App/OIDC credentials.
+- Strix propagates its live `repository_dispatch` admission decision across the
+  scan/status job boundary; false or absent `should_scan` authority cannot start
+  the separate privileged status publisher.
 - Repository public-surface writes execute only from trusted `.github/main`;
   pull-request validation remains read-only and leaf README changes keep their
   repository-local review boundary. Workflow-backed Pages is preserve-only and
@@ -254,8 +280,12 @@ resolver conflict.
   contract.
 - [`docs/adr/0020-repository-public-surface-reconciliation.md`](docs/adr/0020-repository-public-surface-reconciliation.md)
   — desired-state ownership, trust boundary, and convergence decision.
+- [`docs/adr/0021-review-publication-authority-and-live-skip.md`](docs/adr/0021-review-publication-authority-and-live-skip.md)
+  — fresh Noema publication authority and Strix cross-job live-skip decision.
 - [`docs/doctoring/repository-public-surface-reconciliation.md`](docs/doctoring/repository-public-surface-reconciliation.md)
   — current operational baseline and live-verification contract.
+- [`docs/doctoring/noema-review-token-lifetime.md`](docs/doctoring/noema-review-token-lifetime.md)
+  — renewable reviewer credential lifetime and private-sibling publication boundary.
 - [`docs/doctoring/hourly-nvidia-nim-autofix.md`](docs/doctoring/hourly-nvidia-nim-autofix.md)
   — current increment's repair-worker decision and APA 7th citations.
 - [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md)
