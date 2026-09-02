@@ -3215,17 +3215,39 @@ directly rather than assuming further code changes can solve it.
 **Sweep completed.** A peer session covered all 63 repositories not directly sampled above (same
 method: `status=in_progress` + name match on `Required OpenCode Review`, cutoff
 `2026-09-02T08:45:08Z`, each candidate's embedded head SHA cross-checked against the PR's live current
-head before cancelling) and found **13 more confirmed zombies**, all current-head, all cancelled:
-`EmbedRelay#3`, `OriginWeave#46`, `OriginWeave#37`, `clearfolio#536`, `fast-mlsirm#1568`,
-`fast-mlsirm#1690`, `fast-mlsirm#1536`, `linux-cluster-ops#266`, `metering-billing-platform#157`,
-`pg-erd-cloud#1036`, `pg-erd-cloud#996`, `pg-erd-cloud#1027`, `wardnet#137` (run IDs and exact
-`created_at` timestamps in the peer session's own transcript). **16 total zombie runs cleared
-org-wide this tick** (3 found directly + 13 from the full sweep) -- every one confirmed to still be
-running against its PR's live current head, so this is not the earlier "stale/superseded head"
-cleanup class; these were current-head runs that were simply never going to terminate because they
-started executing before the fix that would have bounded them existed.
+head before cancelling) and found **13 more confirmed zombies**, all current-head, all cancelled.
+**Correction (Devin, this same PR):** the first version of this entry cited only the peer session's own
+transcript for run IDs/timestamps, which is not durable, independently-verifiable evidence, and used
+bare `repo#number` instead of this org's required `owner/repo#number` cross-repository reference
+format. Re-verified directly against the GitHub API (`gh api repos/ContextualWisdomLab/<repo>/actions/runs/<id>`)
+rather than trusting the transcript:
 
-One incidental finding worth a small separate follow-up (not fixed here): `wardnet#137`'s run had no
+- `ContextualWisdomLab/EmbedRelay#3`, run `33219512948`, created `2026-08-28T23:10:37Z`, `cancelled`
+- `ContextualWisdomLab/OriginWeave#46`, run `33226360241`, created `2026-08-29T01:25:17Z`, `cancelled`
+- `ContextualWisdomLab/OriginWeave#37`, run `33146883138`, created `2026-08-28T06:07:29Z`, `cancelled`
+- `ContextualWisdomLab/clearfolio#536`, run `33481430374`, created `2026-09-01T07:17:35Z`, `cancelled`
+- `ContextualWisdomLab/linux-cluster-ops#266`, run `33477662315`, created `2026-09-01T06:27:15Z`, `cancelled`
+- `ContextualWisdomLab/metering-billing-platform#157`, run `33550765134`, created `2026-09-01T19:39:20Z`, `cancelled`
+- `ContextualWisdomLab/wardnet#137`, run `33483860053`, created `2026-09-01T07:47:43Z`, `cancelled`
+- `ContextualWisdomLab/fast-mlsirm#1568`, run `33549339556`, created `2026-09-01T19:24:42Z`, `cancelled`
+- `ContextualWisdomLab/fast-mlsirm#1690`, run `33360743995`, created `2026-08-31T05:29:56Z`, `cancelled`
+- `ContextualWisdomLab/fast-mlsirm#1536`, run `33353355144`, created `2026-08-31T03:17:05Z`, `cancelled`
+- `ContextualWisdomLab/pg-erd-cloud#1036`, run `33483217666`, created `2026-09-01T07:39:55Z`, `cancelled`
+- `ContextualWisdomLab/pg-erd-cloud#996`, run `33480172944`, created `2026-09-01T07:01:24Z`, `cancelled`
+- `ContextualWisdomLab/pg-erd-cloud#1027`, run `33479275961`, created `2026-09-01T06:49:25Z`, `cancelled`
+
+All 13 run IDs above were independently re-verified against `gh api repos/ContextualWisdomLab/<repo>/actions/runs/<id>`
+directly (not just accepted from the peer session's report) before being recorded here.
+
+**16 total zombie runs cleared org-wide this tick** (3 found directly + 13 from the full sweep) --
+every one confirmed to still be running against its PR's live current head, so this is not the earlier
+"stale/superseded head" cleanup class; these were current-head runs that were simply never going to
+terminate because they started executing before both fixes that would have bounded or self-retired
+them existed (`.github#1707`'s `poll_deadline_epoch`, merged `2026-09-02T08:45:08Z`, and `.github#1649`'s
+self-retirement check, merged `2026-09-02T08:05:27` KST -- both postdate every one of these 16 runs'
+`created_at`, confirming they genuinely had no escape hatch of any kind, not merely a slow one).
+
+One incidental finding worth a small separate follow-up (not fixed here): `ContextualWisdomLab/wardnet#137`'s run had no
 `pull_requests` field populated (a `pull_request_target`-event quirk requiring the PR number be parsed
 from the run's own name instead), and the PR it belonged to had *already been closed* -- meaning
 `cancel-closed-pr-runs`-style cleanup jobs that rely on the `pull_requests` API field to identify which
