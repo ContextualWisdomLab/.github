@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -275,3 +276,53 @@ def test_successful_put_restores_displaced_admin_after_main_advances(monkeypatch
     assert main_checks == 2
     assert history_reads == 2
     assert put_bodies == [desired, module._editable_projection(administrator)]
+
+
+def test_ambiguous_recovery_rejects_history_rewrite_after_settlement(monkeypatch) -> None:
+    """A history rewrite after settlement is detected before restored state is trusted."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Administrator predecessor", "enforcement": "evaluate"}
+    rewritten = {**current, "name": "Newer administrator state"}
+    put_count = 0
+
+    def history_state(_target, version_id):
+        if version_id == 9:
+            return displaced
+        if version_id == 11:
+            return rewritten
+        raise AssertionError(version_id)
+
+    def api(method, endpoint, *, body=None):
+        nonlocal put_count
+        if method == "GET" and endpoint == target.endpoint:
+            return current
+        if method == "PUT" and endpoint == target.endpoint:
+            put_count += 1
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_history_version_state", history_state)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module, "_gh_api", api)
+    monkeypatch.setattr(
+        module,
+        "_settle_ambiguous_recovery_history",
+        lambda *_args, **_kwargs: [{"version_id": 11}, {"version_id": 10}],
+    )
+
+    with pytest.raises(
+        module.RulesetGovernanceError,
+        match="ambiguous ruleset recovery PUT left a newer state; refusing overwrite",
+    ):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+    assert put_count == 1
