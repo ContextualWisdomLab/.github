@@ -1,0 +1,169 @@
+name: TEMP PR1672 remove fixed repair deadline v2
+
+on:
+  push:
+    branches: [fix/noema-repair-attempt-telemetry]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1672-remove-fixed-repair-deadline
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/noema-repair-attempt-telemetry
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Revalidate writer head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/noema-repair-attempt-telemetry
+          live_head="$(git rev-parse origin/fix/noema-repair-attempt-telemetry)"
+          test "$live_head" = "$EXPECTED_HEAD" || {
+            echo "::notice::Writer branch advanced to $live_head; predecessor repair is obsolete."
+            exit 0
+          }
+
+      - name: Install hash-locked test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+          python3 -m pytest --version
+
+      - name: Apply ADR-0003 repair and regressions
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          gate_path = Path('scripts/ci/noema_review_gate.py')
+          gate = gate_path.read_text(encoding='utf-8')
+
+          constant_pattern = re.compile(
+              r'# NOT DATA-DERIVED -- UNRESOLVED, flagged for an explicit owner decision\.\n'
+              r'.*?NOEMA_REPAIR_DEADLINE_SECONDS = 15 \* 60\n\n',
+              re.S,
+          )
+          gate, constant_count = constant_pattern.subn(
+              '# ADR-0003 assigns inference timeout and provider failover policy to contextual-orchestrator.\n'
+              '# Noema therefore bounds the repair path by attempt count, not by a caller-authored wall-clock cap.\n\n',
+              gate,
+              count=1,
+          )
+          if constant_count != 1:
+              raise SystemExit('fixed repair deadline constant block shape drifted')
+
+          helper_pattern = re.compile(
+              r'@contextlib\.contextmanager\n'
+              r'def _repair_wall_clock_deadline\(seconds: float\):\n'
+              r'.*?\n\nclass StaleHeadDuringRepairRetryError',
+              re.S,
+          )
+          gate, helper_count = helper_pattern.subn(
+              'class StaleHeadDuringRepairRetryError', gate, count=1
+          )
+          if helper_count != 1:
+              raise SystemExit('repair deadline helper shape drifted')
+
+          deadline_block = '''        deadline_context = (\n            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)\n            if is_retry\n            else contextlib.nullcontext()\n        )\n        with deadline_context:\n'''
+          replacement_block = '''        # Retry cardinality remains bounded to one corrective request. ADR-0003\n        # forbids a repository-authored fixed inference wall-clock deadline;\n        # contextual-orchestrator owns provider timeout/failover policy.\n        with contextlib.nullcontext():\n'''
+          if gate.count(deadline_block) != 1:
+              raise SystemExit('repair deadline call-site shape drifted')
+          gate = gate.replace(deadline_block, replacement_block, 1)
+          gate_path.write_text(gate, encoding='utf-8')
+
+          failure_test_path = Path('tests/test_noema_model_output_failure_classification.py')
+          failure_tests = failure_test_path.read_text(encoding='utf-8')
+          for function_name in (
+              'test_total_repair_wall_clock_deadline_interrupts_slow_read',
+              'test_repair_wall_clock_deadline_defensive_fail_closed_paths',
+              'test_repair_wall_clock_deadline_refuses_existing_process_alarm',
+              'test_repair_wall_clock_deadline_rejects_non_main_thread_signal_context',
+          ):
+              function_pattern = re.compile(
+                  rf'\ndef {re.escape(function_name)}\([^\n]*\) -> None:\n.*?(?=\n\ndef |\Z)',
+                  re.S,
+              )
+              failure_tests, removed_count = function_pattern.subn('', failure_tests, count=1)
+              if removed_count != 1:
+                  raise SystemExit(f'legacy deadline regression missing: {function_name}')
+          failure_test_path.write_text(failure_tests, encoding='utf-8')
+
+          telemetry_test_path = Path('tests/test_noema_repair_attempt_telemetry.py')
+          telemetry_tests = telemetry_test_path.read_text(encoding='utf-8')
+          telemetry_tests = telemetry_tests.replace('import signal\n', '')
+          telemetry_tests = telemetry_tests.replace('import time\n', '')
+          telemetry_pattern = re.compile(
+              r'\ndef test_repair_deadline_exceeded_emits_full_attempt_breakdown\([^\n]*\):\n.*?(?=\n\ndef |\Z)',
+              re.S,
+          )
+          telemetry_tests, telemetry_count = telemetry_pattern.subn('', telemetry_tests, count=1)
+          if telemetry_count != 1:
+              raise SystemExit('deadline telemetry regression shape drifted')
+          telemetry_test_path.write_text(telemetry_tests, encoding='utf-8')
+
+          alarm_test_path = Path('tests/test_noema_repair_deadline_alarm_safety.py')
+          if alarm_test_path.exists():
+              alarm_test_path.unlink()
+
+          contract_test_path = Path('tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py')
+          contract_test_path.write_text('''"""Noema repair inference must not carry a caller-authored wall-clock cap."""\n\nfrom pathlib import Path\n\n\ndef test_noema_repair_has_no_repository_fixed_wall_clock_deadline() -> None:\n    source = Path("scripts/ci/noema_review_gate.py").read_text(encoding="utf-8")\n    assert "NOEMA_REPAIR_DEADLINE_SECONDS" not in source\n    assert "_repair_wall_clock_deadline(" not in source\n    assert "signal.setitimer" not in source\n    assert "with contextlib.nullcontext():" in source\n\n\ndef test_noema_repair_attempt_count_remains_bounded() -> None:\n    source = Path("scripts/ci/noema_review_gate.py").read_text(encoding="utf-8")\n    assert "if is_retry:" in source\n    assert "is_retry=True" in source\n    assert source.count("is_retry=True") == 1\n''', encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          note = '- Noema repair inference no longer applies the repository-authored 900-second wall-clock cap; the retry remains cardinality-bounded while contextual-orchestrator owns inference timeout and provider failover per ADR-0003.\n'
+          if note not in changelog:
+              lines = changelog.splitlines(keepends=True)
+              insert_at = 1 if lines else 0
+              lines.insert(insert_at, note)
+              changelog_path.write_text(''.join(lines), encoding='utf-8')
+
+          doctoring_path = Path('docs/doctoring/noema-repair-attempt-telemetry.md')
+          doctoring = doctoring_path.read_text(encoding='utf-8')
+          doctoring_note = '''\n## 2026-09-02 causal-owner correction\n\nThe fixed 900-second repair wall-clock cap was removed from the Noema caller. Repair remains bounded to one corrective inference attempt, while model-call timeout and provider failover remain contextual-orchestrator responsibilities under ADR-0003. Telemetry remains observational and does not authorize a replacement heuristic deadline.\n'''
+          if '## 2026-09-02 causal-owner correction' not in doctoring:
+              doctoring_path.write_text(doctoring.rstrip() + doctoring_note + '\n', encoding='utf-8')
+          PY
+
+      - name: Verify focused and full owner contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest \
+            tests/test_noema_model_output_failure_classification.py \
+            tests/test_noema_repair_attempt_telemetry.py \
+            tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py -q
+          PYTHONPATH=. python3 -m pytest tests -q
+          python3 -m compileall -q scripts tests
+          git diff --check
+          ! grep -R "NOEMA_REPAIR_DEADLINE_SECONDS\|_repair_wall_clock_deadline(" -n scripts/ci/noema_review_gate.py tests
+
+      - name: Publish exact repair and self-retire
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/noema-repair-attempt-telemetry
+          live_head="$(git rev-parse origin/fix/noema-repair-attempt-telemetry)"
+          test "$live_head" = "$EXPECTED_HEAD" || {
+            echo "::notice::Writer branch advanced to $live_head; refusing stale publication."
+            exit 0
+          }
+          git rm -- .github/workflows/_temp_pr1672_remove_fixed_repair_deadline_v2.yml
+          git rm --ignore-unmatch tests/test_noema_repair_deadline_alarm_safety.py
+          git config user.name "ContextualWisdomLab automation"
+          git config user.email "automation@users.noreply.github.com"
+          git add scripts/ci/noema_review_gate.py tests/test_noema_model_output_failure_classification.py tests/test_noema_repair_attempt_telemetry.py tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py CHANGELOG.md docs/doctoring/noema-repair-attempt-telemetry.md
+          git diff --cached --check
+          git commit -m "fix(noema): remove caller fixed repair timeout"
+          git push origin HEAD:fix/noema-repair-attempt-telemetry
