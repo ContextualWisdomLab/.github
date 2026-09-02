@@ -1,0 +1,395 @@
+name: Temporary PR1706 One-shot Runner Release Repair
+
+on:
+  push:
+    branches:
+      - fix/opencode-poll-wall-clock-bound
+    paths:
+      - .github/workflows/_temp_pr1706_one_shot_runner_release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1706-one-shot-runner-release
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact trigger head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install locked repository test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove runner-release regression is RED
+        run: |
+          set -euo pipefail
+          if PYTHONPATH=. python3 -m pytest -q tests/test_opencode_required_verdict_runner_release.py; then
+            echo '::error::Expected one-shot runner-release regression to be RED before production repair.'
+            exit 1
+          fi
+
+      - name: Apply smallest causal owner repair
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/opencode-review.yml')
+          workflow = workflow_path.read_text(encoding='utf-8')
+          start_marker = '      - name: Fail closed without a current-head OpenCode verdict\n'
+          end_marker = '\n  cancel-superseded-opencode-review-runs:\n'
+          if workflow.count(start_marker) != 1 or workflow.count(end_marker) != 1:
+              raise SystemExit('OpenCode required-verdict step boundaries drifted')
+          before, rest = workflow.split(start_marker, 1)
+          _old_step, after = rest.split(end_marker, 1)
+          replacement = '''      - name: Fail closed without a current-head OpenCode verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_ACTION: ${{ github.event.action }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          if [ "$PR_ACTION" = "closed" ]; then
+            echo "PR closed; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
+            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before verdict admission."
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
+            echo "::error::Could not validate live pull request state before verdict admission."
+            exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
+            exit 0
+          fi
+          if [ "$live_draft" = "true" ]; then
+            echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh required-review run will bind the current head."
+            exit 0
+          fi
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "Event draft snapshot is stale; continuing one-shot verdict admission for the live ready PR."
+          fi
+          if ! reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
+            echo "::error::Reviews API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."
+            exit 1
+          fi
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+            (add // [])
+            | [
+                .[]
+                | select(
+                    (.user.login // "" | ascii_downcase) as $user
+                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
+                  )
+                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
+              ]
+            | (last // {}) as $review
+            | ($review.body // "" | ascii_downcase) as $body
+            | if $review.state == "CHANGES_REQUESTED" then
+                "CHANGES_REQUESTED"
+              elif $review.state == "APPROVED"
+                and ($body | contains("deterministic current-head evidence") | not)
+                and ($body | contains("deterministic fallback approval") | not)
+                and ($body | contains("model-unavailable evidence fallback") | not)
+                and ($body | contains("did not emit a usable current-head control block") | not)
+                and ($body | contains("scope: `unsupported`") | not)
+                and ($body | contains("model-pool outcome: `unknown`") | not)
+              then
+                "APPROVED"
+              else
+                empty
+              end
+          ')"
+          if [ -z "$verdict" ]; then
+            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict. The dispatch path wakes this exact failed run when the verdict arrives."
+            exit 1
+          fi
+          echo "Current-head OpenCode verdict: ${verdict}."
+'''
+          workflow = before + replacement + end_marker + after
+          workflow = workflow.replace(
+              '# `converted_to_draft` is included so a PR going draft mid-poll fires a\n'
+              '    # fresh run of this same workflow: the head-scoped concurrency group below\n'
+              '    # (`cancel-in-progress: true`) cancels any in-flight non-draft\n'
+              '    # "Fail closed without a current-head OpenCode verdict" poll for that\n'
+              '    # exact same head. Every non-closed admission path revalidates the live\n'
+              '    # PR/head/state before dispatching, exempting, or polling so out-of-order\n'
+              '    # draft/ready/closed events cannot publish stale evidence or wait on an\n'
+              '    # impossible verdict.\n',
+              '# `converted_to_draft` is included so a same-head state transition can\n'
+              '    # supersede any older admission run. Every non-closed admission path\n'
+              '    # revalidates live PR/head/state before dispatching, exempting, or reading\n'
+              '    # reviews, so stale events cannot publish or admit stale evidence.\n',
+          )
+          workflow = workflow.replace(
+              '# `converted_to_draft` still cancels an active same-head verdict poll.\n',
+              '# `converted_to_draft` still supersedes an active same-head admission run.\n',
+          )
+          workflow = workflow.replace(
+              '    # old-head events, while the poll above now revalidates live PR identity on\n'
+              '    # every wait iteration so an already-running obsolete poll can self-retire\n'
+              '    # without consuming a second runner. This sibling job remains a defense in\n'
+              '    # depth for queued/requested old-head runs and for legacy runs created from\n'
+              '    # older workflow revisions that lack the in-loop self-retirement check.\n',
+              '    # old-head events. The admission step above is one-shot and never holds a\n'
+              '    # runner waiting for model work; this sibling remains defense in depth for\n'
+              '    # queued/requested old-head runs and legacy workflow revisions.\n',
+          )
+          workflow_path.write_text(workflow, encoding='utf-8')
+
+          Path('tests/test_opencode_poll_rate_budget.py').write_text('''"""Request-budget regression for one-shot Required OpenCode verdict admission."""
+
+from pathlib import Path
+
+
+WORKFLOW = Path(".github/workflows/opencode-review.yml")
+
+
+def _admission_step() -> str:
+    """Return the one-shot current-head verdict admission step."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    return workflow.split(
+        "      - name: Fail closed without a current-head OpenCode verdict\\n", 1
+    )[1].split("\\n  cancel-superseded-opencode-review-runs:\\n", 1)[0]
+
+
+def test_admission_uses_one_reviews_read_without_runner_polling() -> None:
+    """Missing model evidence releases the runner instead of allocating REST polling."""
+    step = _admission_step()
+    assert step.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+    assert step.count('gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"') == 1
+    assert "while :; do" not in step
+    assert "poll_interval_seconds" not in step
+    assert "poll_deadline_epoch" not in step
+    assert "sleep " not in step
+
+
+def test_review_read_keeps_maximum_rest_page_size() -> None:
+    """The single Reviews read minimizes pages without dropping history evidence."""
+    step = _admission_step()
+    assert "/reviews?per_page=100" in step
+    assert "gh api --paginate" in step
+''', encoding='utf-8')
+
+          Path('tests/test_opencode_poll_self_retirement.py').write_text('''"""Regression contract for one-shot Required OpenCode verdict admission."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+
+WORKFLOW = Path(".github/workflows/opencode-review.yml")
+HEAD_SHA = "a" * 40
+
+
+def _script() -> str:
+    """Extract the production one-shot verdict admission script."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Fail closed without a current-head OpenCode verdict\\n", 1
+    )[1]
+    return textwrap.dedent(step.split("        run: |\\n", 1)[1])
+
+
+def _run(tmp_path: Path, *, live_pr: dict[str, object], reviews: list[dict[str, object]] | None = None, fail_reviews: bool = False) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Execute the production step against deterministic live PR/review evidence."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "calls"
+    gh = fake_bin / "gh"
+    gh.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$CALL_LOG"
+if [[ "$*" == "api repos/ContextualWisdomLab/example/pulls/42" ]]; then
+  printf '%s\\n' "$LIVE_PR"
+  exit 0
+fi
+if [[ "$*" == "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100" ]]; then
+  if [[ "$FAIL_REVIEWS" == "true" ]]; then exit 7; fi
+  printf '%s\\n' "$REVIEWS"
+  exit 0
+fi
+exit 97
+''', encoding='utf-8')
+    gh.chmod(0o755)
+    sleep = fake_bin / "sleep"
+    sleep.write_text("#!/usr/bin/env bash\\nexit 91\\n", encoding="utf-8")
+    sleep.chmod(0o755)
+    result = subprocess.run(
+        [bash, "-c", _script()],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CALL_LOG": str(log),
+            "LIVE_PR": json.dumps(live_pr),
+            "REVIEWS": json.dumps(reviews or []),
+            "FAIL_REVIEWS": str(fail_reviews).lower(),
+            "GH_TOKEN": "test-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "42",
+            "HEAD_SHA": HEAD_SHA,
+            "PR_ACTION": "synchronize",
+            "PR_DRAFT": "false",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, log.read_text(encoding="utf-8").splitlines()
+
+
+def test_stale_head_retires_before_reviews_read(tmp_path: Path) -> None:
+    """A moved head cannot consume or admit review evidence."""
+    result, calls = _run(tmp_path, live_pr={"head": {"sha": "b" * 40}, "draft": False, "state": "open"})
+    assert result.returncode == 0
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
+
+
+def test_closed_current_head_retires_before_reviews_read(tmp_path: Path) -> None:
+    """A closed current head releases the runner without a review read."""
+    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "closed"})
+    assert result.returncode == 0
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
+
+
+def test_draft_current_head_retires_before_reviews_read(tmp_path: Path) -> None:
+    """A draft current head releases the runner without an impossible review wait."""
+    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": True, "state": "open"})
+    assert result.returncode == 0
+    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
+
+
+def test_current_head_reads_reviews_once_and_accepts_exact_verdict(tmp_path: Path) -> None:
+    """A live current head admits one exact-head formal OpenCode verdict."""
+    reviews = [{"user": {"login": "opencode-agent[bot]"}, "commit_id": HEAD_SHA, "state": "APPROVED", "body": "source-backed review"}]
+    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "open"}, reviews=reviews)
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
+    ]
+
+
+def test_reviews_transport_failure_fails_once_and_releases_runner(tmp_path: Path) -> None:
+    """Transport failure is fail-closed without a repository-authored retry count."""
+    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "open"}, fail_reviews=True)
+    assert result.returncode == 1
+    assert "Reviews API read failed during one-shot" in result.stdout
+    assert len(calls) == 2
+    assert "sleep " not in _script()
+''', encoding='utf-8')
+
+          regression_path = Path('tests/test_opencode_required_verdict_regression.py')
+          regression = regression_path.read_text(encoding='utf-8')
+          regression = regression.replace('    assert "while :; do" in target_job\n    assert \'sleep "$poll_interval_seconds"\' in target_job\n', '    assert "while :; do" not in target_job\n    assert "poll_interval_seconds" not in target_job\n    assert "poll_deadline_epoch" not in target_job\n    assert \'sleep "$poll_interval_seconds"\' not in target_job\n')
+          regression = regression.replace('before polling', 'before verdict admission')
+          regression = regression.replace('before ever polling Reviews API', 'before any Reviews API admission read')
+          regression = regression.replace('while :; do ... sleep "$poll_interval_seconds"; done', 'one-shot current-head verdict read')
+          regression_path.write_text(regression, encoding='utf-8')
+
+          doctoring_path = Path('docs/doctoring/opencode-stale-poll-self-retirement.md')
+          doctoring = doctoring_path.read_text(encoding='utf-8')
+          marker = '## 2026-09-02 one-shot runner-release supersession'
+          if marker not in doctoring:
+              doctoring += '''\n\n## 2026-09-02 one-shot runner-release supersession\n\nThe required-verdict job no longer polls while model review continues. It now performs one authoritative live-PR read followed by at most one paginated Reviews read. Missing or unavailable exact-head verdict evidence fails closed immediately and releases the runner. The authenticated `opencode-review-dispatch.yml` path remains responsible for waking the exact failed required run via `rerun-failed-jobs` when the formal verdict arrives. This removes repository-authored polling interval, retry-count, and wall-clock allocations from the review waiting path without imposing an inference timeout on contextual-orchestrator or the serving model.\n'''
+          doctoring_path.write_text(doctoring, encoding='utf-8')
+
+          baseline_path = Path('docs/product-technical-gap-baseline.md')
+          baseline = baseline_path.read_text(encoding='utf-8')
+          marker = 'OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02'
+          if marker not in baseline:
+              baseline += '''\n\n### OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02\n- Owner: `ContextualWisdomLab/.github` Required OpenCode Review control plane.\n- RCA: the required-verdict job occupied a runner while waiting for asynchronous model work, using repository-authored poll interval, transport retry count, and wall-clock deadline despite an existing authenticated exact-run wake contract in the dispatch workflow.\n- GREEN contract: one live PR read + one Reviews read; absence/transport failure is immediately non-passing, and the dispatch owner wakes the exact failed run after a verdict. Model reasoning/streaming receives no caller wall-clock timeout.\n- Regression: `tests/test_opencode_required_verdict_runner_release.py`, one-shot request-budget/state tests, and the existing exact-run dispatch validation.\n'''
+          baseline_path.write_text(baseline, encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          note = '- Required OpenCode Review now releases its runner after one exact-head verdict admission read and relies on the authenticated exact-run dispatch wake instead of repository-authored polling, retry-count, or waiting deadlines.\n'
+          if note not in changelog:
+              changelog_path.write_text(note + changelog, encoding='utf-8')
+          PY
+
+      - name: Verify GREEN focused and broader contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_opencode_required_verdict_runner_release.py \
+            tests/test_opencode_poll_rate_budget.py \
+            tests/test_opencode_poll_self_retirement.py \
+            tests/test_opencode_required_verdict_regression.py \
+            tests/test_opencode_workflow_shell_syntax.py
+          python3 - <<'PY'
+          import yaml
+          with open('.github/workflows/opencode-review.yml', encoding='utf-8') as handle:
+              yaml.safe_load(handle)
+          PY
+          git diff --check
+          PYTHONPATH=. python3 -m pytest tests -q
+
+      - name: Publish only from unchanged writer head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/opencode-poll-wall-clock-bound
+          live_head="$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)"
+          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+            echo "::error::Writer branch advanced to $live_head; refusing stale publication."
+            exit 1
+          fi
+          git config user.name "ContextualWisdomLab automation"
+          git config user.email "automation@users.noreply.github.com"
+          git add .github/workflows/opencode-review.yml \
+            tests/test_opencode_required_verdict_runner_release.py \
+            tests/test_opencode_poll_rate_budget.py \
+            tests/test_opencode_poll_self_retirement.py \
+            tests/test_opencode_required_verdict_regression.py \
+            docs/doctoring/opencode-stale-poll-self-retirement.md \
+            docs/product-technical-gap-baseline.md CHANGELOG.md
+          git diff --cached --check
+          git commit -m "fix(opencode): release required runner after one verdict read"
+          git push origin HEAD:fix/opencode-poll-wall-clock-bound
