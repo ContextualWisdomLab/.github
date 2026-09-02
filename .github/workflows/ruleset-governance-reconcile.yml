@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - "config/ruleset-governance.json"
+      - "scripts/ci/audit_central_required_workflows.py"
       - "scripts/ci/reconcile_ruleset_governance.py"
       - "tests/test_ruleset_governance_reconciliation.py"
       - "tests/test_ruleset_governance_review_regressions.py"
       - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_ruleset_governance_review_round3.py"
       - "tests/test_ruleset_governance_timeout_regression.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
@@ -20,10 +22,12 @@ on:
       - main
     paths:
       - "config/ruleset-governance.json"
+      - "scripts/ci/audit_central_required_workflows.py"
       - "scripts/ci/reconcile_ruleset_governance.py"
       - "tests/test_ruleset_governance_reconciliation.py"
       - "tests/test_ruleset_governance_review_regressions.py"
       - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_ruleset_governance_review_round3.py"
       - "tests/test_ruleset_governance_timeout_regression.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
@@ -46,10 +50,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  report-disabled:
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.CWL_RULESET_RECONCILE_ENABLED != 'true'
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Report disabled owner-plane state
+        shell: bash
+        run: >-
+          echo "Ruleset reconciliation is disabled; provision the protected owner-plane credential and enable variable before live mutation." >> "$GITHUB_STEP_SUMMARY"
+
   validate:
     # Source/regression drift is already validated on PR, push, and manual runs.
-    # When privileged reconciliation is deliberately disabled, an hourly static
-    # rerun cannot observe live ruleset drift and only consumes shared capacity.
+    # A disabled schedule emits only the cheap report-disabled signal above.
     if: >-
       github.event_name != 'schedule' ||
       vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
@@ -93,6 +108,7 @@ jobs:
               tests/test_ruleset_governance_reconciliation.py \
               tests/test_ruleset_governance_review_regressions.py \
               tests/test_ruleset_governance_review_round2.py \
+              tests/test_ruleset_governance_review_round3.py \
               tests/test_ruleset_governance_timeout_regression.py \
               tests/test_central_required_workflow_ruleset_audit.py \
               tests/test_ruleset_audit_completeness_regression.py \
@@ -114,7 +130,7 @@ jobs:
       vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     environment: ruleset-governance-maintenance
     steps:
       - name: Harden runner
