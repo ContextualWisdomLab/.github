@@ -2677,6 +2677,30 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
         return
     require_github_actions_control_actor(action)
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
+    # A rerun brings a completed run back to queued/in_progress; invalidate
+    # any cached active_workflow_runs snapshot so it is not read as stale.
+    reset_active_workflow_runs_cache()
+
+
+_active_workflow_runs_cache: dict[
+    tuple[str, tuple[str, ...], str | None, str | None, str | None], list[dict[str, Any]]
+] = {}
+
+
+def reset_active_workflow_runs_cache() -> None:
+    """Clear the per-invocation cache backing :func:`active_workflow_runs`.
+
+    ``main`` calls this once at the top of every scheduler run so the cache
+    never survives across separate invocations sharing a process (tests
+    calling ``main`` more than once, most notably). It must also be called
+    immediately after anything that changes GitHub Actions run state --
+    force-cancelling, rerunning, or dispatching a run -- so a later read in
+    the same run observes that mutation instead of a stale pre-mutation
+    snapshot; :func:`force_cancel_workflow_runs`, :func:`rerun_actions_job`,
+    :func:`dispatch_opencode_review`, and :func:`dispatch_strix_evidence` all
+    do this immediately after their mutating call.
+    """
+    _active_workflow_runs_cache.clear()
 
 
 def active_workflow_runs(
@@ -2699,7 +2723,20 @@ def active_workflow_runs(
     run history only grows, such as a same-head dispatch search, or one
     scoped to a single known commit -- should pass them to avoid paginating
     history it can never use.
+
+    Results are memoized per exact ``(repo, statuses, event, created,
+    head_sha)`` combination for the life of the cache (cleared by
+    :func:`reset_active_workflow_runs_cache`). The scheduler's queue sweep
+    calls the unfiltered ``(repo, ("queued", "in_progress"))`` shape from
+    every non-draft PR's unconditional stale-run check plus every review
+    dispatch check, all against the one repository a scheduler invocation
+    ever targets -- without memoization that is up to two redundant,
+    repository-wide, paginated REST calls per PR for identical data.
     """
+    cache_key = (repo, tuple(statuses), event, created, head_sha)
+    cached = _active_workflow_runs_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
     runs: list[dict[str, Any]] = []
     for status in statuses:
         args = [
@@ -2725,7 +2762,8 @@ def active_workflow_runs(
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
-    return runs
+    _active_workflow_runs_cache[cache_key] = runs
+    return list(runs)
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
@@ -2956,6 +2994,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
 
+    # A cancelled run is no longer queued/in_progress; drop any cached
+    # active_workflow_runs snapshot so the next read (this same PR's later
+    # checks, or a later PR sharing this repository) sees the change instead
+    # of replaying it from before the cancellation.
+    reset_active_workflow_runs_cache()
+
     failures = {run_id: reason for run_id, reason in results if reason is not None}
     for run_id, reason in failures.items():
         print(
@@ -3103,6 +3147,9 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
 
 
@@ -3184,6 +3231,9 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
 
 
@@ -5335,6 +5385,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     """Run the scheduler CLI."""
+    # Each invocation is a fresh look at GitHub; never reuse another
+    # invocation's active_workflow_runs cache (relevant when a process
+    # calls main() more than once, tests included).
+    reset_active_workflow_runs_cache()
     args = parse_args(argv)
     if args.self_test:
         self_test()
