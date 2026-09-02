@@ -191,18 +191,23 @@ jobs:
             esac
           done < <(git diff --name-only HEAD)
 
-      - name: Publish only from unchanged exact writer head
+      - name: Publish only from unchanged exact writer head with a workflow-triggering credential
         env:
-          PUSH_TOKEN: ${{ github.token }}
+          EXPECTED_REMOTE_HEAD: ${{ github.sha }}
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error::Publication requires PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN so the new exact head can start required workflows; github.token fallback is intentionally refused."
+            exit 1
+          fi
           remote_head="$(git ls-remote origin refs/heads/fix/opencode-poll-wall-clock-bound | cut -f1)"
-          test "$remote_head" = "$GITHUB_SHA"
+          test "$remote_head" = "$EXPECTED_REMOTE_HEAD"
           git add -A
           git diff --cached --check
           git commit -m "fix(opencode): release required runner after one verdict read"
           remote_head="$(git ls-remote origin refs/heads/fix/opencode-poll-wall-clock-bound | cut -f1)"
-          test "$remote_head" = "$GITHUB_SHA"
+          test "$remote_head" = "$EXPECTED_REMOTE_HEAD"
           git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:refs/heads/fix/opencode-poll-wall-clock-bound
