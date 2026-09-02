@@ -280,7 +280,16 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
 
 
 def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
-    """Serve the authoritative live PR lookup, then reject downstream GitHub I/O."""
+    """Serve the authoritative live PR lookup, then reject downstream GitHub I/O.
+
+    Also stubs ``sleep`` to return instantly. The production poll loop's
+    transport-failure path really does ``sleep "$poll_interval_seconds"``
+    (60s) between retries -- without this stub, a test that drives that path
+    to its 3-failure fail-closed threshold performs two genuine 60s sleeps
+    (observed directly: this exact gap made
+    ``test_fail_closed_step_still_polls_for_a_non_draft_pr`` take ~120s of
+    real wall-clock time per run instead of running fast).
+    """
     fake_gh = bin_dir / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
@@ -294,6 +303,9 @@ def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
+    fake_sleep = bin_dir / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(fake_sleep.stat().st_mode | 0o111)
 
 
 def _run_fail_closed_step(
@@ -623,9 +635,10 @@ def test_fail_closed_step_still_polls_for_a_non_draft_pr(tmp_path: Path) -> None
     """A non-draft PR must still reach the Reviews API call (not exempted).
 
     Unlike the request-review step's single unguarded call, the Reviews API
-    fetch here retries a transport failure up to three times (with a real
-    backoff sleep between attempts) before failing closed with its own exit
-    1, so the fixture's synthetic unmocked-call sentinel exit code (17)
+    fetch here retries a transport failure up to three times (with a
+    stubbed, instant backoff "sleep" between attempts -- see
+    ``_write_live_pr_then_refusing_gh``) before failing closed with its own
+    exit 1, so the fixture's synthetic unmocked-call sentinel exit code (17)
     never reaches this script's own exit status -- it is absorbed by the
     retry loop instead, which still logs the sentinel's stderr diagnostic on
     every attempt.

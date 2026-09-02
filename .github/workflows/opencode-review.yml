@@ -423,7 +423,25 @@ jobs:
           review_poll_failures=0
           max_poll_transport_failures=3
           poll_interval_seconds=60
+          # Distinct from max_poll_transport_failures above: that counter only
+          # catches consecutive gh CLI transport failures. A dispatched
+          # review that never posts a verdict -- every gh call succeeding,
+          # just with no matching APPROVED/CHANGES_REQUESTED review yet --
+          # would loop here forever and occupy this runner indefinitely,
+          # which is what let a stuck dispatch exhaust the org's shared
+          # Actions concurrent-job capacity and stall required-review
+          # dispatch for other open PRs. 10800s (3h) comfortably exceeds this
+          # repo's own documented "OpenCode/Strix/Noema may take over two
+          # hours per model" allowance (docs/product-goal-directive.md §8)
+          # while staying well under GitHub's 360-minute job default, so a
+          # legitimately slow model is never falsely failed closed.
+          max_poll_wall_clock_seconds=10800
+          poll_deadline_epoch=$(( $(date +%s) + max_poll_wall_clock_seconds ))
           while :; do
+            if [ "$(date +%s)" -ge "$poll_deadline_epoch" ]; then
+              echo "::error::No verdict after $(( max_poll_wall_clock_seconds / 60 )) minutes of polling; failing closed and releasing the runner."
+              exit 1
+            fi
             if ! live_poll_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
               live_poll_failures=$((live_poll_failures + 1))
               if [ "$live_poll_failures" -ge "$max_poll_transport_failures" ]; then
