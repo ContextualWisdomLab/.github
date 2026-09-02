@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Strix model normalization now fails closed on every direct-provider model identifier and accepts only the contextual-orchestrator `orchestrator/free` virtual pool spellings. This closes the reusable model-selection bypass without removing `OPENAI_API_KEY` from bootstrap/global discovery; the orchestrator's free-pool credential-source policy remains the candidate-admission authority.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
