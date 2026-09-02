@@ -1,6 +1,6 @@
 """Contract for the reusable Dependency Review workflow.
 
-Replaces argos's, mightyETL's, newsdom-api's, and scopeweave's
+Replaces Argos's, mightyETL's, naruon's, newsdom-api's, and scopeweave's
 independently hand-written ``dependency-review.yml`` files with one reusable
 ``workflow_call`` workflow, ``.github/workflows/dependency-review.yml``, plus
 a thin caller left in each product repository. See
@@ -24,22 +24,29 @@ def _workflow_text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_declares_workflow_call_with_three_inputs_and_recorded_defaults() -> None:
-    """Every genuinely-varying field found while auditing the four originals is an input."""
+def test_declares_workflow_call_with_four_inputs_and_recorded_defaults() -> None:
+    """Every genuinely varying field found while auditing the five originals is an input."""
     workflow = _workflow_text()
     assert "on:\n  workflow_call:\n    inputs:" in workflow
-    for name in ("fail_on_severity:", "allow_ghsas:", "continue_on_error:"):
+    for name in (
+        "fail_on_severity:",
+        "allow_ghsas:",
+        "continue_on_error:",
+        "comment_summary_in_pr:",
+    ):
         assert name in workflow
 
     assert 'default: "moderate"' in workflow
     assert 'default: ""' in workflow
     assert "default: false" in workflow
+    assert 'default: "on-failure"' in workflow
 
 
-def test_step_order_is_checkout_then_preflight_then_dependency_review() -> None:
-    """Checkout, capability preflight, then the gated action must remain ordered."""
+def test_step_order_is_harden_then_checkout_then_preflight_then_dependency_review() -> None:
+    """Runner hardening, checkout, capability proof, then the gated action stay ordered."""
     workflow = _workflow_text()
     order = [
+        "Harden the runner",
         "actions/checkout@",
         "Check dependency graph availability",
         "Dependency review",
@@ -61,23 +68,29 @@ def test_dependency_review_runs_only_after_a_confirmed_successful_comparison() -
 
 
 def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:
-    """fail_on_severity and allow_ghsas must reach the underlying action untouched."""
+    """Every caller-varying action input must reach the pinned action untouched."""
     workflow = _workflow_text()
     assert "fail-on-severity: ${{ inputs.fail_on_severity }}" in workflow
     assert "allow-ghsas: ${{ inputs.allow_ghsas }}" in workflow
+    assert "comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}" in workflow
+
+
+def test_harden_runner_audits_egress() -> None:
+    """naruon's harden-runner control applies uniformly in the reusable owner."""
+    workflow = _workflow_text()
+    assert "step-security/harden-runner@" in workflow
+    assert "egress-policy: audit" in workflow
 
 
 def test_action_pins_are_current_and_uniform() -> None:
-    """checkout and dependency-review-action share one current pin, not per-caller drift."""
+    """Checkout and Dependency Review use one immutable current pin."""
     workflow = _workflow_text()
     assert f"actions/checkout@{_CHECKOUT_PIN}" in workflow
-    assert (
-        f"actions/dependency-review-action@{_DEPENDENCY_REVIEW_PIN}" in workflow
-    )
+    assert f"actions/dependency-review-action@{_DEPENDENCY_REVIEW_PIN}" in workflow
 
 
 def test_uniform_fields_are_hardcoded_not_parameterized() -> None:
-    """Fields byte-identical across all four originals stay static, not inputs."""
+    """Uniform least-privilege and checkout controls stay static."""
     workflow = _workflow_text()
     assert "permissions:\n  contents: read\n  pull-requests: read" in workflow
     assert "persist-credentials: false" in workflow
@@ -95,26 +108,28 @@ def test_example_caller_preserves_required_permission_envelope() -> None:
     )
 
 
+def test_example_caller_requires_immutable_protected_main_pin() -> None:
+    """The canonical example must never teach consumers to execute a mutable owner ref."""
+    workflow = _workflow_text()
+    assert "@<protected-main-commit-sha>" in workflow
+    assert "uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main" not in workflow
+
+
 def test_forces_node24_runtime_for_js_actions() -> None:
-    """newsdom-api's Node24 opt-in applies uniformly, not only to that one caller."""
+    """newsdom-api's Node24 opt-in applies uniformly, not only to one caller."""
     workflow = _workflow_text()
     assert "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true" in workflow
 
 
 def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
-    """The preflight must query the real capability, not infer from repository visibility."""
+    """The preflight must query the real capability, not infer from visibility."""
     workflow = _workflow_text()
     assert "dependency-graph/compare" in workflow
     assert "github.event.repository.private" not in workflow
 
 
 def test_pull_request_http_403_and_404_are_not_normalized_to_unavailable() -> None:
-    """Authorization-shaped HTTP responses are ambiguous and must remain blocking.
-
-    GitHub may use 403 or 404 for permission/policy failures as well as feature
-    availability boundaries. A reusable security gate therefore cannot turn
-    either response into success or delegate coverage to another scanner.
-    """
+    """Authorization-shaped HTTP responses are ambiguous and must remain blocking."""
     workflow = _workflow_text()
     assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' not in workflow
     assert "skipping the dependency-review hard gate" not in workflow
@@ -129,7 +144,9 @@ def test_availability_check_only_runs_the_gate_for_pull_request_events() -> None
     assert '"${{ github.event_name }}" != "pull_request"' in workflow
 
 
-def test_dependency_review_posts_a_pr_comment_on_failure() -> None:
-    """scopeweave's PR-comment-on-failure UX applies uniformly, not only to that one caller."""
+def test_dependency_review_comment_summary_defaults_to_on_failure() -> None:
+    """The shared UX defaults to on-failure while remaining caller-overridable."""
     workflow = _workflow_text()
-    assert "comment-summary-in-pr: on-failure" in workflow
+    assert "comment_summary_in_pr:" in workflow
+    assert 'default: "on-failure"' in workflow
+    assert "comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}" in workflow
