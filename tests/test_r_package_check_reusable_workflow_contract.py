@@ -23,8 +23,8 @@ def _workflow_text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_declares_workflow_call_with_five_inputs_and_recorded_defaults() -> None:
-    """Every genuinely-varying field found while auditing kaefa/nonnest2 is an input."""
+def test_declares_workflow_call_with_six_inputs_and_recorded_defaults() -> None:
+    """Every genuinely varying caller field is data, never executable shell source."""
     workflow = _workflow_text()
     assert "on:\n  workflow_call:\n    inputs:" in workflow
     for name in (
@@ -32,19 +32,20 @@ def test_declares_workflow_call_with_five_inputs_and_recorded_defaults() -> None
         "needs_tinytex:",
         "extra_packages:",
         "check_args:",
-        "pre_check_script:",
+        "install_package_before_pre_check:",
+        "pre_check_test_file:",
     ):
         assert name in workflow
 
     assert 'default: \'[{"os": "ubuntu-latest", "r": "release"}]\'' in workflow
-    assert "default: false" in workflow
+    assert workflow.count("default: false") >= 2
     assert 'default: "any::rcmdcheck"' in workflow
     assert "default: 'c(\"--no-manual\", \"--as-cran\")'" in workflow
     assert 'default: ""' in workflow
 
 
 def test_step_order_matches_the_r_lib_template_sequence() -> None:
-    """checkout -> pandoc -> [tinytex] -> setup-r -> deps -> [pre-check] -> check."""
+    """checkout -> pandoc -> [tinytex] -> setup-r -> deps -> bounded pre-check -> check."""
     workflow = _workflow_text()
     order = [
         "actions/checkout@",
@@ -52,26 +53,33 @@ def test_step_order_matches_the_r_lib_template_sequence() -> None:
         "r-lib/actions/setup-tinytex@",
         "r-lib/actions/setup-r@",
         "r-lib/actions/setup-r-dependencies@",
-        "Run pre-check script (repo-specific)",
+        "Install package for bounded pre-check",
+        "Run bounded testthat pre-check",
         "r-lib/actions/check-r-package@",
     ]
     positions = [workflow.index(marker) for marker in order]
     assert positions == sorted(positions), "steps are out of order"
 
 
-def test_optional_steps_are_gated_on_their_inputs() -> None:
-    """setup-tinytex and the pre-check step must not run unconditionally."""
+def test_optional_steps_are_gated_on_bounded_inputs() -> None:
+    """Optional setup and pre-check steps run only for explicit bounded capabilities."""
     workflow = _workflow_text()
     assert (
         "- if: inputs.needs_tinytex\n        uses: r-lib/actions/setup-tinytex@"
         in workflow
     )
     assert (
-        "- if: inputs.pre_check_script != ''\n"
-        "        name: Run pre-check script (repo-specific)"
+        "- if: inputs.pre_check_test_file != '' && inputs.install_package_before_pre_check\n"
+        "        name: Install package for bounded pre-check"
         in workflow
     )
-    assert "run: ${{ inputs.pre_check_script }}" in workflow
+    assert (
+        "- if: inputs.pre_check_test_file != ''\n"
+        "        name: Run bounded testthat pre-check"
+        in workflow
+    )
+    assert "PRE_CHECK_TEST_FILE: ${{ inputs.pre_check_test_file }}" in workflow
+    assert 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))' in workflow
 
 
 def test_action_pins_are_uniform_and_current() -> None:
@@ -116,4 +124,8 @@ def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
     assert "pre_check_test_file:" in workflow
     assert "install_package_before_pre_check:" in workflow
     assert "PRE_CHECK_TEST_FILE: ${{ inputs.pre_check_test_file }}" in workflow
+    assert 'case "$PRE_CHECK_TEST_FILE" in' in workflow
+    assert "tests/testthat/*.R" in workflow
+    assert '"$PRE_CHECK_TEST_FILE" == *".."*' in workflow
+    assert '"$PRE_CHECK_TEST_FILE" == /*' in workflow
     assert 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))' in workflow
