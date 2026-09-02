@@ -29,6 +29,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
+TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure",)
 
 
 def _normalise_run(
@@ -95,7 +96,7 @@ def collect_snapshot(
     runner: Runner = subprocess.run,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    """Collect active-run evidence bound to a stable pull-request identity view."""
+    """Collect active and pre-job terminal evidence bound to stable PR identities."""
     validated_repositories = sorted(
         {_repository_name(repository_name) for repository_name in repositories}
     )
@@ -177,6 +178,31 @@ def collect_snapshot(
                     "active workflow run snapshot changed during collection"
                 )
 
+            terminal_diagnostic_snapshot: dict[int, dict[str, Any]] = {}
+            for terminal_status in TERMINAL_DIAGNOSTIC_STATUSES:
+                workflow_runs = _list_payload(
+                    github_json(
+                        f"repos/{repository_name}/actions/runs?status={terminal_status}"
+                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                        paginate=True,
+                        max_pages=ACTIVE_RUN_MAX_API_PAGES,
+                        runner=runner,
+                    ),
+                    "workflow_runs",
+                    max_items=WORKFLOW_RUN_PAGE_SIZE * ACTIVE_RUN_MAX_API_PAGES,
+                )
+                for workflow_run in workflow_runs:
+                    workflow_run_id = workflow_run.get("id")
+                    if (
+                        isinstance(workflow_run_id, bool)
+                        or not isinstance(workflow_run_id, int)
+                        or workflow_run_id <= 0
+                    ):
+                        raise QueueHealthError(
+                            "workflow run id must be a positive integer"
+                        )
+                    terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
+
             try:
                 final_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner
@@ -210,17 +236,25 @@ def collect_snapshot(
                 pull_request["number"]: pull_request
                 for pull_request in final_pull_requests
             }
+            observed_snapshot = dict(second_snapshot)
+            observed_snapshot.update(terminal_diagnostic_snapshot)
             runs_by_id: dict[int, dict[str, Any]] = {}
-            for workflow_run_id, workflow_run in second_snapshot.items():
+            for workflow_run_id, workflow_run in observed_snapshot.items():
                 normalized_run = _normalise_run(
                     repository_name, workflow_run, []
                 )
                 identity_state, _ = _run_identity(
                     normalized_run, pull_requests_by_number
                 )
-                if identity_state != "current_head" or normalized_run[
-                    "status"
-                ] not in {"IN_PROGRESS", "WAITING"}:
+                needs_job_evidence = (
+                    identity_state == "current_head"
+                    and (
+                        normalized_run["status"] in {"IN_PROGRESS", "WAITING"}
+                        or normalized_run["conclusion"]
+                        in {status.upper() for status in TERMINAL_DIAGNOSTIC_STATUSES}
+                    )
+                )
+                if not needs_job_evidence:
                     runs_by_id[workflow_run_id] = normalized_run
                     continue
 
@@ -318,6 +352,8 @@ def build_report(
             continue
         report_row["workflow_id"] = run_metadata["workflow_id"]
         report_row["workflow_identity"] = run_metadata["workflow_identity"]
+        report_row["run_conclusion"] = run_metadata.get("conclusion", "")
+        report_row["jobs_materialized"] = bool(run_metadata["jobs"])
         matching_job = next(
             (
                 workflow_job
@@ -332,6 +368,15 @@ def build_report(
         else:
             report_row["queue_age_started_at"] = run_metadata.get("created_at", "")
             report_row["queue_age_source"] = "run_created_at"
+        if (
+            report_row["identity_state"] == "current_head"
+            and report_row["run_conclusion"] == "STARTUP_FAILURE"
+            and not report_row["jobs_materialized"]
+        ):
+            report_row["blocker"] = "startup_failure_before_job_materialization"
+            report_row["recommended_action"] = (
+                "inspect_actions_control_plane_without_leaf_bypass"
+            )
 
     current_pending_rows = [
         report_row
