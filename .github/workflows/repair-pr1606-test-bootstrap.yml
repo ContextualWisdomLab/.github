@@ -1,0 +1,76 @@
+name: Repair PR 1606 test bootstrap
+
+on:
+  push:
+    branches:
+      - fix/noema-truncated-completion-contract-20260901
+    paths:
+      - .github/workflows/repair-pr1606-test-bootstrap.yml
+
+concurrency:
+  group: repair-pr1606-test-bootstrap-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Repair reconciliation test bootstrap and remove this driver
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/reconcile-pr1606-current-main.yml')
+          text = path.read_text()
+          anchor = '''          persist-credentials: true
+
+      - name: Reconcile protected main without history rewrite
+'''
+          replacement = '''          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Reconcile protected main without history rewrite
+'''
+          if replacement in text:
+              raise SystemExit('test bootstrap already repaired')
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one reconciliation anchor, found {text.count(anchor)}')
+          path.write_text(text.replace(anchor, replacement, 1))
+          PY
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/reconcile-pr1606-current-main.yml
+          git rm .github/workflows/repair-pr1606-test-bootstrap.yml
+          git diff --cached --check
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git commit -m "ci: install locked test tooling for PR 1606 reconciliation"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
