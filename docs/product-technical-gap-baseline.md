@@ -1739,6 +1739,52 @@ signature as the original round-4 bug) before passing after the fix. 1930 tests 
 4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
 5. `scripts/ci/select_nvidia_nim_model.py`(호출자 없음, 위 §5의 여러 항목이 이미 문서화)를 별도의 작은 PR(`fix/remove-orphaned-nim-model-resolver`)로 분리 제거했다 — `#1437` 리뷰 스레드가 명시적으로 요청한 대로 direct-NIM cleanup을 pool-flip 논의와 분리했다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은 git history를 가리키도록 갱신했다.
 
+### 5.2 2026-09-02 세션 재개 — 스냅샷과 근본 원인
+
+**컨텍스트**: `docs/product-goal-directive.md`(§1-9)를 전문 재확인한 뒤 재개. 이 세션은 이미
+`ContextualWisdomLab/naruon#1501`("index reparsed attachment content into the content graph")을
+review → fix → Checks 재검증 loop로 여러 시간 구동 중이었다 — Bandit B608 false positive를 근본
+원인까지 추적해 수정(commit `6294b8b9`), CodeRabbit이 지적한 실제 테스트 결함(connectivity-probe
+예외 처리 범위)을 real PostgreSQL 16+pgvector로 검증 후 수정(commit `0345eda4`)해 CodeRabbit 승인
+(`pullrequestreview-5083403237`)과 Devin Review 0-issue를 확보했다. 남은 유일한 blocker는 아래 근본
+원인 절과 동일한 repo-wide Actions 큐 적체다 (`naruon` PR #1501 issuecomment-5500944746 참조).
+
+**도구 제약 (기록)**: 이 세션은 `gh` CLI도 GitHub Projects v2 전용 MCP 도구도 없다 —
+`docs/agent-github-project-protocol.md`가 지시하는 `gh project item-list` 류 명령을 실행할 수 없다.
+Project #1은 GitHub MCP 서버의 issue/PR 도구로 간접 관측(열린 PR 목록)하는 것으로 대체했다. 다음
+세션은 이 gap이 해소됐는지(예: `gh` 또는 project MCP 도구 추가) 먼저 확인하고, 안 됐다면 같은
+간접 관측 방식을 계속 문서화한다.
+
+**같은 세션 PR 재고 스냅샷(2026-09-02 UTC, naruon만; `.github`는 이번 pass에서 미조사)**: `naruon`
+저장소에 열린 PR이 페이지당 100개 한도에서 **100개 관측**됐다(정확한 총합은 페이징 재확인 필요 —
+이 문서 자체가 명시하듯 merge authorization이 아닌 스냅샷). 다수가 이 관측 몇 초~몇 분 전에
+업데이트되어 있어(브랜치 접두사로 `bolt-`, `palette`, `jules`, `cursor`, `codex`, `sentinel`,
+`claude` 등 다수의 자율 에이전트가 동시에 활동 중임을 시사) — `docs/product-goal-directive.md` §2가
+경고하는 "동시 Commit·Push를 경합으로 단정하지 말라"가 실제로 관측되는 상황이다.
+
+**근본 원인 가설(반박 가능, 다음 pass에서 검증)**: 세션 전체에 걸쳐 반복 관측된 repo-wide GitHub
+Actions 큐 적체(예: 특정 시점 193개 이상 queued workflow run, 개별 PR의 check run이 9시간 이상
+`queued`에서 움직이지 않음)는 단일 설정 결함이 아니라 **수요>공급** 문제로 보인다: `naruon`의
+`app-ci.yml`은 `concurrency: cancel-in-progress: true`로 이미 새 push가 이전 in-flight run을
+취소하도록 구성되어 있어 낭비를 줄이지만, 열린 PR 100+개 각각이 push마다 backend+frontend +
+Bandit + Security Scan + SAST Semgrep + Dependency Review + PR Governance + OpenCode Review +
+Noema Review + Strix + CodeQL(code-quality/code-scanning) + Docker validate×3 등 10개 이상의 병렬
+job을 트리거하며, 다수의 자율 에이전트가 동시에 여러 PR에 push하고 있어 순간 수요가 GitHub-hosted
+runner의 동시 job quota(조직 tier에 따라 상한)를 구조적으로 초과한다. **이것은 이번 pass에서
+"고쳐야 할 버그"가 아니라 기록해야 할 운영 조건이다**: 워크플로 설정을 unilateral하게 축소(matrix
+축소, 필수 Check 제거)하면 테스트/보안 커버리지가 줄어드는 trade-off가 생기므로, 증거 없이 임의로
+변경하지 않는다. 실제 완화책은 이 loop directive 자체가 이미 지시하는 것과 같다: PR을 review→
+fix→merge로 소진해 동시 open PR 수를 줄이는 것 — 인프라가 아니라 제품 backlog가 lever다. 다음
+pass가 이 가설을 반증하면(예: 특정 워크플로 하나가 비정상적으로 큐를 독점) 이 절을 갱신한다.
+
+**다음 hourly pass가 이어받을 것**:
+1. `ContextualWisdomLab/naruon#1501` — CI 큐가 실행되면 즉시 확인하고, green이면 merge(또는 merge
+   gate 상태 보고), 아니면 재 root-cause.
+2. `naruon`의 나머지 100+개 열린 PR 중, 위 스냅샷에서 최근 활동이 없는(다른 agent가 동시 작업
+   중이 아닌) 항목부터 하나씩 review→fix→merge 순환 — 이 pass는 시간 예산상 착수하지 못했다.
+3. `ContextualWisdomLab/.github`의 열린 PR도 같은 방식으로 다음 pass에서 재고.
+4. 이 절의 근본 원인 가설을 다음 pass에서 재검증(큐 깊이 추세 재확인)하고 확정되면 §5.1로 승격.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
