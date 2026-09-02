@@ -17,17 +17,25 @@
 # the pinned action; every non-200 comparison fails closed. Non-pull_request
 # triggers may skip because they do not carry the exact PR base/head identity.
 #
+# Reusable-workflow permissions can only be maintained or reduced through the
+# call chain. Every thin caller therefore must declare at least `contents:
+# read` and `pull-requests: read`; this workflow cannot elevate a caller token
+# that omitted those scopes.
+#
 # Example caller (.github/workflows/dependency-review.yml in a product repo):
 #
 #   name: Dependency Review
 #   on:
 #     pull_request:
+#   permissions:
+#     contents: read
+#     pull-requests: read
 #   concurrency:
 #     group: dependency-review-${{ github.event.pull_request.number || github.ref }}
 #     cancel-in-progress: true
 #   jobs:
 #     dependency-review:
-#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<protected-main-commit-sha>
 #       with:
 #         fail_on_severity: high
 #         allow_ghsas: "GHSA-69w3-r845-3855"
