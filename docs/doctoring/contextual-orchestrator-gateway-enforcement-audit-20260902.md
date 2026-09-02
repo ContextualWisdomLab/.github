@@ -252,6 +252,12 @@ This is a deliberate owner-level policy decision with organization-wide
 blast radius on an actively-merging repository, not a `scripts/ci/` code
 defect with a safe, obviously-correct one-line fix — so it is recorded here
 as a finding for the owner to decide on, rather than applied unilaterally.
+Tracked, not just documented: `ContextualWisdomLab/.github#1737` files this
+finding as an actionable issue with re-verified live evidence
+(`enforce_admins: false`, `strix` absent from `required_status_checks.contexts`,
+confirmed again on 2026-09-02 in response to an independent Devin Review
+catch on this same PR) and four concrete owner-decidable options, so the gap
+has a next step rather than remaining a passive audit note.
 
 ## Item 3 — PR #1651 (Bytez discovery sidecar fix)
 
