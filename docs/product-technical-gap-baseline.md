@@ -1785,6 +1785,64 @@ pass가 이 가설을 반증하면(예: 특정 워크플로 하나가 비정상�
 3. `ContextualWisdomLab/.github`의 열린 PR도 같은 방식으로 다음 pass에서 재고.
 4. 이 절의 근본 원인 가설을 다음 pass에서 재검증(큐 깊이 추세 재확인)하고 확정되면 §5.1로 승격.
 
+### 5.3 2026-09-02 확정 근거: 중앙 scheduler 자신도 큐에 굶주림 (§5.2 가설의 §5.1 승격)
+
+**§5.2의 "반박 가능" 가설을 반증이 아니라 직접 증거로 확정한다.** `naruon#1501`이 base 브랜치
+전진으로 `mergeable_state: dirty`가 되어 merge(commit `cdcf2dac`) + 병합이 드러낸 실제 통합 결함
+수정(commit `d7e5d2d3`, PostgreSQL 커밋을 실행하는 `session.refresh()`를 신설한 이 PR과, 그 메서드가
+없는 base 브랜치의 테스트 fake가 병합 시점에 처음 충돌 — RED 재현 후 GREEN, 전체 backend suite
+1920 passed 2회 확인)로 새 head를 push한 뒤, PR 코멘트(`issuecomment-5504172816`)로 기록하고
+CodeRabbit 활동을 관찰하던 중 `review skipped` 코멘트를 받았다: "Auto reviews are disabled on
+base/target branches other than the default branch." — CodeRabbit이 `naruon#1501`의 base가
+default(`develop`)가 아니라는 이유로 리뷰를 건너뛴다는 명시적 확인이다.
+
+이 세션의 이전 시도(pre-compaction)가 이미 같은 결론에 도달해 PR 코멘트에 남겼음을 발견했다:
+"...rather than `develop`, the org's central required workflows — OpenCode Review, Strix — appear
+scoped to the default branch and won't trigger..." — 그리고 `@opencode-agent` 단독 멘션으로 수동
+트리거를 여러 번 시도했으나(코멘트 5488179503 등) OpenCode 응답은 없었다.
+
+`docs/org-required-workflow-rollout.md`를 재확인한 결과 이것은 버그가 아니라 **이미 문서화되고
+의도적으로 설계된 GitHub 플랫폼 한계**다: 조직 필수-워크플로 ruleset `18156473`은
+`ref_name.include=["~DEFAULT_BRANCH"]`로 default 브랜치만 대상으로 하며, 2026-08-28
+21:43 KST에 모든 non-default ref로 active enforcement를 넓히려던 별도 ruleset(`21732164`)이
+`GH013`으로 즉시 실패해 `evaluate`(감사 전용) 모드로 되돌려졌다 — "all-ref contract"는 재현 가능하게
+불가능하다고 문서 자신이 명시한다. 이를 보완하기 위해 이미 `pr-review-merge-scheduler.yml`의
+`org-queue-sweep` job(cron `*/15 * * * *`, 조직 전체 단일 실행, `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`
+기본값 1)이 stacked PR에 한해 bounded OpenCode 리뷰를 별도 배정한다
+(`scripts/ci/pr_review_merge_scheduler.py`의 `stacked_review_dispatch_limit` 인자, PR 목록을
+`CREATED_AT ASC` + "stacked 먼저" 순으로 정렬, 이미 `running`/`complete` 상태인 PR은 예산을 소비하지
+않고 skip해 다음으로 넘어가도록 설계됨 — repo 회전에 이미 있는 `ORG_SWEEP_ROTATION_INDEX`
+anti-starvation과 같은 계열의 fairness 설계).
+
+**새 확정 증거**: `ContextualWisdomLab/.github`의 `Required PR Review Merge Scheduler` 워크플로
+자체를 `event=schedule`로 필터링해 최근 실행을 확인한 결과, 가장 최근 두 건의 cron 실행
+(run `33585256446`, `created_at 2026-09-02T02:59:00Z`; run `33584688227`, `created_at
+2026-09-02T02:49:55Z`)이 **이 문서 작성 시점(04:0X UTC, 각각 1시간+/75분+ 경과)까지도 `status:
+"pending"`에 머물러 있다** — 러너에 배정조차 되지 못했다. 더 이전 실행들(예: run `33572598896`,
+2026-09-01 23:47 생성, 02:40까지 `queued`로 거의 3시간)도 같은 패턴을 보인다. 이것은 **§5.2의
+수요>공급 가설을 "다음 pass에서 검증할 가설"에서 "직접 관측된 사실"로 승격시키는 확정 증거**다:
+큐 적체를 완화해야 할 바로 그 중앙 scheduler 자신이 같은 러너 풀에서 굶주리고 있다 — 자기강화적
+병목(self-reinforcing bottleneck)이다. Stacked PR의 bounded OpenCode 배정 메커니즘은 설계상
+건전해 보이지만, 그 배정을 실행하는 cron 트리거 자체가 실행되지 못하면 무의미하다.
+
+**이번 pass에서 하지 않은 것과 이유**: 이 병목은 워크플로 파일을 고쳐서 해소되는 종류의 버그가
+아니라 러너 용량 대 수요의 구조적 문제이므로, `.github`의 워크플로/scheduler 코드를 임의로 수정하지
+않았다(가설 문서가 이미 명시한 원칙: 증거 없이 Check를 줄이는 trade-off를 감수하지 않는다). 이
+문서화 자체가 이번 pass의 조치다.
+
+**다음 pass가 이어받을 것(§5.2 목록에 추가)**:
+5. `Required PR Review Merge Scheduler`의 최근 `event=schedule` 실행이 `pending`에서 벗어났는지
+   재확인 — 벗어났다면 이 절의 "자기강화적 병목"이 일시적이었는지, 구조적으로 재발하는지 추세를
+   기록한다.
+6. `naruon#1501`이 stacked-PR bounded dispatch로 OpenCode 리뷰를 실제로 받는지(코멘트/리뷰 작성자에
+   `opencode` 계열 등장 여부로 확인) 계속 관찰한다 — 받지 못한 채로 여러 pass가 지나면, 조직 owner에게
+   `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`(기본 1)이 org 전체 stacked PR 수 대비 너무 낮은지
+   보고할 근거로 이 관측을 사용한다(코드 변경이 아니라 owner 판단이 필요한 policy 질문).
+7. 표준 standing 권한("Chicken-and-eggs 상황...bypass merge 가능")은 이번 pass에서 naruon#1501에
+   행사하지 않았다 — 방금 merge conflict를 해소해 head가 바뀌어 fresh review가 필요하다고 PR에
+   직접 남겼으므로, 지금 bypass하면 그 자체 코멘트와 모순된다. 이 판단이 유효한지 다음 pass에서
+   재확인한다.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
