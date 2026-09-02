@@ -300,16 +300,16 @@ jobs:
             echo "::error::Could not validate live pull request state before review dispatch."
             exit 1
           fi
-          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "::error::Pull request head moved while validating live review state."
-            exit 1
-          fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head OpenCode review is not requested."
             exit 0
           fi
           if [ "$live_draft" = "true" ]; then
             echo "PR is still a draft on the live exact head; a current-head OpenCode review is not requested until it is marked ready for review."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh dispatch will fire for the current head."
             exit 0
           fi
           if [ "$PR_DRAFT" = "true" ]; then
@@ -403,16 +403,16 @@ jobs:
             echo "::error::Could not validate live pull request state before verdict admission."
             exit 1
           fi
-          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "::error::Pull request head moved while validating live verdict state."
-            exit 1
-          fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
             exit 0
           fi
           if [ "$live_draft" = "true" ]; then
             echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh poll will start for the current head."
             exit 0
           fi
           if [ "$PR_DRAFT" = "true" ]; then
