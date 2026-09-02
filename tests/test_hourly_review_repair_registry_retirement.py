@@ -50,6 +50,15 @@ def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
     assert "id-token: write" not in text
 
 
+def test_retirement_uses_capacity_available_short_lived_runner() -> None:
+    """The one-shot retirement must not wait behind the saturated standard queue it repairs."""
+    text = _text()
+
+    assert "runs-on: ubuntu-slim" in text
+    assert "runs-on: ubuntu-24.04" not in text
+    assert "runs-on: ubuntu-latest" not in text
+
+
 def test_retirement_names_every_legacy_identity_exactly_once() -> None:
     """No deleted hourly caller can remain an untracked active registry ID."""
     text = _text()
