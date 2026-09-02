@@ -16,13 +16,14 @@ concurrency:
 
 jobs:
   repair:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact trigger head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -30,7 +31,9 @@ jobs:
           python-version: "3.14"
 
       - name: Install locked repository test dependencies
-        run: python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
       - name: Prove prerequisite regression is RED
         run: |
@@ -41,7 +44,9 @@ jobs:
           fi
 
       - name: Apply deterministic causal repair
-        run: PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release.py
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release.py
 
       - name: Verify focused GREEN
         run: |
@@ -63,12 +68,14 @@ jobs:
       - name: Publish only from unchanged writer head
         env:
           EXPECTED_HEAD: ${{ github.sha }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch origin fix/opencode-poll-wall-clock-bound
           live_head="$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)"
-          test "$live_head" = "$EXPECTED_HEAD" || { echo "::error::Writer head advanced to $live_head"; exit 1; }
+          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+            echo "::error::Writer branch advanced to $live_head; refusing stale publication."
+            exit 1
+          fi
           git config user.name "ContextualWisdomLab automation"
           git config user.email "automation@users.noreply.github.com"
           git add .github/workflows/opencode-review.yml \
