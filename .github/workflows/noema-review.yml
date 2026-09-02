@@ -204,8 +204,43 @@ jobs:
         run: |
           echo "::notice::Noema review skipped: no pull request number is associated with this event."
 
-      - name: Resolve trusted Noema review source ref
+      - name: Validate live Noema target before any setup
         if: env.PR_NUMBER != ''
+        id: live_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
+            exit 1
+          fi
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not retrieve the live pull request before Noema setup."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_draft="$(jq -r 'if has("draft") then (.draft | tostring) else empty end' <<<"$pull_request_json")"
+          if [ -z "$live_state" ] || [ -z "$live_head_sha" ] || [ -z "$live_draft" ]; then
+            echo "::error::Could not validate live pull request state before Noema setup."
+            exit 1
+          fi
+          if [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+            printf '::error::Noema trigger is stale. expected head=%s; live state=%s head=%s.\n' \
+              "$EXPECTED_HEAD_SHA" "$live_state" "$live_head_sha"
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] || [ "$live_draft" = "true" ]; then
+            printf '::notice::Noema target is not reviewable on its current head (state=%s draft=%s); skipping all setup.\n' \
+              "$live_state" "$live_draft"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve trusted Noema review source ref
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
         id: trusted_source
         env:
           JOB_CONTEXT_JSON: ${{ toJSON(job) }}
@@ -253,7 +288,7 @@ jobs:
           PY
 
       - name: Materialize trusted Noema review gate
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
@@ -273,24 +308,8 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
-      - name: Reject a stale trigger before credential or model setup
-        if: env.PR_NUMBER != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
-            exit 1
-          fi
-          live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-            echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD_SHA}, observed ${live_head}."
-            exit 1
-          fi
-
       - name: Cancel superseded Noema runs after live-head validation
-        if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''
+        if: github.event_name == 'pull_request_target' && env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CURRENT_RUN_ID: ${{ github.run_id }}
@@ -339,20 +358,23 @@ jobs:
                 [ -n "$run_id" ] || continue
                 [ -z "${seen[$run_id]:-}" ] || continue
                 seen[$run_id]=1
-                # A transient failure here (rate limit, network blip) must
-                # never crash this step under set -e: this is a housekeeping
-                # cleanup, and letting an ancillary API hiccup fail the whole
-                # job would block a perfectly valid, live-head review over
-                # something unrelated to it. Treat "cannot verify" the same
-                # as "verified stale": stop cancelling rather than risk a
-                # wrong cancellation, but let the job continue.
-                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/noema-supersede-live-head-error)"; then
-                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
+                # Revalidate the authoritative live target immediately before
+                # every destructive cancellation. A head match alone is not
+                # enough when draft/close events can race this cleanup.
+                if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" 2>/tmp/noema-supersede-live-head-error)"; then
+                  echo "::warning::Noema cleanup could not re-verify the live PR before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
                   sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
                   exit 0
                 fi
-                if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-                  echo "::notice::Noema cleanup stopped because the PR head advanced."
+                live_head="$(jq -r '.head.sha // empty' <<<"$live_pr_json")"
+                live_state="$(jq -r '.state // empty' <<<"$live_pr_json")"
+                live_draft="$(jq -r 'if has("draft") then (.draft | tostring) else empty end' <<<"$live_pr_json")"
+                if [ -z "$live_head" ] || [ -z "$live_state" ] || [ -z "$live_draft" ]; then
+                  echo "::warning::Noema cleanup received incomplete live PR state; stopping cleanup fail-closed."
+                  exit 0
+                fi
+                if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ] || [ "$live_draft" = "true" ]; then
+                  echo "::notice::Noema cleanup stopped because the authoritative PR head/state is no longer reviewable."
                   exit 0
                 fi
                 if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
@@ -368,7 +390,7 @@ jobs:
           echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
 
       - name: Select fail-closed Noema reviewer credential
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
         id: noema_credential
         env:
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
@@ -407,7 +429,7 @@ jobs:
           exit 1
 
       - name: Mint repository-scoped Noema GitHub App token
-        if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'github-app'
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true' && steps.noema_credential.outputs.source == 'github-app'
         id: noema_github_app_token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -425,7 +447,7 @@ jobs:
           permission-vulnerability-alerts: read
 
       - name: Exchange Noema app token through OIDC
-        if: env.PR_NUMBER != '' && steps.noema_credential.outputs.source == 'oidc'
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true' && steps.noema_credential.outputs.source == 'oidc'
         id: noema_oidc_token
         env:
           OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
@@ -482,41 +504,39 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Validate current pull request head
-        if: env.PR_NUMBER != ''
+      - name: Revalidate live Noema target before model setup
+        if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
+        id: live_pr_refresh
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Noema expected head must be a full commit SHA."
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not refresh the live pull request before Noema model setup."
             exit 1
           fi
-          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ -z "$live_state" ] || [ -z "$live_head_sha" ]; then
-            echo "::error::Could not validate live pull request state before Noema review."
+          live_draft="$(jq -r 'if has("draft") then (.draft | tostring) else empty end' <<<"$pull_request_json")"
+          if [ -z "$live_state" ] || [ -z "$live_head_sha" ] || [ -z "$live_draft" ]; then
+            echo "::error::Could not validate refreshed pull request state before Noema model setup."
             exit 1
           fi
           if [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-            printf '::error::Noema review target is stale. expected head=%s; live state=%s head=%s.\n' \
-              "$EXPECTED_HEAD_SHA" "${live_state:-missing}" "${live_head_sha:-missing}"
+            printf '::error::Noema review target moved before model setup. expected head=%s; live state=%s head=%s.\n' \
+              "$EXPECTED_HEAD_SHA" "$live_state" "$live_head_sha"
             exit 1
           fi
-          if [ "$live_state" != "open" ]; then
-            # The head SHA still matches exactly (checked above); this PR was
-            # simply merged or closed through another path (e.g. the merge
-            # scheduler) before this async review job reached this gate. There
-            # is nothing stale about the target and nothing left to review --
-            # exiting non-zero here would report a spurious failure for
-            # already-resolved, expected work.
-            printf '::notice::Noema review target closed on its current head (state=%s); nothing left to review, skipping.\n' "$live_state"
+          if [ "$live_state" != "open" ] || [ "$live_draft" = "true" ]; then
+            printf '::notice::Noema target became non-reviewable before model setup (state=%s draft=%s); skipping.\n' \
+              "$live_state" "$live_draft"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "proceed=true" >>"$GITHUB_OUTPUT"
 
       - name: Resolve Noema target repository visibility
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_pr_refresh.outputs.proceed == 'true'
         id: target_visibility
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
@@ -554,7 +574,7 @@ jobs:
           esac
 
       - name: Provision contextual-orchestrator review sidecar
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_pr_refresh.outputs.proceed == 'true'
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -567,7 +587,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Prepare Noema model verdict
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.live_pr_refresh.outputs.proceed == 'true'
         id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
@@ -604,8 +624,39 @@ jobs:
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
 
+      - name: Revalidate live Noema target before publication
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
+        id: live_pr_publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not refresh the live pull request before Noema publication."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_draft="$(jq -r 'if has("draft") then (.draft | tostring) else empty end' <<<"$pull_request_json")"
+          if [ -z "$live_state" ] || [ -z "$live_head_sha" ] || [ -z "$live_draft" ]; then
+            echo "::error::Could not validate refreshed pull request state before Noema publication."
+            exit 1
+          fi
+          if [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+            printf '::error::Noema review target moved before publication. expected head=%s; live state=%s head=%s.\n' \
+              "$EXPECTED_HEAD_SHA" "$live_state" "$live_head_sha"
+            exit 1
+          fi
+          if [ "$live_state" != "open" ] || [ "$live_draft" = "true" ]; then
+            printf '::notice::Noema target became non-reviewable before publication (state=%s draft=%s); skipping.\n' \
+              "$live_state" "$live_draft"
+            echo "proceed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >>"$GITHUB_OUTPUT"
+
       - name: Refresh repository-scoped Noema GitHub App token for publication
-        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
+        if: env.PR_NUMBER != '' && steps.live_pr_publish.outputs.proceed == 'true' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
         id: noema_github_app_publication_token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -623,7 +674,7 @@ jobs:
           permission-vulnerability-alerts: read
 
       - name: Publish prepared Noema verdict on the exact live head
-        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
+        if: env.PR_NUMBER != '' && steps.live_pr_publish.outputs.proceed == 'true' && steps.noema_prepare.outputs.prepared == 'true'
         env:
           GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '' }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
