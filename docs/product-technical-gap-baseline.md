@@ -2475,3 +2475,21 @@ Zhang, S., Yu, Y., Li, Y., Zhao, W., Yang, Y., Zhang, Y., & Liu, T. (2025). *Con
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
 
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
+
+
+## 2026-09-01 seedream_evasepic timeout-only route rejection
+
+Fresh live-state inspection of run `33480380500`, job `99768446738` found 12
+provider candidates: five ready, four rejected with HTTP 404, and three marked
+rejected after a single `TimeoutError`. The 404 rows are concrete stale
+provider/model paths. The timeout rows did not contain an HTTP response and did
+not establish endpoint incompatibility, but the launcher previously called
+`_record_provider_exception()` immediately after the first one-shot transport
+exception.
+
+The repair adds one identical read-only confirmation only for direct or wrapped
+timeouts, preserves single-attempt handling for every concrete HTTP and
+non-timeout failure, counts all requests across base and token-escalated probes,
+and remains fail-closed if the confirmation also times out. This closes the
+classification gap without changing the production serving timeout or reviving
+the superseded sidecar-wide fixed-deadline design.

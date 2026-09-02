@@ -279,6 +279,37 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     row.pop("reasoning_without_content", None)
 
 
+
+def _is_preflight_timeout(exc: Exception) -> bool:
+    """Return whether a provider exception is a direct or wrapped timeout."""
+    if isinstance(exc, TimeoutError):
+        return True
+    return isinstance(getattr(exc, "reason", None), TimeoutError)
+
+
+def _send_preflight_probe(
+    agent: object,
+    *,
+    client: Any,
+    payload: dict[str, object],
+    row: dict[str, object],
+) -> object:
+    """Send one read-only probe and confirm a transport timeout exactly once.
+
+    ``ModelClient.proxy_send_once`` deliberately remains a one-shot transport.
+    This caller owns the only additional request because a timeout supplies no
+    provider response and therefore cannot, by itself, prove incompatibility.
+    Concrete HTTP rejections and every other exception remain single-attempt.
+    """
+    try:
+        return client.proxy_send_once(agent, "chat/completions", payload)
+    except Exception as exc:  # noqa: BLE001 - classify before the provider boundary
+        if not _is_preflight_timeout(exc):
+            raise
+        row["attempts"] = int(row.get("attempts", 0)) + 1
+        row["timeout_retries"] = int(row.get("timeout_retries", 0)) + 1
+        return client.proxy_send_once(agent, "chat/completions", payload)
+
 def _response_has_reasoning_without_content(response: object) -> bool:
     """Return whether a response matches the vendored "reasoning, no content" signature.
 
@@ -341,10 +372,11 @@ def _preflight_review_agents(
     primary and fallback stages) must pass the previous stage's ending count
     back in here so the two stages share one budget instead of each getting
     its own -- otherwise the computed worst-case bound this counter exists to
-    enforce silently doubles. Every other failure class (transport exception,
-    non-2xx, or empty content matching neither signature) is not retried: a
-    genuinely-down candidate never reaches the escalation path, so it cannot
-    produce a false "healthy" read.
+    enforce silently doubles. A transport timeout supplies no provider response,
+    so the identical read-only request receives exactly one caller-owned
+    confirmation before the route is rejected for this startup. Concrete HTTP
+    rejections, other transport exceptions, and empty content matching neither
+    budget signature remain single-attempt.
     An exception on the escalated attempt (transport failure, auth failure,
     rate limit, server error, or a genuine budget rejection) is recorded via
     ``_record_provider_exception`` -- the SAME sanitized classification the
@@ -355,8 +387,9 @@ def _preflight_review_agents(
     one via an over-specific label.
 
     The report deliberately records only stable route identity, a bounded
-    exception class name, an optional numeric HTTP status, attempt count, and
-    a bounded ``finish_reason``. Provider response bodies, exception
+    exception class name, an optional numeric HTTP status, attempt count, the
+    optional number of timeout confirmations, and a bounded ``finish_reason``.
+    Provider response bodies, exception
     messages, URLs, prompts, and credentials are never copied into evidence.
     ``finish_reason`` and ``reasoning_without_content`` are populated on
     every response-bearing outcome -- success included, not just
@@ -404,7 +437,9 @@ def _preflight_review_agents(
             "stream": False,
         }
         try:
-            response = client.proxy_send_once(agent, "chat/completions", base_payload)
+            response = _send_preflight_probe(
+                agent, client=client, payload=base_payload, row=row
+            )
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             _record_provider_exception(row, exc)
             routes.append(row)
@@ -464,12 +499,12 @@ def _preflight_review_agents(
             routes.append(row)
             continue
         escalations_used += 1
-        row["attempts"] = 2
+        row["attempts"] = int(row["attempts"]) + 1
         escalated_payload = dict(base_payload)
         escalated_payload["max_tokens"] = REVIEW_PREFLIGHT_ESCALATED_TOKENS
         try:
-            escalated_response = client.proxy_send_once(
-                agent, "chat/completions", escalated_payload
+            escalated_response = _send_preflight_probe(
+                agent, client=client, payload=escalated_payload, row=row
             )
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             # An HTTP status alone (401 auth, 429 throttle, 5xx server
