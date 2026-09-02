@@ -78,9 +78,15 @@ def test_delayed_recovery_acceptance_settles_before_any_second_put(monkeypatch) 
     displaced = {**current, "name": "Administrator predecessor", "enforcement": "evaluate"}
     history_reads = 0
     put_count = 0
+    sleep_calls = 0
 
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
-    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
+
+    def fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+
+    monkeypatch.setattr(module.time, "sleep", fake_sleep)
     monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
 
     def fake_history(*_args):
@@ -111,6 +117,7 @@ def test_delayed_recovery_acceptance_settles_before_any_second_put(monkeypatch) 
     )
 
     assert history_reads == 2
+    assert sleep_calls == 1
     assert put_count == 1
 
 
