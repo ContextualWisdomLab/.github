@@ -33,6 +33,7 @@ jobs:
           remote_head="$(git ls-remote origin refs/heads/fix/noema-review-no-heuristic-timeouts | cut -f1)"
           test -n "$remote_head"
           test "$remote_head" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 5935c8153722fe6b53bafd579b74f8f097303959 "$GITHUB_SHA"
 
       - name: Set up Python 3.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -46,6 +47,19 @@ jobs:
           set -euo pipefail
           python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
+      - name: Prove PR1715 model-timeout regression is genuinely RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          red_output="$(PYTHONPATH=. python -m pytest -q tests/test_noema_model_timeout_policy.py 2>&1)"
+          red_status=$?
+          set -e
+          printf '%s\n' "$red_output"
+          test "$red_status" -eq 1
+          grep -Eq '1 failed' <<<"$red_output"
+          grep -Fq 'Noema model execution must not be terminated by elapsed time' <<<"$red_output"
+
       - name: Apply causal-owner repair
         shell: bash
         run: |
@@ -54,17 +68,25 @@ jobs:
           python -m py_compile scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           git diff --check
 
-      - name: Verify Noema timeout authority contract
+      - name: Verify focused Noema timeout authority GREEN
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest \
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_noema_model_timeout_policy.py \
             tests/test_noema_orchestrator_workflow_contract.py \
             tests/test_required_workflow_queue_contract.py \
             tests/test_noema_review_gate.py \
             tests/test_noema_review_handoff.py \
-            tests/test_noema_two_phase_handoff.py \
-            -q
+            tests/test_noema_two_phase_handoff.py
+
+      - name: Verify full repository coverage, docstrings, and syntax GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m coverage run --branch -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate -c pyproject.toml scripts/ci
           python -m compileall -q scripts tests .github/actions/noema-review
           git diff --check
 
@@ -74,7 +96,7 @@ jobs:
           set -euo pipefail
           rm scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           rm .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
-          allowed='^(.github/workflows/noema-review.yml|tests/test_noema_orchestrator_workflow_contract.py|CHANGELOG.md|docs/product-technical-gap-baseline.md|scripts/ci/source_fix_pr1715_no_model_job_timeout.py|.github/workflows/source-fix-pr1715-no-model-job-timeout.yml)$'
+          allowed='^(.github/workflows/noema-review.yml|tests/test_noema_orchestrator_workflow_contract.py|tests/test_noema_model_timeout_policy.py|CHANGELOG.md|ARCHITECTURE.md|docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md|docs/doctoring/noema-model-timeout-authority-2026-09-02.md|docs/product-technical-gap-baseline.md|scripts/ci/source_fix_pr1715_no_model_job_timeout.py|.github/workflows/source-fix-pr1715-no-model-job-timeout.yml)$'
           bad="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
           test -z "$bad"
           test ! -e scripts/ci/source_fix_pr1715_no_model_job_timeout.py
