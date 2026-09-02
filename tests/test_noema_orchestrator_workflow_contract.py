@@ -390,29 +390,34 @@ def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
     assert timeout < 360
 
 
-def test_noema_review_job_has_a_bounded_runtime_above_the_two_hour_model_allowance() -> None:
-    """noema-review must not fall back to GitHub's 360-minute platform default.
+def test_noema_review_job_has_no_job_level_timeout() -> None:
+    """noema-review must not carry a job-level timeout-minutes.
 
-    Its "Prepare Noema model verdict" step calls into two_phase.py's
-    call_llm via the contextual-orchestrator gateway, which
-    noema_review_gate.py's own module comment says "remains governed by
-    contextual-orchestrator rather than a fixed inference timeout" -- so
-    nothing upstream of this job bounds that call. docs/product-goal-directive.md
-    section 8 documents that "OpenCode·Strix·Noema의 모델당 2시간 이상을
-    수용한다" (OpenCode, Strix, and Noema accept that a model call may
-    legitimately take 2+ hours per model -- reworded from an earlier
-    revision's "모델당 두 시간 이상 걸릴 수 있음을 수용한다" during the
-    owner's 2026-09-02 directive restatement, same substantive commitment),
-    so the bound must clear two hours (120 minutes) without falling back to
-    GitHub's 360-minute job default.
+    Its "Prepare Noema model verdict" step calls two_phase.py's call_llm
+    synchronously via the contextual-orchestrator gateway and blocks on the
+    model's own response -- a job-level wall-clock bound here directly caps
+    the model's reasoning/tool-use time once elapsed, which
+    docs/product-goal-directive.md #8 prohibits ("Model timeout은
+    application·Agent·Gateway 공통 상한 없이 기본 null이다"). An earlier
+    version of this job set timeout-minutes: 210, reasoning it gave that
+    step "the same ~180-minute allowance" opencode-review.yml's
+    poll_deadline_epoch gives an unrelated step -- that reasoning was
+    itself the mistake: poll_deadline_epoch bounds a step that polls GitHub
+    for whether a *separately triggered* review process has posted a
+    verdict yet (an async external wait), not a step that itself runs the
+    model synchronously. Any fixed cap on a job whose body IS the
+    synchronous model call is exactly the forbidden inference-time cap. See
+    docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = workflow_text("noema-review.yml")
     job = workflow.split("  noema-review:\n", 1)[1]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
-    assert match is not None, "noema-review must declare a job-level timeout-minutes"
-    timeout = int(match.group(1))
-    assert 120 < timeout < 360
+    assert match is None, (
+        "noema-review must not declare a job-level timeout-minutes -- its "
+        "body is a synchronous model call, so any job-level bound caps "
+        "model inference time, which this org's model-timeout policy forbids"
+    )
 
     assert (
         "모델당 2시간 이상을 수용한다"
