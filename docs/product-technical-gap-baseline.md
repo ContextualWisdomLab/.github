@@ -101,7 +101,7 @@ flowchart LR
 | G-21 | directive가 이름을 붙인 14개 저장소가 `CWL-MASTER-CONTEXT.md`의 ecosystem catalog/UML에 아직 없다 | 문서 간 불일치로 신규 에이전트·구매자가 실제 생태계 범위를 오판한다 | 각 저장소의 실제 현재 상태를 확인해 `CWL-MASTER-CONTEXT.md`의 카탈로그·UML에 추가한다. 상세: 본문 하단 서술 항목 |
 | G-22 | `contextual-orchestrator`의 stdlib-Python core가 새로 sharpened된 §6 Rust 원칙(허용 예외는 ADR로 근거·범위·제거조건 명시) 기준을 충족하는지 미검증이다 | 언어 선택이 정책과 어긋나면 성능·유지보수 리스크가 문서화 없이 누적된다 | `library_research.md`의 기존 항목을 §6 신판 기준으로 재검토하고, control-plane 로직이 Rust mandate 범위에 드는지 판정한다. 상세: 본문 하단 서술 항목 |
 | G-23 | directive §8의 CI 통합 아키텍처(exact-SHA 검증, owner RED→fix→GREEN→release, mutable-head 금지 등) 요구가 현재 owner/consumer 관계 전반에서 실제로 충족되는지 감사되지 않았다 | "이미 하고 있다"는 인상과 검증된 준수는 다르다 | 모든 owner PR·release·consumer 변경에 대해 SBOM/provenance/exact-SHA 검증이 실제로 걸리는지 전용 감사 pass로 확인한다. 상세: 본문 하단 서술 항목 |
-| G-24 | directive §4가 Keyverse 연동으로 Direct Grant/ROPC를 허용하며 로그인·가입·복구를 제품 자체 form으로 만들라고 명시한다(owner 검증 문구, 재작성 대상 아님). ROPC는 정의상 제품 코드가 raw credential을 직접 취급해 IdP가 credential을 격리하는 redirect 기반 Authorization Code 경계를 우회한다 | 제품이 침해되면, redirect 기반 흐름이라면 격리됐을 raw credential을 공격자가 그대로 탈취할 수 있다 | 보완 통제(TLS 강제, credential 무저장·무로깅, product-side rate limit/lockout, 가능하면 PKCE 기반 Authorization Code 내장 웹뷰 대안 검토)를 Keyverse 통합 ADR로 명시한다. 상세: 본문 하단 서술 항목 |
+| G-24 | directive §4가 Keyverse 연동으로 Direct Grant/ROPC를 허용하며 로그인·가입·복구를 제품 자체 form으로 만들라고 명시한다(owner 검증 문구, 재작성 대상 아님). ROPC는 정의상 제품 코드가 raw credential을 직접 취급해 IdP가 credential을 격리하는 redirect 기반 Authorization Code 경계를 우회한다 | 제품이 침해되면, redirect 기반 흐름이라면 격리됐을 raw credential을 공격자가 그대로 탈취할 수 있다 | 보완 통제(TLS 강제, credential 무저장·무로깅, product-side rate limit/lockout)를 Keyverse 통합 ADR로 명시한다. 대안 검토 시 embedded webview는 PKCE 여부와 무관하게 격리를 제공하지 않으므로(RFC 8252), 대안은 반드시 external user agent(system browser/Custom Tabs/ASWebAuthenticationSession) 기반이어야 한다. 상세: 본문 하단 서술 항목 |
 
 ## 4. 열린 PR live inventory
 
@@ -2919,11 +2919,24 @@ would be presumptuous, not a fix.
 **Recorded instead, as G-24 above.** The register row captures the trade-off and a compensating-control
 direction (enforce TLS on every ROPC exchange; never log or persist the raw credential beyond the
 immediate token exchange; rate-limit/lockout the product-side ROPC endpoint against credential
-stuffing; evaluate a PKCE-based Authorization Code flow inside an embedded/native webview as a
-lower-risk alternative if product UX constraints allow it) that a future Keyverse-integration ADR
-should make an explicit, reviewed decision about — accepting the risk with documented compensating
-controls, or revising the integration pattern — rather than leaving the trade-off implicit and
-undocumented as it was before this pass.
+stuffing) that a future Keyverse-integration ADR should make an explicit, reviewed decision about —
+accepting the risk with documented compensating controls, or revising the integration pattern — rather
+than leaving the trade-off implicit and undocumented as it was before this pass.
+
+**Correction (flagged by Devin Review, round 7):** this entry's first draft additionally suggested
+"a PKCE-based Authorization Code flow inside an embedded/native webview" as a lower-risk alternative.
+That conflates two orthogonal OAuth protections and is wrong as stated: PKCE protects the *authorization
+code exchange* from interception/replay by a different, malicious app on the same device — it says
+nothing about who can see the *login page itself*. An **embedded** webview is still rendered inside,
+and fully inspectable by, the hosting product's own process (cookies, DOM, injected JS, form field
+values) — it provides no isolation between the login form and the product at all, PKCE or not, which
+is exactly why RFC 8252 ("OAuth 2.0 for Native Apps") explicitly recommends against embedded/in-app
+webviews for this reason and requires the **external user agent** instead — the system browser, or an
+OS-mediated in-app-browser-tab construct that runs in a separate, product-inaccessible process/cookie
+jar (`SFSafariViewController`/`ASWebAuthenticationSession` on iOS, Chrome Custom Tabs on Android). If a
+future ADR wants an alternative to ROPC's raw-credential handling, that alternative is Authorization
+Code + PKCE **via the external user agent**, not an embedded webview with PKCE — the webview choice is
+what determines isolation, not the presence of PKCE.
 
 **Verification.** `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` → no matches (confirms gap
 was genuinely untracked); `docs/product-goal-directive.md`'s §4 blockquote left byte-for-byte

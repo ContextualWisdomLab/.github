@@ -763,11 +763,52 @@ fixed:
   narrative entry in `docs/product-technical-gap-baseline.md`, naming the trade-off, confirming it was
   untracked, and directing a future Keyverse-integration ADR to make an explicit reviewed decision
   (accept with compensating controls — TLS, no credential logging/storage beyond the immediate
-  exchange, product-side rate-limit/lockout, or evaluate a PKCE-based embedded-webview alternative — or
-  revise the pattern) rather than leaving the trade-off implicit.
-- **Verification:** `git diff docs/product-goal-directive.md` → empty (confirms the verbatim blockquote
-  was not touched); `git diff --check origin/main -- docs/product-technical-gap-baseline.md` → exit 0;
+  exchange, product-side rate-limit/lockout — or revise the pattern) rather than leaving the trade-off
+  implicit.
+- **Verification (this round):** `git diff HEAD -- docs/product-goal-directive.md` → empty at the time
+  of this round's own edit, confirming this round's change (adding G-24) touched only
+  `docs/product-technical-gap-baseline.md` and did not modify `docs/product-goal-directive.md` — a claim
+  about this round's edit scope, not a comprehensive proof that the §4 blockquote has stayed
+  byte-for-byte identical to the owner's original text across this PR's entire commit history (which
+  has, by design, added new sentences to it in earlier, individually-verified-against-the-owner's-text
+  rounds); `git diff --check origin/main -- docs/product-technical-gap-baseline.md` → exit 0;
   `grep -n "�" docs/product-technical-gap-baseline.md` → no matches;
   `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` → no matches (confirms G-24 was genuinely new);
   `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 7: one real technical error in this session's own G-24 compensating-control suggestion fixed, one real verification-claim overreach corrected
+
+- **Date:** 2026-09-02, after round 6's push (`fcad134f`).
+- **Subject:** a seventh Devin Review pass found 2 new items: 1 `SEC`, 1 `ANALYSIS`. Both about this
+  session's own prior-round work, not the owner's directive text.
+- **Finding 1 (SEC, real, fixed) — "Embedded webview defeats OAuth isolation."** Round 6's `G-24` entry
+  suggested "a PKCE-based Authorization Code flow inside an embedded/native webview" as a lower-risk
+  alternative to ROPC. This conflates two orthogonal OAuth protections: PKCE protects the *authorization
+  code exchange* from interception/replay by a different app on the same device; it says nothing about
+  who can observe the *login page itself*. An embedded webview is rendered inside, and fully inspectable
+  by, the hosting product's own process — cookies, DOM, injected JS, form field values are all reachable
+  by the product regardless of PKCE — so it provides **no isolation improvement over ROPC at all**. This
+  is precisely why RFC 8252 ("OAuth 2.0 for Native Apps") mandates the external user agent (system
+  browser, or an OS-mediated in-app-browser-tab construct such as `SFSafariViewController`/
+  `ASWebAuthenticationSession` on iOS or Chrome Custom Tabs on Android — a separate, product-inaccessible
+  process/cookie jar) rather than an app-embedded webview. **Fix:** removed the embedded-webview
+  suggestion from both the `G-24` register row and its narrative entry; added a correction paragraph to
+  the narrative explaining the error (PKCE ≠ webview isolation) and stating the technically correct
+  alternative, if one is wanted: Authorization Code + PKCE *via the external user agent*, never an
+  embedded webview.
+- **Finding 2 (ANALYSIS, real, fixed) — "Verification cannot prove unchanged text."** Round 6's
+  verification line claimed `git diff docs/product-goal-directive.md` → empty "confirms the verbatim
+  blockquote was not touched," phrased as an unqualified claim. A bare `git diff` only compares the
+  working tree against the index/HEAD at the moment it's run — it proves that *round's own edit* made no
+  further change to the file, not that the blockquote has been byte-for-byte stable across this PR's
+  entire commit history (which it has not been, by design — earlier rounds added new sentences to it,
+  each individually verified against the owner's supplied text at the time). **Fix:** reworded the round
+  6 verification entry above to scope the claim correctly to "this round's own edit" rather than
+  implying a whole-PR-history proof.
+- **Verification:** `grep -n "PKCE\|embedded" docs/product-technical-gap-baseline.md` → confirms the
+  embedded-webview suggestion no longer appears in either the register row or narrative (only the
+  correction paragraph mentions "embedded" while explaining why it's wrong);
+  `git diff --check origin/main -- docs/product-technical-gap-baseline.md docs/doctoring/product-goal-directive.md`
+  → exit 0; `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
 - **PR:** `ContextualWisdomLab/.github#1659`.
