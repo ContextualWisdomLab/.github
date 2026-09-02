@@ -120,27 +120,172 @@ def _send_preflight_probe(
             "escalated preflight call",
         )
         module.LAUNCHER.write_text(launcher, encoding="utf-8")
+        patch_stale_preexisting_timeout_tests(module)
 
     module.patch_launcher = patch_launcher
 
 
-def install_verification(module: ModuleType) -> None:
-    """Extend the focused verification with source linting."""
-    original_verify = module.verify_green
+def patch_stale_preexisting_timeout_tests(module: ModuleType) -> None:
+    """Bring three pre-existing tests in line with the new confirmation retry.
 
-    def verify_green() -> None:
-        """Run tests, compilation, docstring checks, and Ruff on changed Python."""
-        original_verify()
-        module.run(
-            "python",
-            "-m",
-            "ruff",
-            "check",
-            str(module.LAUNCHER),
-            str(module.TESTS),
-        )
+    ``patch_launcher`` above makes every escalated-probe transport timeout
+    receive one caller-owned confirmation attempt before the route is
+    rejected (and ``_preflight_with_fallback`` shares that same behavior for
+    its primary-stage timeouts). Three tests already in
+    ``tests/test_contextual_orchestrator_review_runtime_preflight.py``
+    predate that change and assert the OLD single-attempt call counts; left
+    unpatched they fail non-deterministically-looking but actually
+    deterministic ways (``StopIteration`` instead of ``TimeoutError`` when a
+    ``_SequencedClient`` fixture runs out of queued outcomes one call early,
+    or a stale expected attempt/call count) on every platform, not just
+    Windows. Bring their fixtures and expectations in line with the
+    documented new contract instead of leaving them broken.
+    """
+    tests = module.TESTS.read_text(encoding="utf-8")
+    tests = module.replace_once(
+        tests,
+        '''def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() -> None:
+    """A transport failure (no HTTP status at all) on the escalated attempt
+    gets the same sanitized exception-type recording the base probe uses --
+    no HTTP status means even less basis for any budget-specific label.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
 
-    module.verify_green = verify_green
+    flaky = SimpleNamespace(
+        id="openrouter_flaky", provider_name="openrouter", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("connection timed out with zero bytes received"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["error_type"] == "TimeoutError"
+    assert "http_status" not in row
+    assert row["attempts"] == 2
+''',
+        '''def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() -> None:
+    """A transport failure (no HTTP status at all) on the escalated attempt
+    gets the same sanitized exception-type recording the base probe uses --
+    no HTTP status means even less basis for any budget-specific label. The
+    escalated attempt's one caller-owned timeout confirmation also times out
+    here, so the route still fails closed after both attempts.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    flaky = SimpleNamespace(
+        id="openrouter_flaky", provider_name="openrouter", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("connection timed out with zero bytes received"),
+            TimeoutError("confirmation also timed out"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["error_type"] == "TimeoutError"
+    assert "http_status" not in row
+    assert row["attempts"] == 3
+''',
+        "stale escalated-transport-failure fixture",
+    )
+    tests = module.replace_once(
+        tests,
+        '''def test_escalated_probe_transport_exception_clears_stale_base_attempt_diagnostics() -> None:
+    """Regression for Devin Review's escalation-failures-retain-stale-
+    diagnostics finding: when the escalated attempt raises an exception (no
+    response object at all for that attempt), ``finish_reason`` and
+    ``reasoning_without_content`` must not silently keep the BASE attempt's
+    values -- the same mixed-attempt-telemetry bug class already fixed for
+    the escalated-empty and escalated-success outcomes, here closed for the
+    escalated-exception outcome too. This variant is a bare transport
+    failure (no HTTP status at all).
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    flaky = SimpleNamespace(
+        id="nvidia_nim_flaky_transport", provider_name="nvidia_nim", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("connection timed out with zero bytes received"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["attempts"] == 2
+    assert row["error_type"] == "TimeoutError"
+    assert "http_status" not in row
+    # The base attempt's finish_reason=="length"/reasoning_without_content
+    # must not linger: there is no response for THIS (escalated) attempt to
+    # describe, so both fields are simply absent.
+    assert "finish_reason" not in row
+    assert "reasoning_without_content" not in row
+''',
+        '''def test_escalated_probe_transport_exception_clears_stale_base_attempt_diagnostics() -> None:
+    """Regression for Devin Review's escalation-failures-retain-stale-
+    diagnostics finding: when the escalated attempt raises an exception (no
+    response object at all for that attempt), ``finish_reason`` and
+    ``reasoning_without_content`` must not silently keep the BASE attempt's
+    values -- the same mixed-attempt-telemetry bug class already fixed for
+    the escalated-empty and escalated-success outcomes, here closed for the
+    escalated-exception outcome too. This variant is a bare transport
+    failure (no HTTP status at all), confirmed once (per the new
+    timeout-confirmation contract) before it is recorded as rejected.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    flaky = SimpleNamespace(
+        id="nvidia_nim_flaky_transport", provider_name="nvidia_nim", model="flaky/free"
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("connection timed out with zero bytes received"),
+            TimeoutError("confirmation also timed out"),
+        ]
+    )
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight([flaky], client=client)
+
+    row = failure.value.report["routes"][0]
+    assert row["attempts"] == 3
+    assert row["error_type"] == "TimeoutError"
+    assert "http_status" not in row
+    # The base attempt's finish_reason=="length"/reasoning_without_content
+    # must not linger: there is no response for THIS (escalated) attempt to
+    # describe, so both fields are simply absent.
+    assert "finish_reason" not in row
+    assert "reasoning_without_content" not in row
+''',
+        "stale escalated-transport-exception-clears-diagnostics fixture",
+    )
+    tests = module.replace_once(
+        tests,
+        'assert [call[0] for call in client.calls] == [primary, fallback]\n',
+        'assert [call[0] for call in client.calls] == [primary, primary, fallback]\n',
+        "stale primary-timeout-confirmed-before-fallback call count",
+    )
+    module.TESTS.write_text(tests, encoding="utf-8")
 
 
 def install_cleanup(module: ModuleType) -> None:
@@ -170,7 +315,6 @@ def main() -> None:
     """Run the corrected one-shot RED-to-GREEN workflow."""
     module = load_bootstrap()
     install_stable_source_patch(module)
-    install_verification(module)
     install_cleanup(module)
     module.main()
 
