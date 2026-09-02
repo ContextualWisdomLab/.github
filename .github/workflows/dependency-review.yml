@@ -9,14 +9,13 @@
 # calling repo's own thin workflow file -- a workflow_call target cannot also
 # be the thing GitHub triggers directly on pull_request.
 #
-# Dependency Review requires GitHub Dependency Graph (and, on private repos
-# without GitHub Advanced Security, it is unavailable regardless of a repo's
-# own settings). scopeweave's original workflow already detected this
-# dynamically via the dependency-graph compare API instead of assuming from
-# public/private repository status (mightyETL's original approach, which is
-# wrong for a private repo that does have GHAS). This reusable workflow
-# adopts the dynamic detection as the common, more-correct behavior for
-# every caller, so no per-repo public/private input is needed.
+# Dependency Review requires a successful Dependency Graph comparison for the
+# exact pull-request base/head. Repository visibility is not a sufficient
+# capability signal, and HTTP 403/404 are not safe availability signals:
+# GitHub can use those statuses for authorization/policy denials as well as
+# unavailable resources. For a pull_request, only HTTP 200 authorizes running
+# the pinned action; every non-200 comparison fails closed. Non-pull_request
+# triggers may skip because they do not carry the exact PR base/head identity.
 #
 # Example caller (.github/workflows/dependency-review.yml in a product repo):
 #
@@ -113,14 +112,10 @@ jobs:
             exit 0
           fi
 
-          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
-            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is unavailable)."
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            exit 0
+          echo "::error::Dependency graph comparison failed with HTTP ${status}. For a pull_request, non-200 responses are ambiguous between feature availability and authorization/policy/transport failure, so Dependency Review fails closed instead of being skipped."
+          if [ -s "$response_file" ]; then
+            cat "$response_file"
           fi
-
-          echo "::error::Dependency graph availability check failed with HTTP ${status}. This is not a 'graph unavailable' response (403/404) -- treating it as a genuine failure instead of silently skipping the security gate."
-          cat "$response_file"
           exit 1
 
       - name: Dependency review
@@ -131,9 +126,3 @@ jobs:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           allow-ghsas: ${{ inputs.allow_ghsas }}
           comment-summary-in-pr: on-failure
-
-      - name: Dependency graph unavailable note
-        if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
-        run: |
-          echo "Dependency Review requires GitHub Dependency Graph to be enabled for this repository (and, on private repositories, GitHub Advanced Security)."
-          echo "Other required dependency-vulnerability gates (OSV-Scanner, Scorecard) remain the blocking coverage until Dependency Graph is available here."
