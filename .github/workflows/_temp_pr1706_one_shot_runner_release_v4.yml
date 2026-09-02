@@ -101,7 +101,21 @@ jobs:
           )
           WORKFLOW.write_text(before + step_start + target + step_end + after, encoding="utf-8")
           '''
-          driver.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          text = text[:start] + replacement + text[end:]
+
+          brittle = '''regression = replace_once(regression, '            "PR_HEAD_SHA": HEAD,\\n            "REQUIRED_RUN_ID": "42",\\n', '            "PR_NUMBER": "1437",\\n            "PR_HEAD_SHA": HEAD,\\n            "REQUIRED_RUN_ID": "42",\\n', "formal wake PR identity fixture")
+          '''
+          robust = '''wake_env = '            "PR_HEAD_SHA": HEAD,\\n            "REQUIRED_RUN_ID": "42",\\n'
+          wake_env_with_pr = '            "PR_NUMBER": "1437",\\n            "PR_HEAD_SHA": HEAD,\\n            "REQUIRED_RUN_ID": "42",\\n'
+          wake_env_count = regression.count(wake_env)
+          if wake_env_count != 2:
+              raise SystemExit(f"formal wake PR identity fixtures drifted: expected 2 exact matches, found {wake_env_count}")
+          regression = regression.replace(wake_env, wake_env_with_pr)
+          '''
+          if text.count(brittle) != 1:
+              raise SystemExit("v3 formal wake PR identity repair block drifted")
+          text = text.replace(brittle, robust, 1)
+          driver.write_text(text, encoding="utf-8")
           PY
           PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release_v3.py
           git restore --source=HEAD -- docs/product-technical-gap-baseline.md
