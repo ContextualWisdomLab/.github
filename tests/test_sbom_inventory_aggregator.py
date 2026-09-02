@@ -211,14 +211,17 @@ def test_self_test_passes(capsys):
 
 
 def test_arg_parser_defaults():
-    """CLI parser exposes org/output-dir/repo/self-test with sane defaults."""
+    """CLI flags translate to semantic internal destinations with sane defaults."""
     argument_parser = agg.build_arg_parser()
-    cli_args = argument_parser.parse_args([])
-    assert cli_args.org == "ContextualWisdomLab"
-    assert cli_args.output_dir == "docs/sbom"
-    assert cli_args.repos is None
-    cli_args = argument_parser.parse_args(
+    cli_arguments = argument_parser.parse_args([])
+    assert cli_arguments.organization_name == "ContextualWisdomLab"
+    assert cli_arguments.output_directory == "docs/sbom"
+    assert cli_arguments.repository_names is None
+    assert cli_arguments.generated_timestamp == ""
+    assert cli_arguments.self_test_requested is False
+
+    cli_arguments = argument_parser.parse_args(
         ["--repo", "a/b", "--repo", "c/d", "--self-test"]
     )
-    assert cli_args.repos == ["a/b", "c/d"]
-    assert cli_args.self_test is True
+    assert cli_arguments.repository_names == ["a/b", "c/d"]
+    assert cli_arguments.self_test_requested is True
