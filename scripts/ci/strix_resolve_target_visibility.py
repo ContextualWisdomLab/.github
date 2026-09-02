@@ -7,9 +7,10 @@ rate-limit) aborted the scan before it started. Generic flakes retry a few
 times with short backoff. Authenticated HTTP 403 rate-limits use a shorter
 attempt budget and a longer bounded wait, honoring Retry-After /
 X-RateLimit-Reset from ``gh`` output when present and capping the sleep so
-the job cannot stall. A real 401/403/404 on a missing or unauthorized
-repository stays fail-closed and is never treated as success or as a source
-finding.
+the job cannot stall. Repository visibility is resolved from GitHub's
+``visibility`` field so ``internal`` remains private for the downstream Strix
+contract. A real 401/403/404 on a missing or unauthorized repository stays
+fail-closed and is never treated as success or as a source finding.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 TARGET_REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
-HTTP_STATUS_RE = re.compile(r"\bHTTP[ /](\d{3})\b", re.IGNORECASE)
+HTTP_STATUS_RE = re.compile(r"\bHTTP(?:/\S+)?[ /](\d{3})\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"(gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)")
 RETRY_AFTER_RE = re.compile(r"(?i)\bretry-after\s*[:=]\s*(\d+)\b")
 RATE_LIMIT_RESET_RE = re.compile(r"(?i)\bx-ratelimit-reset\s*[:=]\s*(\d+)\b")
@@ -56,18 +57,29 @@ MAX_BACKOFF_SECONDS = 4.0
 RATE_LIMIT_BASE_BACKOFF_SECONDS = 30.0
 RATE_LIMIT_MIN_BACKOFF_SECONDS = 5.0
 RATE_LIMIT_MAX_BACKOFF_SECONDS = 60.0
+REPOSITORY_VISIBILITY_JQ = (
+    '(.visibility // (if .private then "private" else "public" end) | ascii_downcase) '
+    'as $visibility | if $visibility == "public" then "false" '
+    'elif $visibility == "private" or $visibility == "internal" then "true" '
+    "else empty end"
+)
 
 
 def split_gh_response(output: str) -> tuple[str, str]:
-    """Return HTTP headers and body from ``gh api --include`` output."""
-    status = re.search(r"(?m)^HTTP/[^\r\n]*\r?\n", output or "")
-    if status is None:
-        return "", output or ""
-    separator = re.search(r"\r?\n\r?\n", output[status.end() :])
-    if separator is None:
-        return output, ""
-    body_start = status.end() + separator.end()
-    return output[:body_start], output[body_start:]
+    """Return all leading HTTP header blocks and the terminal response body."""
+    remaining = output or ""
+    header_blocks: list[str] = []
+    while re.match(r"^HTTP/[^\r\n]*\r?\n", remaining):
+        status = re.match(r"^HTTP/[^\r\n]*\r?\n", remaining)
+        if status is None:  # pragma: no cover - guarded by the while condition
+            break
+        separator = re.search(r"\r?\n\r?\n", remaining[status.end() :])
+        if separator is None:
+            return "".join(header_blocks) + remaining, ""
+        body_start = status.end() + separator.end()
+        header_blocks.append(remaining[:body_start])
+        remaining = remaining[body_start:]
+    return "".join(header_blocks), remaining
 
 
 class VisibilityResolutionError(RuntimeError):
@@ -128,8 +140,15 @@ def classify_gh_failure(message: str) -> str:
 def run_gh_visibility(
     repository: str, timeout: float = DEFAULT_TIMEOUT_SECONDS
 ) -> str:
-    """Return only the boolean body from ``gh api`` response evidence."""
-    argv = ["gh", "api", f"repos/{repository}", "--include", "--jq", ".private"]
+    """Return only the private-contract boolean from GitHub visibility evidence."""
+    argv = [
+        "gh",
+        "api",
+        f"repos/{repository}",
+        "--include",
+        "--jq",
+        REPOSITORY_VISIBILITY_JQ,
+    ]
     try:
         completed = subprocess.run(
             argv,
@@ -145,7 +164,11 @@ def run_gh_visibility(
         ) from exc
     if completed.returncode != 0:
         detail = scrub_sensitive_data(
-            "\n".join(part for part in (completed.stdout or "", completed.stderr or "") if part).strip()
+            "\n".join(
+                part
+                for part in (completed.stdout or "", completed.stderr or "")
+                if part
+            ).strip()
         )
         raise VisibilityCommandError(
             detail or f"gh api exited {completed.returncode}"
