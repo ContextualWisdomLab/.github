@@ -1,9 +1,12 @@
-"""Collect established runtime-preflight regressions with one repaired oracle.
+"""Collect runtime-preflight regressions under the no-heuristics contract.
 
-The regression corpus remains byte-for-byte in the adjacent non-collectable
-case module. This collection shim re-exports every existing test except the
-obsolete constructor-text assertion, then replaces that assertion with the
-provider-neutral one-shot and universal deadline-free inference contract.
+The adjacent case module preserves historical regression evidence. This shim
+continues to execute findings that remain semantically valid while excluding
+oracles whose *expected behavior* was the retired 16->4096 token escalation or
+bounded inference-retry policy. Those cases are replaced by
+``test_contextual_orchestrator_review_no_heuristic_compute.py``, which requires
+one provider-default compatibility observation and fail-closed behavior when
+that observation is insufficient.
 """
 
 from __future__ import annotations
@@ -17,21 +20,48 @@ _CASES_PATH = Path(__file__).with_name(
 )
 _CASES = runpy.run_path(str(_CASES_PATH))
 _LAUNCHER = Path(__file__).resolve().parents[1] / "scripts/ci/contextual_orchestrator_review_launcher.py"
-_OBSOLETE_TEST = "test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral"
+
+
+def _retired_heuristic_oracle(name: str) -> bool:
+    """Identify historical tests whose asserted policy is now forbidden.
+
+    This is test collection only, never a production decision rule. The
+    underlying historical cases remain in-tree as evidence; executable
+    replacements live in the no-heuristic compute contract.
+    """
+    exact = {
+        "test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral",
+        "test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes",
+        "test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe",
+        "test_gateway_preflight_retries_transport_failures_up_to_a_bounded_attempt_count",
+        "test_reasoning_without_content_escalates_then_still_fails_closed_if_unresolved",
+        "test_finish_reason_length_escalates_and_can_succeed",
+        "test_fallback_escalation_is_independent_of_primary_catalog_order",
+        "test_every_budget_starved_route_gets_its_own_escalation",
+    }
+    return (
+        name in exact
+        or name.startswith("test_gateway_retry_loop_")
+        or name.startswith("test_escalated_probe_")
+    )
+
 
 for _name, _value in _CASES.items():
-    if not _name.startswith("__") and _name != _OBSOLETE_TEST:
+    if not _name.startswith("__") and not _retired_heuristic_oracle(_name):
         globals()[_name] = _value
 
 
-def test_preflight_transport_has_no_inference_timeout_or_transport_retry() -> None:
-    """Review inference is deadline-free and every transport payload is one-shot."""
+def test_preflight_transport_has_no_inference_timeout_or_compute_defaults() -> None:
+    """Central review inference supplies no repository-authored TTC policy."""
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
-    assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
-    assert "REVIEW_TEMPERATURE = 1.0" in launcher
     assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
     assert "REVIEW_PREFLIGHT_TRANSIENT_RETRIES" not in launcher
+    assert "REVIEW_MAX_OUTPUT_TOKENS" not in launcher
+    assert "REVIEW_TEMPERATURE" not in launcher
+    assert "REVIEW_PREFLIGHT_BASE_TOKENS" not in launcher
+    assert "REVIEW_PREFLIGHT_ESCALATED_TOKENS" not in launcher
     assert launcher.count("timeout=None") == 2
     assert launcher.count("max_retries=0") == 2
-    assert "temperature=REVIEW_TEMPERATURE" in launcher
+    assert "max_output_tokens=" not in launcher
+    assert "temperature=" not in launcher
