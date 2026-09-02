@@ -7,7 +7,12 @@ name: CodeQL PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
+    # No branches: filter, deliberately -- see opencode-review.yml/noema-review.yml's
+    # identical choice. This required-check's org-ruleset target is
+    # `~DEFAULT_BRANCH` (any branch name), not a fixed list; a repository whose
+    # default branch is not literally named main/master/develop would never
+    # fire this trigger, leaving its required CodeQL check permanently absent
+    # rather than passing or failing (Devin Review on `.github#1661`).
 
 concurrency:
   group: >-

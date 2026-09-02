@@ -16,7 +16,14 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     )
 
     assert "name: CodeQL PR" in workflow
-    assert "branches: [main, master, develop]" in workflow
+    # No branches: filter on the pull_request trigger -- a fixed branch-name
+    # list would silently never fire for a repository whose default branch
+    # isn't literally named main/master/develop, leaving its org-required
+    # CodeQL check permanently absent rather than passing or failing.
+    trigger_start = workflow.index("on:\n  pull_request:")
+    trigger_end = workflow.index("\n\n", trigger_start)
+    trigger_lines = workflow[trigger_start:trigger_end].splitlines()
+    assert not any(line.strip().startswith("branches:") for line in trigger_lines)
     assert workflow.count("upload: false") == 2
     assert "upload: always" not in workflow
     assert workflow.count("Enforce CodeQL Medium+ SARIF gate") == 2
