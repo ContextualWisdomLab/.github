@@ -248,8 +248,8 @@ def test_recovery_timeout_without_history_fails_closed(monkeypatch) -> None:
         )
 
 
-def test_recovery_timeout_before_acceptance_retries_boundedly(monkeypatch) -> None:
-    """A recovery PUT absent from history is retried only within the bounded recovery loop."""
+def test_recovery_timeout_before_acceptance_fails_after_settlement_without_retry(monkeypatch) -> None:
+    """An absent recovery transition fails closed after settlement without issuing another PUT."""
 
     module = load_module()
     target = repository_target(module)
@@ -258,6 +258,7 @@ def test_recovery_timeout_before_acceptance_retries_boundedly(monkeypatch) -> No
     put_count = 0
     monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
 
     def fake_api(method, endpoint, **_kwargs):
         nonlocal put_count
@@ -271,7 +272,10 @@ def test_recovery_timeout_before_acceptance_retries_boundedly(monkeypatch) -> No
     monkeypatch.setattr(module, "_gh_api", fake_api)
     monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [{"version_id": 10}])
 
-    with pytest.raises(module.RulesetGovernanceError, match="exceeded bounded attempts"):
+    with pytest.raises(
+        module.RulesetGovernanceError,
+        match="ambiguous ruleset recovery PUT outcome remains unresolved after settlement window",
+    ):
         module._recover_displaced_history_state(
             target,
             current_version=10,
@@ -279,7 +283,7 @@ def test_recovery_timeout_before_acceptance_retries_boundedly(monkeypatch) -> No
             displaced_version=9,
             expected_main_sha="a" * 40,
         )
-    assert put_count == module.COLLISION_RECOVERY_LIMIT
+    assert put_count == 1
 
 
 def test_recovery_timeout_with_new_version_requires_predecessor(monkeypatch) -> None:
