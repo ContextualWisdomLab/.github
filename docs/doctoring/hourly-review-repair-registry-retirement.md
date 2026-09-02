@@ -12,7 +12,7 @@ The replacement scheduler must therefore be active before legacy identities are 
 
 ## Migration contract
 
-PR #1673 adds the one-shot compatibility workflow `.github/workflows/hourly-review-repair-registry-retirement.yml`. On protected `main` activation it:
+PR #1673 adds the one-shot compatibility workflow `.github/workflows/hourly-review-repair-registry-retirement.yml`. It has **no `workflow_dispatch` entrypoint**: its `actions: write` shell is executable only from reviewed source after a push to protected `main`. The job also checks `github.event_name == 'push'` and `github.ref == 'refs/heads/main'` before receiving destructive registry authority. On protected-`main` activation it:
 
 1. enumerates the complete GitHub Actions workflow registry with pagination;
 2. resolves exactly one registry identity for the consolidated replacement and requires its state to be `active` before any destructive mutation;
@@ -22,7 +22,7 @@ PR #1673 adds the one-shot compatibility workflow `.github/workflows/hourly-revi
 6. rechecks that the replacement remains active after all legacy identities are retired; and
 7. disables the one-shot migration workflow's own registry identity last.
 
-The migration has repository `actions: write` plus `contents: read`, no checkout, no model/reviewer secrets, no OIDC grant, no repository-content mutation, and no schedule. It fails closed on missing, duplicate, unresolved, or unexpected registry states. The permanent consolidated scheduler retains its narrower read/OIDC dispatch permissions and does not inherit registry-mutation authority.
+The migration has repository `actions: write` plus `contents: read`, no checkout, no model/reviewer secrets, no OIDC grant, no repository-content mutation, no schedule, and no arbitrary-branch manual dispatch. It fails closed on missing, duplicate, unresolved, or unexpected registry states. A transient hosted-run failure is retried through GitHub's run/job retry controls against the same reviewed protected-main source rather than by dispatching a feature branch. The permanent consolidated scheduler retains its narrower read/OIDC dispatch permissions and does not inherit registry-mutation authority.
 
 ## Cleanup and evidence
 
@@ -30,7 +30,7 @@ The migration source must remain in protected `main` until a hosted run proves a
 
 ## Regression contract
 
-`tests/test_hourly_review_repair_registry_retirement.py` requires the one-shot workflow to have no schedule, to name all 18 legacy paths exactly once, to prove the replacement active before the first disable request, to re-read and verify every disabled state, to disable itself last, and to avoid reviewer/model/provider credentials. This complements `tests/test_hourly_review_repair_callers.py`, which continues to verify the 18-repository schedule/target/concurrency mapping in the single active scheduler file.
+`tests/test_hourly_review_repair_registry_retirement.py` requires the one-shot workflow to have neither a schedule nor `workflow_dispatch`, to bind execution to protected-main push context, to name all 18 legacy paths exactly once, to prove the replacement active before the first disable request, to re-read and verify every disabled state, to disable itself last, and to avoid reviewer/model/provider credentials. The focused `Contextual Orchestrator Review Repair Quality CI` watches the migration workflow, this doctoring record, and the retirement contract test so a future change cannot bypass that regression. This complements `tests/test_hourly_review_repair_callers.py`, which continues to verify the 18-repository schedule/target/concurrency mapping in the single active scheduler file.
 
 ## References
 
