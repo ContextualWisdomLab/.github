@@ -74,7 +74,7 @@ flowchart LR
 
 ### 2.4 Ecosystem canonical-owner map
 
-각 core 기능은 정확히 하나의 canonical-owner 저장소가 소유하며, 소비 저장소는 해당 기능을 복제·우회·배제하지 않는다(§5의 "no duplicating immature core in consumers" 원칙). 미성숙한 core가 필요하면 소비 저장소는 오너 저장소에 RED 테스트 → 수정/기능/문서/릴리스를 개발해 통합 CI가 GREEN이 될 때까지 진행한 뒤 소비측 고정 버전을 올린다. 배제는 경계가 실제로 잘못되었거나 공통 수요가 없음을 ADR로 정당화할 때만 허용된다.
+각 core 기능은 정확히 하나의 canonical-owner 저장소가 소유하며, 소비 저장소는 해당 기능을 복제·우회·배제하지 않는다 ("no duplicating immature core in consumers" 원칙 — 이 섹션(§2.4)이 정의하는 소유권 규칙이며, 실행 루프를 다루는 §5와는 별개다). 미성숙한 core가 필요하면 소비 저장소는 오너 저장소에 RED 테스트 → 수정/기능/문서/릴리스를 개발해 통합 CI가 GREEN이 될 때까지 진행한 뒤 소비측 고정 버전을 올린다. 배제는 경계가 실제로 잘못되었거나 공통 수요가 없음을 ADR로 정당화할 때만 허용된다.
 
 core foundation은 전 제품의 공통 설치물이 아니라, 여러 제품에서 반복되는 책임 하나를 한 저장소가 canonical owner로서 독립 배포·versioned contract로 제공하는 선택형 control plane·service·library다. 보호 브랜치의 문서·API/schema·release evidence로 역할·성숙도를 확인하며, open PR은 아직 Proposed 상태로 취급한다.
 
@@ -88,7 +88,7 @@ core foundation은 전 제품의 공통 설치물이 아니라, 여러 제품에
 | 의미·데이터 | `EmbedRelay` | embedding identity·migration |
 | 의미·데이터 | `mhtml-etl-gateway` | MHTML 검사·schema proposal·load lineage |
 | AI·운영 | `contextual-orchestrator` | provider discovery·model capability·routing/delegation/verification·admin |
-| AI·운영 | `noema` | GitHub Actions OIDC 단기 repository capability·exact-revision evidence |
+| AI·운영 | `noema` | 공유 agent runtime·GitHub review agent·GitHub Actions OIDC 단기 repository capability·exact-revision evidence |
 | AI·운영 | `pg-llm-batch` | DB token count·batch 처리 |
 | Identity·보안·runtime | `keyverse` | identity·federation·token (유일한 identity ledger; Keycloak 기반 인증 백엔드) |
 | Identity·보안·runtime | `EgressWeave` | 안전한 outbound HTTP |
