@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
+ORCH_PIN_SHA = "045d17da5e2aea56a97e241ee158ab1628d78660"
 
 
 def _read(path: Path) -> str:
@@ -90,6 +90,49 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
     ):
         assert arg in text
     assert "https://openrouter.ai/api/v1/endpoints/zdr" in text
+
+
+def test_sidecar_pins_the_pool_to_free_for_github_actions() -> None:
+    """GitHub Actions Workflow usage of contextual-orchestrator is pinned free.
+
+    ``auto`` was removed from the sidecar's own accepted
+    ``CONTEXTUAL_ORCHESTRATOR_POOL`` values: the org has not solved cost-safe
+    free+ZDR routing well enough yet to justify a priced-inclusive pool in
+    central CI. The launcher's own ``--pool`` flag (a general-purpose CLI
+    also used outside GitHub Actions, asserted separately above) still
+    accepts ``auto`` -- only this repo's GitHub-Actions-facing sidecar script
+    is narrowed.
+    """
+    text = _read(SIDECAR)
+    assert 'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"' in text
+    assert 'case "$orchestrator_pool" in\n  free)' in text
+    assert "fail \"CONTEXTUAL_ORCHESTRATOR_POOL must be free\"" in text
+    assert "free|auto" not in text
+    assert "must be free or auto" not in text
+
+    pool_case = text.split('orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"', 1)[
+        1
+    ].split("esac", 1)[0]
+    for candidate, should_fail in (("free", False), ("auto", True), ("", False), ("bogus", True)):
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'fail() { echo "FAIL: $*"; exit 7; }\n'
+                f'CONTEXTUAL_ORCHESTRATOR_POOL="{candidate}"\n'
+                'orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"\n'
+                + pool_case
+                + "esac\necho \"pool_args=${pool_args[*]}\"",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if should_fail:
+            assert result.returncode == 7, (candidate, result.stdout, result.stderr)
+            assert "must be free" in result.stdout
+        else:
+            assert result.returncode == 0, (candidate, result.stdout, result.stderr)
+            assert "pool_args=--pool free" in result.stdout
 
 
 def test_sidecar_exports_gateway_env_for_review_steps() -> None:
@@ -345,17 +388,10 @@ def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
 
 
 def test_strix_gateway_uses_provider_neutral_reasoning_effort() -> None:
-    """Gateway scans must not force unsupported provider controls.
-
-    The sidecar always boots the richer "auto" catalog (see
-    docs/adr/0020-strix-orchestrator-free-pool.md): booting "free"-only
-    would leave no priced agents loaded, making any later fallback to
-    orchestrator/auto a fake alias for the exact same single-family
-    catalog rather than a real safety net.
-    """
+    """Gateway free-pool scans must not force unsupported provider controls."""
     text = _read(STRIX_WORKFLOW)
     assert "STRIX_REASONING_EFFORT: none" in text
-    assert "CONTEXTUAL_ORCHESTRATOR_POOL: auto" in text
+    assert "CONTEXTUAL_ORCHESTRATOR_POOL: free" in text
 
 
 def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
@@ -367,6 +403,12 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "accepted_size = 64 * 1024 + 1" in text
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
     assert "assert response.status == 413" in text
+    assert "expected_rejection_log = io.StringIO()" in text
+    assert "with contextlib.redirect_stderr(expected_rejection_log):" in text
+    assert '"request_failed status=413 code=request_too_large"' in text
+    assert "in expected_rejection_log.getvalue()" in text
+    assert "return self._mock_raw(agent, endpoint, payload)" in text
+    assert "return super().proxy_send(agent, endpoint, payload)" not in text
     assert "_request_body_size" not in text
     assert "class CaptureClient(ModelClient):" in text
     assert '"description": description' in text
@@ -509,41 +551,6 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     assert "require_zdr=args.require_zdr" in launcher
 
 
-def test_minimum_serving_diversity_flag_is_wired_end_to_end_and_off_by_default() -> None:
-    """The opt-in runtime floor is plumbed from env var through to the launcher call.
-
-    docs/adr/0020-strix-orchestrator-free-pool.md: off by default (mirrors
-    --require-zdr's own opt-in shape exactly) because unconditionally
-    enabling it today would immediately fail closed for any caller relying
-    on this sidecar's default pool, including callers that have not asked
-    for or gated on this guarantee.
-    """
-    sidecar = _read(SIDECAR)
-    launcher = _read(LAUNCHER)
-
-    assert 'case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_MINIMUM_SERVING_DIVERSITY:-false}" in' in sidecar
-    assert "diversity_args=(--require-minimum-serving-diversity)" in sidecar
-    assert "diversity_args=()" in sidecar
-    assert '"${diversity_args[@]}"' in sidecar
-    # The array must actually reach the launcher invocation, not just be
-    # built and discarded.
-    assert sidecar.index('"${diversity_args[@]}"') > sidecar.index(
-        'launch_sidecar.py" \\'
-    )
-
-    assert (
-        'parser.add_argument("--require-minimum-serving-diversity", action="store_true")'
-        in launcher
-    )
-    assert "if args.require_minimum_serving_diversity:" in launcher
-    assert "_require_minimum_serving_diversity(agents)" in launcher
-    # Must be checked on the FINAL agents list (after any fallback
-    # substitution), not the pre-fallback primary result.
-    assert launcher.index("_write_json(args.preflight_out, preflight_report)") < launcher.index(
-        "_require_minimum_serving_diversity(agents)"
-    )
-
-
 def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosis() -> None:
     """The privileged Required OpenCode path has no direct-provider model route."""
     workflow = _read(OPENCODE_DISPATCH_WORKFLOW)
@@ -561,17 +568,11 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
 
 
 def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
-    """Strix accepts only the gateway route and binds private scans to ZDR.
-
-    The gate's static base model is the safe orchestrator/auto default;
-    orchestrator/free is reachable only through the evidence-gated
-    resolution step (docs/adr/0020-strix-orchestrator-free-pool.md).
-    """
+    """Strix accepts only the gateway route and binds private scans to ZDR."""
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
-    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/auto' in workflow
-    assert "free_account_diversity" in workflow
+    assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
     assert workflow.index("Resolve target repository visibility") < workflow.index(

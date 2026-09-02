@@ -206,7 +206,7 @@ def test_build_catalog_is_zdr_first_and_free_only() -> None:
 
 
 def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
-    """The auto pool can use priced routes without weakening the free pool."""
+    """The Strix auto pool can use priced routes without weakening the free pool."""
     parsed = policy.parse_discovery_report(_report())
     result = policy.build_zdr_prioritized_catalog(
         parsed,
@@ -258,7 +258,7 @@ def test_priced_routes_require_complete_published_price_evidence(
 
 
 def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
-    """Private auto-pool routing still excludes every unattested route."""
+    """Private Strix auto routing still excludes every unattested route."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
         limit=12,
@@ -354,7 +354,7 @@ def test_build_catalog_applies_account_cap() -> None:
             for i in range(6)
         ]
         + [
-                {"provider": "openai", "model": f"o{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+                {"provider": "openrouter", "model": f"o{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
             for i in range(3)
         ]
     }
@@ -367,14 +367,14 @@ def test_build_catalog_applies_account_cap() -> None:
         account_counts[account] = account_counts.get(account, 0) + 1
     assert account_counts["nvidia_nim"] == 2
     assert account_counts["nvidia_nim_sub"] == 2
-    assert account_counts["openai"] == 2
+    assert account_counts["openrouter"] == 2
 
 
 def test_build_catalog_respects_limit() -> None:
     """The catalog never exceeds the configured agent limit."""
     report = {
         "models": [
-                {"provider": "openai", "model": f"m{i}", "agent_id": f"oa_{i}", "is_free": True, **FREE_PRICE}
+                {"provider": "openrouter", "model": f"m{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
             for i in range(20)
         ]
     }

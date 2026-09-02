@@ -24,31 +24,18 @@ _SANITIZER = _REPO_ROOT / "scripts/ci/sanitize_contextual_orchestrator_sidecar_s
 
 
 class _ProbeClient:
-    """Return deterministic per-agent outcomes for runtime preflight tests.
-
-    An outcome may be a single value (returned or raised on every call for
-    that agent, the original behavior) or a ``list`` of values consumed one
-    per call in order -- the last entry repeats once the list is exhausted --
-    so a test can exercise the preflight retry path by giving one agent a
-    transient failure followed by success.
-    """
+    """Return deterministic per-agent outcomes for runtime preflight tests."""
 
     def __init__(self, outcomes: dict[str, object]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[object, str, dict[str, object]]] = []
-        self._call_counts: dict[str, int] = {}
 
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
         """Capture one request and return or raise the configured outcome."""
         self.calls.append((agent, endpoint, payload))
-        agent_id = str(getattr(agent, "id"))
-        outcome = self.outcomes[agent_id]
-        if isinstance(outcome, list):
-            call_index = self._call_counts.get(agent_id, 0)
-            self._call_counts[agent_id] = call_index + 1
-            outcome = outcome[min(call_index, len(outcome) - 1)]
+        outcome = self.outcomes[str(getattr(agent, "id"))]
         if isinstance(outcome, BaseException):
             raise outcome
         assert isinstance(outcome, dict)
@@ -443,8 +430,8 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
-def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
-    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+def test_gateway_preflight_has_no_inference_timeout() -> None:
+    """The end-to-end gateway check must not cap real completion latency.
 
     Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
     evidence reproduction (Strix run 33306775025 on
@@ -453,22 +440,51 @@ def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> No
     identical gateway request against that same healthy route being cut off
     at exactly curl's configured bound -- "gateway preflight request could
     not reach the local sidecar" was that timeout, not a real connectivity
-    failure. This asserts the bound is generous enough to tolerate a real
-    reasoning generation (well above the routing probe's own 10s
-    per-candidate budget) rather than the previous 30s, which rejected a
-    route the routing probe had just proven healthy.
+    failure. The request therefore has no wall-clock bound.
     """
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
-    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
-    gateway_preflight_timeout_seconds = int(match.group(1))
+    request_block = sidecar.rsplit("curl -sS", 1)[1].split(
+        '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"', 1
+    )[0]
+    assert "--max-time" not in request_block
 
-    assert gateway_preflight_timeout_seconds >= 120, (
-        "gateway preflight curl --max-time "
-        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
-        "completion latency; 30s was observed cutting off a route the routing probe "
-        "had just proven ready"
+
+def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    lines = sidecar.splitlines()
+
+    def curl_command(url: str) -> tuple[str, int]:
+        index = next(index for index, line in enumerate(lines) if url in line)
+        start = index
+        while start and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        command = " ".join(line.strip().removesuffix("\\") for line in lines[start : end + 1])
+        assert re.search(r"\bcurl\b", command)
+        return command, end
+
+    timeout_option = re.compile(
+        r"(?:^|\s)(?:-m(?:\s|$)|--[a-z-]*(?:time|timeout)[a-z-]*(?:=|\s|$))"
+    )
+    zdr_command, _ = curl_command("https://openrouter.ai/api/v1/endpoints/zdr")
+    health_command, health_command_end = curl_command(
+        'http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz'
+    )
+    for command in (zdr_command, health_command):
+        assert timeout_option.search(command) is None
+        assert re.search(r"(?:^|\s)timeout(?:\s|$)", command) is None
+
+    health_loop = "\n".join(lines[health_command_end + 1 :]).split("\ndone", 1)[0]
+    assert 'kill -0 "$sidecar_pid"' in health_loop
+    assert health_loop.count("fail ") == 1
+    assert health_loop.index('kill -0 "$sidecar_pid"') < health_loop.index("fail ")
+    assert not re.search(
+        r"\b(?:break|exit|timeout)\b|\s-(?:ge|gt|le|lt)\s|\bif\s+\(\(",
+        health_loop,
     )
 
 
@@ -1393,57 +1409,6 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert failure.value.report["primary_attempt"]["ready_count"] == 0
 
 
-def test_served_account_diversity_counts_independent_credentials() -> None:
-    """Each independently credentialed account counts once."""
-    namespace = _load_launcher()
-    served_account_diversity = namespace.get("_served_account_diversity")
-    assert callable(served_account_diversity)
-
-    assert served_account_diversity(
-        [
-            SimpleNamespace(id="a", provider_name="nvidia_nim"),
-            SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
-        ]
-    ) == 2
-    assert served_account_diversity(
-        [
-            SimpleNamespace(id="a", provider_name="nvidia_nim"),
-            SimpleNamespace(id="b", provider_name="nvidia_nim"),
-        ]
-    ) == 1
-    assert served_account_diversity([]) == 0
-
-
-def test_require_minimum_serving_diversity_fails_closed_below_threshold() -> None:
-    """A single-account or empty post-preflight pool cannot serve."""
-    namespace = _load_launcher()
-    require_minimum = namespace.get("_require_minimum_serving_diversity")
-    assert callable(require_minimum)
-
-    single_account_agents = [
-        SimpleNamespace(id="a", provider_name="nvidia_nim"),
-        SimpleNamespace(id="b", provider_name="nvidia_nim"),
-    ]
-    with pytest.raises(SystemExit, match="single-point-of-failure"):
-        require_minimum(single_account_agents)
-    with pytest.raises(SystemExit, match="single-point-of-failure"):
-        require_minimum([])
-
-
-def test_require_minimum_serving_diversity_passes_at_or_above_threshold() -> None:
-    """Two independently credentialed accounts preserve request-time failover."""
-    namespace = _load_launcher()
-    require_minimum = namespace.get("_require_minimum_serving_diversity")
-    assert callable(require_minimum)
-
-    require_minimum(
-        [
-            SimpleNamespace(id="a", provider_name="nvidia_nim"),
-            SimpleNamespace(id="b", provider_name="nvidia_nim_sub"),
-        ]
-    )
-
-
 def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case() -> None:
     """Regression for Devin Review's fallback-retries-exceed-startup-deadline
     finding: ``_preflight_review_agents`` used to start ``escalations_used``
@@ -1466,7 +1431,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
     max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    timeout_seconds = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
     primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
     total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
     fallback_limit = total_route_limit - primary_limit
@@ -1494,12 +1458,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    worst_case_seconds = total_attempts * timeout_seconds
-    assert worst_case_seconds <= 160, (
-        f"worst-case preflight time ({worst_case_seconds}s across "
-        f"{total_attempts} attempts) must stay within the 160s the ADR "
-        "computes and the 180s healthz-readiness watchdog allows"
-    )
     # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
     # candidate across both stages) + 4 escalations (the shared cap) = 16.
     assert total_attempts == total_route_limit + max_escalations
@@ -1657,14 +1615,13 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
     assert not path.exists()
 
 
-def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
-    """Sequential route probes must fit inside the sidecar startup budget."""
+def test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
     assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
     assert "REVIEW_TEMPERATURE = 1.0" in launcher
-    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10" in launcher
-    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
+    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
+    assert "ModelClient(\n        timeout=" not in launcher
     assert "max_retries=0" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 

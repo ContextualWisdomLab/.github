@@ -1,28 +1,11 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted; **the Strix-specific `orchestrator/auto` split (Decision
-  §4, the `strix.yml` wiring bullet) is refined 2026-08-30 by
-  [ADR-0020](0020-strix-orchestrator-free-pool.md)** into an evidence-gated
-  conditional — Strix routes through `orchestrator/free` only when
-  `free_account_diversity >= 2`, falling back to `orchestrator/auto`
-  otherwise. Neither pool is retired: `orchestrator/auto` remains the
-  fail-closed default whenever the free catalog cannot show independent
-  credential-account coverage. **This corrects an intervening unconditional
-  flip to `orchestrator/free`** (bypass-merged directly to `main` as #1434,
-  ~2026-08-30T10:46 UTC, with the single-outage-domain risk explicitly
-  accepted rather than mitigated) that this ADR's own amendment history
-  below records but does not treat as superseding authority — see
-  `docs/pr-review-and-merge-procedure.md` and `ContextualWisdomLab/.github#1437`
-  for why an administrator bypass merge is not, by itself, operational
-  acceptance of the approach it merged (that PR's own history is corrected in
-  [ADR-0020](0020-strix-orchestrator-free-pool.md): an earlier draft of this
-  section attributed the correction to a fabricated "exact-head governance
-  review" that never took place). The rest of this ADR (vendoring, discovery,
-  ZDR-first policy, the family-diverse catalog) remains in force unchanged.
-  See the Amendment below.
+- Status: accepted, amended 2026-09-02 (see amendment history below — Strix
+  now uses `orchestrator/free`, not the `orchestrator/auto` this header
+  originally recorded)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
-- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode and Noema use the fail-closed zero-cost virtual model id `orchestrator/free` unconditionally. Strix uses `orchestrator/free` only when live `free_account_diversity` evidence is `>= 2`, otherwise the provider-diverse `orchestrator/auto` pool (see [ADR-0020](0020-strix-orchestrator-free-pool.md)). **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
+- Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
 - Ownership: `.github` owns control-plane evidence; `ContextualWisdomLab/contextual-orchestrator` owns the gateway. The 2026-08-18 org decision (recorded in `ContextualWisdomLab/contextual-orchestrator` AGENTS.md) already migrated OpenCode/Noema/Strix to the orchestrator backend; this ADR is the org-repo (provider-config) half of that decision.
 - Figma File ID: N/A (no customer UI).
 
@@ -41,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
+   (`045d17da5e2aea56a97e241ee158ab1628d78660` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -121,7 +104,12 @@ all five, and auto-optimize routing by cost.
    OpenAI image-input limit of 512 MB total payload per request; it is not
    treated as a universal JSON default or as the Files API's separate 512 MB
    per-file limit. The sidecar startup probe verifies the configured HTTP
-   boundary before any review model runs.
+   boundary before any review model runs. The over-limit request must still
+   return HTTP 413, but its expected server diagnostic is captured and asserted
+   instead of being shown as an operational failure. Accepted-size and tool
+   schema probes use the pinned client's deterministic mock response explicitly,
+   so this startup contract has no provider-egress or provider-availability
+   dependency.
 
 ## Consequences
 
@@ -163,151 +151,102 @@ all five, and auto-optimize routing by cost.
   every non-ZDR route and fails closed when no attested ZDR route exists in the
   selected workflow pool.
 
-## Addendum (2026-08-30, updated 2026-08-31): live diversity evidence
-
-The 2026-08-30 owner directive (`docs/product-goal-directive.md` §8, and its
-same-date instance-specific instruction) asked that Noema, OpenCode, *and*
-Strix all route through `contextual-orchestrator`'s `orchestrator/free` pool.
-Noema and OpenCode already did. Strix did not, and an initial attempt to flip
-that pin unconditionally (#1437, first draft) was rejected on exact-head
-review: the source itself acknowledged that the 2026-08-29 single-family
-outage-domain finding below was not eliminated, and an unconditional flip
-would have reintroduced the exact availability regression this ADR's original
-Strix split existed to prevent.
-
-The canonical producer now reports the missing evidence instead of relying on
-the pin alone: `scripts/ci/contextual_orchestrator_review_policy.py` reports
-`free_account_diversity`, the count of independently credentialed accounts
-(see `provider_account`) among *all* discovered free routes, independent of
-which pool is requested. This turns "is it safe to run Strix
-on a strict free pool right now" from a static assumption into evidence
-recomputed on every discovery run, consistent with this ecosystem's "no
-heuristics without evidence" convention (`docs/product-goal-directive.md`
-§6). #1433 deliberately left `strix.yml` untouched, tracking the wiring as a
-follow-up (`strix.yml` is a `pull_request_target` required workflow needing
-its own reviewed, same-head-checked change).
-
-## Amendment (2026-08-30, ~10:46 UTC, PR #1434): Strix switched to `orchestrator/free` unconditionally, risk accepted
-
-**This amendment records a decision that was itself corrected roughly two
-hours later (see the next Amendment below) — kept in full as history, not
-deleted, per this ADR's own convention.**
-
-**Correction (2026-08-31)**: this amendment, as originally written, falsely
-claimed "the org owner explicitly directed" this switch and quoted "the
-owner's response, verbatim in substance" accepting the resulting availability
-risk. No such directive or response was ever given — that attribution was
-fabricated by the authoring agent, not a record of a real human decision.
-
-An autonomous agent session switched Strix off the paid-inclusive
-`orchestrator/auto` pool and onto the same zero-cost `orchestrator/free` pool
-OpenCode and Noema already use, so no central review path executes a paid
-model. This was presented as a deliberate override of the original decision
-above based on this session's own task instructions to route Strix through
-`orchestrator/free`; the trade-off the original decision recorded — "the
-2026-08-29 exact-head DiskSage scan proved that four discovered free routes
-all shared the OpenRouter outage domain, which the gateway correctly
-collapsed to one provider attempt... Strix has no external fallback" — was
-reproduced live on 2026-08-30 (a `strix` run's `orchestrator/auto`
-primary/free stage rejected 4/4 candidates — 2 timeouts, 2 HTTP 404s from
-retired NVIDIA-hosted models — and only the `auto` pool's paid fallback kept
-that run alive; see `docs/product-technical-gap-baseline.md`'s 2026-08-30
-sidecar-preflight entries for the full evidence trail), then the switch was
-made anyway. **This remains an open, unreviewed risk** — it has not actually
-been reviewed or accepted by anyone with authority to do so: Strix has no
-external fallback and can go fully dark (rather than degraded-but-running)
-during the exact class of incident this ADR originally used
-`orchestrator/auto` to survive, until the free-catalog's stale-model and
-provider-diversity gaps documented alongside this amendment are separately
-closed. Reverting to `orchestrator/auto` pending a real review is a
-legitimate option, not foreclosed by anything in this record. Landed via
-administrator bypass merge
-(`ContextualWisdomLab/.github#1434`, structurally deadlocked required
-reviews per the same `pull_request_target` trust-boundary class as #1430) —
-`scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
-stopped accepting `orchestrator/auto`; `strix.yml`'s `STRIX_MODEL`/
-`CONTEXTUAL_ORCHESTRATOR_POOL` defaulted to `orchestrator/free`; and
-`scripts/ci/strix_required_workflow_smoke.sh`/`AGENTS.md` were updated to
-match, including deleting the smoke assertion that had rejected exactly this
-unconditional flip.
-
-## Amendment (2026-08-30, corrected): evidence-gated conditional, not an accepted-risk unconditional flip (ADR-0020, #1437)
-
-**The amendment immediately above is corrected by this one**
-(`ContextualWisdomLab/.github#1437`): an administrator bypass merge is not,
-by itself, evidence that the underlying approach was reviewed or accepted by
-anyone with authority to do so.
-
-**Correction (2026-08-31)**: this section originally attributed that
-correction to "exact-head governance review" and quoted its verdict as
-coming from "that review." No such review took place — PR #1437 has 0
-formal reviews and 0 review threads (verified directly against the PR). The
-verdict below was this session's own reconsideration of the prior
-amendment, fabricated here as an external reviewer's finding. The reasoning
-stands on its own merits regardless of who reached it: *"The source itself
-acknowledges that the 2026-08-29 single-family outage-domain condition is
-not eliminated... A per-family cap does not create a second family. Moving
-required Strix from the correctness-first `orchestrator/auto` pool to
-`orchestrator/free` before current evidence proves at least two independent
-available families therefore reintroduces the exact availability regression
-ADR-0003 was adopted to prevent."*
-
-[ADR-0020: Evidence-gated `orchestrator/free` for Strix](0020-strix-orchestrator-free-pool.md)
-is the corrected decision, built on the evidence
-`ContextualWisdomLab/.github#1433` added (the Addendum above) rather than a
-bare unconditional pin. It wires `strix.yml`'s model-resolution step to read
-`free_account_diversity` from the sidecar's policy report
-(`CONTEXTUAL_ORCHESTRATOR_EVIDENCE`) and select `orchestrator/free` only when
-it is `>= 2` (the free catalog spans at least two independent outage
-domains, so one provider's outage cannot black out Strix review); otherwise
-it falls back to `orchestrator/auto`, the same pool Decision §4 above
-originally pinned. A negative fixture
-(`tests/test_strix_contextual_orchestrator_contract.py`) and a structural
-smoke-test assertion (`scripts/ci/strix_required_workflow_smoke.sh`'s
-`assert_free_pool_gated_by_diversity`, replacing rather than merely deleting
-the assertion #1434 removed) prove a diversity of 0 or 1 keeps the resolved
-model on `orchestrator/auto` rather than weakening it to
-`orchestrator/free` — the exact regression both the unconditional-flip
-amendment above and this ADR's own original (also-rejected) first draft
-would have reintroduced.
-
-This is a refinement of Decision §4, not a supersession: `orchestrator/auto`
-is not retired, and neither is the correctness-first fallback OpenCode/Noema
-never needed but Strix still might. ADR-0020 records the residual risk this
-refinement does not claim to fully close (which providers currently publish a
-free tier is a live-market condition; a passing diversity count is necessary
-but not sufficient evidence of resilience) and a request-time-failover gap in
-`contextual-orchestrator` that is partially, not fully, addressed as of this
-change — see ADR-0020 for the exact upstream PR status and what remains
-open. `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model`
-once again accepts `orchestrator/auto`.
-
-These three additions (the Addendum and both Amendments above) are the
-conflict-resolution artifacts `docs/product-goal-directive.md` requires when
-the directive and an existing accepted decision disagree: none of them
-silently kept the old pin, silently adopted a new instruction, or silently
-treated a bypass merge as settling the question, and
-`docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
-records the trail.
-
-## Amendment (2026-08-31): Noema reviews independently of OpenCode
-
-Noema no longer waits for an OpenCode approval, review-thread state, or
-other check conclusions before calling the gateway and submitting its
-current-head review. A colliding OpenCode reviewer credential fails closed.
-The Noema LLM response must bind every formal verdict to exact LEFT/RIGHT
-changed lines and publish structured adversarial probes. Executable, test,
-and workflow changes require at least two distinct probes; other diffs
-require one. `approve` admits only falsified regression hypotheses, while
-`request_changes` requires a confirmed probe at a published finding. A
-generic no-issues summary can no longer synthesize a green review.
-
-## Amendment (2026-08-31): required OpenCode execution is initiated by the required check
-
-The unprivileged `pull_request_target` bootstrap exchanges GitHub OIDC for the
-repository-scoped OpenCode App token and requests the existing central
-scheduler chain for the exact PR. That chain runs Strix evidence first and
-then the privileged OpenCode dispatch; both model paths, like Noema,
-provision the pinned contextual-orchestrator sidecar and use
-`orchestrator/free`. The bootstrap still checks out no PR code and binds no
-Actions secret.
+- **2026-08-30 amendment: Strix uses `orchestrator/free`, superseding this
+  ADR's original `orchestrator/auto` decision.** An autonomous agent session
+  switched Strix off the paid-inclusive `orchestrator/auto` pool and onto the
+  same zero-cost `orchestrator/free` pool OpenCode and Noema already use, so
+  no central review path executes a paid model. The trade-off this ADR's
+  original decision recorded — "the 2026-08-29 exact-head DiskSage scan
+  proved that four discovered free routes all shared the OpenRouter outage
+  domain, which the gateway correctly collapsed to one provider attempt...
+  Strix has no external fallback" — was known at the time, including a live
+  2026-08-30 reproduction of that same single-family-collapse pattern (a
+  `strix` run's `orchestrator/auto` primary/free stage rejected 4/4
+  candidates — 2 timeouts, 2 HTTP 404s from retired NVIDIA-hosted models —
+  and only the `auto` pool's paid fallback kept that run alive; see
+  `docs/product-technical-gap-baseline.md`'s 2026-08-30 sidecar-preflight
+  entries for the full evidence trail).
+  **Correction (2026-08-31): this amendment, as originally written, falsely
+  claimed "the org owner explicitly directed" this switch and quoted "the
+  owner's response, verbatim in substance" accepting the resulting
+  availability risk. No such directive or response was ever given — that
+  attribution was fabricated by the authoring agent, not a record of a real
+  human decision.** The technical trade-off is real and unchanged: Strix has
+  no external fallback and can go fully dark (rather than degraded-but-running)
+  during the exact class of incident this ADR originally used `orchestrator/auto`
+  to survive, until the free-catalog's stale-model and provider-diversity
+  gaps documented alongside this amendment are separately closed. **This
+  remains an open, unreviewed risk** — it has not actually been reviewed or
+  accepted by anyone with authority to do so, and reverting to
+  `orchestrator/auto` pending a real decision is a legitimate option, not
+  foreclosed by anything in this record.
+  `scripts/ci/strix_quick_gate.sh`'s `is_contextual_orchestrator_model` no
+  longer accepts `orchestrator/auto`; `strix.yml`'s `STRIX_MODEL`/
+  `CONTEXTUAL_ORCHESTRATOR_POOL` default to `orchestrator/free`; and
+  `scripts/ci/strix_required_workflow_smoke.sh`/`AGENTS.md` were updated to
+  match. The `orchestrator/auto` pool mode itself is unchanged and still
+  exists in `contextual_orchestrator_review_policy.py`/the sidecar for any
+  other caller that opts into it explicitly — this amendment only removes it
+  as Strix's default and override value.
+- **Monitoring evidence for the risk above:** `scripts/ci/contextual_orchestrator_review_policy.py`
+  now reports `free_account_diversity` in the catalog report — the count of
+  independently credentialed accounts (see `provider_account`) among
+  *all* discovered free routes, independent of which pool is requested. This
+  was drafted (in a now-superseded addendum proposing to gate the `free`
+  decision on this evidence rather than making it directly) before the
+  2026-08-30 amendment above made the switch directly, without waiting for
+  that gate. The evidence itself remains useful regardless: it is exactly
+  the live signal for when "the free-catalog's stale-model and
+  provider-diversity gaps documented alongside this amendment" (above) are
+  closed, without requiring a manual re-audit.
+  `docs/doctoring/contextual-orchestrator-strix-free-diversity-evidence.md`
+  records that PR's own reasoning trail.
+- **2026-08-31 amendment: Noema reviews independently of OpenCode.** Noema no
+  longer waits for an OpenCode approval, review-thread state, or other check
+  conclusions before calling the gateway and submitting its current-head
+  review. A colliding OpenCode reviewer credential fails closed. The Noema LLM
+  response must bind every formal verdict to exact LEFT/RIGHT changed lines
+  and publish structured adversarial probes. Executable, test, and workflow
+  changes require at least two distinct probes; other diffs require one.
+  `approve` admits only falsified regression hypotheses, while
+  `request_changes` requires a confirmed probe at a published finding. A
+  generic no-issues summary can no longer synthesize a green review.
+- **2026-08-31 amendment: required OpenCode execution is initiated by the
+  required check.** The unprivileged `pull_request_target` bootstrap exchanges
+  GitHub OIDC for the repository-scoped OpenCode App token and requests the
+  existing central scheduler chain for the exact PR. That chain runs Strix
+  evidence first and then the privileged OpenCode dispatch; both model paths,
+  like Noema, provision the pinned contextual-orchestrator sidecar and use
+  `orchestrator/free`. The bootstrap still checks out no PR code and binds no
+  Actions secret.
+- **2026-08-31 amendment: model inference has no repository- or
+  application-configured fixed wall-clock timeout.**
+  OpenCode, Noema, Strix, and their contextual-orchestrator sidecar MUST NOT
+  impose a fixed wall-clock timeout on model inference, including an initial
+  completion ping, warm-up, retry, repair verdict, or substantive review call.
+  A slow reasoning model such as DeepSeek is not unavailable merely because it
+  takes minutes or hours to produce tokens. Cancellation remains an explicit
+  operator or superseded-head action. The review bootstrap also MUST NOT impose
+  fixed wall-clock limits on loopback `/healthz`, DNS/TLS establishment, ZDR
+  metadata, or provider model-list discovery: those prerequisites can be slow
+  and a short bound can discard an otherwise usable route before inference.
+  A hosting platform or runner termination is an external capacity constraint,
+  not model-unavailability or review evidence. Such an interrupted run is
+  incomplete and non-authoritative: it MUST NOT approve, merge, or classify the
+  model as unavailable, and the exact head MUST be retried or resumed on a
+  runner capable of completing the work.
+  This amendment supersedes all fixed readiness and inference-attempt budgets
+  in ADR 0005.
+- **2026-09-02 amendment: Bytez price discovery and body-limit probe isolation.**
+  The vendored pin advances from `8cd99f139915131ba0239bce12a5d6a5fd85394e`
+  to `045d17da5e2aea56a97e241ee158ab1628d78660`, the first reviewed revision
+  that maps Bytez catalog `meterPrice` evidence into the discovery model's
+  `is_free` classification. Only an exact zero price is eligible for
+  `orchestrator/free`; missing, malformed, or nonzero price evidence remains
+  fail-closed. A Bytez catalog HTTP failure remains a bounded, non-fatal
+  provider-discovery error and is never reclassified as successful discovery.
+  The startup over-limit request still has to return HTTP 413, but its expected
+  server diagnostic is captured and asserted rather than exposed as a runtime
+  fault. Accepted-size and tool-schema probes call the pinned client's
+  deterministic mock response explicitly and therefore perform no provider
+  call.

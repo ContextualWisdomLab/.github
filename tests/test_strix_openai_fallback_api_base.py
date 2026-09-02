@@ -1,24 +1,13 @@
-"""Regression contract for the gate script's generic API-base resolver.
+"""Regression contract for direct-OpenAI fallback API-base routing.
 
-`scripts/ci/strix_quick_gate.sh` implements a general-purpose model/API-base
-resolver that can, in principle, route direct-provider models (NVIDIA NIM,
-OpenRouter, GitHub Models, direct OpenAI). The central required workflow
-(`strix.yml`) never invokes it with anything other than the local
-contextual-orchestrator gateway's `orchestrator/auto` or `orchestrator/free`
-virtual model — the resolved pool depends only on `free_account_diversity`
-evidence (see docs/adr/0020-strix-orchestrator-free-pool.md), never on
-external input. `STRIX_FALLBACK_MODELS: ""` and the dispatch-override
-allowlist in `strix.yml`'s "Gate Strix secrets" step structurally prevent any
-direct provider from being selected (see `WorkflowUsesContextualOrchestrator`
-below).
-This file pins the resolver's own correctness as defense in depth (were a
-non-gateway model ever passed to it, a cross-provider fallback must never
-silently inherit another provider's API base — e.g. routing an OpenAI model
-through the NVIDIA NIM edge would yield a plain-text gateway 404 instead of
-OpenAI responses), not a description of a live fallback chain Strix's
-required path actually uses today.
+When the Strix primary provider is NVIDIA NIM (or OpenRouter / GitHub Models),
+the workflow's ``LLM_API_BASE_FILE`` points at that provider's endpoint. A
+cross-provider fallback to ``openai-direct/gpt-5.4`` must never inherit that
+base: routing an OpenAI model through the NVIDIA NIM edge yields a plain-text
+gateway 404 ("404 page not found") instead of OpenAI responses, so the final
+contracted fallback could never complete a scan.
 
-The resolver must therefore prefer an explicit
+The gate must therefore prefer an explicit
 ``STRIX_OPENAI_FALLBACK_API_BASE_FILE`` for explicit direct-OpenAI models, and
     fall back to a caller-supplied ``LLM_API_BASE_FILE`` for standalone custom
     endpoints, or to litellm's default OpenAI endpoint when no base is supplied.
@@ -317,18 +306,11 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
 
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
-        """Both gateway pools accept only the pinned process-local HTTP base.
-
-        docs/adr/0020-strix-orchestrator-free-pool.md: orchestrator/auto is
-        the permanent, evidence-gated fallback alongside orchestrator/free,
-        not a retired route -- both must resolve identically here.
-        """
+        """The free gateway pool accepts only the pinned process-local HTTP base."""
 
         for model in (
             "orchestrator/free",
             "contextual-orchestrator/orchestrator/free",
-            "orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto",
         ):
             with self.subTest(model=model):
                 rc, api_base = _resolve_api_base(
@@ -344,8 +326,12 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         )
         self.assertEqual(rc, 2)
 
+        # 2026-08-30: orchestrator/auto is no longer a recognized Strix gateway
+        # model (owner decision superseding ADR-0003's auto default) -- the
+        # gate must now reject it rather than resolve it, the same as any
+        # other unrecognized virtual pool.
         rc, _ = _resolve_api_base(
-            {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
             "orchestrator/auto",
         )
         self.assertEqual(rc, 2)
@@ -362,8 +348,6 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         expected_child_models = {
             "orchestrator/free": "openai/orchestrator/free",
             "contextual-orchestrator/orchestrator/free": "openai/orchestrator/free",
-            "orchestrator/auto": "openai/orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto": "openai/orchestrator/auto",
         }
         for model, expected_child_model in expected_child_models.items():
             with self.subTest(model=model):
