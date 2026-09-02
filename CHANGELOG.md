@@ -1,3 +1,5 @@
+- Required OpenCode verdict wake is event-driven: formal-review receipt and GitHub `workflow_run: completed` reconcile exact run/PR/head state, replacing runner polling and fixed wake retry/sleep/transport allocations.
+- Required OpenCode Review now releases its runner after one exact-head verdict admission read and relies on authenticated exact-run dispatch wake instead of repository-authored polling, retry-count, or waiting deadlines.
 # Changelog
 
 All notable changes to the organization automation repository are documented in

@@ -46,3 +46,20 @@ Rollback is the ordinary revert of the workflow repair if exact-head evidence sh
 Monitor both runner occupancy and GitHub API failure/rate-limit evidence. Repeated transport failures should terminate the required check after three bounded attempts rather than leave an immortal poll. A rate-pressure regression should be repaired by changing evidence acquisition/cadence without weakening exact-head review semantics.
 
 After protected integration, re-observe affected leaf repositories. Acceptance requires predecessor-head OpenCode polls to release runner capacity without waiting for a separate cleanup runner, while unchanged current-head semantic reviews remain able to run beyond arbitrary short deadlines and current-head polls stay within a defensible REST request budget.
+
+
+## 2026-09-02 one-shot runner-release supersession
+
+The required-verdict job performs one authoritative live-PR read followed by at most one paginated Reviews read. Missing or unavailable exact-head verdict evidence fails closed immediately and releases the runner. Authenticated `opencode-review-dispatch.yml` wakes the exact failed run via `rerun-failed-jobs` when the formal verdict arrives; no repository-authored polling interval, retry count, or wall-clock deadline bounds model work.
+
+
+### Exact-run wake identity and transient lookup correction
+
+For `pull_request_target`, top-level workflow-run `head_sha` identifies the base revision, not the PR head. Wake authority binds immutable run id, event, workflow path, exact PR number, and `pull_requests[].head.sha`. Run-lookup transport failure fails closed without inventing a retry policy; the independent GitHub workflow-run completion event closes the opposite review-before-failure ordering.
+
+
+### 2026-09-02 event-driven wake supersedes fixed retry allocation
+
+RCA found that the intermediate PR #1706 repair replaced a runner-held verdict poll with a dispatch wake loop containing fixed `12` attempts, `5` second sleeps, and `30` second transport deadlines. Those values had no governing model, standard, experiment, or provider contract. The corrected state machine uses the authenticated formal-review receipt event plus GitHub's `workflow_run` `completed` event. Receipt-after-failure performs one exact-run transition; review-before-failure is reconciled on completion and requires `review.submitted_at > run.run_started_at`. Mutation readback only resolves concurrent state advancement and is not a retry loop.
+
+Reference (APA 7): GitHub. (2026). *Events that trigger workflows*. GitHub Docs. https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#workflow_run

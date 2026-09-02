@@ -161,7 +161,7 @@ def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
 
     assert result.returncode == 1
     assert "Event draft snapshot is stale" in result.stdout
-    assert "Reviews API read failed 3 consecutive times" in result.stdout
+    assert "Reviews API read failed during one-shot current-head verdict admission" in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))

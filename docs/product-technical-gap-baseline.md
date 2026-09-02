@@ -2613,3 +2613,18 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+
+### OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02
+- Owner: `ContextualWisdomLab/.github` Required OpenCode Review control plane.
+- RCA: required-verdict occupied a runner while asynchronous model work continued, using repository-authored polling/retry/wall-clock allocation despite an authenticated exact-run wake contract.
+- GREEN: one live PR read plus one Reviews read; missing/unavailable exact-head verdict fails closed immediately and dispatch wakes the exact failed run after the verdict. Model reasoning receives no caller wall-clock timeout.
+- Regression: `tests/test_opencode_required_verdict_runner_release.py` plus one-shot request/state and dispatch-wake contracts.
+
+
+### OPENCODE-EVENT-DRIVEN-REQUIRED-WAKE-2026-09-02
+- Gap: Required OpenCode verdict admission occupied a hosted runner while waiting; an intermediate repair then introduced fixed dispatch retry/sleep/transport allocations (`12`, `5s`, `30s`) without a governing model or standard.
+- Causal owner: `ContextualWisdomLab/.github` required review and merge-control workflows.
+- Repair: one-shot exact-head verdict admission plus dual event reconciliation. A formal-review receipt handles review-after-failure; GitHub `workflow_run: completed` handles review-before-failure with exact PR/head/workflow identity and `review.submitted_at > run.run_started_at`.
+- Verification: executable regressions cover one-shot admission, `pull_request_target` PR-head identity rather than base `head_sha`, opposite event orderings, stale evidence, and absence of repository-authored retry/sleep/transport budgets.
+- Status: Proposed on PR #1706 until exact-head focused/full CI and independent review are GREEN.

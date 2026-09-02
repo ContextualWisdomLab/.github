@@ -391,7 +391,10 @@ jobs:
             echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
             exit 1
           fi
-          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          if ! live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Live pull request API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."
+            exit 1
+          fi
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
@@ -412,96 +415,25 @@ jobs:
             exit 0
           fi
           if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "Pull request head moved on the live open, ready-for-review PR; a fresh poll will start for the current head."
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh required-review run will bind the current head."
             exit 0
           fi
           if [ "$PR_DRAFT" = "true" ]; then
-            echo "Event draft snapshot is stale; continuing verdict polling for the live ready PR."
+            echo "Event draft snapshot is stale; continuing one-shot verdict admission for the live ready PR."
           fi
-          verdict=""
-          live_poll_failures=0
-          review_poll_failures=0
-          max_poll_transport_failures=3
-          poll_interval_seconds=60
-          # Wall-clock backstop, distinct from max_poll_transport_failures above:
-          # that counter only bounds *consecutive transport failures*, so a
-          # review dispatch that never produces a verdict -- while every
-          # individual `gh api` call keeps succeeding -- previously polled
-          # forever, holding a live runner for up to GitHub's 360-minute
-          # platform default job timeout. 10800s (3h) is chosen to stay
-          # comfortably above this org's own documented "accommodate over 2
-          # hours per model" allowance (docs/product-goal-directive.md §8)
-          # while still releasing the runner well before the platform
-          # default. This bounds how long the CI job waits for a verdict; it
-          # does not cap the model's own reasoning/streaming time, which
-          # remains governed entirely upstream by the dispatched review run
-          # itself.
-          poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))
-          while :; do
-            if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then
-              echo "::error::No current-head OpenCode verdict after 180 minutes of polling; failing closed and releasing the runner."
-              exit 1
-            fi
-            if ! live_poll_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
-              live_poll_failures=$((live_poll_failures + 1))
-              if [ "$live_poll_failures" -ge "$max_poll_transport_failures" ]; then
-                echo "::error::Live pull request read failed ${live_poll_failures} consecutive times while polling; failing closed and releasing the runner."
-                exit 1
-              fi
-              echo "::warning::Live pull request read failed while polling (${live_poll_failures}/${max_poll_transport_failures}); retrying after revalidation delay."
-              sleep "$poll_interval_seconds"
-              continue
-            fi
-            live_poll_failures=0
-            live_poll_head="$(printf '%s' "$live_poll_pr" | jq -r '.head.sha // empty')"
-            live_poll_draft="$(printf '%s' "$live_poll_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
-            live_poll_state="$(printf '%s' "$live_poll_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
-            if [ -z "$live_poll_head" ] || [ -z "$live_poll_draft" ] || [ -z "$live_poll_state" ]; then
-              echo "::error::Could not validate live pull request state while polling for a current-head OpenCode verdict."
-              exit 1
-            fi
-            if [ "$live_poll_state" != "open" ] && [ "$live_poll_state" != "closed" ]; then
-              echo "::error::Could not validate live pull request state while polling for a current-head OpenCode verdict."
-              exit 1
-            fi
-            if [ "${live_poll_head,,}" != "${HEAD_SHA,,}" ]; then
-              echo "::notice::Pull request head moved while waiting for a current-head OpenCode verdict; retiring superseded Required OpenCode Review poll."
-              exit 1
-            fi
-            if [ "$live_poll_state" = "closed" ]; then
-              echo "PR closed while waiting for the current-head OpenCode verdict; the poll is no longer required."
-              exit 0
-            fi
-            if [ "$live_poll_draft" = "true" ]; then
-              echo "PR became draft while waiting for the current-head OpenCode verdict; the poll is no longer required until it is marked ready for review."
-              exit 0
-            fi
-            if ! reviews="$(timeout 30s gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
-              review_poll_failures=$((review_poll_failures + 1))
-              if [ "$review_poll_failures" -ge "$max_poll_transport_failures" ]; then
-                echo "::error::Reviews API read failed ${review_poll_failures} consecutive times while polling; failing closed and releasing the runner."
-                exit 1
-              fi
-              echo "::warning::Reviews API read failed while polling (${review_poll_failures}/${max_poll_transport_failures}); revalidating live PR state before retry."
-              sleep "$poll_interval_seconds"
-              continue
-            fi
-            review_poll_failures=0
-            verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+          if ! reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
+            echo "::error::Reviews API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."
+            exit 1
+          fi
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
-            | [
-                .[]
-                | select(
-                    (.user.login // "" | ascii_downcase) as $user
-                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
-                  )
+            | [.[]
+                | select((.user.login // "" | ascii_downcase) as $user | $user == "opencode-agent" or $user == "opencode-agent[bot]")
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
-              ]
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
             | (last // {}) as $review
             | ($review.body // "" | ascii_downcase) as $body
-            | if $review.state == "CHANGES_REQUESTED" then
-                "CHANGES_REQUESTED"
+            | if $review.state == "CHANGES_REQUESTED" then "CHANGES_REQUESTED"
               elif $review.state == "APPROVED"
                 and ($body | contains("deterministic current-head evidence") | not)
                 and ($body | contains("deterministic fallback approval") | not)
@@ -509,19 +441,10 @@ jobs:
                 and ($body | contains("did not emit a usable current-head control block") | not)
                 and ($body | contains("scope: `unsupported`") | not)
                 and ($body | contains("model-pool outcome: `unknown`") | not)
-              then
-                "APPROVED"
-              else
-                empty
-              end
+              then "APPROVED" else empty end
           ')"
-            if [ -n "$verdict" ]; then
-              break
-            fi
-            sleep "$poll_interval_seconds"
-          done
           if [ -z "$verdict" ]; then
-            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
+            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict. The dispatch path wakes this exact failed run when the verdict arrives."
             exit 1
           fi
           echo "Current-head OpenCode verdict: ${verdict}."
