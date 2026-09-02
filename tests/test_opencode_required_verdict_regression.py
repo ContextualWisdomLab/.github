@@ -268,9 +268,9 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     )
     assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
     assert "while :; do" in target_job
-    assert "sleep 30" in target_job
+    assert 'sleep "$poll_interval_seconds"' in target_job
     assert "enable_auto_merge:false" in workflow
-    assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
+    assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
     assert (
@@ -309,7 +309,7 @@ def _run_fail_closed_step(
     A fake ``gh`` that fails loudly is installed on ``PATH`` so a closed or
     draft early exit that reaches the Reviews API call at all fails the test
     immediately, rather than actually looping (the production step's
-    ``while :; do ... sleep 30; done`` never naturally terminates on a
+    ``while :; do ... sleep "$poll_interval_seconds"; done`` never naturally terminates on a
     non-matching review, so a real ``gh`` fixture serving no match would hang
     a test rather than fail it).
     """
@@ -355,7 +355,7 @@ def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> N
     (`scripts/ci/pr_review_merge_scheduler.py`'s `inspect_pr`) skips
     dispatching a review for an ordinary draft entirely (no
     `@opencode-agent` mention). With no draft exemption here, this step's
-    `while :; do ... sleep 30; done` loop would poll for a verdict OpenCode
+    `while :; do ... sleep "$poll_interval_seconds"; done` loop would poll for a verdict OpenCode
     will never post, until the job's own ~360-minute runtime ceiling kills
     it -- reproduced against this exact commit before this fix (`#1443`
     fixed the same class of bug on a now-superseded design; this restores
@@ -523,10 +523,20 @@ def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Pat
 
 
 def test_fail_closed_step_still_polls_for_a_non_draft_pr(tmp_path: Path) -> None:
-    """A non-draft PR must still reach the Reviews API call (not exempted)."""
+    """A non-draft PR must still reach the Reviews API call (not exempted).
+
+    Unlike the request-review step's single unguarded call, the Reviews API
+    fetch here retries a transport failure up to three times (with a real
+    backoff sleep between attempts) before failing closed with its own exit
+    1, so the fixture's synthetic unmocked-call sentinel exit code (17)
+    never reaches this script's own exit status -- it is absorbed by the
+    retry loop instead, which still logs the sentinel's stderr diagnostic on
+    every attempt.
+    """
     result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="false")
-    assert result.returncode == 17, result.stderr
+    assert result.returncode == 1, result.stderr
     assert "unexpected gh invocation after live-state validation" in result.stderr
+    assert "Reviews API read failed 3 consecutive times" in result.stdout
 
 
 @pytest.mark.parametrize(
