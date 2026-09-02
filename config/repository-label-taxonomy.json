@@ -93,7 +93,7 @@
     {"repository": "aFIPC", "issue": 308, "type": "feature"},
     {"repository": "g7", "issue": 2, "type": "documentation"},
     {"repository": "codec-carver", "issue": 513, "type": "bug"},
-    {"repository": "codec-carver", "issue": 514, "type": "documentation"},
+    {"repository": "codec-carver", "issue": 516, "type": "documentation"},
     {"repository": "noema", "issue": 531, "type": "bug"},
     {"repository": "semantic-data-portal", "issue": 91, "type": "bug"},
     {"repository": "learning-content-studio", "issue": 3, "type": "feature"},
