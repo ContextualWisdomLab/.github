@@ -31,15 +31,6 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
-# Opaque binary document formats that cannot embed an interpretable, active
-# Nginx runtime artifact (unlike a text config, script, or container image
-# reference). Without this, any such file placed under a documentation
-# directory still falls through to `_needs_content_scan` -> `True` (binary
-# files never carry a GitHub diff `patch`), and then `_load_file_content`
-# fails closed with a `PolicyError` for any instance over the Contents API's
-# 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
-# (this org's own "attach the relevant paper PDF" convention) for a reason
-# that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
     ".pdf": (b"%PDF-",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
@@ -176,25 +167,7 @@ def _is_known_documentation_path(pure: PurePosixPath) -> bool:
 
 
 def _is_documentation_or_source_fixture(path: str) -> bool:
-    """Return whether *path* is prose, license text, or scanner source fixture.
-
-    Textual suffixes only: a ``.pdf`` is handled separately by
-    ``_is_binary_documentation_asset`` and gated on GitHub reporting no diff
-    ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
-    (one GitHub *can* diff, meaning it could carry inspectable content) is
-    never exempted here.
-
-    ``tests/test_pingora_edge_policy.py`` is exempted the same way this
-    module's own source is: a scanner's regression suite necessarily
-    contains the denied Nginx runtime forms it verifies detection of as
-    fixture strings, so a PR whose diff to that file happens to add a line
-    matching a ``CONTENT_RULES`` pattern (triggering `_needs_content_scan`'s
-    "nginx" in the patch heuristic) does not then get the file's *entire*
-    content -- full of intentional denied forms throughout -- scanned and
-    rejected. A ``.py`` test file cannot itself be deployed as an active
-    Nginx runtime artifact, unlike the config/Dockerfile/service forms this
-    policy actually guards against.
-    """
+    """Return whether *path* is prose, license text, or scanner source fixture."""
 
     pure = PurePosixPath(path)
     lower_name = pure.name.lower()
@@ -215,17 +188,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
 
 
 def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
-    """Return whether *changed* is a plausibly binary documentation asset.
-
-    This is only the cheap, patch-presence pre-filter: GitHub's changed-files
-    API never returns a diff ``patch`` for a true binary file, so a missing
-    ``patch`` is *necessary* but not *sufficient* evidence -- GitHub also
-    omits one for a textual diff that merely exceeds its own rendering
-    limit. A caller with network access (``evaluate_pull_request``) must
-    still confirm this with ``_binary_documentation_evidence_confirms`` before
-    trusting it; a caller without one (this module's own unit tests calling
-    this function directly) is only checking the necessary condition.
-    """
+    """Return whether *changed* is a plausibly binary documentation asset."""
 
     if changed.patch_available:
         return False
@@ -243,10 +206,7 @@ def _is_wave_audio_asset(changed: ChangedFile) -> bool:
     if changed.patch_available:
         return False
     changed_path = PurePosixPath(changed.path)
-    return (
-        changed_path.suffix.lower() == ".wav"
-        and _runtime_path_rule(changed.path) is None
-    )
+    return changed_path.suffix.lower() == ".wav" and _runtime_path_rule(changed.path) is None
 
 
 def _runtime_path_rule(path: str) -> str | None:
@@ -306,7 +266,7 @@ def _github_open_json(url: str, token: str) -> object:
     """Read one bounded GitHub REST JSON document using bearer authentication."""
 
     _validate_github_api_url(url)
-    request = Request(  # noqa: S310 - URL is validated immediately above
+    request = Request(
         url,
         headers={
             "Accept": "application/vnd.github+json",
@@ -363,38 +323,11 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    # Unreachable by construction, not a live fallback: every one of the 31
-    # `range(1, 32)` iterations that reaches this point already returned a
-    # page whose length is >= 100 (a page under 100 items hits the `return`
-    # two lines up first), so 31 such pages accumulate at least 3,100 files
-    # -- strictly more than the 3,000 cap above, which is checked after
-    # every single appended item, not just at page boundaries. That in-loop
-    # check therefore always raises no later than partway through the 31st
-    # page, before the `for` loop can ever exhaust its range. Kept as a
-    # structural fail-closed guard (so a future change to PAGE_COUNT,
-    # per_page, or the 3,000 cap that breaks this invariant fails loudly
-    # instead of silently truncating evidence) rather than deleted; see
-    # test_changed_file_pagination_bound_is_provably_unreachable, which
-    # pins the arithmetic relationship itself.
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
 
 
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
-    """Load one final head file's raw decoded bytes from the Contents API.
-
-    Raises ``ContentSizeExceededError`` specifically when the declared size
-    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
-    caller may treat differently from every other, genuinely malformed
-    response shape, which always raises the base ``PolicyError`` instead.
-
-    GitHub's Contents API returns two distinct shapes for a file it cannot
-    inline: some responses still report ``encoding: "base64"`` with a
-    ``size`` over the inline-content ceiling and empty/absent ``content``;
-    for files whose blob exceeds that ceiling, GitHub instead reports
-    ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
-    all. Both are treated as the same size-exceeded evidence; every other
-    response shape still fails closed.
-    """
+    """Load one final head file's raw decoded bytes from the Contents API."""
 
     encoded_path = quote(path, safe="/")
     url = f"{api_url}/repos/{repository}/contents/{encoded_path}?ref={head_sha}"
@@ -436,7 +369,7 @@ def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, 
 
 
 def _is_complete_wave_audio(wave_bytes: bytes) -> bool:
-    """Validate a bounded RIFF/WAVE container without interpreting sample data."""
+    """Validate a bounded RIFF/WAVE container and all declared chunk boundaries."""
 
     if (
         len(wave_bytes) < 12
@@ -445,7 +378,32 @@ def _is_complete_wave_audio(wave_bytes: bytes) -> bool:
     ):
         return False
     declared_container_size = int.from_bytes(wave_bytes[4:8], "little")
-    return declared_container_size == len(wave_bytes) - 8
+    if declared_container_size != len(wave_bytes) - 8:
+        return False
+
+    chunk_offset = 12
+    format_chunk_seen = False
+    audio_data_seen = False
+    while chunk_offset < len(wave_bytes):
+        if chunk_offset + 8 > len(wave_bytes):
+            return False
+        chunk_name = wave_bytes[chunk_offset : chunk_offset + 4]
+        chunk_size = int.from_bytes(wave_bytes[chunk_offset + 4 : chunk_offset + 8], "little")
+        chunk_payload_end = chunk_offset + 8 + chunk_size
+        chunk_end = chunk_payload_end + (chunk_size % 2)
+        if chunk_end > len(wave_bytes):
+            return False
+        if chunk_name == b"fmt ":
+            if format_chunk_seen or chunk_size < 16:
+                return False
+            format_chunk_seen = True
+        elif chunk_name == b"data":
+            if audio_data_seen:
+                return False
+            audio_data_seen = True
+        chunk_offset = chunk_end
+
+    return chunk_offset == len(wave_bytes) and format_chunk_seen and audio_data_seen
 
 
 def _wave_audio_evidence_confirms(
@@ -459,14 +417,7 @@ def _wave_audio_evidence_confirms(
 ) -> bool:
     """Return whether a patchless ``.wav`` candidate is a complete RIFF/WAVE asset."""
 
-    wave_bytes = _load_raw_file_bytes(
-        api_url,
-        repository,
-        changed.path,
-        head_sha,
-        token,
-        opener,
-    )
+    wave_bytes = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     return _is_complete_wave_audio(wave_bytes)
 
 
@@ -479,22 +430,7 @@ def _binary_documentation_evidence_confirms(
     token: str,
     opener: OpenJson,
 ) -> bool:
-    """Return whether a claimed binary documentation asset is genuine.
-
-    A missing diff ``patch`` alone is not proof of binary content: GitHub
-    also omits a patch for a textual diff that exceeds its own rendering
-    limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
-    ceiling. Whenever the file's raw bytes can be fetched at all, this
-    verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
-    exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention for oversized PDFs only; every other
-    content-evidence failure (a
-    malformed API response, corrupt base64, a declared size that does not
-    match the decoded bytes) propagates and fails the whole check closed,
-    same as for any other file that needs scanning.
-    """
+    """Return whether a claimed binary documentation asset is genuine."""
 
     try:
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
@@ -588,9 +524,7 @@ def _is_complete_png(raw: bytes) -> bool:
             if length != 0 or not image_data or chunk_end != len(raw):
                 return False
             width, height, bit_depth, color_type, interlace = header
-            if (color_type == 3 and not palette_entries) or (
-                color_type in {0, 4} and palette_entries
-            ):
+            if (color_type == 3 and not palette_entries) or (color_type in {0, 4} and palette_entries):
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
             passes = (
@@ -615,10 +549,7 @@ def _is_complete_png(raw: bytes) -> bool:
                 decoded = decoder.decompress(b"".join(image_data), expected_size + 1)
             except zlib.error:
                 return False
-            if (
-                len(decoded) != expected_size or not decoder.eof
-                or decoder.unused_data or decoder.unconsumed_tail
-            ):
+            if len(decoded) != expected_size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
                 return False
             decoded_offset = 0
             for row_count, row_bytes, pass_width in scanlines:
@@ -651,13 +582,7 @@ def _is_complete_png(raw: bytes) -> bool:
 
 
 def _needs_content_scan(changed: ChangedFile) -> bool:
-    """Return whether a changed final file can carry an active edge runtime.
-
-    A claimed binary documentation asset (``_is_binary_documentation_asset``)
-    exempts here on the cheap, offline pre-filter alone; ``evaluate_pull_request``
-    never actually relies on that -- it runs ``_binary_documentation_evidence_confirms``
-    for that case before this function is even consulted.
-    """
+    """Return whether a changed final file can carry an active edge runtime."""
 
     if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
         return False
@@ -700,9 +625,6 @@ def evaluate_pull_request(
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
-        # Claimed inert binary assets get their own network-verified checks
-        # ahead of UTF-8 runtime scanning. Patch absence is only a candidate
-        # signal; the final head bytes must establish the declared container.
         if changed.status != "removed" and _is_binary_documentation_asset(changed):
             if _binary_documentation_evidence_confirms(
                 changed,
