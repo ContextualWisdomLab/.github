@@ -15,18 +15,25 @@ repository's own file. See
 Reading all four files' full bodies (not just the job name and action used)
 found real, repo-specific policy differences, not accidental copy drift:
 
-| Field | argos | mightyETL | newsdom-api | scopeweave |
-| --- | --- | --- | --- | --- |
-| `fail-on-severity` | `moderate` | `high` | unset → action default `low` | `moderate` |
-| `allow-ghsas` | none | none | `GHSA-69w3-r845-3855` | none |
-| `comment-summary-in-pr` | unset | unset | unset | `on-failure` |
-| step `continue-on-error` | `true` | unset (blocking) | unset (blocking) | unset (blocking) |
-| availability handling | none | static `repository.private` branch to a separate no-op job | none | dynamic `dependency-graph/compare` HTTP-status preflight: 200 → run, 403/404 → warn+skip, other → hard-fail |
-| trigger | `pull_request: branches: [main, developmental]` | `pull_request` | `pull_request` | `pull_request`, `workflow_dispatch` |
-| concurrency group | none | workflow+PR/ref group, cancel-in-progress | none | `dependency-review-`+PR/ref group, cancel-in-progress |
-| `actions/checkout` pin | unpinned `@v4` | not used | SHA `3d3c42e5aac5ba805825da76410c181273ba90b1` | SHA `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) |
-| `dependency-review-action` pin | unpinned `@v4` | SHA `a1d282b36b6f3519aa1f3fc636f609c47dddb294` (v5.0.0) | same SHA | same SHA |
-| `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` | unset | unset | `true` | unset |
+| Field | argos | mightyETL | newsdom-api | scopeweave | naruon |
+| --- | --- | --- | --- | --- | --- |
+| `fail-on-severity` | `moderate` | `high` | unset → action default `low` | `moderate` | `moderate` |
+| `allow-ghsas` | none | none | `GHSA-69w3-r845-3855` | none | none |
+| `comment-summary-in-pr` | unset | unset | unset | `on-failure` | `never` (explicit) |
+| step `continue-on-error` | `true` | unset (blocking) | unset (blocking) | unset (blocking) | unset (blocking) |
+| availability handling | none | static `repository.private` branch to a separate no-op job | none | dynamic `dependency-graph/compare` HTTP-status preflight: 200 → run, 403/404 → warn+skip, other → hard-fail | none |
+| `harden-runner` (egress audit) | absent | absent | absent | absent | present |
+| trigger | `pull_request: branches: [main, developmental]` | `pull_request` | `pull_request` | `pull_request`, `workflow_dispatch` | `pull_request: branches: [develop, master, release/**]`, `workflow_dispatch` |
+| concurrency group | none | workflow+PR/ref group, cancel-in-progress | none | `dependency-review-`+PR/ref group, cancel-in-progress | `dependency-review-`+PR/ref group, cancel-in-progress |
+| `actions/checkout` pin | unpinned `@v4` | not used | SHA `3d3c42e5aac5ba805825da76410c181273ba90b1` | SHA `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) | SHA `3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1) |
+| `dependency-review-action` pin | unpinned `@v4` | SHA `a1d282b36b6f3519aa1f3fc636f609c47dddb294` (v5.0.0) | same SHA | same SHA | same SHA |
+| `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` | unset | unset | `true` | unset | unset |
+
+naruon was found later the same day by a peer session's fresh org-wide survey
+-- missed by the original 4-repo survey this consolidation started from. See
+"Addendum: naruon" below for the two real design changes it required
+(`comment_summary_in_pr` becoming an input instead of a hardcoded uniform
+value, and adding `harden-runner` uniformly).
 
 Two decisions this audit drove (see ADR-0024 for the full reasoning):
 
@@ -50,10 +57,11 @@ Two decisions this audit drove (see ADR-0024 for the full reasoning):
 
 ## Mechanism
 
-`.github/workflows/dependency-review.yml` (this repository) takes three
+`.github/workflows/dependency-review.yml` (this repository) takes four
 `workflow_call` inputs (`fail_on_severity`, `allow_ghsas`,
-`continue_on_error`) and always runs the checkout → availability-preflight →
-conditional dependency-review → conditional unavailability-note sequence.
+`continue_on_error`, `comment_summary_in_pr`) and always runs the
+harden-runner → checkout → availability-preflight → conditional
+dependency-review → conditional unavailability-note sequence.
 Each calling repository's own thin `.github/workflows/dependency-review.yml`
 keeps that repository's original `on:` trigger block (argos keeps its
 `branches: [main, developmental]` restriction — a `workflow_call` target
@@ -152,6 +160,61 @@ same event-name guard internally, so the caller does not need its own
 job-level `if:` to reproduce it — `workflow_dispatch` stays in the trigger
 list and the job still runs, harmlessly skipping the gate exactly as the
 original did.
+
+### naruon caller
+
+```yaml
+name: Dependency Review
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - master
+      - "release/**"
+  workflow_dispatch:
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-review:
+    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<commit-sha>
+    with:
+      fail_on_severity: moderate
+      comment_summary_in_pr: never
+```
+
+naruon's original also had a job-level `permissions:` block duplicating the
+workflow-level one, and an informational "Log dependency review policy" step
+that only printed the policy text and base/head refs -- neither is carried
+into the caller: the job-level `permissions:` was redundant, and the log
+step added no policy value beyond what `actions/dependency-review-action`
+itself already reports on failure.
+
+## Addendum: naruon (2026-09-02, later the same day)
+
+A peer session's fresh org-wide workflow-duplication survey (63 repos, 255
+workflow files) found `naruon` independently carrying its own
+`dependency-review.yml` -- missed by the original 4-repo survey. Auditing it
+found two real differences, not cosmetic ones:
+
+1. **`step-security/harden-runner` (egress audit)**, absent from all four
+   original callers. Not a per-repo policy choice -- a uniformly beneficial
+   hardening practice already standard elsewhere in this org (e.g.
+   `pr-review-autofix.yml`). Added to the reusable workflow itself as its
+   first step, so every caller (the four already migrated included) gets it
+   with no caller-side change required.
+2. **`comment-summary-in-pr: never`**, an explicit opt-out that directly
+   conflicts with the earlier decision to hardcode
+   `comment-summary-in-pr: on-failure` uniformly (made when only scopeweave's
+   original set the field, so hardcoding it cost no caller its own choice).
+   Silently applying that hardcoded value to naruon would overturn a
+   deliberate choice its original workflow made. Fixed by making
+   `comment_summary_in_pr` a proper `workflow_call` input, default
+   `"on-failure"` (no change for the four already-migrated callers),
+   `naruon`'s caller explicitly setting `"never"`.
 
 ## Post-merge corrections (2026-09-02, same day)
 
