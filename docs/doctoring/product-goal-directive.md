@@ -726,3 +726,48 @@ fixed:
   docs/product-technical-gap-baseline.md` → no matches (confirms no collision-prone label survives);
   `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 6: one real cross-repo-reference-format bug fixed, one real untracked security gap recorded (not fixed by rewording the owner's verbatim text)
+
+- **Date:** 2026-09-02.
+- **Subject:** a sixth Devin Review pass found 2 new items: 1 `ANALYSIS` (repository-reference format),
+  1 `SEC` (security). Both checked against live source and the org's own binding convention before
+  acting.
+- **Finding 1 (ANALYSIS, partially real) — "Repository references lack full ownership."** Anchored on
+  `docs/product-technical-gap-baseline.md`'s new `.github#1659` reference. Checked
+  `docs/CWL-MASTER-CONTEXT.md` §7's actual rule: "Cross-repo references must be `owner/repo#num`... **Same-repo may use `#num`**." `.github#1659` is a same-repo reference (this file lives in `.github`), so
+  it already satisfies the rule as written — Devin's framing that *all* references need the owner
+  prefix is not what the convention says. **However**, checking the same diff for genuine cross-repo
+  references surfaced a real instance the finding's title correctly describes even if its example
+  didn't: two newly-added bare `naruon#1486` references (this file lives in `.github`, so a reference to
+  a `naruon` PR *is* cross-repo and needs the full form) — confirmed via
+  `git diff origin/main...HEAD` that both are new to this branch (two other bare `naruon#...` mentions
+  in the file predate this branch and are out of this pass's scope). **Fix:** qualified both new
+  references to `ContextualWisdomLab/naruon#1486`. The `.github#1659` same-repo reference was left as-is
+  since it already complies.
+- **Finding 2 (SEC, real, recorded not rewritten) — "Product logins collect identity passwords."**
+  Anchored on `docs/product-goal-directive.md`§4's verbatim owner blockquote (line 183): "Keyverse는
+  인증 backend로 유지하되(Direct Grant/ROPC 또는 Keycloak REST API), 로그인·가입·복구는 제품 자체
+  form으로 만든다." The underlying technical claim is correct and well-established: OAuth2 ROPC/"Direct
+  Grant" by definition has the client application itself collect and forward the user's raw password,
+  unlike a redirect-based Authorization Code flow where only the identity provider's own hosted page
+  ever sees it — precisely the isolation property RFC 6819/the OAuth 2.0 Security BCP cite as the
+  reason ROPC is discouraged. Confirmed via `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/`
+  and a grep of this file that this trade-off was genuinely untracked anywhere in this repo — a real
+  gap, not a duplicate. **Not fixed by editing the quote:** this sentence is the owner's own explicit,
+  deliberate architecture choice (naming both ROPC and the Keycloak REST API specifically, almost
+  certainly *because* both allow the product-branded, non-redirected login UI the same sentence
+  mandates, despite the well-known trade-off) — rewording it would substitute this session's judgment
+  for an explicit owner decision, which this file's own governance clause and this PR's established
+  practice throughout forbid. **Recorded instead:** added `G-24` to the gap register plus a full
+  narrative entry in `docs/product-technical-gap-baseline.md`, naming the trade-off, confirming it was
+  untracked, and directing a future Keyverse-integration ADR to make an explicit reviewed decision
+  (accept with compensating controls — TLS, no credential logging/storage beyond the immediate
+  exchange, product-side rate-limit/lockout, or evaluate a PKCE-based embedded-webview alternative — or
+  revise the pattern) rather than leaving the trade-off implicit.
+- **Verification:** `git diff docs/product-goal-directive.md` → empty (confirms the verbatim blockquote
+  was not touched); `git diff --check origin/main -- docs/product-technical-gap-baseline.md` → exit 0;
+  `grep -n "�" docs/product-technical-gap-baseline.md` → no matches;
+  `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` → no matches (confirms G-24 was genuinely new);
+  `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` → 5 passed.
+- **PR:** `ContextualWisdomLab/.github#1659`.

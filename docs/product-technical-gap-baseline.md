@@ -101,6 +101,7 @@ flowchart LR
 | G-21 | directive가 이름을 붙인 14개 저장소가 `CWL-MASTER-CONTEXT.md`의 ecosystem catalog/UML에 아직 없다 | 문서 간 불일치로 신규 에이전트·구매자가 실제 생태계 범위를 오판한다 | 각 저장소의 실제 현재 상태를 확인해 `CWL-MASTER-CONTEXT.md`의 카탈로그·UML에 추가한다. 상세: 본문 하단 서술 항목 |
 | G-22 | `contextual-orchestrator`의 stdlib-Python core가 새로 sharpened된 §6 Rust 원칙(허용 예외는 ADR로 근거·범위·제거조건 명시) 기준을 충족하는지 미검증이다 | 언어 선택이 정책과 어긋나면 성능·유지보수 리스크가 문서화 없이 누적된다 | `library_research.md`의 기존 항목을 §6 신판 기준으로 재검토하고, control-plane 로직이 Rust mandate 범위에 드는지 판정한다. 상세: 본문 하단 서술 항목 |
 | G-23 | directive §8의 CI 통합 아키텍처(exact-SHA 검증, owner RED→fix→GREEN→release, mutable-head 금지 등) 요구가 현재 owner/consumer 관계 전반에서 실제로 충족되는지 감사되지 않았다 | "이미 하고 있다"는 인상과 검증된 준수는 다르다 | 모든 owner PR·release·consumer 변경에 대해 SBOM/provenance/exact-SHA 검증이 실제로 걸리는지 전용 감사 pass로 확인한다. 상세: 본문 하단 서술 항목 |
+| G-24 | directive §4가 Keyverse 연동으로 Direct Grant/ROPC를 허용하며 로그인·가입·복구를 제품 자체 form으로 만들라고 명시한다(owner 검증 문구, 재작성 대상 아님). ROPC는 정의상 제품 코드가 raw credential을 직접 취급해 IdP가 credential을 격리하는 redirect 기반 Authorization Code 경계를 우회한다 | 제품이 침해되면, redirect 기반 흐름이라면 격리됐을 raw credential을 공격자가 그대로 탈취할 수 있다 | 보완 통제(TLS 강제, credential 무저장·무로깅, product-side rate limit/lockout, 가능하면 PKCE 기반 Authorization Code 내장 웹뷰 대안 검토)를 Keyverse 통합 ADR로 명시한다. 상세: 본문 하단 서술 항목 |
 
 ## 4. 열린 PR live inventory
 
@@ -2639,7 +2640,7 @@ user-cancelled, provider-terminated, and admin-timed-out outcomes as three separ
 natural owner, since per-model/pool configuration already lives there and `orchestrator.py` already
 has no fixed per-call timeout on its own primary inference path (this session's
 `scripts/ci/noema_review_gate.py` transport-fix work this same day, reconciled in the 2026-09-01
-`naruon#1486` entry above, independently confirms the "no uniform hardcoded timeout" direction is
+`ContextualWisdomLab/naruon#1486` entry above, independently confirms the "no uniform hardcoded timeout" direction is
 already the accepted design elsewhere in the ecosystem — this gap is about giving admins an explicit,
 audited *override* surface, not about reintroducing a default timeout). Not started: no ADR, no KV
 schema for per-model timeout records, no `/admin` UI, no API contract. Needs an ADR before
@@ -2698,7 +2699,7 @@ an instantaneous depth drop was never the right signal to wait for.
 **Cross-reference, not a duplicate:** this entry supplements, and does not restate or supersede, the
 2026-09-01 "floating runner image" entry above (still the record for the `ubuntu-latest` →
 `ubuntu-24.04` pin across `strix.yml`/`opencode-review.yml`/`noema-review.yml`) and the "independent
-corroboration" paragraph appended to it (`naruon#1486`'s `strix` check queued-then-cancelled
+corroboration" paragraph appended to it (`ContextualWisdomLab/naruon#1486`'s `strix` check queued-then-cancelled
 observation). Together the two entries are the current, most-complete picture of why Actions runners
 across this organization were saturated through early 2026-09-01/02, and what has been fixed so far.
 
@@ -2881,3 +2882,51 @@ suggestion) picks them up, per directive §1's "PR·Issues 소진 후에도 제�
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## 2026-09-02 G-24: Keyverse Direct Grant/ROPC mandate hands raw credentials to product-owned login forms (flagged by Devin Review, security)
+
+**Problem.** `docs/product-goal-directive.md` §4's verbatim owner directive states: "Keyverse는 인증
+backend로 유지하되(Direct Grant/ROPC 또는 Keycloak REST API), 로그인·가입·복구는 제품 자체 form으로
+만든다" (Keyverse stays the auth backend via Direct Grant/ROPC or the Keycloak REST API, but
+login/signup/recovery are the product's own forms, not a Keyverse-hosted page). Devin Review correctly
+identified a real, previously-untracked security trade-off in this: the OAuth2 Resource Owner Password
+Credentials grant (ROPC/"Direct Grant") is defined by having the *client application itself* collect
+the user's raw password and forward it to the identity provider for a token — unlike a redirect-based
+Authorization Code flow, where only the identity provider's own hosted page ever sees the raw
+credential. This is precisely why OAuth 2.0 security best-practice guidance (RFC 6819; the OAuth 2.0
+Security Best Current Practice) treats ROPC as legacy/discouraged: it collapses the very isolation
+boundary — "the product never touches raw credentials" — that a redirect-based flow provides. If any
+product in this ecosystem, or Keyverse itself, currently relies on that isolation as a stated security
+property ("passwordless identity boundary"), a compromised product surface (XSS, a malicious
+dependency, a logging bug) could now capture raw credentials that flow would have kept out of its
+reach entirely.
+
+**Verified before recording.** Checked `docs/adr/` and this file for any existing ADR or gap entry
+covering Keyverse's credential-handling posture or a "passwordless identity boundary" claim — none
+exists (`grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` and `grep -n "Keyverse\|ROPC"` on this
+file both return no prior coverage beyond an unrelated CI-automation PR reference). So this is a
+genuine, newly-surfaced gap, not a duplicate of tracked work.
+
+**Why not fixed by editing the directive.** This sentence sits inside the owner's verbatim `>`
+blockquote, and this file's own governance clause (and this session's standing practice throughout
+this PR) forbids rewording verbatim owner-directed text — doing so would be substituting this
+session's judgment for an explicit, deliberate owner architecture decision (the directive names *both*
+Direct Grant/ROPC and the Keycloak REST API specifically, precisely because both allow a
+product-branded, non-redirected login UI, which is very likely the actual reason for choosing them over
+Authorization Code + redirect despite the well-known trade-off). Overriding that by editing the quote
+would be presumptuous, not a fix.
+
+**Recorded instead, as G-24 above.** The register row captures the trade-off and a compensating-control
+direction (enforce TLS on every ROPC exchange; never log or persist the raw credential beyond the
+immediate token exchange; rate-limit/lockout the product-side ROPC endpoint against credential
+stuffing; evaluate a PKCE-based Authorization Code flow inside an embedded/native webview as a
+lower-risk alternative if product UX constraints allow it) that a future Keyverse-integration ADR
+should make an explicit, reviewed decision about — accepting the risk with documented compensating
+controls, or revising the integration pattern — rather than leaving the trade-off implicit and
+undocumented as it was before this pass.
+
+**Verification.** `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` → no matches (confirms gap
+was genuinely untracked); `docs/product-goal-directive.md`'s §4 blockquote left byte-for-byte
+unchanged (`git diff` shows only the new G-24 register row and this narrative section, no change to
+`product-goal-directive.md`); `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
+→ 5 passed.
