@@ -2,10 +2,8 @@ name: Source Fix 1656 Stale Close Contract
 
 on:
   push:
-    branches:
-      - fix/close-empty-noop-runner-712
-    paths:
-      - .github/workflows/source-fix-1656-stale-close-contract.yml
+    branches: [fix/close-empty-noop-runner-712]
+    paths: [.github/workflows/source-fix-1656-stale-close-contract.yml]
 
 permissions:
   contents: write
@@ -30,13 +28,10 @@ jobs:
         run: |
           set -euo pipefail
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
-          local_head="$(git rev-parse HEAD)"
-          if [ -z "$remote_head" ] || [ "$remote_head" != "$local_head" ]; then
-            echo "writer head moved: local=$local_head remote=$remote_head" >&2
-            exit 1
-          fi
+          test -n "$remote_head"
+          test "$remote_head" = "$(git rev-parse HEAD)"
 
-      - name: Remove runner-backed no-op close jobs and align contracts
+      - name: Repair native close-event queue contract
         shell: bash
         run: |
           set -euo pipefail
@@ -45,187 +40,102 @@ jobs:
           import re
           from pathlib import Path
 
-          workflow_dir = Path(".github/workflows")
-          native_concurrency_workflows = (
-              "close-empty-pr.yml",
-              "codeql-pr.yml",
-              "osv-scanner-pr.yml",
-              "pr-review-merge-scheduler.yml",
-              "python-security.yml",
-              "sast-semgrep.yml",
-              "sbom-generation.yml",
-              "scorecard-pr.yml",
-              "secret-scan.yml",
-              "security-scan.yml",
+          workflow_dir = Path('.github/workflows')
+          native = (
+              'close-empty-pr.yml',
+              'codeql-pr.yml',
+              'osv-scanner-pr.yml',
+              'pr-review-merge-scheduler.yml',
+              'python-security.yml',
+              'sast-semgrep.yml',
+              'sbom-generation.yml',
+              'scorecard-pr.yml',
+              'secret-scan.yml',
+              'security-scan.yml',
           )
 
-          def remove_noop_close_job(text: str, filename: str) -> str:
-              """Remove the runner-only close sentinel while preserving real jobs."""
+          def remove_noop_job(text: str, filename: str) -> str:
               lines = text.splitlines(keepends=True)
-              starts = [
-                  index
-                  for index, line in enumerate(lines)
-                  if line.rstrip("\n") == "  cancel-closed-pr-runs:"
-              ]
+              starts = [i for i, line in enumerate(lines) if line.rstrip('\n') == '  cancel-closed-pr-runs:']
               if len(starts) > 1:
-                  raise SystemExit(f"{filename}: multiple close sentinel jobs found")
-              if not starts:
-                  return text
-              start = starts[0]
-              end = len(lines)
-              job_key = re.compile(r"^  [A-Za-z0-9_.-]+:\s*$")
-              for index in range(start + 1, len(lines)):
-                  if job_key.match(lines[index].rstrip("\n")):
-                      end = index
-                      break
-              del lines[start:end]
-              updated = "".join(lines)
+                  raise SystemExit(f'{filename}: multiple close sentinel jobs')
+              if starts:
+                  start = starts[0]
+                  end = len(lines)
+                  for i in range(start + 1, len(lines)):
+                      if re.match(r'^  [A-Za-z0-9_.-]+:\s*$', lines[i].rstrip('\n')):
+                          end = i
+                          break
+                  del lines[start:end]
+              updated = ''.join(lines)
               updated = re.sub(
-                  r"\n  # Compatibility sentinel[^\n]*\n(?:  #[^\n]*\n){0,3}",
-                  "\n",
+                  r'\n  # Compatibility sentinel[^\n]*\n(?:  #[^\n]*\n){0,3}',
+                  '\n',
                   updated,
               )
               return updated
 
-          for filename in native_concurrency_workflows:
+          for filename in native:
               path = workflow_dir / filename
-              text = path.read_text(encoding="utf-8")
-              updated = remove_noop_close_job(text, filename)
-              if "cancel-closed-pr-runs:" in updated:
-                  raise SystemExit(f"{filename}: close sentinel remains after rewrite")
-              if "closed" not in updated:
-                  raise SystemExit(f"{filename}: closed trigger disappeared")
-              if "concurrency:" not in updated or "permissions:" not in updated:
-                  raise SystemExit(f"{filename}: workflow contract boundary missing")
-              concurrency = updated.split("concurrency:", 1)[1].split("permissions:", 1)[0]
-              if "github.event.pull_request.number" not in concurrency:
-                  raise SystemExit(f"{filename}: concurrency is not PR-stable")
-              if "github.event.pull_request.head.sha" in concurrency:
-                  raise SystemExit(f"{filename}: concurrency unexpectedly includes head SHA")
-              if "cancel-in-progress:" not in concurrency:
-                  raise SystemExit(f"{filename}: concurrency has no cancellation policy")
-              path.write_text(updated, encoding="utf-8")
+              updated = remove_noop_job(path.read_text(encoding='utf-8'), filename)
+              if 'cancel-closed-pr-runs:' in updated:
+                  raise SystemExit(f'{filename}: runner-backed close job remains')
+              if 'closed' not in updated:
+                  raise SystemExit(f'{filename}: closed trigger missing')
+              concurrency = updated.split('concurrency:', 1)[1].split('permissions:', 1)[0]
+              if 'github.event.pull_request.number' not in concurrency:
+                  raise SystemExit(f'{filename}: PR-stable concurrency missing')
+              if 'github.event.pull_request.head.sha' in concurrency:
+                  raise SystemExit(f'{filename}: head SHA fragments concurrency group')
+              if 'cancel-in-progress:' not in concurrency:
+                  raise SystemExit(f'{filename}: cancellation policy missing')
+              if "github.event.action != 'closed'" not in updated:
+                  raise SystemExit(f'{filename}: evidence job lacks close guard')
+              path.write_text(updated, encoding='utf-8')
 
-          contract = Path("tests/test_required_workflow_queue_contract.py")
-          text = contract.read_text(encoding="utf-8")
-          function_start = text.index(
-              "def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:"
+          contract = Path('tests/test_required_workflow_queue_contract.py')
+          text = contract.read_text(encoding='utf-8')
+          old_inventory = '''    workflows = (\n        "close-empty-pr.yml",\n        "codeql-pr.yml",\n        "noema-review.yml",\n        "osv-scanner-pr.yml",\n        "pr-review-merge-scheduler.yml",\n        "scorecard-pr.yml",\n        "security-scan.yml",\n        "strix.yml",\n    )\n'''
+          new_inventory = '''    workflows = (\n        "close-empty-pr.yml",\n        "codeql-pr.yml",\n        "noema-review.yml",\n        "osv-scanner-pr.yml",\n        "pr-review-merge-scheduler.yml",\n        "python-security.yml",\n        "sast-semgrep.yml",\n        "sbom-generation.yml",\n        "scorecard-pr.yml",\n        "secret-scan.yml",\n        "security-scan.yml",\n        "strix.yml",\n    )\n'''
+          if text.count(old_inventory) != 1:
+              raise SystemExit('close-event inventory contract drifted')
+          text = text.replace(old_inventory, new_inventory)
+
+          old_else = '''        else:\n            assert "cancel-closed-pr-runs:" in workflow\n            assert (\n                "PR closed; this run only cancels older runs through workflow concurrency."\n                in workflow\n            )\n        assert "github.event.action != 'closed'" in workflow\n'''
+          native_literal = ', '.join(repr(name) for name in native)
+          new_else = f'''        elif filename in {{{native_literal}}}:\n            assert "cancel-closed-pr-runs:" not in workflow\n            concurrency_contract = workflow.split("concurrency:", 1)[1].split(\n                "permissions:", 1\n            )[0]\n            assert "github.event.pull_request.number" in concurrency_contract\n            assert "github.event.pull_request.head.sha" not in concurrency_contract\n            assert "cancel-in-progress:" in concurrency_contract\n        else:\n            raise AssertionError(f"unclassified close-event workflow: {{filename}}")\n        assert "github.event.action != 'closed'" in workflow\n'''
+          if text.count(old_else) != 1:
+              raise SystemExit('close-event fallback contract drifted')
+          contract.write_text(text.replace(old_else, new_else), encoding='utf-8')
+
+          regression = Path('tests/test_close_empty_pr_queue_pressure.py')
+          cases = (
+              ('close-empty-pr.yml', '  close-empty:'),
+              ('codeql-pr.yml', '  detect-languages:'),
+              ('osv-scanner-pr.yml', '  osv-scan:'),
+              ('pr-review-merge-scheduler.yml', '  scan-pr-queue:'),
+              ('python-security.yml', '  detect-python:'),
+              ('sast-semgrep.yml', '  semgrep:'),
+              ('sbom-generation.yml', '  generate-sbom:'),
+              ('scorecard-pr.yml', '  analysis:'),
+              ('secret-scan.yml', '  gitleaks:'),
+              ('security-scan.yml', '  osv-scan:'),
           )
-          function_end = text.index(
-              "\ndef test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:",
-              function_start,
-          )
-          replacement = '''def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
-    """Close events should retire old runs without needless runner admission."""
-    native_concurrency_workflows = (
-        "close-empty-pr.yml",
-        "codeql-pr.yml",
-        "osv-scanner-pr.yml",
-        "pr-review-merge-scheduler.yml",
-        "python-security.yml",
-        "sast-semgrep.yml",
-        "sbom-generation.yml",
-        "scorecard-pr.yml",
-        "secret-scan.yml",
-        "security-scan.yml",
-    )
+          case_rows = '\n'.join(f'        ({name!r}, {job!r}),' for name, job in cases)
+          regression.write_text(f'''\"\"\"Regression contracts for close-event runner admission pressure.\"\"\"\n\nfrom pathlib import Path\n\nimport pytest\n\nWORKFLOWS = Path(__file__).parents[1] / ".github/workflows"\n\n@pytest.mark.parametrize(\n    ("filename", "evidence_job"),\n    (\n{case_rows}\n    ),\n)\ndef test_closed_pull_request_does_not_allocate_a_noop_runner(\n    filename: str, evidence_job: str\n) -> None:\n    \"\"\"PR-stable concurrency retires close work without a no-op runner.\"\"\"\n    workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")\n    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]\n    assert "closed" in workflow\n    assert "github.event.pull_request.number" in concurrency\n    assert "github.event.pull_request.head.sha" not in concurrency\n    assert "cancel-in-progress:" in concurrency\n    assert "cancel-closed-pr-runs:" not in workflow\n    assert "github.event.action != 'closed'" in workflow\n    assert evidence_job in workflow\n''', encoding='utf-8')
 
-    for filename in native_concurrency_workflows:
-        workflow = workflow_text(filename)
-        assert "closed" in workflow
-        assert "cancel-closed-pr-runs:" not in workflow
-        concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-            "permissions:", 1
-        )[0]
-        assert "github.event.pull_request.number" in concurrency_contract
-        assert "github.event.pull_request.head.sha" not in concurrency_contract
-        assert "cancel-in-progress:" in concurrency_contract
-        assert "github.event.action != 'closed'" in workflow
-
-    noema = workflow_text("noema-review.yml")
-    assert "closed" in noema
-    assert "cancel-closed-pr-runs:" in noema
-    assert "Cancel queued and running Noema reviews for the closed pull request" in noema
-    assert "leaving runs unchanged" in noema
-    noema_cleanup = noema.split("  cancel-closed-pr-runs:", 1)[1].split(
-        "  noema-review:", 1
-    )[0]
-    assert "actions: write" in noema_cleanup
-    assert "actions/checkout" not in noema_cleanup
-    assert "cleanup skipped" not in noema_cleanup
-    assert "github.event.action != 'closed'" in noema
-
-    strix_workflow = workflow_text("strix.yml")
-    assert "closed" in strix_workflow
-    assert "cancel-superseded-pr-runs:" in strix_workflow
-    assert (
-        "Cancel queued and running scans for superseded or closed pull request heads"
-        in strix_workflow
-    )
-    assert (
-        "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
-        "|| github.token"
-    ) in strix_workflow
-    assert "DISPATCH_REPOSITORY" not in strix_workflow
-    assert "TARGET_PR_HEAD_SHA" in strix_workflow
-    assert 'select(.event == "pull_request_target")' in strix_workflow
-    assert 'select(.event == "repository_dispatch")' not in strix_workflow
-    assert "(.pull_requests // [])" in strix_workflow
-    assert ".head.sha // \"\"" in strix_workflow
-    assert "leaving runs unchanged" in strix_workflow
-    assert (
-        "for active_status in queued in_progress requested waiting pending"
-        in strix_workflow
-    )
-    assert "github.event.action != 'closed'" in strix_workflow
-    assert "cancel-in-progress: false" in strix_workflow
-    assert "Keep provider-backed scans serial per repository" in strix_workflow
-
-    opencode_bootstrap = workflow_text("opencode-review.yml")
-    assert (
-        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]"
-        in opencode_bootstrap
-    )
-    assert "actions/checkout" not in opencode_bootstrap
-    assert "${{ secrets." not in opencode_bootstrap
-
-'''
-          contract.write_text(
-              text[:function_start] + replacement + text[function_end + 1 :],
-              encoding="utf-8",
-          )
-
-          regression = Path("tests/test_close_empty_pr_queue_pressure.py")
-          regression.write_text(
-              '''"""Regression contracts for close-event runner admission pressure."""\n\nfrom pathlib import Path\n\nimport pytest\n\n\nWORKFLOWS = Path(__file__).parents[1] / ".github/workflows"\n\n\n@pytest.mark.parametrize(\n    ("filename", "evidence_job"),\n    (\n        ("close-empty-pr.yml", "  close-empty:"),\n        ("codeql-pr.yml", "  detect-languages:"),\n        ("osv-scanner-pr.yml", "  osv-scan:"),\n        ("pr-review-merge-scheduler.yml", "  scan-pr-queue:"),\n        ("python-security.yml", "  detect-python:"),\n        ("sast-semgrep.yml", "  semgrep:"),\n        ("sbom-generation.yml", "  generate-sbom:"),\n        ("scorecard-pr.yml", "  analysis:"),\n        ("secret-scan.yml", "  gitleaks:"),\n        ("security-scan.yml", "  osv-scan:"),\n    ),\n)\ndef test_closed_pull_request_does_not_allocate_a_noop_runner(\n    filename: str,\n    evidence_job: str,\n) -> None:\n    """PR-stable concurrency must retire close work without a no-op runner."""\n    workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")\n    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]\n\n    assert "closed" in workflow\n    assert "github.event.pull_request.number" in concurrency\n    assert "github.event.pull_request.head.sha" not in concurrency\n    assert "cancel-in-progress:" in concurrency\n    assert "cancel-closed-pr-runs:" not in workflow\n    assert "github.event.action != 'closed'" in workflow\n    assert evidence_job in workflow\n''',
-              encoding="utf-8",
-          )
-
-          ast.parse(contract.read_text(encoding="utf-8"))
-          ast.parse(regression.read_text(encoding="utf-8"))
-          for filename in native_concurrency_workflows:
-              workflow = (workflow_dir / filename).read_text(encoding="utf-8")
-              concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
-              assert "closed" in workflow
-              assert "github.event.pull_request.number" in concurrency
-              assert "github.event.pull_request.head.sha" not in concurrency
-              assert "cancel-in-progress:" in concurrency
-              assert "cancel-closed-pr-runs:" not in workflow
-              assert "github.event.action != 'closed'" in workflow
-
-          noema = (workflow_dir / "noema-review.yml").read_text(encoding="utf-8")
-          strix = (workflow_dir / "strix.yml").read_text(encoding="utf-8")
-          assert "Cancel queued and running Noema reviews for the closed pull request" in noema
-          assert "Cancel queued and running scans for superseded or closed pull request heads" in strix
-          print(f"validated {len(native_concurrency_workflows)} native-concurrency close-event workflows")
+          ast.parse(contract.read_text(encoding='utf-8'))
+          ast.parse(regression.read_text(encoding='utf-8'))
+          noema = (workflow_dir / 'noema-review.yml').read_text(encoding='utf-8')
+          strix = (workflow_dir / 'strix.yml').read_text(encoding='utf-8')
+          assert 'Cancel queued and running Noema reviews for the closed pull request' in noema
+          assert 'Cancel queued and running scans for superseded or closed pull request heads' in strix
+          print(f'validated {len(native)} native-concurrency close-event workflows')
           PY
-
-          python -m compileall -q \
-            tests/test_required_workflow_queue_contract.py \
-            tests/test_close_empty_pr_queue_pressure.py
+          python -m compileall -q tests/test_required_workflow_queue_contract.py tests/test_close_empty_pr_queue_pressure.py
           git diff --check
 
-      - name: Publish repaired source and remove one-shot workflow
+      - name: Publish repair and remove one-shot workflow
         shell: bash
         run: |
           set -euo pipefail
@@ -233,26 +143,10 @@ jobs:
           rm -f .github/workflows/tmp-pr1656-queue-contract-repair.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            .github/workflows/close-empty-pr.yml \
-            .github/workflows/codeql-pr.yml \
-            .github/workflows/osv-scanner-pr.yml \
-            .github/workflows/pr-review-merge-scheduler.yml \
-            .github/workflows/python-security.yml \
-            .github/workflows/sast-semgrep.yml \
-            .github/workflows/sbom-generation.yml \
-            .github/workflows/scorecard-pr.yml \
-            .github/workflows/secret-scan.yml \
-            .github/workflows/security-scan.yml \
-            .github/workflows/source-fix-1656-stale-close-contract.yml \
-            tests/test_required_workflow_queue_contract.py \
-            tests/test_close_empty_pr_queue_pressure.py
+          git add .github/workflows tests/test_required_workflow_queue_contract.py tests/test_close_empty_pr_queue_pressure.py
           git diff --cached --check
           git commit -m "fix(actions): retire no-op close-event runners"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           parent="$(git rev-parse HEAD^)"
-          if [ "$remote_head" != "$parent" ]; then
-            echo "writer head moved before publish: expected=$parent remote=$remote_head" >&2
-            exit 1
-          fi
+          test "$remote_head" = "$parent"
           git push origin "HEAD:${GITHUB_REF_NAME}"
