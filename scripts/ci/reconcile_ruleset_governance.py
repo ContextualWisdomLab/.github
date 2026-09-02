@@ -462,6 +462,8 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
         "required_approving_review_count": int,
         "require_code_owner_review": bool,
         "require_last_push_approval": bool,
+        "dismiss_stale_reviews_on_push": bool,
+        "required_review_thread_resolution": bool,
         "allowed_merge_methods": list,
     }
     for field, expected_type in required_parameters.items():
@@ -478,6 +480,8 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
     parameters["require_code_owner_review"] = False
     parameters["require_last_push_approval"] = False
     parameters["required_reviewers"] = []
+    parameters["dismiss_stale_reviews_on_push"] = True
+    parameters["required_review_thread_resolution"] = True
     parameters["allowed_merge_methods"] = list(DESIRED_MERGE_METHODS)
     return desired
 

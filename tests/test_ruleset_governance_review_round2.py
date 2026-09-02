@@ -147,6 +147,21 @@ def test_missing_empty_required_reviewers_is_normalized_to_declared_empty_list()
     assert desired["rules"][-1]["parameters"]["required_reviewers"] == []
 
 
+def test_desired_payload_forces_stale_review_and_thread_resolution_guards() -> None:
+    """Live review-safety drift is repaired instead of copied into the update payload."""
+    module = load_module()
+    live = repository_payload()
+    parameters = live["rules"][-1]["parameters"]
+    parameters["dismiss_stale_reviews_on_push"] = False
+    parameters["required_review_thread_resolution"] = False
+
+    desired = module._desired_payload(live, repository_target(module))
+    desired_parameters = desired["rules"][-1]["parameters"]
+
+    assert desired_parameters["dismiss_stale_reviews_on_push"] is True
+    assert desired_parameters["required_review_thread_resolution"] is True
+
+
 def test_recovery_revalidates_protected_main_before_every_recovery_put(monkeypatch) -> None:
     """A stale run must stop before a recovery PUT after protected main advances."""
     module = load_module()
