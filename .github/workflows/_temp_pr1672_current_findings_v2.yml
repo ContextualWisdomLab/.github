@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1672_current_findings_v2.yml
       - scripts/ci/temp_pr1672_current_findings_v2.py
+      - scripts/ci/temp_pr1672_missing_value_repair.py
 
 concurrency:
   group: temp-pr1672-noema-findings-${{ github.repository }}-${{ github.ref_name }}
@@ -42,7 +43,7 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Harden predecessor generator and apply all reviewed repairs
+      - name: Apply one ordered current-head remediation path
         env:
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
@@ -51,6 +52,7 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
+          test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           python - <<'PY'
           from pathlib import Path
           path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
@@ -68,8 +70,11 @@ jobs:
           PY
           python scripts/ci/temp_pr1672_noema_findings_repair.py
           python scripts/ci/temp_pr1672_current_findings_v2.py
+          python scripts/ci/temp_pr1672_missing_value_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
           test ! -e scripts/ci/temp_pr1672_current_findings_v2.py
+          test ! -e scripts/ci/temp_pr1672_missing_value_repair.py
+          test ! -e scripts/ci/temp_pr1672_followup_repair.py
           test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           test ! -e .github/workflows/_temp_pr1672_current_findings_v2.yml
           test ! -e tests/test_noema_repair_deadline_alarm_safety.py
@@ -79,6 +84,7 @@ jobs:
           grep -q 'def _entry_ordinal' scripts/ci/noema_review_gate.py
           grep -q 'nearest changed lines for' scripts/ci/noema_review_gate.py
           grep -q 'semantic validation may still require' scripts/ci/noema_review_gate.py
+          grep -q 'def _comma_follows_complete_json_value' scripts/ci/noema_review_gate.py
           git diff --check
 
       - name: Verify focused Noema contracts
@@ -105,7 +111,7 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/fix/noema-repair-attempt-telemetry'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
@@ -126,6 +132,7 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
+          test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           python3 - <<'PY'
           from pathlib import Path
           path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
@@ -143,8 +150,11 @@ jobs:
           PY
           python3 scripts/ci/temp_pr1672_noema_findings_repair.py
           python3 scripts/ci/temp_pr1672_current_findings_v2.py
+          python3 scripts/ci/temp_pr1672_missing_value_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
           test ! -e scripts/ci/temp_pr1672_current_findings_v2.py
+          test ! -e scripts/ci/temp_pr1672_missing_value_repair.py
+          test ! -e scripts/ci/temp_pr1672_followup_repair.py
           test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           test ! -e .github/workflows/_temp_pr1672_current_findings_v2.yml
           git diff --check
@@ -163,6 +173,6 @@ jobs:
           git add -A
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
-          git commit -m "fix(noema): preserve diagnostics and harden telemetry"
+          git commit -m "fix(noema): materialize reviewed current-head repairs"
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
