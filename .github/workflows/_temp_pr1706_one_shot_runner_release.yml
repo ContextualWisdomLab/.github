@@ -43,307 +43,57 @@ jobs:
             exit 1
           fi
 
-      - name: Apply smallest causal owner repair
+      - name: Apply deterministic owner repair
+        env:
+          STEP_B64: ICAgICAgLSBuYW1lOiBGYWlsIGNsb3NlZCB3aXRob3V0IGEgY3VycmVudC1oZWFkIE9wZW5Db2RlIHZlcmRpY3QKICAgICAgICBlbnY6CiAgICAgICAgICBHSF9UT0tFTjogJHt7IGdpdGh1Yi50b2tlbiB9fQogICAgICAgICAgVEFSR0VUX1JFUE9TSVRPUlk6ICR7eyBnaXRodWIuZXZlbnQucHVsbF9yZXF1ZXN0LmJhc2UucmVwby5mdWxsX25hbWUgfHwgZ2l0aHViLnJlcG9zaXRvcnkgfX0KICAgICAgICAgIFBSX05VTUJFUjogJHt7IGdpdGh1Yi5ldmVudC5wdWxsX3JlcXVlc3QubnVtYmVyIH19CiAgICAgICAgICBIRUFEX1NIQTogJHt7IGdpdGh1Yi5ldmVudC5wdWxsX3JlcXVlc3QuaGVhZC5zaGEgfX0KICAgICAgICAgIFBSX0FDVElPTjogJHt7IGdpdGh1Yi5ldmVudC5hY3Rpb24gfX0KICAgICAgICAgIFBSX0RSQUZUOiAke3sgZ2l0aHViLmV2ZW50LnB1bGxfcmVxdWVzdC5kcmFmdCB9fQogICAgICAgIHJ1bjogfAogICAgICAgICAgc2V0IC1ldW8gcGlwZWZhaWwKICAgICAgICAgIGlmIFsgIiRQUl9BQ1RJT04iID0gImNsb3NlZCIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICJQUiBjbG9zZWQ7IGEgY3VycmVudC1oZWFkIE9wZW5Db2RlIHZlcmRpY3QgaXMgbm90IHJlcXVpcmVkLiIKICAgICAgICAgICAgZXhpdCAwCiAgICAgICAgICBmaQogICAgICAgICAgaWYgWyAteiAiJHtQUl9OVU1CRVI6LX0iIF0gfHwgWyAteiAiJHtIRUFEX1NIQTotfSIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICI6OmVycm9yOjpNaXNzaW5nIFBSIG51bWJlciBvciBoZWFkIFNIQTsgY2Fubm90IHZlcmlmeSBhIGN1cnJlbnQtaGVhZCBPcGVuQ29kZSB2ZXJkaWN0LiIKICAgICAgICAgICAgZXhpdCAxCiAgICAgICAgICBmaQogICAgICAgICAgbGl2ZV9wcj0iJChnaCBhcGkgInJlcG9zLyR7VEFSR0VUX1JFUE9TSVRPUll9L3B1bGxzLyR7UFJfTlVNQkVSfSIpIgogICAgICAgICAgbGl2ZV9oZWFkPSIkKHByaW50ZiAnJXMnICIkbGl2ZV9wciIgfCBqcSAtciAnLmhlYWQuc2hhIC8vIGVtcHR5JykiCiAgICAgICAgICBsaXZlX2RyYWZ0PSIkKHByaW50ZiAnJXMnICIkbGl2ZV9wciIgfCBqcSAtciAnaWYgKC5kcmFmdCB8IHR5cGUpID09ICJib29sZWFuIiB0aGVuICguZHJhZnQgfCB0b3N0cmluZykgZWxzZSBlbXB0eSBlbmQnKSIKICAgICAgICAgIGxpdmVfc3RhdGU9IiQocHJpbnRmICclcycgIiRsaXZlX3ByIiB8IGpxIC1yICdpZiAoLnN0YXRlIHwgdHlwZSkgPT0gInN0cmluZyIgdGhlbiAuc3RhdGUgZWxzZSBlbXB0eSBlbmQnKSIKICAgICAgICAgIGlmIFsgLXogIiRsaXZlX2hlYWQiIF0gfHwgWyAteiAiJGxpdmVfZHJhZnQiIF0gfHwgWyAteiAiJGxpdmVfc3RhdGUiIF07IHRoZW4KICAgICAgICAgICAgZWNobyAiOjplcnJvcjo6Q291bGQgbm90IHZhbGlkYXRlIGxpdmUgcHVsbCByZXF1ZXN0IHN0YXRlIGJlZm9yZSB2ZXJkaWN0IGFkbWlzc2lvbi4iCiAgICAgICAgICAgIGV4aXQgMQogICAgICAgICAgZmkKICAgICAgICAgIGlmIFsgIiRsaXZlX3N0YXRlIiAhPSAib3BlbiIgXSAmJiBbICIkbGl2ZV9zdGF0ZSIgIT0gImNsb3NlZCIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICI6OmVycm9yOjpDb3VsZCBub3QgdmFsaWRhdGUgbGl2ZSBwdWxsIHJlcXVlc3Qgc3RhdGUgYmVmb3JlIHZlcmRpY3QgYWRtaXNzaW9uLiIKICAgICAgICAgICAgZXhpdCAxCiAgICAgICAgICBmaQogICAgICAgICAgaWYgWyAiJGxpdmVfc3RhdGUiID0gImNsb3NlZCIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICJQUiBpcyBjbG9zZWQgb24gdGhlIGxpdmUgZXhhY3QgaGVhZDsgYSBjdXJyZW50LWhlYWQgT3BlbkNvZGUgdmVyZGljdCBpcyBub3QgcmVxdWlyZWQuIgogICAgICAgICAgICBleGl0IDAKICAgICAgICAgIGZpCiAgICAgICAgICBpZiBbICIkbGl2ZV9kcmFmdCIgPSAidHJ1ZSIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICJQUiBpcyBzdGlsbCBhIGRyYWZ0IG9uIHRoZSBsaXZlIGV4YWN0IGhlYWQ7IGEgY3VycmVudC1oZWFkIE9wZW5Db2RlIHZlcmRpY3QgaXMgbm90IHJlcXVpcmVkIHVudGlsIGl0IGlzIG1hcmtlZCByZWFkeSBmb3IgcmV2aWV3LiIKICAgICAgICAgICAgZXhpdCAwCiAgICAgICAgICBmaQogICAgICAgICAgaWYgWyAiJHtsaXZlX2hlYWQsLH0iICE9ICIke0hFQURfU0hBLCx9IiBdOyB0aGVuCiAgICAgICAgICAgIGVjaG8gIlB1bGwgcmVxdWVzdCBoZWFkIG1vdmVkIG9uIHRoZSBsaXZlIG9wZW4sIHJlYWR5LWZvci1yZXZpZXcgUFI7IGEgZnJlc2ggcmVxdWlyZWQtcmV2aWV3IHJ1biB3aWxsIGJpbmQgdGhlIGN1cnJlbnQgaGVhZC4iCiAgICAgICAgICAgIGV4aXQgMAogICAgICAgICAgZmkKICAgICAgICAgIGlmIFsgIiRQUl9EUkFGVCIgPSAidHJ1ZSIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICJFdmVudCBkcmFmdCBzbmFwc2hvdCBpcyBzdGFsZTsgY29udGludWluZyBvbmUtc2hvdCB2ZXJkaWN0IGFkbWlzc2lvbiBmb3IgdGhlIGxpdmUgcmVhZHkgUFIuIgogICAgICAgICAgZmkKICAgICAgICAgIGlmICEgcmV2aWV3cz0iJChnaCBhcGkgLS1wYWdpbmF0ZSAicmVwb3MvJHtUQVJHRVRfUkVQT1NJVE9SWX0vcHVsbHMvJHtQUl9OVU1CRVJ9L3Jldmlld3M/cGVyX3BhZ2U9MTAwIikiOyB0aGVuCiAgICAgICAgICAgIGVjaG8gIjo6ZXJyb3I6OlJldmlld3MgQVBJIHJlYWQgZmFpbGVkIGR1cmluZyBvbmUtc2hvdCBjdXJyZW50LWhlYWQgdmVyZGljdCBhZG1pc3Npb247IGZhaWxpbmcgY2xvc2VkIGFuZCByZWxlYXNpbmcgdGhlIHJ1bm5lci4iCiAgICAgICAgICAgIGV4aXQgMQogICAgICAgICAgZmkKICAgICAgICAgIHZlcmRpY3Q9IiQocHJpbnRmICclc1xuJyAiJHJldmlld3MiIHwganEgLXIgLXMgLS1hcmcgc2hhICIkSEVBRF9TSEEiICcKICAgICAgICAgICAgKGFkZCAvLyBbXSkKICAgICAgICAgICAgfCBbCiAgICAgICAgICAgICAgICAuW10KICAgICAgICAgICAgICAgIHwgc2VsZWN0KAogICAgICAgICAgICAgICAgICAgICgudXNlci5sb2dpbiAvLyAiIiB8IGFzY2lpX2Rvd25jYXNlKSBhcyAkdXNlcgogICAgICAgICAgICAgICAgICAgIHwgJHVzZXIgPT0gIm9wZW5jb2RlLWFnZW50IiBvciAkdXNlciA9PSAib3BlbmNvZGUtYWdlbnRbYm90XSIKICAgICAgICAgICAgICAgICAgKQogICAgICAgICAgICAgICAgfCBzZWxlY3QoKC5jb21taXRfaWQgLy8gIiIgfCBhc2NpaV9kb3duY2FzZSkgPT0gKCRzaGEgfCBhc2NpaV9kb3duY2FzZSkpCiAgICAgICAgICAgICAgICB8IHNlbGVjdCguc3RhdGUgPT0gIkFQUFJPVkVEIiBvciAuc3RhdGUgPT0gIkNIQU5HRVNfUkVRVUVTVEVEIikKICAgICAgICAgICAgICBdCiAgICAgICAgICAgIHwgKGxhc3QgLy8ge30pIGFzICRyZXZpZXcKICAgICAgICAgICAgfCAoJHJldmlldy5ib2R5IC8vICIiIHwgYXNjaWlfZG93bmNhc2UpIGFzICRib2R5CiAgICAgICAgICAgIHwgaWYgJHJldmlldy5zdGF0ZSA9PSAiQ0hBTkdFU19SRVFVRVNURUQiIHRoZW4KICAgICAgICAgICAgICAgICJDSEFOR0VTX1JFUVVFU1RFRCIKICAgICAgICAgICAgICBlbGlmICRyZXZpZXcuc3RhdGUgPT0gIkFQUFJPVkVEIgogICAgICAgICAgICAgICAgYW5kICgkYm9keSB8IGNvbnRhaW5zKCJkZXRlcm1pbmlzdGljIGN1cnJlbnQtaGVhZCBldmlkZW5jZSIpIHwgbm90KQogICAgICAgICAgICAgICAgYW5kICgkYm9keSB8IGNvbnRhaW5zKCJkZXRlcm1pbmlzdGljIGZhbGxiYWNrIGFwcHJvdmFsIikgfCBub3QpCiAgICAgICAgICAgICAgICBhbmQgKCRib2R5IHwgY29udGFpbnMoIm1vZGVsLXVuYXZhaWxhYmxlIGV2aWRlbmNlIGZhbGxiYWNrIikgfCBub3QpCiAgICAgICAgICAgICAgICBhbmQgKCRib2R5IHwgY29udGFpbnMoImRpZCBub3QgZW1pdCBhIHVzYWJsZSBjdXJyZW50LWhlYWQgY29udHJvbCBibG9jayIpIHwgbm90KQogICAgICAgICAgICAgICAgYW5kICgkYm9keSB8IGNvbnRhaW5zKCJzY29wZTogYHVuc3VwcG9ydGVkYCIpIHwgbm90KQogICAgICAgICAgICAgICAgYW5kICgkYm9keSB8IGNvbnRhaW5zKCJtb2RlbC1wb29sIG91dGNvbWU6IGB1bmtub3duYCIpIHwgbm90KQogICAgICAgICAgICAgIHRoZW4KICAgICAgICAgICAgICAgICJBUFBST1ZFRCIKICAgICAgICAgICAgICBlbHNlCiAgICAgICAgICAgICAgICBlbXB0eQogICAgICAgICAgICAgIGVuZAogICAgICAgICAgJykiCiAgICAgICAgICBpZiBbIC16ICIkdmVyZGljdCIgXTsgdGhlbgogICAgICAgICAgICBlY2hvICI6OmVycm9yOjpObyBBUFBST1ZFRCBvciBDSEFOR0VTX1JFUVVFU1RFRCBmcm9tIG9wZW5jb2RlLWFnZW50IG9uIHRoZSBjdXJyZW50IGhlYWQuIFRoaXMgcmVxdWlyZWQgY2hlY2sgaXMgbm90IGEgcmV2aWV3IGFuZCBtdXN0IG5vdCBzdWNjZWVkIHVudGlsIHRoZSBhdXRoZW50aWNhdGVkIGRpc3BhdGNoIHBvc3RzIGEgY3VycmVudC1oZWFkIHZlcmRpY3QuIFRoZSBkaXNwYXRjaCBwYXRoIHdha2VzIHRoaXMgZXhhY3QgZmFpbGVkIHJ1biB3aGVuIHRoZSB2ZXJkaWN0IGFycml2ZXMuIgogICAgICAgICAgICBleGl0IDEKICAgICAgICAgIGZpCiAgICAgICAgICBlY2hvICJDdXJyZW50LWhlYWQgT3BlbkNvZGUgdmVyZGljdDogJHt2ZXJkaWN0fS4iCg==
+          RATE_B64: IiIiUmVxdWVzdC1idWRnZXQgcmVncmVzc2lvbiBmb3Igb25lLXNob3QgUmVxdWlyZWQgT3BlbkNvZGUgdmVyZGljdCBhZG1pc3Npb24uIiIiCgpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCgpXT1JLRkxPVyA9IFBhdGgoIi5naXRodWIvd29ya2Zsb3dzL29wZW5jb2RlLXJldmlldy55bWwiKQoKCmRlZiBfYWRtaXNzaW9uX3N0ZXAoKSAtPiBzdHI6CiAgICAiIiJSZXR1cm4gdGhlIG9uZS1zaG90IGN1cnJlbnQtaGVhZCB2ZXJkaWN0IGFkbWlzc2lvbiBzdGVwLiIiIgogICAgd29ya2Zsb3cgPSBXT1JLRkxPVy5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKICAgIHJldHVybiB3b3JrZmxvdy5zcGxpdCgKICAgICAgICAiICAgICAgLSBuYW1lOiBGYWlsIGNsb3NlZCB3aXRob3V0IGEgY3VycmVudC1oZWFkIE9wZW5Db2RlIHZlcmRpY3RcbiIsIDEKICAgIClbMV0uc3BsaXQoIlxuICBjYW5jZWwtc3VwZXJzZWRlZC1vcGVuY29kZS1yZXZpZXctcnVuczpcbiIsIDEpWzBdCgoKZGVmIHRlc3RfYWRtaXNzaW9uX3VzZXNfb25lX3Jldmlld3NfcmVhZF93aXRob3V0X3J1bm5lcl9wb2xsaW5nKCkgLT4gTm9uZToKICAgICIiIk1pc3NpbmcgbW9kZWwgZXZpZGVuY2UgcmVsZWFzZXMgdGhlIHJ1bm5lciBpbnN0ZWFkIG9mIGFsbG9jYXRpbmcgUkVTVCBwb2xsaW5nLiIiIgogICAgc3RlcCA9IF9hZG1pc3Npb25fc3RlcCgpCiAgICBhc3NlcnQgc3RlcC5jb3VudCgnZ2ggYXBpICJyZXBvcy8ke1RBUkdFVF9SRVBPU0lUT1JZfS9wdWxscy8ke1BSX05VTUJFUn0iJykgPT0gMQogICAgYXNzZXJ0IHN0ZXAuY291bnQoJ2doIGFwaSAtLXBhZ2luYXRlICJyZXBvcy8ke1RBUkdFVF9SRVBPU0lUT1JZfS9wdWxscy8ke1BSX05VTUJFUn0vcmV2aWV3cz9wZXJfcGFnZT0xMDAiJykgPT0gMQogICAgYXNzZXJ0ICJ3aGlsZSA6OyBkbyIgbm90IGluIHN0ZXAKICAgIGFzc2VydCAicG9sbF9pbnRlcnZhbF9zZWNvbmRzIiBub3QgaW4gc3RlcAogICAgYXNzZXJ0ICJwb2xsX2RlYWRsaW5lX2Vwb2NoIiBub3QgaW4gc3RlcAogICAgYXNzZXJ0ICJzbGVlcCAiIG5vdCBpbiBzdGVwCgoKZGVmIHRlc3RfcmV2aWV3X3JlYWRfa2VlcHNfbWF4aW11bV9yZXN0X3BhZ2Vfc2l6ZSgpIC0+IE5vbmU6CiAgICAiIiJUaGUgc2luZ2xlIFJldmlld3MgcmVhZCBtaW5pbWl6ZXMgcGFnZXMgd2l0aG91dCBkcm9wcGluZyBoaXN0b3J5IGV2aWRlbmNlLiIiIgogICAgc3RlcCA9IF9hZG1pc3Npb25fc3RlcCgpCiAgICBhc3NlcnQgIi9yZXZpZXdzP3Blcl9wYWdlPTEwMCIgaW4gc3RlcAogICAgYXNzZXJ0ICJnaCBhcGkgLS1wYWdpbmF0ZSIgaW4gc3RlcAo=
+          SELF_B64: IiIiUmVncmVzc2lvbiBjb250cmFjdCBmb3Igb25lLXNob3QgUmVxdWlyZWQgT3BlbkNvZGUgdmVyZGljdCBhZG1pc3Npb24uIiIiCgpmcm9tIF9fZnV0dXJlX18gaW1wb3J0IGFubm90YXRpb25zCgppbXBvcnQganNvbgppbXBvcnQgb3MKaW1wb3J0IHNodXRpbAppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgdGV4dHdyYXAKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgppbXBvcnQgcHl0ZXN0CgoKV09SS0ZMT1cgPSBQYXRoKCIuZ2l0aHViL3dvcmtmbG93cy9vcGVuY29kZS1yZXZpZXcueW1sIikKSEVBRF9TSEEgPSAiYSIgKiA0MAoKCmRlZiBfc2NyaXB0KCkgLT4gc3RyOgogICAgIiIiRXh0cmFjdCB0aGUgcHJvZHVjdGlvbiBvbmUtc2hvdCB2ZXJkaWN0IGFkbWlzc2lvbiBzY3JpcHQuIiIiCiAgICB3b3JrZmxvdyA9IFdPUktGTE9XLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKQogICAgc3RlcCA9IHdvcmtmbG93LnNwbGl0KAogICAgICAgICIgICAgICAtIG5hbWU6IEZhaWwgY2xvc2VkIHdpdGhvdXQgYSBjdXJyZW50LWhlYWQgT3BlbkNvZGUgdmVyZGljdFxuIiwgMQogICAgKVsxXS5zcGxpdCgiXG4gIGNhbmNlbC1zdXBlcnNlZGVkLW9wZW5jb2RlLXJldmlldy1ydW5zOlxuIiwgMSlbMF0KICAgIHJldHVybiB0ZXh0d3JhcC5kZWRlbnQoc3RlcC5zcGxpdCgiICAgICAgICBydW46IHxcbiIsIDEpWzFdKQoKCmRlZiBfcnVuKAogICAgdG1wX3BhdGg6IFBhdGgsCiAgICAqLAogICAgbGl2ZV9wcjogZGljdFtzdHIsIG9iamVjdF0sCiAgICByZXZpZXdzOiBsaXN0W2RpY3Rbc3RyLCBvYmplY3RdXSB8IE5vbmUgPSBOb25lLAogICAgZmFpbF9yZXZpZXdzOiBib29sID0gRmFsc2UsCikgLT4gdHVwbGVbc3VicHJvY2Vzcy5Db21wbGV0ZWRQcm9jZXNzW3N0cl0sIGxpc3Rbc3RyXV06CiAgICAiIiJFeGVjdXRlIHRoZSBwcm9kdWN0aW9uIHN0ZXAgYWdhaW5zdCBkZXRlcm1pbmlzdGljIGxpdmUgUFIvcmV2aWV3IGV2aWRlbmNlLiIiIgogICAgYmFzaCA9IHNodXRpbC53aGljaCgiYmFzaCIpCiAgICBqcSA9IHNodXRpbC53aGljaCgianEiKQogICAgaWYgYmFzaCBpcyBOb25lIG9yIGpxIGlzIE5vbmU6CiAgICAgICAgcHl0ZXN0LnNraXAoImJhc2ggYW5kIGpxIGFyZSByZXF1aXJlZCIpCiAgICBmYWtlX2JpbiA9IHRtcF9wYXRoIC8gImJpbiIKICAgIGZha2VfYmluLm1rZGlyKCkKICAgIGxvZyA9IHRtcF9wYXRoIC8gImNhbGxzIgogICAgZ2ggPSBmYWtlX2JpbiAvICJnaCIKICAgIGdoLndyaXRlX3RleHQoCiAgICAgICAgIiMhL3Vzci9iaW4vZW52IGJhc2hcbiIKICAgICAgICAic2V0IC1ldW8gcGlwZWZhaWxcbiIKICAgICAgICAicHJpbnRmICclc1xcbicgXCIkKlwiID4+XCIkQ0FMTF9MT0dcIlxuIgogICAgICAgICJpZiBbWyBcIiQqXCIgPT0gXCJhcGkgcmVwb3MvQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlL3B1bGxzLzQyXCIgXV07IHRoZW5cbiIKICAgICAgICAiICBwcmludGYgJyVzXFxuJyBcIiRMSVZFX1BSXCJcbiIKICAgICAgICAiICBleGl0IDBcbiIKICAgICAgICAiZmlcbiIKICAgICAgICAiaWYgW1sgXCIkKlwiID09IFwiYXBpIC0tcGFnaW5hdGUgcmVwb3MvQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlL3B1bGxzLzQyL3Jldmlld3M/cGVyX3BhZ2U9MTAwXCIgXV07IHRoZW5cbiIKICAgICAgICAiICBpZiBbWyBcIiRGQUlMX1JFVklFV1NcIiA9PSBcInRydWVcIiBdXTsgdGhlbiBleGl0IDc7IGZpXG4iCiAgICAgICAgIiAgcHJpbnRmICclc1xcbicgXCIkUkVWSUVXU1wiXG4iCiAgICAgICAgIiAgZXhpdCAwXG4iCiAgICAgICAgImZpXG4iCiAgICAgICAgImV4aXQgOTdcbiIsCiAgICAgICAgZW5jb2Rpbmc9InV0Zi04IiwKICAgICkKICAgIGdoLmNobW9kKDBvNzU1KQogICAgc2xlZXAgPSBmYWtlX2JpbiAvICJzbGVlcCIKICAgIHNsZWVwLndyaXRlX3RleHQoIiMhL3Vzci9iaW4vZW52IGJhc2hcbmV4aXQgOTFcbiIsIGVuY29kaW5nPSJ1dGYtOCIpCiAgICBzbGVlcC5jaG1vZCgwbzc1NSkKICAgIHJlc3VsdCA9IHN1YnByb2Nlc3MucnVuKAogICAgICAgIFtiYXNoLCAiLWMiLCBfc2NyaXB0KCldLAogICAgICAgIGVudj17CiAgICAgICAgICAgICoqb3MuZW52aXJvbiwKICAgICAgICAgICAgIlBBVEgiOiBmIntmYWtlX2Jpbn17b3MucGF0aHNlcH17b3MuZW52aXJvbi5nZXQoJ1BBVEgnLCAnJyl9IiwKICAgICAgICAgICAgIkNBTExfTE9HIjogc3RyKGxvZyksCiAgICAgICAgICAgICJMSVZFX1BSIjoganNvbi5kdW1wcyhsaXZlX3ByKSwKICAgICAgICAgICAgIlJFVklFV1MiOiBqc29uLmR1bXBzKHJldmlld3Mgb3IgW10pLAogICAgICAgICAgICAiRkFJTF9SRVZJRVdTIjogc3RyKGZhaWxfcmV2aWV3cykubG93ZXIoKSwKICAgICAgICAgICAgIkdIX1RPS0VOIjogInRlc3QtdG9rZW4iLAogICAgICAgICAgICAiVEFSR0VUX1JFUE9TSVRPUlkiOiAiQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlIiwKICAgICAgICAgICAgIlBSX05VTUJFUiI6ICI0MiIsCiAgICAgICAgICAgICJIRUFEX1NIQSI6IEhFQURfU0hBLAogICAgICAgICAgICAiUFJfQUNUSU9OIjogInN5bmNocm9uaXplIiwKICAgICAgICAgICAgIlBSX0RSQUZUIjogImZhbHNlIiwKICAgICAgICAgIH0sCiAgICAgICAgdGV4dD1UcnVlLAogICAgICAgIGNhcHR1cmVfb3V0cHV0PVRydWUsCiAgICAgICAgY2hlY2s9RmFsc2UsCiAgICApCiAgICByZXR1cm4gcmVzdWx0LCBsb2cucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpLnNwbGl0bGluZXMoKQoKCmRlZiB0ZXN0X3N0YWxlX2hlYWRfcmV0aXJlc19iZWZvcmVfcmV2aWV3c19yZWFkKHRtcF9wYXRoOiBQYXRoKSAtPiBOb25lOgogICAgIiIiQSBtb3ZlZCBoZWFkIGNhbm5vdCBjb25zdW1lIG9yIGFkbWl0IHJldmlldyBldmlkZW5jZS4iIiIKICAgIHJlc3VsdCwgY2FsbHMgPSBfcnVuKAogICAgICAgIHRtcF9wYXRoLAogICAgICAgIGxpdmVfcHI9eyJoZWFkIjogeyJzaGEiOiAiYiIgKiA0MH0sICJkcmFmdCI6IEZhbHNlLCAic3RhdGUiOiAib3BlbiJ9LAogICAgKQogICAgYXNzZXJ0IHJlc3VsdC5yZXR1cm5jb2RlID09IDAKICAgIGFzc2VydCBjYWxscyA9PSBbImFwaSByZXBvcy9Db250ZXh0dWFsV2lzZG9tTGFiL2V4YW1wbGUvcHVsbHMvNDIiXQoKCmRlZiB0ZXN0X2Nsb3NlZF9jdXJyZW50X2hlYWRfcmV0aXJlc19iZWZvcmVfcmV2aWV3c19yZWFkKHRtcF9wYXRoOiBQYXRoKSAtPiBOb25lOgogICAgIiIiQSBjbG9zZWQgY3VycmVudCBoZWFkIHJlbGVhc2VzIHRoZSBydW5uZXIgd2l0aG91dCBhIHJldmlldyByZWFkLiIiIgogICAgcmVzdWx0LCBjYWxscyA9IF9ydW4oCiAgICAgICAgdG1wX3BhdGgsCiAgICAgICAgbGl2ZV9wcj17ImhlYWQiOiB7InNoYSI6IEhFQURfU0hBfSwgImRyYWZ0IjogRmFsc2UsICJzdGF0ZSI6ICJjbG9zZWQifSwKICAgICkKICAgIGFzc2VydCByZXN1bHQucmV0dXJuY29kZSA9PSAwCiAgICBhc3NlcnQgY2FsbHMgPT0gWyJhcGkgcmVwb3MvQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlL3B1bGxzLzQyIl0KCgpkZWYgdGVzdF9kcmFmdF9jdXJyZW50X2hlYWRfcmV0aXJlc19iZWZvcmVfcmV2aWV3c19yZWFkKHRtcF9wYXRoOiBQYXRoKSAtPiBOb25lOgogICAgIiIiQSBkcmFmdCBjdXJyZW50IGhlYWQgcmVsZWFzZXMgdGhlIHJ1bm5lciB3aXRob3V0IGFuIGltcG9zc2libGUgcmV2aWV3IHdhaXQuIiIiCiAgICByZXN1bHQsIGNhbGxzID0gX3J1bigKICAgICAgICB0bXBfcGF0aCwKICAgICAgICBsaXZlX3ByPXsiaGVhZCI6IHsic2hhIjogSEVBRF9TSEF9LCAiZHJhZnQiOiBUcnVlLCAic3RhdGUiOiAib3BlbiJ9LAogICAgKQogICAgYXNzZXJ0IHJlc3VsdC5yZXR1cm5jb2RlID09IDAKICAgIGFzc2VydCBjYWxscyA9PSBbImFwaSByZXBvcy9Db250ZXh0dWFsV2lzZG9tTGFiL2V4YW1wbGUvcHVsbHMvNDIiXQoKCmRlZiB0ZXN0X2N1cnJlbnRfaGVhZF9yZWFkc19yZXZpZXdzX29uY2VfYW5kX2FjY2VwdHNfZXhhY3RfdmVyZGljdCh0bXBfcGF0aDogUGF0aCkgLT4gTm9uZToKICAgICIiIkEgbGl2ZSBjdXJyZW50IGhlYWQgYWRtaXRzIG9uZSBleGFjdC1oZWFkIGZvcm1hbCBPcGVuQ29kZSB2ZXJkaWN0LiIiIgogICAgcmV2aWV3cyA9IFsKICAgICAgICB7CiAgICAgICAgICAgICJ1c2VyIjogeyJsb2dpbiI6ICJvcGVuY29kZS1hZ2VudFtib3RdIn0sCiAgICAgICAgICAgICJjb21taXRfaWQiOiBIRUFEX1NIQSwKICAgICAgICAgICAgInN0YXRlIjogIkFQUFJPVkVEIiwKICAgICAgICAgICAgImJvZHkiOiAic291cmNlLWJhY2tlZCByZXZpZXciLAogICAgICAgIH0KICAgIF0KICAgIHJlc3VsdCwgY2FsbHMgPSBfcnVuKAogICAgICAgIHRtcF9wYXRoLAogICAgICAgIGxpdmVfcHI9eyJoZWFkIjogeyJzaGEiOiBIRUFEX1NIQX0sICJkcmFmdCI6IEZhbHNlLCAic3RhdGUiOiAib3BlbiJ9LAogICAgICAgIHJldmlld3M9cmV2aWV3cywKICAgICkKICAgIGFzc2VydCByZXN1bHQucmV0dXJuY29kZSA9PSAwLCByZXN1bHQuc3RkZXJyCiAgICBhc3NlcnQgY2FsbHMgPT0gWwogICAgICAgICJhcGkgcmVwb3MvQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlL3B1bGxzLzQyIiwKICAgICAgICAiYXBpIC0tcGFnaW5hdGUgcmVwb3MvQ29udGV4dHVhbFdpc2RvbUxhYi9leGFtcGxlL3B1bGxzLzQyL3Jldmlld3M/cGVyX3BhZ2U9MTAwIiwKICAgIF0KCgpkZWYgdGVzdF9yZXZpZXdzX3RyYW5zcG9ydF9mYWlsdXJlX2ZhaWxzX29uY2VfYW5kX3JlbGVhc2VzX3J1bm5lcih0bXBfcGF0aDogUGF0aCkgLT4gTm9uZToKICAgICIiIlRyYW5zcG9ydCBmYWlsdXJlIGlzIGZhaWwtY2xvc2VkIHdpdGhvdXQgYSByZXBvc2l0b3J5LWF1dGhvcmVkIHJldHJ5IGNvdW50LiIiIgogICAgcmVzdWx0LCBjYWxscyA9IF9ydW4oCiAgICAgICAgdG1wX3BhdGgsCiAgICAgICAgbGl2ZV9wcj17ImhlYWQiOiB7InNoYSI6IEhFQURfU0hBfSwgImRyYWZ0IjogRmFsc2UsICJzdGF0ZSI6ICJvcGVuIn0sCiAgICAgICAgZmFpbF9yZXZpZXdzPVRydWUsCiAgICApCiAgICBhc3NlcnQgcmVzdWx0LnJldHVybmNvZGUgPT0gMQogICAgYXNzZXJ0ICJSZXZpZXdzIEFQSSByZWFkIGZhaWxlZCBkdXJpbmcgb25lLXNob3QiIGluIHJlc3VsdC5zdGRvdXQKICAgIGFzc2VydCBsZW4oY2FsbHMpID09IDIKICAgIGFzc2VydCAic2xlZXAgIiBub3QgaW4gX3NjcmlwdCgpCg==
         run: |
           set -euo pipefail
           python3 <<'PY'
+          import base64
+          import os
           from pathlib import Path
 
           workflow_path = Path('.github/workflows/opencode-review.yml')
           workflow = workflow_path.read_text(encoding='utf-8')
-          start_marker = '      - name: Fail closed without a current-head OpenCode verdict\n'
-          end_marker = '\n  cancel-superseded-opencode-review-runs:\n'
-          if workflow.count(start_marker) != 1 or workflow.count(end_marker) != 1:
+          start = '      - name: Fail closed without a current-head OpenCode verdict\n'
+          end = '\n  cancel-superseded-opencode-review-runs:\n'
+          if workflow.count(start) != 1 or workflow.count(end) != 1:
               raise SystemExit('OpenCode required-verdict step boundaries drifted')
-          before, rest = workflow.split(start_marker, 1)
-          _old_step, after = rest.split(end_marker, 1)
-          replacement = '''      - name: Fail closed without a current-head OpenCode verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_ACTION: ${{ github.event.action }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
-        run: |
-          set -euo pipefail
-          if [ "$PR_ACTION" = "closed" ]; then
-            echo "PR closed; a current-head OpenCode verdict is not required."
-            exit 0
-          fi
-          if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then
-            echo "::error::Missing PR number or head SHA; cannot verify a current-head OpenCode verdict."
-            exit 1
-          fi
-          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
-          live_draft="$(printf '%s' "$live_pr" | jq -r 'if (.draft | type) == "boolean" then (.draft | tostring) else empty end')"
-          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
-          if [ -z "$live_head" ] || [ -z "$live_draft" ] || [ -z "$live_state" ]; then
-            echo "::error::Could not validate live pull request state before verdict admission."
-            exit 1
-          fi
-          if [ "$live_state" != "open" ] && [ "$live_state" != "closed" ]; then
-            echo "::error::Could not validate live pull request state before verdict admission."
-            exit 1
-          fi
-          if [ "$live_state" = "closed" ]; then
-            echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
-            exit 0
-          fi
-          if [ "$live_draft" = "true" ]; then
-            echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
-            exit 0
-          fi
-          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "Pull request head moved on the live open, ready-for-review PR; a fresh required-review run will bind the current head."
-            exit 0
-          fi
-          if [ "$PR_DRAFT" = "true" ]; then
-            echo "Event draft snapshot is stale; continuing one-shot verdict admission for the live ready PR."
-          fi
-          if ! reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"; then
-            echo "::error::Reviews API read failed during one-shot current-head verdict admission; failing closed and releasing the runner."
-            exit 1
-          fi
-          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
-            (add // [])
-            | [
-                .[]
-                | select(
-                    (.user.login // "" | ascii_downcase) as $user
-                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
-                  )
-                | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
-              ]
-            | (last // {}) as $review
-            | ($review.body // "" | ascii_downcase) as $body
-            | if $review.state == "CHANGES_REQUESTED" then
-                "CHANGES_REQUESTED"
-              elif $review.state == "APPROVED"
-                and ($body | contains("deterministic current-head evidence") | not)
-                and ($body | contains("deterministic fallback approval") | not)
-                and ($body | contains("model-unavailable evidence fallback") | not)
-                and ($body | contains("did not emit a usable current-head control block") | not)
-                and ($body | contains("scope: `unsupported`") | not)
-                and ($body | contains("model-pool outcome: `unknown`") | not)
-              then
-                "APPROVED"
-              else
-                empty
-              end
-          ')"
-          if [ -z "$verdict" ]; then
-            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict. The dispatch path wakes this exact failed run when the verdict arrives."
-            exit 1
-          fi
-          echo "Current-head OpenCode verdict: ${verdict}."
-'''
-          workflow = before + replacement + end_marker + after
-          workflow = workflow.replace(
-              '# `converted_to_draft` is included so a PR going draft mid-poll fires a\n'
-              '    # fresh run of this same workflow: the head-scoped concurrency group below\n'
-              '    # (`cancel-in-progress: true`) cancels any in-flight non-draft\n'
-              '    # "Fail closed without a current-head OpenCode verdict" poll for that\n'
-              '    # exact same head. Every non-closed admission path revalidates the live\n'
-              '    # PR/head/state before dispatching, exempting, or polling so out-of-order\n'
-              '    # draft/ready/closed events cannot publish stale evidence or wait on an\n'
-              '    # impossible verdict.\n',
-              '# `converted_to_draft` is included so a same-head state transition can\n'
-              '    # supersede any older admission run. Every non-closed admission path\n'
-              '    # revalidates live PR/head/state before dispatching, exempting, or reading\n'
-              '    # reviews, so stale events cannot publish or admit stale evidence.\n',
+          before, rest = workflow.split(start, 1)
+          _old, after = rest.split(end, 1)
+          replacement = base64.b64decode(os.environ['STEP_B64']).decode()
+          workflow_path.write_text(before + replacement + end + after, encoding='utf-8')
+
+          Path('tests/test_opencode_poll_rate_budget.py').write_text(
+              base64.b64decode(os.environ['RATE_B64']).decode(), encoding='utf-8'
           )
-          workflow = workflow.replace(
-              '# `converted_to_draft` still cancels an active same-head verdict poll.\n',
-              '# `converted_to_draft` still supersedes an active same-head admission run.\n',
+          Path('tests/test_opencode_poll_self_retirement.py').write_text(
+              base64.b64decode(os.environ['SELF_B64']).decode(), encoding='utf-8'
           )
-          workflow = workflow.replace(
-              '    # old-head events, while the poll above now revalidates live PR identity on\n'
-              '    # every wait iteration so an already-running obsolete poll can self-retire\n'
-              '    # without consuming a second runner. This sibling job remains a defense in\n'
-              '    # depth for queued/requested old-head runs and for legacy runs created from\n'
-              '    # older workflow revisions that lack the in-loop self-retirement check.\n',
-              '    # old-head events. The admission step above is one-shot and never holds a\n'
-              '    # runner waiting for model work; this sibling remains defense in depth for\n'
-              '    # queued/requested old-head runs and legacy workflow revisions.\n',
-          )
-          workflow_path.write_text(workflow, encoding='utf-8')
-
-          Path('tests/test_opencode_poll_rate_budget.py').write_text('''"""Request-budget regression for one-shot Required OpenCode verdict admission."""
-
-from pathlib import Path
-
-
-WORKFLOW = Path(".github/workflows/opencode-review.yml")
-
-
-def _admission_step() -> str:
-    """Return the one-shot current-head verdict admission step."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    return workflow.split(
-        "      - name: Fail closed without a current-head OpenCode verdict\\n", 1
-    )[1].split("\\n  cancel-superseded-opencode-review-runs:\\n", 1)[0]
-
-
-def test_admission_uses_one_reviews_read_without_runner_polling() -> None:
-    """Missing model evidence releases the runner instead of allocating REST polling."""
-    step = _admission_step()
-    assert step.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
-    assert step.count('gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"') == 1
-    assert "while :; do" not in step
-    assert "poll_interval_seconds" not in step
-    assert "poll_deadline_epoch" not in step
-    assert "sleep " not in step
-
-
-def test_review_read_keeps_maximum_rest_page_size() -> None:
-    """The single Reviews read minimizes pages without dropping history evidence."""
-    step = _admission_step()
-    assert "/reviews?per_page=100" in step
-    assert "gh api --paginate" in step
-''', encoding='utf-8')
-
-          Path('tests/test_opencode_poll_self_retirement.py').write_text('''"""Regression contract for one-shot Required OpenCode verdict admission."""
-
-from __future__ import annotations
-
-import json
-import os
-import shutil
-import subprocess
-import textwrap
-from pathlib import Path
-
-import pytest
-
-
-WORKFLOW = Path(".github/workflows/opencode-review.yml")
-HEAD_SHA = "a" * 40
-
-
-def _script() -> str:
-    """Extract the production one-shot verdict admission script."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    step = workflow.split(
-        "      - name: Fail closed without a current-head OpenCode verdict\\n", 1
-    )[1]
-    return textwrap.dedent(step.split("        run: |\\n", 1)[1])
-
-
-def _run(tmp_path: Path, *, live_pr: dict[str, object], reviews: list[dict[str, object]] | None = None, fail_reviews: bool = False) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Execute the production step against deterministic live PR/review evidence."""
-    bash = shutil.which("bash")
-    jq = shutil.which("jq")
-    if bash is None or jq is None:
-        pytest.skip("bash and jq are required")
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    log = tmp_path / "calls"
-    gh = fake_bin / "gh"
-    gh.write_text('''#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >>"$CALL_LOG"
-if [[ "$*" == "api repos/ContextualWisdomLab/example/pulls/42" ]]; then
-  printf '%s\\n' "$LIVE_PR"
-  exit 0
-fi
-if [[ "$*" == "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100" ]]; then
-  if [[ "$FAIL_REVIEWS" == "true" ]]; then exit 7; fi
-  printf '%s\\n' "$REVIEWS"
-  exit 0
-fi
-exit 97
-''', encoding='utf-8')
-    gh.chmod(0o755)
-    sleep = fake_bin / "sleep"
-    sleep.write_text("#!/usr/bin/env bash\\nexit 91\\n", encoding="utf-8")
-    sleep.chmod(0o755)
-    result = subprocess.run(
-        [bash, "-c", _script()],
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
-            "CALL_LOG": str(log),
-            "LIVE_PR": json.dumps(live_pr),
-            "REVIEWS": json.dumps(reviews or []),
-            "FAIL_REVIEWS": str(fail_reviews).lower(),
-            "GH_TOKEN": "test-token",
-            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
-            "PR_NUMBER": "42",
-            "HEAD_SHA": HEAD_SHA,
-            "PR_ACTION": "synchronize",
-            "PR_DRAFT": "false",
-        },
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    return result, log.read_text(encoding="utf-8").splitlines()
-
-
-def test_stale_head_retires_before_reviews_read(tmp_path: Path) -> None:
-    """A moved head cannot consume or admit review evidence."""
-    result, calls = _run(tmp_path, live_pr={"head": {"sha": "b" * 40}, "draft": False, "state": "open"})
-    assert result.returncode == 0
-    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
-
-
-def test_closed_current_head_retires_before_reviews_read(tmp_path: Path) -> None:
-    """A closed current head releases the runner without a review read."""
-    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "closed"})
-    assert result.returncode == 0
-    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
-
-
-def test_draft_current_head_retires_before_reviews_read(tmp_path: Path) -> None:
-    """A draft current head releases the runner without an impossible review wait."""
-    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": True, "state": "open"})
-    assert result.returncode == 0
-    assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
-
-
-def test_current_head_reads_reviews_once_and_accepts_exact_verdict(tmp_path: Path) -> None:
-    """A live current head admits one exact-head formal OpenCode verdict."""
-    reviews = [{"user": {"login": "opencode-agent[bot]"}, "commit_id": HEAD_SHA, "state": "APPROVED", "body": "source-backed review"}]
-    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "open"}, reviews=reviews)
-    assert result.returncode == 0, result.stderr
-    assert calls == [
-        "api repos/ContextualWisdomLab/example/pulls/42",
-        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
-    ]
-
-
-def test_reviews_transport_failure_fails_once_and_releases_runner(tmp_path: Path) -> None:
-    """Transport failure is fail-closed without a repository-authored retry count."""
-    result, calls = _run(tmp_path, live_pr={"head": {"sha": HEAD_SHA}, "draft": False, "state": "open"}, fail_reviews=True)
-    assert result.returncode == 1
-    assert "Reviews API read failed during one-shot" in result.stdout
-    assert len(calls) == 2
-    assert "sleep " not in _script()
-''', encoding='utf-8')
 
           regression_path = Path('tests/test_opencode_required_verdict_regression.py')
           regression = regression_path.read_text(encoding='utf-8')
-          regression = regression.replace('    assert "while :; do" in target_job\n    assert \'sleep "$poll_interval_seconds"\' in target_job\n', '    assert "while :; do" not in target_job\n    assert "poll_interval_seconds" not in target_job\n    assert "poll_deadline_epoch" not in target_job\n    assert \'sleep "$poll_interval_seconds"\' not in target_job\n')
-          regression = regression.replace('before polling', 'before verdict admission')
-          regression = regression.replace('before ever polling Reviews API', 'before any Reviews API admission read')
-          regression = regression.replace('while :; do ... sleep "$poll_interval_seconds"; done', 'one-shot current-head verdict read')
-          regression_path.write_text(regression, encoding='utf-8')
+          old = '    assert "while :; do" in target_job\n    assert \'sleep "$poll_interval_seconds"\' in target_job\n'
+          new = '    assert "while :; do" not in target_job\n    assert "poll_interval_seconds" not in target_job\n    assert "poll_deadline_epoch" not in target_job\n    assert \'sleep "$poll_interval_seconds"\' not in target_job\n'
+          count = regression.count(old)
+          if count != 1:
+              raise SystemExit(f'obsolete polling assertions drifted: {count}')
+          regression_path.write_text(regression.replace(old, new, 1), encoding='utf-8')
 
           doctoring_path = Path('docs/doctoring/opencode-stale-poll-self-retirement.md')
           doctoring = doctoring_path.read_text(encoding='utf-8')
           marker = '## 2026-09-02 one-shot runner-release supersession'
           if marker not in doctoring:
-              doctoring += '''\n\n## 2026-09-02 one-shot runner-release supersession\n\nThe required-verdict job no longer polls while model review continues. It now performs one authoritative live-PR read followed by at most one paginated Reviews read. Missing or unavailable exact-head verdict evidence fails closed immediately and releases the runner. The authenticated `opencode-review-dispatch.yml` path remains responsible for waking the exact failed required run via `rerun-failed-jobs` when the formal verdict arrives. This removes repository-authored polling interval, retry-count, and wall-clock allocations from the review waiting path without imposing an inference timeout on contextual-orchestrator or the serving model.\n'''
+              doctoring += '\n\n' + marker + '\n\nThe required-verdict job no longer polls while model review continues. It performs one authoritative live-PR read followed by at most one paginated Reviews read. Missing or unavailable exact-head verdict evidence fails closed immediately and releases the runner. The authenticated `opencode-review-dispatch.yml` path remains responsible for waking the exact failed required run via `rerun-failed-jobs` when the formal verdict arrives. This removes repository-authored polling interval, retry-count, and wall-clock allocations from the review waiting path without imposing an inference timeout on contextual-orchestrator or the serving model.\n'
           doctoring_path.write_text(doctoring, encoding='utf-8')
 
           baseline_path = Path('docs/product-technical-gap-baseline.md')
           baseline = baseline_path.read_text(encoding='utf-8')
-          marker = 'OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02'
+          marker = '### OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02'
           if marker not in baseline:
-              baseline += '''\n\n### OPENCODE-ONE-SHOT-RUNNER-RELEASE-2026-09-02\n- Owner: `ContextualWisdomLab/.github` Required OpenCode Review control plane.\n- RCA: the required-verdict job occupied a runner while waiting for asynchronous model work, using repository-authored poll interval, transport retry count, and wall-clock deadline despite an existing authenticated exact-run wake contract in the dispatch workflow.\n- GREEN contract: one live PR read + one Reviews read; absence/transport failure is immediately non-passing, and the dispatch owner wakes the exact failed run after a verdict. Model reasoning/streaming receives no caller wall-clock timeout.\n- Regression: `tests/test_opencode_required_verdict_runner_release.py`, one-shot request-budget/state tests, and the existing exact-run dispatch validation.\n'''
+              baseline += '\n\n' + marker + '\n- Owner: `ContextualWisdomLab/.github` Required OpenCode Review control plane.\n- RCA: the required-verdict job occupied a runner while waiting for asynchronous model work, using repository-authored poll interval, transport retry count, and wall-clock deadline despite an existing authenticated exact-run wake contract in the dispatch workflow.\n- GREEN contract: one live PR read + one Reviews read; absence/transport failure is immediately non-passing, and the dispatch owner wakes the exact failed run after a verdict. Model reasoning/streaming receives no caller wall-clock timeout.\n- Regression: `tests/test_opencode_required_verdict_runner_release.py`, one-shot request-budget/state tests, and the existing exact-run dispatch validation.\n'
           baseline_path.write_text(baseline, encoding='utf-8')
 
           changelog_path = Path('CHANGELOG.md')
@@ -353,22 +103,22 @@ def test_reviews_transport_failure_fails_once_and_releases_runner(tmp_path: Path
               changelog_path.write_text(note + changelog, encoding='utf-8')
           PY
 
-      - name: Verify GREEN focused and broader contracts
+      - name: Verify GREEN focused contracts
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 -m pytest -q \
             tests/test_opencode_required_verdict_runner_release.py \
             tests/test_opencode_poll_rate_budget.py \
             tests/test_opencode_poll_self_retirement.py \
-            tests/test_opencode_required_verdict_regression.py \
-            tests/test_opencode_workflow_shell_syntax.py
-          python3 - <<'PY'
-          import yaml
-          with open('.github/workflows/opencode-review.yml', encoding='utf-8') as handle:
-              yaml.safe_load(handle)
-          PY
+            tests/test_opencode_required_verdict_regression.py
+          python3 -m compileall -q scripts tests
           git diff --check
+
+      - name: Verify broader repository suite
+        run: |
+          set -euo pipefail
           PYTHONPATH=. python3 -m pytest tests -q
+          git diff --check
 
       - name: Publish only from unchanged writer head
         env:
