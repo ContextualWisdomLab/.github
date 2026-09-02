@@ -3038,8 +3038,13 @@ def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
 
 
 def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
-    """Return fresh active workflow-run evidence immediately before cancellation."""
-    payload = gh_api_json(f"repos/{run_repo}/actions/runs/{run_id}")
+    """Return fresh active workflow-run evidence with repository-correct read authority."""
+    central_repo = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    use_dispatch_authority = bool(
+        central_repo and run_repo == validate_github_repository(central_repo)
+    )
+    reader = gh_api_json_via_dispatch_token if use_dispatch_authority else gh_api_json
+    payload = reader(f"repos/{run_repo}/actions/runs/{run_id}")
     if not isinstance(payload, dict) or str(payload.get("status") or "").lower() not in {
         "queued",
         "in_progress",

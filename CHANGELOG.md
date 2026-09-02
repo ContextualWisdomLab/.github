@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Bind stale-review run revalidation to repository-correct credentials.** Central `repository_dispatch` Actions evidence now uses the existing central dispatch read authority while direct target-repository runs retain target read authority.
 - **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review. Also ensures every cancellation path (`cancel_stale_pr_runs`, `cancel_stale_opencode_runs`, `_cancel_revalidated_review_run_refs`) treats a run as cancelled only when `force_cancel_workflow_runs` actually reports success, not merely when live revalidation proved it stale -- superseding PR #1712's simpler `force_cancel_workflow_run_refs` wrapper (removed as dead code; its safety guarantee is preserved inline at every call site by this more thorough revalidate-then-cancel design).
 - **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
   invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
