@@ -297,6 +297,7 @@ def test_repository_ruleset_rejects_malformed_review_parameters() -> None:
 
     assert audit.audit_repository_ruleset(payload) == [
         "repository solo-maintainer ruleset must not require approving reviews",
+        "repository solo-maintainer ruleset must not require code-owner review",
         "repository ruleset stale-review dismissal on push is disabled",
         "repository solo-maintainer ruleset must not require last-push approval",
         "repository ruleset review-thread resolution protection is disabled",
