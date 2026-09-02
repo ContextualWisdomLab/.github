@@ -3309,7 +3309,10 @@ this tick** that a human check of `https://github.com/organizations/ContextualWi
 (or the Billing page) is the next step, not another round of workflow-level engineering, since the
 actual levers from here are a plan upgrade, self-hosted runner capacity, or deliberately throttling
 how many PRs get pushed to simultaneously across concurrent agent sessions -- not more YAML. If that
-check instead shows headroom well above the ~15-22 concurrent-job range measured here, the hypothesis
-in this entry is wrong and the real cause is one of the other two candidates above (workflow-level
-contention or genuine demand growth), which would need its own dedicated, better-instrumented
-investigation before any further fix is attempted.
+check instead shows headroom well above the 17 in-progress jobs measured across the 3 sampled
+repositories at `2026-09-02T13:28:00Z`-`13:29:xxZ` (see the table above; note this is a 3-of-63-repository
+sample at one instant, not a verified org-wide total -- other repositories' concurrently-in-progress
+jobs at that same moment were not counted here), the hypothesis in this entry is wrong and the real
+cause is one of the other two candidates above (workflow-level contention or genuine demand growth),
+which would need its own dedicated, better-instrumented investigation before any further fix is
+attempted.
