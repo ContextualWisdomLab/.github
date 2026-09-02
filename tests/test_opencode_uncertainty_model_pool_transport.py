@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "ci" / "run_opencode_review_model_pool.sh"
+NORMALIZER = ROOT / "scripts" / "ci" / "opencode_review_normalize_output.py"
 GATE = ROOT / "scripts" / "ci" / "opencode_review_approve_gate.sh"
 HEAD_SHA = "1" * 40
 RUN_ID = "424242"
@@ -34,8 +36,10 @@ def _bash() -> str:
     return command
 
 
-def test_needs_info_survives_model_pool_and_reaches_terminal_gate(tmp_path: Path) -> None:
-    """A valid current-run non-conclusion must not be retried as malformed output."""
+def test_needs_info_survives_model_pool_normalizer_and_terminal_gate(
+    tmp_path: Path,
+) -> None:
+    """A valid current-run non-conclusion must not be retried or rewritten."""
     review_dir = tmp_path / "review"
     source_dir = tmp_path / "source"
     runner_temp = tmp_path / "runner-temp"
@@ -114,6 +118,23 @@ def test_needs_info_survives_model_pool_and_reaches_terminal_gate(tmp_path: Path
     outputs = github_output.read_text(encoding="utf-8")
     assert "review_status=no_conclusion" in outputs
     assert "review_status=success" not in outputs
+
+    normalized = subprocess.run(
+        [
+            sys.executable,
+            str(NORMALIZER),
+            HEAD_SHA,
+            RUN_ID,
+            RUN_ATTEMPT,
+            str(selected),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert normalized.returncode == 0, normalized.stdout + normalized.stderr
+    assert selected.read_text(encoding="utf-8") == model_output
 
     gate = subprocess.run(
         [_bash(), str(GATE), HEAD_SHA, RUN_ID, RUN_ATTEMPT, str(selected)],
