@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -17,7 +18,7 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 10
     env:
-      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -57,7 +58,17 @@ jobs:
           repaired_block = ''.join(repaired)
           if repaired_block == block:
               raise SystemExit('parse_block indentation was already repaired')
-          path.write_text(text[:start] + repaired_block + text[end:])
+          text = text[:start] + repaired_block + text[end:]
+          if "\n  workflow_dispatch:\n" not in text:
+              trigger_anchor = "on:\n  push:\n"
+              if text.count(trigger_anchor) != 1:
+                  raise SystemExit('unexpected reconcile workflow trigger shape')
+              text = text.replace(
+                  trigger_anchor,
+                  "on:\n  workflow_dispatch:\n  push:\n",
+                  1,
+              )
+          path.write_text(text)
           PY
 
           git config user.name github-actions[bot]
@@ -70,3 +81,11 @@ jobs:
           git commit -m "ci: fix PR 1606 generated source indentation"
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+
+          curl --fail-with-body --silent --show-error -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${WORKFLOW_PUSH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/reconcile-pr1606-current-main.yml/dispatches" \
+            -d "{\"ref\":\"${GITHUB_REF_NAME}\"}"
