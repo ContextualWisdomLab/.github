@@ -249,3 +249,109 @@ fixed:
 - `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` — the
   authoritative ADR for *why* the pool pin is `orchestrator/free`; this
   revision's §8 note points here rather than restating the reasoning.
+
+## 2026-09-02 revision (third, same-day refinement)
+
+- **Subject:** the owner issued a third, further-refined version of the
+  directive the same day as the second revision above, delivered directly in
+  an agent session (again not via a PR comment). Per this file's own conflict
+  policy, `docs/product-goal-directive.md` was updated in place again — on
+  the same branch/PR as the second revision (`docs/product-goal-directive-2026-09-02-revision`,
+  ContextualWisdomLab/.github#1692), not a new PR, since that PR was still
+  open/draft and unmerged when this third revision arrived. The prior
+  agent-session identity that authored the second revision's PR body could
+  not be directly confirmed as the same session continuing (concurrent
+  sessions under the same account are normal per §2's "don't assume
+  concurrent commits are a race" instruction), so this revision's notes are
+  additive to, not a rewrite of, the second revision's verification record
+  above — both are kept so the reconciliation trail stays intact regardless
+  of which session's account of events is read first.
+
+### What changed in the directive text (second revision → third revision)
+
+- §1: added an explicit constraint on what "0 open PRs" may mean — reaching
+  it via merge or via a successor PR's full absorption of a predecessor's
+  valid delta only, never via a bare close. This is a forward reference to
+  §2's new repair-vs-close policy below.
+- §2: gained a substantial, entirely new PR-lifecycle policy not present in
+  the second revision at all — a `single-writer`/DDD violation, wrong
+  base/merge conflict, ADR-number collision, premature `Accepted` status, an
+  unprotected dependency, or a missing test/fixture/contract is a **repair
+  finding**, not grounds for closing a PR. Required response: downgrade to
+  Draft/Proposed and non-force restack/retarget onto the correct owner
+  stack (never force-push over someone else's branch); resolve a
+  `single-writer` conflict by integrating both deltas, never discarding
+  either; when an agent can't fix a PR directly, a successor must fully
+  absorb its valid delta and continue the predecessor's intent; a PR
+  blocked on an unlanded prerequisite stays open while the prerequisite is
+  completed; a mistakenly closed PR is recovered via reopen or successor,
+  not left closed. Closing a PR at all is permitted only for an explicit
+  user request, no valid delta remaining, a malicious change, or full
+  successor absorption — and even then, "closed" is a label, not
+  confirmation the underlying work landed anywhere.
+- §4: dropped the second revision's named-framework shortlist
+  ("React·Vite·shadcn/ui·jQuery 4"); the stack-choice criteria are now
+  stated framework-agnostically (security, maintainability, standards,
+  accessibility, measured performance), while still naming `shadcn/ui`
+  explicitly as the owned component source.
+- §5: moved the second revision's detailed per-repo ontology-owner
+  breakdown (which repo does discover/propose/align/validate/publish, etc.)
+  out of §5 and into §9, where the full core-repo table now lives; §5 itself
+  now just states the responsibilities are split across separate owners and
+  points to §9.
+- §8: spelled out, in the quoted text itself, exactly how the
+  `orchestrator/free` pin must be implemented at the GitHub Actions layer —
+  workflows select only the pool id and a gateway token, never a concrete
+  provider/model/group name or a paid-fallback flag; all free-candidate
+  discovery/routing/fallback happens inside contextual-orchestrator itself;
+  a workflow fails closed (not to a paid model) when no free capability is
+  available. This is strictly more specific than the second revision's bare
+  "`orchestrator/free` 고정," not a change in intent.
+- §9: added an explicit definition of what "core foundation" means (not a
+  common install for every product; a selective control-plane/service/
+  library one repo canonically owns because a responsibility repeats across
+  products, with role/maturity verified from protected-branch evidence, and
+  an open PR proposing core status is `Proposed`, not authoritative yet);
+  reorganized the same 21-repo list into five named categories (조직·계약 /
+  의미·데이터 / AI·운영 / Identity·보안·runtime / 재사용 기능) instead of the
+  second revision's flat bullet list; and added concrete interim-boundary
+  mechanisms for the §2 build-the-core policy — while an owner is still
+  building a needed capability, a consumer holds the boundary with a port,
+  an ACL, a feature flag, or a test double, and must not read the owner's
+  source, database, or a temporary branch directly.
+
+### Verification performed this revision
+
+1. **Repo list unchanged, re-confirmed.** The third revision's §9 names the
+   same 21 core repos as the second revision (reorganized into categories,
+   not expanded or reduced), plus the same second-revision consumer set is
+   implied by §9's new opening definition even though the third revision's
+   quoted text doesn't restate the seven-repo consumer list verbatim. No new
+   repo-existence check was needed beyond the second revision's — recorded
+   inline in the directive (§9 "Verification" note) rather than re-running
+   the same live-listing check for an unchanged set.
+2. **§2 repair-vs-close policy — no conflict found against
+   `docs/CWL-MASTER-CONTEXT.md` or `docs/agent-github-project-protocol.md`.**
+   This is new operational policy (how to handle a defective PR) rather than
+   a restatement of an existing binding convention, so there was nothing to
+   reconcile it against; it does not contradict anything already binding.
+3. **§8's newly-explicit workflow-implementation language — re-verified
+   against the same four workflow files as the second revision**
+   (`opencode-review-dispatch.yml`, `noema-review.yml`, `strix.yml`,
+   `pr-review-autofix.yml`): all four already set only the pool id plus a
+   gateway token, never a provider/model/group name or paid-fallback flag,
+   and `strix.yml` fails closed on any other requested value — the third
+   revision's more detailed wording matches confirmed reality exactly, same
+   conclusion as the second revision's check, now more specifically stated.
+
+### Audit trail (2026-09-02, third revision)
+
+- `docs/product-goal-directive.md` — updated again in place; each section
+  with third-revision changes carries its own dated note distinguishing
+  second-revision text from third-revision text, and the "Revision history"
+  section at the end of the file now has three dated entries.
+- ContextualWisdomLab/.github#1692 (branch
+  `docs/product-goal-directive-2026-09-02-revision`) — the same open PR
+  carrying both the second and third revision's commits; not superseded by
+  a new PR, per this directive's own "edit this file in place... do not
+  fork a second copy elsewhere" policy applied to the PR-branch level too.
