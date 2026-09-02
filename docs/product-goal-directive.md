@@ -160,7 +160,7 @@ combined "everything is a translatable string" table.
 
 ## 7. Realistic verification, load, and container testing
 
-> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. 초과하면 알고리즘·query·I/O·rendering을 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·개발 언어를 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up을 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·Frontend stack을 교체한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다.
+> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. 초과하면 알고리즘·query·I/O·rendering을 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·개발 언어를 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up을 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·Frontend stack을 교체한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
 **Addition (2026-09-02):** two anti-gaming clauses for the p95≤20ms criterion the 2026-09-01 revision
 added, not previously spelled out: (1) never satisfy the target by shrinking the sample, excluding
@@ -170,7 +170,13 @@ memory or latency driver, the fix is to replace the dependency or the frontend s
 accept the slower ceiling. Both reinforce, rather than change, the profile-first-then-fix-the-real-
 cause approach already in this section (algorithm/query/I/O/rendering profiling before reaching for a
 Rust rewrite) — the new text just forecloses the two most tempting ways to "pass" the check without
-actually fixing anything. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
+actually fixing anything. (Devin Review, 2026-09-02: the container-requirements sentences — Docker/
+Podman/Colima substitution, `shm_size`/PostgreSQL auto-tuning, compose-first operation for k8s
+portability, fixed-then-overridable container project naming, and the MLX/CPU/CUDA/OpenCL ADR
+requirement — were originally appended after this English commentary instead of inside the `>`
+blockquote above, so a consumer extracting only the ten quoted sections would have silently missed
+binding directive text. Moved into the blockquote itself, verbatim and unparaphrased; this commentary
+paragraph now contains only the anti-gaming-clause explanation it was written for.)
 
 ## 8. LLM, orchestration, and embedding
 
@@ -180,7 +186,27 @@ actually fixing anything. Docker는 Podman 또는 colima로 대체할 수 있다
 
 **Note (2026-08-30, superseded by the merged pin flip — see the correction below):** an earlier draft of this note said Strix stayed on `orchestrator/auto` pending `free_family_diversity` reaching `>= 2`. That is no longer true and must not be read as current: `.github/workflows/strix.yml` now hardcodes `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` and fails closed on any other value. This note originally went on to say that ADR-0003's 2026-08-30 amendment "records the owner's decision to accept the residual single-outage-domain risk immediately rather than wait for the evidence-gated threshold this note originally described" — that framing was false, as ADR-0003's own 2026-08-31 correction now records: no owner reviewed or accepted this switch or its risk. `free_account_diversity` (`scripts/ci/contextual_orchestrator_review_policy.py`; renamed from `free_family_diversity` once every KV credential became an independent discovery account rather than being grouped into a vendor "family", see #1468) remains useful as ongoing monitoring evidence for that open, unreviewed risk, not as a gate blocking the pin.
 
-**Note (2026-09-02):** this revision's re-issued §8 text again says "`orchestrator/free` 고정" ("pinned
+**Note (2026-09-02, Devin Review reconciliation):** §8's "LLM Provider group 이름을 코드·설정·테스트·
+라우팅 조건에 하드코딩하지 않는다" and §10's "GitHub Actions Workflow 이용에 관해 orchestrator/free 로
+고정" read as a direct contradiction taken in isolation — Devin Review flagged exactly this ("agents
+cannot satisfy both"). They govern different things and are not actually in tension: §8's prohibition
+is about **behavioral feature branching** — application/Agent/gateway code must never select a model,
+change capability handling, or gate a code path on a string match against a provider *group* name
+(e.g. `if group == "openai": ...`), because group membership is a display alias that can be
+re-partitioned without notice, while the underlying auto-discovered model characteristics (modality,
+context window, reasoning effort, tool calling, structured output, streaming, price/latency/
+availability/accuracy) are what must drive behavior. §10's pin is a **CI admission-pool selection**,
+not behavior branching: `CONTEXTUAL_ORCHESTRATOR_POOL=free` in a required-check workflow tells the
+sidecar which cost/ZDR-governed *admission pool* a security-critical CI job may draw candidates from
+at all — it changes no application code path, no feature, and no model-capability handling; every
+model actually selected from within that pool is still chosen by the same auto-discovery/capability
+ranking §8 requires. Reading §8 narrowly as "no group-name string literal may appear anywhere,
+including infrastructure/CI configuration" would make §10 itself impossible to state, which cannot
+have been the intent of a revision that added both in the same document. No text is weakened by this
+reconciliation — §8's quote is unchanged, and CI's `orchestrator/free` pin (§10, `strix.yml`) remains
+exactly as narrow and audited as before (see `docs/product-technical-gap-baseline.md`'s "`auto`
+removed as an accepted value" entry for the fail-closed enforcement of that narrowness). This
+revision's re-issued §8 text again says "`orchestrator/free` 고정" ("pinned
 to orchestrator/free"), but states it as a bare clause inside §8's general body rather than as a
 separately scope-qualified item. Read together with §10 below (added 2026-09-01, wording refined the
 same day to add "GitHub Actions Workflow 이용에 관해" — i.e. this governs CI-consumer workflows, not

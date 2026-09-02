@@ -379,3 +379,48 @@ fixed:
   translation-ledger architecture; the ontology-pipeline repo-responsibility split awaiting an
   `enterprise-architecture-core`/`context-graph-contracts`/`ConceptWeave` cross-check), plus the
   tracked follow-up to add the not-yet-cross-checked §9 repo names to `CWL-MASTER-CONTEXT.md`.
+
+## 2026-09-02 Devin Review reconciliation: one real internal contradiction, one real misplaced quote
+
+- **Date:** 2026-09-02
+- **Subject:** Devin Review's automated review of this PR (`#1659`) flagged 5 findings against the
+  2026-09-02 revision above. Two were `BUG`-severity and, verified directly against the file before
+  acting (not taken at face value, per this session's standing verification discipline), both turned
+  out to be real defects introduced by that revision's own edits:
+  1. **§7's newly-added container-requirements sentences (Docker/Podman/Colima substitution,
+     `shm_size`/PostgreSQL auto-tuning, compose-first k8s portability, fixed-then-overridable
+     container project naming, MLX/CPU/CUDA/OpenCL ADR requirement) had been appended after the
+     English "Addition (2026-09-02)" commentary paragraph instead of inside the `>` blockquote
+     above it.** Confirmed by direct inspection: the quoted §7 block ends at "...점검한다." and the
+     Korean container sentences sat at the tail of the English commentary that follows, with no `>`
+     prefix. Since this file's own "How to point a `/goal` session at this directive" section frames
+     the ten sections as extractable quoted blocks, any consumer pulling just the `>`-quoted text
+     would silently miss binding directive content. **Fix:** moved the Korean sentences verbatim into
+     the end of the §7 blockquote itself (no paraphrasing, no wording change), leaving the English
+     commentary paragraph containing only the anti-gaming-clause explanation it was originally written
+     for, with a short note recording the move and crediting Devin Review's finding.
+  2. **§8's "LLM Provider group 이름을... 하드코딩하지 않는다" and §10's "orchestrator/free 로 고정"
+     read as a direct contradiction in isolation** — Devin's own framing, "agents cannot satisfy both,"
+     is accurate as far as it goes. Verified this was a genuine gap: the existing §8/§10 notes already
+     explained the *scope* (CI-consumer workflows vs. general product capability) but never explicitly
+     reconciled §8's literal "하드코딩하지 않는다" against §10's own admitted hardcoding of a group-name
+     string in `strix.yml`'s `CONTEXTUAL_ORCHESTRATOR_POOL`. **Fix:** added a new note distinguishing
+     §8's actual target — **behavioral feature branching** in application/Agent/gateway code (never
+     select a model or change capability handling by string-matching a provider group name; drive
+     behavior from auto-discovered model characteristics instead) — from §10's **CI admission-pool
+     selection**, which changes no application code path or feature at all; it only tells a
+     security-critical required-check workflow which cost/ZDR-governed pool it may draw candidates
+     from, with every model inside that pool still chosen by the same auto-discovery §8 requires. No
+     directive quote was weakened or reopened by this reconciliation — both `>` blocks are unchanged.
+- **Not acted on:** Devin's other three findings were re-statements of gaps this same PR already
+  records — "focused test remains unverified" (no pytest in Devin's own review sandbox; this session's
+  actual `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q` run, `5
+  passed`, is the real evidence, and no test in this repo pins `product-goal-directive.md`'s prose —
+  confirmed via `grep -rln "product-goal-directive" tests/`, no matches), "master context remains
+  unsynchronized" (already Gap 5 in the gap-baseline), and "unverified roles become binding policy"
+  (already Gap 4). All three are accurate observations of already-tracked, already-labeled gaps, not
+  new defects — no further action needed on them beyond what's already recorded.
+- **Verification:** `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
+  → 5 passed (this file's only executable contract, unaffected by directive-text edits); confirmed via
+  `grep` that no test pins `product-goal-directive.md`'s literal prose.
+- **PR:** `ContextualWisdomLab/.github#1659`.
