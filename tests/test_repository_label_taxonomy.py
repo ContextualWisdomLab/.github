@@ -112,6 +112,13 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         {"repository": "aFIPC", "issue": 309, "type": "bug"},
         {"repository": "aFIPC", "issue": 308, "type": "feature"},
         {"repository": "g7", "issue": 2, "type": "documentation"},
+        {"repository": "codec-carver", "issue": 513, "type": "bug"},
+        {"repository": "codec-carver", "issue": 514, "type": "documentation"},
+        {"repository": "noema", "issue": 531, "type": "bug"},
+        {"repository": "semantic-data-portal", "issue": 91, "type": "bug"},
+        {"repository": "learning-content-studio", "issue": 3, "type": "feature"},
+        {"repository": "learning-record-store", "issue": 3, "type": "feature"},
+        {"repository": "bandscope", "issue": 985, "type": "feature"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
 
