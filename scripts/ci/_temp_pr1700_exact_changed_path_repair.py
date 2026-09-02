@@ -46,6 +46,12 @@ for constant in (
     "MAX_THREAD_BODY_CHARS = 1200\n",
 ):
     gate = replace_once(gate, constant, "", constant.strip())
+# Retire the explanatory prose tied to the superseded caller-authored probe-count
+# allocator before the source-level no-heuristics invariant is checked below.
+gate = gate.replace(
+    "``_required_probe_count``",
+    "the former caller-authored probe-count allocator",
+)
 
 schema_pattern = re.compile(
     r"def _noema_verdict_json_schema\(required_probes: int\) -> dict\[str, Any\]:\n.*?(?=\n\nclass NoemaModelOutputError)",
