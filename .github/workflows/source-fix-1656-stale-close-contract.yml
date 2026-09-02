@@ -1,0 +1,76 @@
+name: Source Fix 1656 Stale Close Contract
+
+on:
+  push:
+    branches:
+      - fix/close-empty-noop-runner-712
+    paths:
+      - .github/workflows/source-fix-1656-stale-close-contract.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-1656-stale-close-contract
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Revalidate exact remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          local_head="$(git rev-parse HEAD)"
+          if [ -z "$remote_head" ] || [ "$remote_head" != "$local_head" ]; then
+            echo "writer head moved: local=$local_head remote=$remote_head" >&2
+            exit 1
+          fi
+
+      - name: Repair stale queue contract and prove both contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_required_workflow_queue_contract.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''        else:\n            assert "cancel-closed-pr-runs:" in workflow\n            assert (\n                "PR closed; this run only cancels older runs through workflow concurrency."\n                in workflow\n            )\n        assert "github.event.action != 'closed'" in workflow\n'''
+          new = '''        elif filename in {\n            "close-empty-pr.yml",\n            "osv-scanner-pr.yml",\n            "scorecard-pr.yml",\n        }:\n            # These workflows use PR-stable workflow concurrency with\n            # cancel-in-progress, so a closed event retires the predecessor\n            # without allocating a no-op hosted-runner cleanup job.\n            assert "cancel-closed-pr-runs:" not in workflow\n            assert "cancel-in-progress: true" in workflow\n        else:\n            assert "cancel-closed-pr-runs:" in workflow\n            assert (\n                "PR closed; this run only cancels older runs through workflow concurrency."\n                in workflow\n            )\n        assert "github.event.action != 'closed'" in workflow\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one stale contract block, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+          python -m pytest -q \
+            tests/test_close_empty_pr_queue_pressure.py \
+            tests/test_required_workflow_queue_contract.py::test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs
+          python -m compileall -q tests/test_required_workflow_queue_contract.py tests/test_close_empty_pr_queue_pressure.py
+
+      - name: Publish repaired source and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/source-fix-1656-stale-close-contract.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_required_workflow_queue_contract.py .github/workflows/source-fix-1656-stale-close-contract.yml
+          git diff --cached --check
+          git commit -m "test(actions): align close-event queue contract"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          parent="$(git rev-parse HEAD^)"
+          if [ "$remote_head" != "$parent" ]; then
+            echo "writer head moved before publish: expected=$parent remote=$remote_head" >&2
+            exit 1
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
