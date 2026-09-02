@@ -1442,7 +1442,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test localhost rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://localhost/chat")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
@@ -1452,7 +1452,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test internal IP rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://169.254.169.254/chat")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
@@ -1460,7 +1460,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     original_getaddrinfo = socket.getaddrinfo
 
     # Test DNS resolution bypass
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
@@ -1474,7 +1474,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     # failure at validation time no longer means "nothing to validate,
     # allow it" -- a later, independent resolution reaching an internal
     # address in that gap would otherwise bypass validation entirely.
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
@@ -1484,7 +1484,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
 
     # Test invalid IP string from getaddrinfo (unlikely but theoretically
     # possible) now fails closed the same way, for the same reason.
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]

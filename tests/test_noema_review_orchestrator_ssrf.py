@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import http.server
 import json
+import shutil
+import ssl
+import subprocess
 import threading
 import urllib.request
 
@@ -103,17 +106,21 @@ def test_reject_private_llm_url_allows_sidecar_and_keeps_ssrf_closed(monkeypatch
     noema.reject_private_llm_url("http://127.0.0.1:18080/v1/chat/completions")
 
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
-    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+    with pytest.raises(ValueError, match="URL must use https"):
         noema.reject_private_llm_url("http://127.0.0.1:18080/v1/chat/completions")
-    with pytest.raises(ValueError, match="URL cannot target localhost"):
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.reject_private_llm_url("https://127.0.0.1:18080/v1/chat/completions")
+    with pytest.raises(ValueError, match="URL must use https"):
         noema.reject_private_llm_url("http://localhost:18080/v1/chat/completions")
+    with pytest.raises(ValueError, match="URL cannot target localhost"):
+        noema.reject_private_llm_url("https://localhost:18080/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "true")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.reject_private_llm_url("http://localhost:18080/v1/chat/completions")
+        noema.reject_private_llm_url("https://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.reject_private_llm_url("http://agent.localhost/v1/chat")
+        noema.reject_private_llm_url("https://agent.localhost/v1/chat")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
-        noema.reject_private_llm_url("http://[::1]:18080/v1/chat/completions")
+        noema.reject_private_llm_url("https://[::1]:18080/v1/chat/completions")
 
 
 def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
@@ -146,16 +153,20 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     assert seen["model"] == "orchestrator/free"
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:9/evil")
+    with pytest.raises(ValueError, match="URL must use https"):
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://127.0.0.1:9/evil")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://[::1]:18080/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://[::1]:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost:18080/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
@@ -251,18 +262,20 @@ def test_reject_private_llm_url_rejects_reserved_embedded_ipv4(
 
 
 def test_pinned_connection_handlers_selects_by_scheme():
-    """The handler list is empty with no pinned IPs, else scheme-selected."""
+    """The handler list is empty with no pinned IPs, else a pinned HTTPS handler.
+
+    ``reject_private_llm_url`` requires ``https://`` for every non-sidecar
+    target it pins IPs for, so a non-empty ``pinned_ips`` always implies
+    HTTPS -- there is no remaining HTTP branch to select between.
+    """
     assert noema._pinned_connection_handlers("https://x.test/", []) == []
     handlers = noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
     assert len(handlers) == 1
     assert isinstance(handlers[0], noema._PinnedHTTPSHandler)
-    handlers = noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
-    assert len(handlers) == 1
-    assert isinstance(handlers[0], noema._PinnedHTTPHandler)
 
 
 def test_pinned_connection_handlers_fails_closed_when_proxy_needs_pinning(monkeypatch):
-    """A configured proxy for a scheme that needs pinning raises, not falls back.
+    """A configured HTTPS proxy that isn't bypassed for this host raises, not falls back.
 
     The pinned connection classes dial the gateway IP directly and do not
     implement CONNECT tunneling or proxy dialing, so pinning through a
@@ -273,25 +286,39 @@ def test_pinned_connection_handlers_fails_closed_when_proxy_needs_pinning(monkey
     close for that one configuration (Devin Review, second pass): the
     validated addresses would just be discarded with nothing enforced in
     their place. Failing closed instead makes that loud rather than silent.
+
+    ``reject_private_llm_url`` requires HTTPS for any non-sidecar target, so
+    a non-empty ``pinned_ips`` always means an HTTPS request; the check
+    below is therefore keyed on the ``https`` proxy entry regardless of
+    ``api_url``'s own scheme string (only its hostname is used).
     """
     monkeypatch.setattr(
         noema.urllib.request, "getproxies", lambda: {"https": "http://proxy.test:3128"}
     )
+    monkeypatch.setattr(noema.urllib.request, "proxy_bypass", lambda host: False)
     with pytest.raises(ValueError, match="proxy is configured"):
         noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
-    # A proxy configured for a *different* scheme than the one in use
-    # doesn't block pinning for this request.
-    handlers = noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
-    assert len(handlers) == 1
-    assert isinstance(handlers[0], noema._PinnedHTTPHandler)
 
+    # NO_PROXY/no_proxy excluding this specific host means urllib was
+    # always going to reach it directly anyway -- pinning proceeds instead
+    # of failing closed on an ambient proxy config that never applies here
+    # (Devin Review, third pass).
+    monkeypatch.setattr(noema.urllib.request, "proxy_bypass", lambda host: True)
+    handlers = noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], noema._PinnedHTTPSHandler)
+
+    # No HTTPS proxy configured at all means the bypass check is never
+    # consulted.
+    monkeypatch.setattr(noema.urllib.request, "getproxies", lambda: {})
     monkeypatch.setattr(
         noema.urllib.request,
-        "getproxies",
-        lambda: {"http": "http://proxy.test:3128", "https": "http://proxy.test:3128"},
+        "proxy_bypass",
+        lambda host: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
-    with pytest.raises(ValueError, match="proxy is configured"):
-        noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
+    handlers = noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], noema._PinnedHTTPSHandler)
 
     # No pinning needed at all (e.g. the sidecar loopback fast path) means
     # the proxy check is never reached, regardless of ambient proxy config.
@@ -315,30 +342,69 @@ class _EchoHandler(http.server.BaseHTTPRequestHandler):
         """Silence the default per-request stderr logging."""
 
 
-def test_pinned_http_connection_connects_to_pinned_ip_not_hostname():
-    """The request reaches a real server via the pinned IP, bypassing DNS.
+def _generate_self_signed_cert(tmp_path, hostname):
+    """Generate a short-lived self-signed cert/key pair for ``hostname`` via openssl.
+
+    A pure-stdlib ``ssl.SSLContext`` can serve/verify TLS but cannot mint a
+    certificate on its own; ``openssl`` is the standard platform tool for
+    that (present on every GitHub Actions Linux runner), so this shells out
+    to it rather than adding a new pinned Python dependency just for one
+    test's throwaway cert.
+    """
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    subprocess.run(  # nosec B603 B607 - fixed args, test-only throwaway cert
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key_path), "-out", str(cert_path), "-days", "1",
+            "-subj", f"/CN={hostname}",
+            "-addext", f"subjectAltName=DNS:{hostname}",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert_path, key_path
+
+
+def test_pinned_https_connection_connects_to_real_server_via_pinned_ip(tmp_path):
+    """The request reaches a real TLS server via the pinned IP, bypassing DNS.
 
     The request URL names a hostname that cannot resolve (``.invalid`` is
     reserved by RFC 2606 to never resolve); the request only succeeds
-    because ``_PinnedHTTPHandler`` connects directly to the pinned loopback
-    IP instead of asking the socket layer to resolve that hostname.
+    because ``_PinnedHTTPSHandler`` connects directly to the pinned loopback
+    IP instead of asking the socket layer to resolve that hostname. The
+    server's certificate SAN matches only that unresolvable hostname, so
+    this also proves -- against a real TLS handshake, not a mock -- that
+    ``_PinnedHTTPSConnection`` keeps certificate/SNI verification on the
+    original hostname (``self.host``) rather than the pinned IP it actually
+    dials: a cert-hostname mismatch would fail the handshake before the
+    server ever saw the request.
     """
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl binary not available to generate a self-signed cert")
+    hostname = "noema-dns-pin-test.invalid"
+    cert_path, key_path = _generate_self_signed_cert(tmp_path, hostname)
+
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(str(cert_path), str(key_path))
     server = http.server.HTTPServer(("127.0.0.1", 0), _EchoHandler)
+    server.socket = server_context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         port = server.server_address[1]
-        opener = urllib.request.build_opener(
-            noema._PinnedHTTPHandler(pinned_ips=["127.0.0.1"])
-        )
+        client_context = ssl.create_default_context(cafile=str(cert_path))
+        handler = noema._PinnedHTTPSHandler(pinned_ips=["127.0.0.1"])
+        handler._context = client_context
+        opener = urllib.request.build_opener(handler)
         request = urllib.request.Request(
-            f"http://noema-dns-pin-test.invalid:{port}/echo",
+            f"https://{hostname}:{port}/echo",
             data=b"{}",
             method="POST",
         )
         with opener.open(request) as response:  # nosec B310
             body = response.read().decode("utf-8")
-        assert body == f"noema-dns-pin-test.invalid:{port}"
+        assert body == f"{hostname}:{port}"
     finally:
         server.shutdown()
         thread.join(timeout=5)

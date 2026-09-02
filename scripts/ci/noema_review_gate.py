@@ -946,38 +946,22 @@ def _connect_to_pinned_ips(
     raise last_error
 
 
-class _PinnedHTTPConnection(http.client.HTTPConnection):
-    """An ``HTTPConnection`` that connects to pre-validated IP addresses.
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """An ``HTTPSConnection`` that connects to pre-validated IP addresses.
 
     Closes the validate-then-connect TOCTOU/DNS-rebinding gap
     (CWE-350/CWE-918): ``reject_private_llm_url`` resolves and validates
     the hostname once, and this class connects directly to one of those
     exact results instead of letting the socket layer re-resolve the
     hostname independently at connect time, where a changed DNS answer
-    could bypass the earlier validation entirely.
-    """
-
-    def __init__(
-        self, host: str, *args: Any, pinned_ips: Sequence[str], **kwargs: Any
-    ) -> None:
-        """Record ``pinned_ips`` alongside the usual connection arguments."""
-        super().__init__(host, *args, **kwargs)
-        self._pinned_ips = pinned_ips
-
-    def connect(self) -> None:
-        """Connect to a pinned IP instead of re-resolving ``self.host``."""
-        self.sock = _connect_to_pinned_ips(
-            self._pinned_ips, self.port, self.timeout, self.source_address
-        )
-
-
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """The TLS variant of ``_PinnedHTTPConnection``.
-
-    Still verifies the server certificate against the original hostname
-    via SNI (``server_hostname=self.host``), so pinning the connection
-    does not weaken certificate validation -- only which IP address the
-    TCP connection itself is made to.
+    could bypass the earlier validation entirely. Still verifies the
+    server certificate against the original hostname via SNI
+    (``server_hostname=self.host``), so pinning the connection does not
+    weaken certificate validation -- only which IP address the TCP
+    connection itself is made to. HTTPS-only: ``reject_private_llm_url``
+    requires ``https://`` for every non-sidecar target (CodeRabbit;
+    plaintext would transmit the bearer token and PR content in the
+    clear), so there is no plain-HTTP counterpart to pin.
     """
 
     def __init__(
@@ -993,21 +977,6 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             self._pinned_ips, self.port, self.timeout, self.source_address
         )
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-
-
-class _PinnedHTTPHandler(urllib.request.HTTPHandler):
-    """A ``urllib`` handler that opens plain-HTTP connections to pinned IPs."""
-
-    def __init__(self, pinned_ips: Sequence[str]) -> None:
-        """Record the IPs every request through this handler pins to."""
-        super().__init__()
-        self._pinned_ips = pinned_ips
-
-    def http_open(self, req: urllib.request.Request) -> Any:
-        """Open the request through a DNS-pinned ``HTTPConnection``."""
-        return self.do_open(
-            functools.partial(_PinnedHTTPConnection, pinned_ips=self._pinned_ips), req
-        )
 
 
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
@@ -1037,41 +1006,51 @@ def _pinned_connection_handlers(
     to pin (the orchestrator-sidecar loopback fast path never performs a
     DNS lookup at all, so this never reaches the proxy check below either)
     -- the ordinary ``urllib`` handlers already installed by
-    ``build_opener`` are used unchanged.
+    ``build_opener`` are used unchanged. Whenever ``pinned_ips`` is
+    non-empty, ``reject_private_llm_url`` already guarantees the scheme is
+    ``https`` (it rejects non-sidecar ``http://`` outright -- plaintext
+    would transmit the bearer token and PR content in the clear,
+    CodeRabbit), so this only ever needs to build an HTTPS handler.
 
-    Raises when a proxy is configured for this URL's scheme and there is
-    something to pin: the connection classes above dial the pinned gateway
-    IP directly and do not implement CONNECT tunneling or proxy dialing,
-    so pinning through a configured proxy would silently connect to the
-    wrong endpoint and break HTTPS entirely -- but *silently falling back*
-    to an ordinary, unpinned, proxy-routed request would just as silently
-    reopen the exact TOCTOU/DNS-rebinding gap this whole mechanism exists
-    to close for that one configuration (Devin Review, second pass): the
-    already-validated addresses would be discarded with no pinning
-    enforced in their place, rather than either pinning correctly or
-    refusing loudly. Failing closed instead is deliberately narrower in
-    scope than reimplementing proxy-aware pinning (CONNECT tunneling,
-    proxy dialing): today no workflow in this repository configures a
-    proxy, and the orchestrator-sidecar loopback path this mechanism
-    exists to protect never reaches this check at all, so refusing to
-    proceed here costs nothing in the deployment this code actually runs
-    in, while a silent degradation would cost real protection in a
-    deployment this code does not yet run in either.
+    Raises when an HTTPS proxy is configured and applies to this host:
+    ``_PinnedHTTPSConnection`` dials the pinned gateway IP directly and
+    does not implement CONNECT tunneling or proxy dialing, so pinning
+    through a configured proxy would silently connect to the wrong
+    endpoint -- but *silently falling back* to an ordinary, unpinned,
+    proxy-routed request would just as silently reopen the exact TOCTOU/
+    DNS-rebinding gap this whole mechanism exists to close for that one
+    configuration (Devin Review, second pass): the already-validated
+    addresses would be discarded with no pinning enforced in their place,
+    rather than either pinning correctly or refusing loudly. Checks
+    ``urllib.request.proxy_bypass()``, not just ``getproxies()``, to match
+    what ``urllib`` itself would actually do: ``getproxies()`` reports a
+    proxy is configured for the scheme even when ``NO_PROXY``/``no_proxy``
+    excludes this specific host, which would otherwise fail closed for a
+    host `urllib` was always going to reach directly anyway (Devin
+    Review, third pass). Failing closed instead of pinning-through-a-proxy
+    is deliberately narrower in scope than reimplementing proxy-aware
+    pinning (CONNECT tunneling, proxy dialing): today no workflow in this
+    repository configures a proxy, and the orchestrator-sidecar loopback
+    path this mechanism exists to protect never reaches this check at
+    all, so refusing to proceed here costs nothing in the deployment this
+    code actually runs in, while a silent degradation would cost real
+    protection in a deployment this code does not yet run in either.
     """
     if not pinned_ips:
         return []
-    scheme = urllib.parse.urlparse(api_url).scheme.lower()
-    if urllib.request.getproxies().get(scheme):
+    hostname = urllib.parse.urlparse(api_url).hostname or ""
+    if urllib.request.getproxies().get("https") and not urllib.request.proxy_bypass(
+        hostname
+    ):
         raise ValueError(
             "NOEMA_LLM_API_URL resolved to a public host that requires DNS "
-            "pinning, but an HTTP(S) proxy is configured for this scheme; "
-            "pinning through a proxy is not supported and falling back to "
-            "an unpinned, proxy-routed request would reopen the TOCTOU/"
-            "DNS-rebinding gap this check exists to close"
+            "pinning, but an HTTPS proxy is configured and does not "
+            "exclude this host via NO_PROXY; pinning through a proxy is "
+            "not supported and falling back to an unpinned, proxy-routed "
+            "request would reopen the TOCTOU/DNS-rebinding gap this check "
+            "exists to close"
         )
-    if scheme == "https":
-        return [_PinnedHTTPSHandler(pinned_ips)]
-    return [_PinnedHTTPHandler(pinned_ips)]
+    return [_PinnedHTTPSHandler(pinned_ips)]
 
 
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
@@ -1555,6 +1534,17 @@ def reject_private_llm_url(api_url: str) -> list[str]:
         raise ValueError("URL must have a valid hostname")
     if is_allowed_orchestrator_sidecar_url(api_url):
         return []
+    if parsed.scheme.lower() != "https":
+        # Cleartext transmission of sensitive information (CWE-319):
+        # call_llm() puts the bearer token and PR diff/content in this
+        # request. The sidecar loopback case above is exempt because it
+        # never leaves the machine; every other target does, so it must
+        # be encrypted (CodeRabbit).
+        raise ValueError(
+            "URL must use https:// for any non-sidecar target; plaintext "
+            "http:// would transmit the bearer token and PR content in "
+            "the clear"
+        )
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
@@ -1575,6 +1565,19 @@ def reject_private_llm_url(api_url: str) -> list[str]:
             or ip.is_multicast
             or ip.is_unspecified
             or ip.is_reserved
+            # `not ip.is_global` alone is NOT a safe replacement for the
+            # checks above -- verified directly: it is actually *less*
+            # strict for multicast (224.0.0.1) and the is_reserved forms
+            # above (::127.0.0.1, 64:ff9b::7f00:1), which read
+            # `is_global=True` despite being exactly the addresses those
+            # checks exist to catch. It is additive here specifically to
+            # close a gap none of the checks above catch: the RFC 6598
+            # shared/CGN address space (100.64.0.0/10, e.g. 100.64.0.1)
+            # reads private=False, loopback=False, link_local=False,
+            # multicast=False, unspecified=False, and reserved=False, but
+            # is_global=False (CodeRabbit; confirmed with the module's own
+            # ipaddress.ip_address("100.64.0.1") directly before fixing).
+            or not ip.is_global
         ):
             raise ValueError("URL cannot target internal IP addresses")
         if ip_str not in pinned_ips:
