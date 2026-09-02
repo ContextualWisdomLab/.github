@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -184,6 +185,102 @@ def test_recovery_revalidates_protected_main_before_every_recovery_put(monkeypat
 
     assert main_checks == ["a" * 40]
     assert puts == []
+
+
+def test_invalid_json_transport_is_typed_for_read_and_ambiguous_put(monkeypatch) -> None:
+    """Malformed GitHub JSON is a read error but an ambiguous mutation outcome for PUT."""
+    module = load_module()
+
+    def invalid_json(*_args, **_kwargs):
+        return subprocess.CompletedProcess(args=["gh", "api"], returncode=0, stdout="{", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", invalid_json)
+    with pytest.raises(module.RulesetGovernanceError, match="invalid JSON"):
+        module._run_gh_json("GET", "repos/ContextualWisdomLab/.github/rulesets/17921150")
+    with pytest.raises(module.AmbiguousRulesetWriteError, match="response is ambiguous"):
+        module._run_gh_json(
+            "PUT",
+            "repos/ContextualWisdomLab/.github/rulesets/17921150",
+            body={"name": "Lock default branch"},
+        )
+
+
+def test_successful_recovery_requires_history_predecessor(monkeypatch) -> None:
+    """A successful recovery PUT is not trusted without an immutable predecessor record."""
+    module = load_module()
+    target = repository_target(module)
+    current = repository_payload()
+    displaced = historical_state()
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, _endpoint, **_kwargs: current if method == "GET" else {},
+    )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [{"version_id": 11}])
+
+    with pytest.raises(module.RulesetGovernanceError, match="history did not expose a predecessor"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_successful_recovery_rejects_mismatched_latest_history_state(monkeypatch) -> None:
+    """A recovery PUT fails closed when immutable history records a different newest state."""
+    module = load_module()
+    target = repository_target(module)
+    current = repository_payload()
+    displaced = historical_state()
+    unrelated = historical_state(name="Concurrent administrator state")
+
+    def history_state(_target, version_id):
+        return unrelated if version_id == 11 else displaced
+
+    monkeypatch.setattr(module, "_history_version_state", history_state)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, _endpoint, **_kwargs: current if method == "GET" else {},
+    )
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args: [{"version_id": 11}, {"version_id": 10}],
+    )
+
+    with pytest.raises(module.RulesetGovernanceError, match="latest history does not match restore write"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_ambiguous_put_rejects_history_success_without_live_convergence(monkeypatch) -> None:
+    """History acceptance alone cannot promote an ambiguous PUT whose live state still differs."""
+    module = load_module()
+    target = repository_target(module)
+    live = repository_payload()
+    desired = module._desired_payload(live, target)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module, "_verify_ruleset_history_transition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: live)
+
+    with pytest.raises(module.RulesetGovernanceError, match="ambiguous ruleset mutation did not converge"):
+        module._confirm_ambiguous_put(
+            target,
+            baseline_version=10,
+            desired=desired,
+            expected_main_sha="a" * 40,
+        )
 
 
 def test_verify_only_rejects_drift_outside_reconciler_projection(monkeypatch) -> None:
