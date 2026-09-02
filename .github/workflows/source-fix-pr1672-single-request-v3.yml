@@ -103,13 +103,21 @@ jobs:
           test "$remote_head" = "$GITHUB_SHA"
 
           # GitHub's workflow token may write repository contents but cannot be
-          # used to mutate workflow files. Keep the three one-shot workflow
-          # files at this exact head for this commit; the GitHub control plane
-          # deletes them immediately after the verified source lands.
-          git restore --source="$GITHUB_SHA" -- \
+          # used to mutate workflow files. Restore every workflow path that the
+          # materializer intentionally retires, publish only the independently
+          # verified non-workflow source, then let the GitHub control plane
+          # remove obsolete workflows in a separate exact-head commit.
+          for workflow_path in \
             .github/workflows/source-fix-pr1672-single-request.yml \
             .github/workflows/source-fix-pr1672-single-request-v2.yml \
-            .github/workflows/source-fix-pr1672-single-request-v3.yml
+            .github/workflows/source-fix-pr1672-single-request-v3.yml \
+            .github/workflows/source-fix-pr1714-no-model-job-timeout.yml \
+            .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
+          do
+            if git cat-file -e "$GITHUB_SHA:$workflow_path" 2>/dev/null; then
+              git restore --source="$GITHUB_SHA" -- "$workflow_path"
+            fi
+          done
 
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
