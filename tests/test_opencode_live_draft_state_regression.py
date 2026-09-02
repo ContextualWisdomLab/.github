@@ -186,15 +186,31 @@ def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
-def test_draft_exemption_fails_closed_when_live_head_moved(
+def test_draft_exemption_also_applies_when_live_head_has_moved(
     tmp_path: Path,
     script: str,
 ) -> None:
-    """The event cannot exempt a different live head even when it is still draft."""
+    """A still-draft PR is exempted even if its live head has also moved.
+
+    Stale-test regression: this asserted the pre-#1697 contract (head-moved
+    checked, and failed closed, before the draft exemption), which #1697
+    deliberately inverted to stop a still-iterating draft PR from failing
+    with a spurious ``head moved`` error on every race between the event
+    snapshot and this step's own live re-fetch
+    (https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33548447878/job/100066104033,
+    fixed in `.github/workflows/opencode-review.yml` and covered from the
+    production-incident angle by
+    `test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved`
+    in `test_opencode_required_verdict_regression.py`). This file's own
+    `_run_step` harness never had its matching case updated to the new
+    contract, so it kept failing after #1697 merged.
+    """
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
-    assert result.returncode == 1
-    assert "head moved while validating live" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "still a draft on the live exact head" in result.stdout
+    assert "head moved while validating live" not in result.stdout
+    assert "::error::" not in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
