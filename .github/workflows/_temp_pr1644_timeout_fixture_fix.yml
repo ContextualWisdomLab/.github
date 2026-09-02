@@ -1,0 +1,52 @@
+name: Temporary PR1644 Timeout Fixture Fix
+
+on:
+  push:
+    branches:
+      - fix/ruleset-owner-plane-reconciler
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1644-timeout-fixture-fix
+  cancel-in-progress: false
+
+jobs:
+  fix-and-remove-self:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Check out current writer branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/ruleset-owner-plane-reconciler
+          fetch-depth: 1
+      - name: Apply exact regression repair and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/ruleset-owner-plane-reconciler --depth=1
+          git reset --hard origin/fix/ruleset-owner-plane-reconciler
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_ruleset_governance_timeout_regression.py")
+          text = path.read_text(encoding="utf-8")
+          needle = '        assert expected_main_sha == "a" * 40\n'
+          replacement = (
+              '        # Once a PUT is issued, history settlement must finish without a stale-main veto.\n'
+              '        assert expected_main_sha is None\n'
+          )
+          if text.count(needle) != 1:
+              raise SystemExit("expected exactly one stale post-PUT main-SHA assertion")
+          path.write_text(text.replace(needle, replacement), encoding="utf-8")
+          Path(".github/workflows/_temp_pr1644_timeout_fixture_fix.yml").unlink()
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_ruleset_governance_timeout_regression.py .github/workflows/_temp_pr1644_timeout_fixture_fix.yml
+          git diff --cached --quiet && { echo "expected source-fix diff is empty" >&2; exit 1; }
+          git commit -m "test(governance): align ambiguous PUT settlement fixture"
+          git push origin HEAD:fix/ruleset-owner-plane-reconciler
