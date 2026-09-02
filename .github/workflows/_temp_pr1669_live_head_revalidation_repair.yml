@@ -10,18 +10,24 @@ on:
       - scripts/ci/temp_pr1669_live_head_revalidation_v2.py
       - scripts/ci/temp_pr1669_live_head_revalidation_v3.py
       - scripts/ci/temp_pr1669_live_head_revalidation_v4.py
-  workflow_dispatch:
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: true
 
+# This one-shot writer is confined to its owner feature branch. The previous
+# external writer-token path was unavailable in the actual hosted run after the
+# full source/test proof succeeded, so publication uses the repository-scoped
+# GitHub token rather than broadening or inventing reviewer credentials.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
-    if: github.repository == 'ContextualWisdomLab/.github' && github.ref_name == 'fix/scheduler-stale-headrefoid-cancellation'
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/scheduler-stale-headrefoid-cancellation'
     runs-on: ubuntu-slim
     timeout-minutes: 60
     steps:
@@ -85,10 +91,9 @@ jobs:
       - name: Publish one fast-forward canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
-          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          WORKFLOW_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -n "${WORKFLOW_PUSH_TOKEN:-}"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
