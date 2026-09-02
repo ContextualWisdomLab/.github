@@ -69,6 +69,7 @@ flowchart TB
     LIN["LineageWeave"]
     TW["ThreadWeave"]
     RW["RankWeave"]
+    TEPP["TEPP"]
   end
   subgraph CONSUMER["Personal / consumer apps"]
     SAJU["saju-caldav"]
@@ -76,27 +77,26 @@ flowchart TB
     DW["DiagramWeave"]
   end
 
-  %% confirmed this session (solid)
-  NAR -->|"OIDC relying party"| KEY
-  ERD -->|"OIDC relying party"| KEY
-  SDP -->|"OIDC relying party"| KEY
-  CLR -->|"OIDC relying party"| KEY
-  ORCH -->|"OIDC relying party"| KEY
-  NEWS -->|"OIDC relying party"| KEY
+  %% confirmed this session (solid) -- each edge evidenced in the DEPENDENT's own README/manifest
   SAJU -->|"OIDC auth"| KEY
+  ORCH -->|"optional Keyverse-token verifier"| KEY
   ORG -->|"keyverse-adapter"| KEY
   ORG -->|"naruon-adapter"| NAR
-  LIN -->|"pinned dependency"| TW
-  LIN -->|"pinned dependency"| RW
+  LIN -->|"PyPI version pin >=0.1.0"| TW
+  LIN -->|"git-commit-pinned dependency"| RW
+  LIN -->|"wire contract (tepp_client.py)"| TEPP
+  LIN -->|"optional LLM adjudication"| ORCH
+  LIN -->|"IRT calibration, optional backend, git-pinned"| FM
   DW -->|"AI-edit adapter"| ORCH
-  FP -.->|"optional interpretation route"| ORCH
+  FP -->|"optional interpretation route"| ORCH
   NAR -->|"reference threading"| TW
   NAR -->|"consumes, fail-closed"| CAL
   LIN -->|"consumes, fail-closed"| CAL
-  BATCH -.->|"extracted from"| XLB
-  RW -.->|"originated inside, now independent"| NAR
+  BATCH -->|"extracted from"| XLB
+  RW -->|"originated inside, now independent"| NAR
 
-  %% documented in CWL-MASTER-CONTEXT.md, not independently re-verified this session (dashed)
+  %% documented (architecture brief and/or the PROVIDER's own README), not
+  %% independently re-verified in the DEPENDENT's own README this session (dashed)
   WARD -.->|"routes traffic to"| NAR
   KEY -.->|"federates in"| ADFS
   NEWS -.->|"PDF -> DOM feed"| NAR
@@ -115,6 +115,11 @@ flowchart TB
   NAR -.->|"extracted issues -> manage"| SCOPE
   CODEC -.->|"diarize + minutes"| NAR
   NAR -.->|"agent runtime"| NOEMA
+  NAR -.->|"OIDC relying party (keyverse's claim, not naruon's own README)"| KEY
+  ERD -.->|"OIDC relying party (keyverse's claim, not pg-erd-cloud's own README)"| KEY
+  SDP -.->|"OIDC relying party (keyverse's claim, not semantic-data-portal's own README)"| KEY
+  CLR -.->|"OIDC relying party (keyverse's claim, not clearfolio's own README)"| KEY
+  NEWS -.->|"OIDC relying party (keyverse's claim, not newsdom-api's own README)"| KEY
 
   classDef core fill:#1f6feb,stroke:#0b3d91,color:#fff;
   classDef plane fill:#6e40c9,stroke:#3d1f7a,color:#fff;
@@ -128,19 +133,22 @@ between the two repos — drawing it as a dependency arrow would overstate what'
 
 ## Confirmed this session (solid arrows)
 
+Every row's evidence comes from the **dependent** repo's own README/manifest — not from the target's
+description of itself. Five OIDC "relying party" claims that were previously listed here on
+keyverse's own say-so were re-checked directly against each dependent's own README, found
+unconfirmed there, and moved to the dashed table below.
+
 | Dependent | Depends on | Relationship | Evidence |
 |---|---|---|---|
-| `naruon` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `pg-erd-cloud` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `semantic-data-portal` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `clearfolio` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `contextual-orchestrator` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `newsdom-api` | `keyverse` | OIDC/OAuth2.0 relying party | keyverse README's relying-party list |
-| `saju-caldav` | `keyverse` | Keyverse OIDC auth for its operator console | saju-caldav README |
+| `saju-caldav` | `keyverse` | Keyverse OIDC auth for its operator console | saju-caldav README, directly (`docs/security/KEYVERSE.md`, multiple mentions) |
+| `contextual-orchestrator` | `keyverse` | optional bearer-token verifier for Keyverse-issued OIDC tokens (a production deployment "must inject" one; not a default/always-on call) | contextual-orchestrator README, directly (conditional phrasing preserved) |
 | `Orgmetra` | `keyverse` | `packages/keyverse-adapter` | Orgmetra repo tree |
 | `Orgmetra` | `naruon` | `packages/naruon-adapter` | Orgmetra repo tree |
-| `LineageWeave` | `ThreadWeave` | real git-pinned dependency | LineageWeave `pyproject.toml` |
-| `LineageWeave` | `RankWeave` | real git-pinned dependency | LineageWeave `pyproject.toml` |
+| `LineageWeave` | `ThreadWeave` | PyPI version-range pin (`threadweave>=0.1.0`) — **not** git-pinned | LineageWeave `pyproject.toml` |
+| `LineageWeave` | `RankWeave` | git-commit-pinned dependency (`rankweave @ git+...@61c49c5`, no PyPI release yet) | LineageWeave `pyproject.toml` |
+| `LineageWeave` | `TEPP` | consumed purely through TEPP's own wire contract (`lineageweave/tepp_client.py`, `AnalysisRunRequest` v1) — never reads TEPP's tables directly | LineageWeave README ("How it fits with the rest of the ecosystem") |
+| `LineageWeave` | `contextual-orchestrator` | optional LLM-adjudication channel (`lineageweave/adjudication_client.py`) | LineageWeave README |
+| `LineageWeave` | `fast-mlsirm` | optional `backend` extra, git-commit-pinned (`fast-mlsirm @ git+...@d025b7d`, no PyPI release yet) — LLM-as-Judge → IRT → Fixed-Item Parameter Calibration for periodic reports (ADR 0003) | LineageWeave `pyproject.toml` |
 | `DiagramWeave` | `contextual-orchestrator` | adapter for remote AI edit proposals | DiagramWeave README |
 | `four-pillars` | `contextual-orchestrator` | optional LLM interpretation route (or direct NVIDIA NIM) | four-pillars README |
 | `naruon` | `ThreadWeave` | JWZ/RFC 5256 reference threading, importable standalone | ThreadWeave README ("importable standalone by naruon or any other host") |
@@ -159,6 +167,11 @@ documentation.
 
 | Dependent / source | Target | Relationship |
 |---|---|---|
+| `naruon` | `keyverse` | OIDC/OAuth2.0 relying party — keyverse's own README names naruon as one; naruon's own README does not mention keyverse at all |
+| `pg-erd-cloud` | `keyverse` | OIDC/OAuth2.0 relying party — same pattern: keyverse's claim, no mention in pg-erd-cloud's own README |
+| `semantic-data-portal` | `keyverse` | OIDC/OAuth2.0 relying party — same pattern: keyverse's claim, no mention in semantic-data-portal's own README |
+| `clearfolio` | `keyverse` | OIDC/OAuth2.0 relying party — same pattern: keyverse's claim, no mention in clearfolio's own README |
+| `newsdom-api` | `keyverse` | OIDC/OAuth2.0 relying party — same pattern: keyverse's claim, no mention in newsdom-api's own README |
 | `wardnet` | `naruon` | routes traffic to |
 | `keyverse` | `feelanet-adfs` (private) | federates in (external ADFS/LDAP) |
 | `newsdom-api` | `naruon` | PDF → DOM feed |
@@ -198,8 +211,10 @@ deployability, or is a pre-implementation scaffold with no code to integrate yet
 `learning-record-store`, `learning-interoperability-contracts` — a self-contained trio/quartet, all
 still bare scaffolds.
 
-**Psychometrics & research:** `TEPP`, `psychometrics-commons`, `nonnest2` — standalone research
-tools/packages with no sibling-repo dependency found.
+**Psychometrics & research:** `psychometrics-commons` — standalone research tool with no sibling-repo
+dependency found. (`TEPP` now appears in the diagram as `LineageWeave`'s wire-contract dependency;
+`nonnest2` is listed once, under "Forks," below — it's a fork of an external academic package first
+and foremost, and listing it in both places overstated it as two separate facts.)
 
 **Standalone modules:** `ConceptWeave`, `EmbedRelay`, `PolicyWeave`, `ELUNVERA`, `disksage`,
 `pingora-gateway` — independent products or early scaffolds.

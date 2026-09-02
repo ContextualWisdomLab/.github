@@ -83,7 +83,8 @@
   .std-list{font-size:.8rem; color:var(--ink-dim); line-height:1.6}
   .std-list code{background:var(--surface-alt); padding:1px 5px; border-radius:4px; font-size:.78rem}
 </style>
-
+</head>
+<body>
 <div class="wrap">
   <div class="page-head">
     <span class="eyebrow">ContextualWisdomLab · .github</span>
@@ -140,6 +141,7 @@ flowchart TB
     LIN["LineageWeave"]
     TW["ThreadWeave"]
     RW["RankWeave"]
+    TEPP["TEPP"]
   end
   subgraph CONSUMER["Personal / consumer apps"]
     SAJU["saju-caldav"]
@@ -147,24 +149,22 @@ flowchart TB
     DW["DiagramWeave"]
   end
 
-  NAR -->|"OIDC relying party"| KEY
-  ERD -->|"OIDC relying party"| KEY
-  SDP -->|"OIDC relying party"| KEY
-  CLR -->|"OIDC relying party"| KEY
-  ORCH -->|"OIDC relying party"| KEY
-  NEWS -->|"OIDC relying party"| KEY
   SAJU -->|"OIDC auth"| KEY
+  ORCH -->|"optional Keyverse-token verifier"| KEY
   ORG -->|"keyverse-adapter"| KEY
   ORG -->|"naruon-adapter"| NAR
-  LIN -->|"pinned dependency"| TW
-  LIN -->|"pinned dependency"| RW
+  LIN -->|"PyPI version pin >=0.1.0"| TW
+  LIN -->|"git-commit-pinned dependency"| RW
+  LIN -->|"wire contract (tepp_client.py)"| TEPP
+  LIN -->|"optional LLM adjudication"| ORCH
+  LIN -->|"IRT calibration, optional backend, git-pinned"| FM
   DW -->|"AI-edit adapter"| ORCH
-  FP -.->|"optional interpretation route"| ORCH
+  FP -->|"optional interpretation route"| ORCH
   NAR -->|"reference threading"| TW
   NAR -->|"consumes, fail-closed"| CAL
   LIN -->|"consumes, fail-closed"| CAL
-  BATCH -.->|"extracted from"| XLB
-  RW -.->|"originated inside, now independent"| NAR
+  BATCH -->|"extracted from"| XLB
+  RW -->|"originated inside, now independent"| NAR
 
   WARD -.->|"routes traffic to"| NAR
   KEY -.->|"federates in"| ADFS
@@ -184,42 +184,55 @@ flowchart TB
   NAR -.->|"extracted issues to manage"| SCOPE
   CODEC -.->|"diarize + minutes"| NAR
   NAR -.->|"agent runtime"| NOEMA
+  NAR -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  ERD -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  SDP -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  CLR -.->|"OIDC relying party (keyverse's claim only)"| KEY
+  NEWS -.->|"OIDC relying party (keyverse's claim only)"| KEY
       </pre>
     </div>
 
     <div>
       <div class="panel">
-        <h2>Open PR status</h2>
-        <div class="sub">All three came out of this session; state as of the latest check</div>
+        <h2>Related open PRs</h2>
+        <div class="sub">From this session's work on the .github repo; state as of the last check</div>
         <div class="pr-list">
           <div class="pr-card">
             <div class="row1">
-              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1679" target="_blank" rel="noopener">#1679</a></span>
-              <span class="pill closed">closed, not merged</span>
-            </div>
-            <div class="pr-title">docs: retire removed repository from master context</div>
-            <div class="pr-note">Originally the exhaustive repo-catalog reconciliation. Renamed, narrowed, and closed by the repo's own PR process on 2026-09-02 05:48 KST as superseded by #1687.</div>
-          </div>
-          <div class="pr-card">
-            <div class="row1">
               <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1687" target="_blank" rel="noopener">#1687</a></span>
-              <span class="pill open">open · blocked on checks</span>
+              <span class="pill open">open · behind main</span>
             </div>
             <div class="pr-title">docs: retire removed repository from governance records</div>
-            <div class="pr-note">Rewritten in place: the profile-catalog expansion was reverted byte-for-byte to #1676. Current diff is 2 files, ±5 lines — just the <code>vooster-v2-mvp</code> retirement in CWL-MASTER-CONTEXT.md and PR_GOVERNANCE_AUDIT.md.</div>
+            <div class="pr-note">Narrow fix: <code>vooster-v2-mvp</code> retirement in CWL-MASTER-CONTEXT.md and PR_GOVERNANCE_AUDIT.md. The earlier, larger profile-catalog reconciliation this branch also carried was superseded by #1692 and dropped.</div>
           </div>
           <div class="pr-card">
             <div class="row1">
               <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1689" target="_blank" rel="noopener">#1689</a></span>
-              <span class="pill clean">open · untouched</span>
+              <span class="pill open">open · behind main</span>
             </div>
             <div class="pr-title">docs: add cross-repo dependency graph from the repo audit</div>
-            <div class="pr-note">New file only (this diagram's source). No overlap with the profile page — hasn't been touched by the other process.</div>
+            <div class="pr-note">This page's source, plus <code>docs/repo-dependency-graph.md</code>. Revised after review to re-verify the OIDC edges against each dependent repo's own README and correct the ThreadWeave/RankWeave pin description.</div>
+          </div>
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1692" target="_blank" rel="noopener">#1692</a></span>
+              <span class="pill open">draft · behind main</span>
+            </div>
+            <div class="pr-title">docs: record the 2026-09-02 product-goal-directive revisions (2nd + 3rd)</div>
+            <div class="pr-note">The canonical, single-writer PR for <code>docs/product-goal-directive.md</code> — more thorough than a since-closed duplicate this session opened independently before finding it.</div>
+          </div>
+          <div class="pr-card">
+            <div class="row1">
+              <span class="pr-num"><a href="https://github.com/ContextualWisdomLab/.github/pull/1729" target="_blank" rel="noopener">#1729</a></span>
+              <span class="pill open">open · blocked on checks</span>
+            </div>
+            <div class="pr-title">docs(gap-baseline): record org-queue-sweep rate-limit investigation, no change needed</div>
+            <div class="pr-note">Unrelated backlog item finished in parallel with this diagram's revisions.</div>
           </div>
         </div>
 
         <div class="flagbox">
-          <div><b>What's rewriting #1679/#1687:</b> every commit is authored as your own git identity, with no Claude Code co-author trailer. Checked <code>pr-review-autofix.yml</code>'s actual run history via <code>gh api .../actions/workflows/pr-review-autofix.yml/runs</code> — every run is triggered by <code>opencode-agent[bot]</code> on <code>head_branch: main</code>, never on either disputed branch, and no GitHub Actions run exists for either branch at all. So it isn't this repo's own CI pipeline. Devin (<code>devin-ai-integration[bot]</code>) is the most persistently active reviewer on these PRs, and the rewritten PR body's structured, reasoned style matches its review comments — tools like it often push fixes via a connected personal git credential rather than the GitHub App identity used for comments. Not confirmed; check app.devin.ai's settings for this repo for an autofix/auto-push toggle.</div>
+          <div><b>Multiple writers on this repo.</b> Several PRs this session (profile catalog, product-goal-directive) got rewritten mid-flight by a process pushing under the repo owner's own git identity — no Claude Code co-author trailer, and no matching GitHub Actions run on the affected branches. <code>gh api orgs/ContextualWisdomLab/installations</code> confirms the actual cause: eight different AI coding-agent GitHub Apps (<code>chatgpt-codex-connector</code>, <code>devin-ai-integration</code>, <code>cursor</code>, <code>grok-by-xai</code>, <code>claude</code>, <code>coderabbitai</code>, <code>opencode-agent</code>, <code>google-labs-jules</code>) all hold <code>contents: write</code> across every org repo — any of them can push independently. This isn't a bug in this diagram; it's a live governance fact worth knowing before trusting any one PR's current head as final.</div>
         </div>
 
         <div class="field-label">Repos with no known dependency</div>
