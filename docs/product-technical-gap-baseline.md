@@ -2651,10 +2651,21 @@ one day after the flagged run, independently of this investigation.
 most recent 100 Actions runs in `contextual-orchestrator`: 70 are still `queued`, 3 `pending`, and of
 the 27 `completed`, zero are `Required OpenCode Review` runs (several `CodeQL PR` runs show
 `startup_failure`, and most other named checks show `cancelled` — superseded by a later push before
-they ran). This is the same organization-wide Actions capacity saturation the gap-baseline entries
-above (floating-runner starvation, `org-queue-sweep`/`scan-pr-queue` cadence) already document and this
-session's own backlog item 15 investigation just re-confirmed is still live. The review workflow isn't
-failing right now — it mostly isn't *running* yet, for nearly every open PR, independent of this fix.
+they ran). The review workflow isn't failing right now — it mostly isn't *running* yet, for nearly
+every open PR, independent of this fix.
+
+**Correction (2026-09-02, re-verified by a peer session):** the queue depth above is a *transient* load
+spike, not the same multi-hour saturation incident the floating-runner-starvation and
+`org-queue-sweep`/`scan-pr-queue` entries elsewhere in this document describe. Age-sorted
+`gh api ".../actions/runs?status=queued&per_page=100" --jq '[.workflow_runs[].created_at] | sort |
+.[0], .[-1]'` shows the oldest queued run in this repository is roughly 1.5 hours old, and completed
+runs (CodeQL PR, Strix Security Scan, etc.) kept finishing throughout the same window — the queue is
+actively draining, not stuck for 7-31 hours like the historical incidents. The likely proximate cause:
+a new required-check wave from an org-ruleset addition (CodeQL/Scorecard/OSV-Scanner) landing on every
+open PR at once, compounded by three sessions (this one, a peer working the same repository, and a
+third reviewing PRs) each pushing PRs concurrently and each triggering a full check suite. Do not cite
+this specific measurement as evidence of a persistent saturation incident in a future investigation —
+re-measure queue *age*, not just the queued/completed ratio, before drawing that conclusion again.
 
 **Conclusion.** No code change needed for this item. The specific failure the flagged run showed was
 already fixed on `main` in `#1697`, for a materially good reason (the "fail loud on a race" behavior
@@ -2662,11 +2673,11 @@ was itself the UX problem, not the race detection). Re-open only if a *current-h
 Review` run is observed failing with the same `::error::...head moved...` message once the queue
 backlog above clears enough for runs to actually execute and a real post-fix sample becomes available.
 
-**Residual.** This is the second backlog item this session that traces back to the same root incident —
-organization-wide Actions queue saturation — without that incident itself being this item's job to fix
-(see item 15's entry above, and the earlier floating-runner-image and `orchestrator/free` entries in
-this file). If a third unrelated backlog item traces to the same root cause, it's worth escalating queue
-saturation itself as its own tracked item rather than re-diagnosing it from a different angle each time.
+**Residual.** Unlike item 15's investigation (which concerned a genuine, historically-documented
+multi-hour saturation incident), the queue depth observed *while investigating this item* turned out to
+be an actively-draining transient spike — see the correction above. Don't conflate the two in a future
+read of this document: item 15's cadence-lengthening conclusion stands on its own evidence, independent
+of this item's (corrected) queue observation.
 
 ## 2026-09-02 backlog item 32 verification: batch-endpoint capability gate already root-cause fixed, pending merge
 
