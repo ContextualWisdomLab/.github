@@ -1182,6 +1182,19 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Removed `scripts/ci/source_fix_pr1714_no_model_job_timeout.py` and
+  `scripts/ci/source_fix_pr1715_no_model_job_timeout.py` plus their paired
+  one-shot workflows. Verified both were fully orphaned debris before
+  deleting: their target files (`pr-review-autofix.yml`, `noema-review.yml`,
+  and the two associated test files) had already been hand-repaired with
+  differently-worded fixes and new test names
+  (`test_autofix_job_has_no_job_level_timeout`,
+  `test_noema_review_job_has_no_job_level_timeout` — see
+  `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`),
+  so neither script's exact literal-text preconditions matched current
+  content any longer; running either would only raise `SystemExit`. Their
+  presence with 0% test coverage was failing this repo's 100% coverage gate
+  after merging `main` into PR #1563.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
