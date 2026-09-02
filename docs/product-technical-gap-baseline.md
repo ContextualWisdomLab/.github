@@ -2613,3 +2613,47 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+### Noema workflow elapsed-time authority — PR #1715 successor
+
+- **Protected-main incident base:** `5935c8153722fe6b53bafd579b74f8f097303959`
+  (merge of PR #1715).
+- **Live gap:** PR #1715 introduced local `timeout-minutes: 20` and
+  `timeout-minutes: 210`. The former was inferred by analogy to another queue
+  job; the latter combined an inherited allowance with an invented buffer.
+  Neither value had executable standards, measured-runtime, or experimentally
+  validated provenance. The 210-minute value also violated ADR-0003's existing
+  no-fixed-inference-timeout contract.
+- **PRD goal:** preserve correctness-first long-running Noema review without
+  replacing model/provider lifecycle authority with elapsed time.
+- **TRD invariant:** neither Noema job invents a repository-authored local
+  deadline; the model-bearing job uses `contextual-orchestrator/orchestrator/free`
+  and terminates intentionally only on provider end, exact live-state
+  invalidation, explicit user/operator cancellation, or an explicitly configured
+  contextual-orchestrator administrative timeout. GitHub's host ceiling remains
+  an external capacity constraint.
+- **Context Map:** `.github` owns Actions admission, exact-head validation, and
+  stale-run retirement; `ContextualWisdomLab/contextual-orchestrator` owns model
+  routing and configured model timeout policy.
+- **Regression:** `tests/test_noema_model_timeout_policy.py` is committed RED
+  before the source repair and `test_noema_jobs_do_not_invent_repository_wall_clock_deadlines`
+  rejects reintroduction on either job.
+- **Status:** Proposed until the one-shot self-removes and fresh exact-head
+  required Checks are GREEN.
+
+```mermaid
+flowchart LR
+    PR[Exact PR head] --> GH[.github Noema control plane]
+    GH --> CO[ContextualWisdomLab/contextual-orchestrator]
+    CO --> MODEL[orchestrator/free model execution]
+    USER[User/operator cancel] --> GH
+    HEAD[Superseding PR head] --> GH
+    PROVIDER[Provider termination] --> CO
+    ADMIN[Configured CO admin timeout] --> CO
+    GH -. no local elapsed-time deadline .-> MODEL
+```
+
+| Gap | Action | Status |
+| --- | --- | --- |
+| G-NOEMA-TIMEOUT-AUTHORITY | RED→remove unsupported 20/210-minute local deadlines→full GREEN→self-retire repair artifacts→fresh exact-head required Checks. | Proposed / PR #1720 |
+| G-STALE-RUN-CENTRAL-AUTHORITY | PR #1717 must read central `repository_dispatch` run evidence with validated central authority; its prior verified patch publication failed closed after protected main moved. | Draft; preserve until current-main reconciliation |

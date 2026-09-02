@@ -36,13 +36,10 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
-    # Bound this job well short of GitHub's 360-minute platform default. Its
-    # only step is a single-repository, status-filtered gh api --paginate
-    # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
-    # or merge -- lighter than pr-review-merge-scheduler.yml's scan-pr-queue
-    # job (PR #1702), which got timeout-minutes: 30 for a comparable
-    # single-repo scan that also dispatches a review and updates a branch.
-    timeout-minutes: 20
+    # No repository-authored wall-clock cutoff: this housekeeping job relies
+    # on GitHub Actions' external platform execution contract plus explicit API
+    # failure. A shorter local deadline would be an unsupported hand-selected
+    # policy rather than a measured queue-control invariant.
     permissions:
       actions: write
       contents: read
@@ -187,21 +184,12 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-24.04
-    # Bound this job well short of GitHub's 360-minute platform default. Its
-    # "Prepare Noema model verdict" step calls into two_phase.py's call_llm
-    # via the same contextual-orchestrator gateway whose unbounded wait was
-    # confirmed to stall runs for 7-20 hours in opencode-review.yml before
-    # PR #1707's fix -- and noema_review_gate.py's own comment says that
-    # step "remains governed by contextual-orchestrator rather than a fixed
-    # inference timeout", so nothing upstream of this job bounds it either.
-    # 210 minutes gives that step the same ~180-minute (3-hour) allowance
-    # PR #1707 set for its analogous model-wait deadline -- comfortably
-    # above this org's documented "accommodate over 2 hours per model"
-    # policy (docs/product-goal-directive.md #8) -- plus a 30-minute buffer
-    # for this job's other steps (tarball fetch, credential mint, the
-    # superseded-run cleanup sweep, visibility-lookup retries, sidecar
-    # provisioning, publication), while staying well under GitHub's default.
-    timeout-minutes: 210
+    # Model-backed Noema intentionally has no repository-authored wall-clock
+    # timeout. contextual-orchestrator/orchestrator/free owns provider routing
+    # and configured model timeout policy; provider termination, live PR/head
+    # invalidation, and explicit user/operator cancellation remain authoritative
+    # stop signals. GitHub's platform execution ceiling is an external capacity
+    # constraint, not a model-selection or test-time-compute policy.
     if: >-
       github.event_name == 'repository_dispatch'
       || (

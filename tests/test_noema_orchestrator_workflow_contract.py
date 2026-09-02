@@ -371,50 +371,16 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     assert "sidecar must be provisioned before Noema LLM review" in noema.stdout
 
 
-def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
-    """cancel-closed-pr-runs must not fall back to GitHub's 360-minute default.
-
-    Its only step is a single-repository, status-filtered gh api --paginate
-    list-and-cancel sweep (up to 3 passes x 5 statuses) with no branch update
-    or merge -- comparable to, or lighter than, pr-review-merge-scheduler.yml's
-    scan-pr-queue job, which PR #1702 bounded to timeout-minutes: 30 for a
-    single-repository scan that also dispatches a review and updates a branch.
-    """
+def test_noema_jobs_do_not_invent_repository_wall_clock_deadlines() -> None:
+    """Noema model/support jobs must not encode hand-selected elapsed-time cutoffs."""
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split("\n  noema-review:\n", 1)[0]
+    cleanup = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split(
+        "\n  noema-review:\n", 1
+    )[0]
+    model = workflow.split("  noema-review:\n", 1)[1]
 
-    match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
-    assert match is not None, "cancel-closed-pr-runs must declare a job-level timeout-minutes"
-    timeout = int(match.group(1))
-    assert 1 <= timeout <= 30
-    assert timeout < 360
-
-
-def test_noema_review_job_has_a_bounded_runtime_above_the_two_hour_model_allowance() -> None:
-    """noema-review must not fall back to GitHub's 360-minute platform default.
-
-    Its "Prepare Noema model verdict" step calls into two_phase.py's
-    call_llm via the contextual-orchestrator gateway, which
-    noema_review_gate.py's own module comment says "remains governed by
-    contextual-orchestrator rather than a fixed inference timeout" -- so
-    nothing upstream of this job bounds that call. docs/product-goal-directive.md
-    section 8 documents that "중앙 OpenCode, Strix, Noema는 모델당 두 시간
-    이상 걸릴 수 있음을 수용한다" (central OpenCode, Strix, and Noema accept
-    that a model call may legitimately take over two hours), so the bound
-    must clear two hours (120 minutes) without falling back to GitHub's
-    360-minute job default.
-    """
-    workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\n", 1)[1]
-
-    match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
-    assert match is not None, "noema-review must declare a job-level timeout-minutes"
-    timeout = int(match.group(1))
-    assert 120 < timeout < 360
-
-    assert (
-        "모델당 두 시간 이상 걸릴 수 있음을 수용한다"
-        in (Path(__file__).resolve().parents[1] / "docs" / "product-goal-directive.md").read_text(
-            encoding="utf-8"
-        )
-    ), "the two-hour-per-model allowance this bound relies on must still be documented"
+    assert re.search(r"^    timeout-minutes:", cleanup, flags=re.MULTILINE) is None
+    assert re.search(r"^    timeout-minutes:", model, flags=re.MULTILINE) is None
+    assert "contextual-orchestrator/orchestrator/free" in workflow
+    assert "unsupported hand-selected" in cleanup
+    assert "no repository-authored wall-clock" in model
