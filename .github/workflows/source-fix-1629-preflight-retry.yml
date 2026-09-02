@@ -5,22 +5,30 @@ on:
     branches:
       - fix/no-heuristic-review-admission-current-main
     paths:
+      - .github/workflows/source-fix-1629-preflight-retry.yml
       - .github/source-fix-1629-preflight-retry.trigger
 
 permissions:
   contents: write
 
+concurrency:
+  group: source-fix-1629-preflight-retry
+  cancel-in-progress: true
+
 jobs:
   repair:
     if: github.repository == 'ContextualWisdomLab/.github'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
     steps:
-      - name: Checkout exact repair head
+      - name: Checkout exact repair head without persisted mutation credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -33,6 +41,16 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
             -r requirements-opencode-review-ci-hashes.txt
 
+      - name: Revalidate exact writer head
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          local_head="$(git rev-parse HEAD)"
+          if [ -z "$remote_head" ] || [ "$remote_head" != "$local_head" ]; then
+            echo "::error::writer head moved: local=$local_head remote=$remote_head"
+            exit 1
+          fi
+
       - name: Prove no-retry regression is RED
         run: |
           set -euo pipefail
@@ -44,7 +62,7 @@ jobs:
             echo "::error::Preflight retry regression was unexpectedly GREEN before repair."
             exit 1
           fi
-          echo "Preflight retry regression reproduced the hand-selected transport allocation."
+          echo "RED verified: hand-selected transport retry allocation is still live."
 
       - name: Apply exact guarded owner repair
         run: python scripts/source_fix_1629_preflight_retry.py
@@ -55,7 +73,15 @@ jobs:
           python -m pytest -q \
             tests/test_contextual_orchestrator_no_heuristic_preflight_retry.py \
             tests/test_contextual_orchestrator_review_transient_preflight.py \
-            tests/test_contextual_orchestrator_review_runtime_preflight.py
+            tests/test_contextual_orchestrator_review_runtime_preflight.py \
+            tests/test_contextual_orchestrator_review_preflight_concurrency.py \
+            tests/test_contextual_orchestrator_no_heuristic_admission.py
+          git diff --check
+
+      - name: Verify broader repository suite
+        run: |
+          set -euo pipefail
+          python -m pytest -q
           git diff --check
 
       - name: Remove completed one-shot machinery
@@ -65,25 +91,34 @@ jobs:
             .github/workflows/source-fix-1629-preflight-retry.yml \
             .github/source-fix-1629-preflight-retry.trigger \
             scripts/source_fix_1629_preflight_retry.py
+          if git ls-files | grep -E '(^|/)(source-fix-1629|source_fix_1629)'; then
+            echo "::error::temporary PR1629 repair machinery remains tracked"
+            exit 1
+          fi
           git diff --check
 
-      - name: Commit verified owner repair
-        env:
-          EXPECTED_TRIGGER_HEAD: ${{ github.sha }}
+      - name: Commit verified owner repair with workflow-starting credential
         run: |
           set -euo pipefail
-          git fetch origin fix/no-heuristic-review-admission-current-main
-          remote_head="$(git rev-parse origin/fix/no-heuristic-review-admission-current-main)"
-          if [ "$remote_head" != "$EXPECTED_TRIGGER_HEAD" ]; then
-            echo "::error::Canonical branch moved; refusing to overwrite or guess a merge."
+          if [ -z "${WORKFLOW_PUSH_TOKEN:-}" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
+          git fetch origin "${GITHUB_REF_NAME}"
+          remote_head="$(git rev-parse "origin/${GITHUB_REF_NAME}")"
+          local_parent="$(git rev-parse HEAD)"
+          if [ "$remote_head" != "$local_parent" ]; then
+            echo "::error::Canonical branch moved; local=$local_parent remote=$remote_head"
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git diff --cached --check
           if git diff --cached --quiet; then
             echo "::error::Source fix produced no publishable delta."
             exit 1
           fi
           git commit -m "fix(ci): remove heuristic preflight transport retry"
-          git push origin HEAD:fix/no-heuristic-review-admission-current-main
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
