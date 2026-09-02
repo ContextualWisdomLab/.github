@@ -106,3 +106,14 @@ def test_matrix_is_driven_by_the_r_matrix_input() -> None:
     assert "runs-on: ${{ matrix.config.os }}" in workflow
     assert "r-version: ${{ matrix.config.r }}" in workflow
     assert "http-user-agent: ${{ matrix.config['http-user-agent'] }}" in workflow
+
+
+def test_pre_check_hook_is_bounded_data_not_caller_shell_source() -> None:
+    """A reusable caller must not inject arbitrary Bash source into the trusted job."""
+    workflow = _workflow_text()
+    assert "pre_check_script:" not in workflow
+    assert "run: ${{ inputs.pre_check_script }}" not in workflow
+    assert "pre_check_test_file:" in workflow
+    assert "install_package_before_pre_check:" in workflow
+    assert "PRE_CHECK_TEST_FILE: ${{ inputs.pre_check_test_file }}" in workflow
+    assert 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))' in workflow
