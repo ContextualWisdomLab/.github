@@ -3,9 +3,9 @@
 **Recorded:** 2026-09-02  
 **Owner:** `ContextualWisdomLab/.github`
 
-This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **112 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 63 reviewed targets below.
+This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **144 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 95 reviewed targets below.
 
-The explicit label assignments cover 112 active evidence-backed targets across the baseline and this supplement.
+The explicit label assignments cover 144 active evidence-backed targets across the baseline and this supplement.
 
 - `ContextualWisdomLab/ThreadWeave#37`
 - `ContextualWisdomLab/fast-mlsirm#1716`
@@ -70,5 +70,37 @@ The explicit label assignments cover 112 active evidence-backed targets across t
 - `ContextualWisdomLab/TEPP#174`
 - `ContextualWisdomLab/TEPP#175`
 - `ContextualWisdomLab/nonnest2#84`
+- `ContextualWisdomLab/.github#1686`
+- `ContextualWisdomLab/.github#1687`
+- `ContextualWisdomLab/.github#1688`
+- `ContextualWisdomLab/.github#1689`
+- `ContextualWisdomLab/keyverse#130`
+- `ContextualWisdomLab/argos#550`
+- `ContextualWisdomLab/contextual-orchestrator#1012`
+- `ContextualWisdomLab/naruon#1520`
+- `ContextualWisdomLab/contextual-orchestrator#1013`
+- `ContextualWisdomLab/TEPP#480`
+- `ContextualWisdomLab/life-os#208`
+- `ContextualWisdomLab/contextual-orchestrator#1014`
+- `ContextualWisdomLab/fast-mlsirm#1727`
+- `ContextualWisdomLab/fast-mlsirm#1457`
+- `ContextualWisdomLab/.github#1685`
+- `ContextualWisdomLab/quarantine-sandbox-runtime#1`
+- `ContextualWisdomLab/quarantine-sandbox-runtime#6`
+- `ContextualWisdomLab/quarantine-sandbox-runtime#9`
+- `ContextualWisdomLab/quarantine-sandbox-runtime#13`
+- `ContextualWisdomLab/ConceptWeave#5`
+- `ContextualWisdomLab/pingora-gateway#7`
+- `ContextualWisdomLab/accounting-information-platform#41`
+- `ContextualWisdomLab/newsdom-api#781`
+- `ContextualWisdomLab/.github#1692`
+- `ContextualWisdomLab/html4tree#600`
+- `ContextualWisdomLab/nonnest2#118`
+- `ContextualWisdomLab/argos#553`
+- `ContextualWisdomLab/newsdom-api#756`
+- `ContextualWisdomLab/LineageWeave#915`
+- `ContextualWisdomLab/contextual-orchestrator#1009`
+- `ContextualWisdomLab/pg-llm-batch#323`
+- `ContextualWisdomLab/scopeweave#653`
 
 Each target records the evidence-backed primary semantic type established from current PR/issue scope and live repository labels: documentation for public-surface writers, bug for security/correctness/commercial-policy defects, and feature for buyer-facing product capabilities. Recording semantic type does not make Draft work Ready, unblock blocked work, transfer merge authority, or override repository-local priority/status/security/component labels. The reconciliation contract continues to preserve labels outside the centrally managed semantic set.
