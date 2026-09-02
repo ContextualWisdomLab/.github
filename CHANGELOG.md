@@ -5,6 +5,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review.
 - **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
   At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
   `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,

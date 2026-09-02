@@ -4,9 +4,10 @@ from scripts.ci import pr_review_merge_scheduler as sched
 
 
 def test_cancel_stale_opencode_runs_uses_revalidated_refs(monkeypatch):
-    """Cancel only the refs returned by the live-state-aware review classifier."""
+    """Revalidate every candidate and cancel only refs still proven stale."""
     actor_calls: list[str] = []
-    cancelled_refs: list[tuple[str, str]] = []
+    revalidated: list[tuple[str, str, int, str, str]] = []
+    cancelled: list[tuple[str, list[str]]] = []
     stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
 
     monkeypatch.setattr(
@@ -19,10 +20,16 @@ def test_cancel_stale_opencode_runs_uses_revalidated_refs(monkeypatch):
         "active_opencode_run_refs",
         lambda _repo, _workflow, _pr: ([], stale_refs),
     )
+
+    def still_superseded(repo, workflow, number, run_repo, run_id):
+        revalidated.append((repo, workflow, number, run_repo, run_id))
+        return True
+
+    monkeypatch.setattr(sched, "_review_run_still_superseded", still_superseded)
     monkeypatch.setattr(
         sched,
-        "force_cancel_workflow_run_refs",
-        lambda refs: cancelled_refs.extend(refs),
+        "force_cancel_workflow_runs",
+        lambda repo, run_ids: cancelled.append((repo, list(run_ids))),
     )
 
     run_ids = sched.cancel_stale_opencode_runs(
@@ -33,5 +40,12 @@ def test_cancel_stale_opencode_runs_uses_revalidated_refs(monkeypatch):
     )
 
     assert actor_calls == ["force-cancel-stale-opencode-review"]
-    assert cancelled_refs == stale_refs
-    assert run_ids == ["101", "202"]
+    assert sorted(revalidated) == [
+        ("owner/repo", "OpenCode Review", 7, "owner/repo", "101"),
+        ("owner/repo", "OpenCode Review", 7, "owner/repo", "202"),
+    ]
+    assert sorted(cancelled) == [
+        ("owner/repo", ["101"]),
+        ("owner/repo", ["202"]),
+    ]
+    assert sorted(run_ids) == ["101", "202"]
