@@ -320,9 +320,21 @@ def collect_snapshot(
                     repository_name, workflow_run, workflow_jobs
                 )
 
-            post_evidence_pull_requests = _read_pull_request_snapshot(
-                pulls_endpoint, runner=runner
-            )
+            try:
+                post_evidence_pull_requests = _read_pull_request_snapshot(
+                    pulls_endpoint, runner=runner
+                )
+            except IncompletePullRequestIdentity:
+                time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
+                try:
+                    post_evidence_pull_requests = _read_pull_request_snapshot(
+                        pulls_endpoint, runner=runner
+                    )
+                except QueueHealthError as retry_error:
+                    raise QueueHealthError(
+                        "pull-request identity validation failed: "
+                        f"{retry_error}"
+                    ) from retry_error
             if (
                 _pull_request_identity_view(final_pull_requests)
                 != _pull_request_identity_view(post_evidence_pull_requests)
