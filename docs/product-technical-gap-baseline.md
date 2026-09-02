@@ -2627,3 +2627,27 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## Backlog items 33-37 (OpenAI SDK parity) scoping, and item 32 (batch scope) reclassification — 2026-09-02
+
+**Status:** Scoping only, recorded per this session's throttle agreement. Implementation is deliberately deferred — opening new feature PRs right now would add to an already-saturated review queue (2154 queued / 2-4 in-progress GitHub Actions runs at the time of this entry, unchanged or worse than the 60-concurrent-runner-slot ceiling already documented elsewhere in this file) rather than clear it. Resume only once that queue meaningfully eases, or the repository owner explicitly directs otherwise — not on this session's own initiative.
+
+**Method.** Read `contextual-orchestrator/contextual_orchestrator/server.py` (8744 lines, a raw `http.server`-based OpenAI-compatible gateway, not a framework router) directly from protected `main`, plus `batch_routing.py` and `file_registry.py`, and grepped for every major OpenAI SDK endpoint family's path string.
+
+**Already implemented** (broader than expected): `/v1/chat/completions`, `/v1/responses`, `/v1/completions` (legacy, redirects to chat/completions), `/v1/embeddings`, `/v1/models`, `/v1/files`, `/v1/batch/embeddings`, `/v1/videos`, `/v1/images/generations`, `/v1/audio/{speech,transcriptions,generations}`, and `/v1/rerank` (a non-standard extension, not in the OpenAI SDK).
+
+**Genuinely missing** (item 34 candidates — in the SDK, absent here):
+- `/v1/moderations`
+- `/v1/fine_tuning/jobs`
+- `/v1/audio/translations`
+- `/v1/images/edits`, `/v1/images/variations`
+- `/v1/uploads`
+- `/v1/realtime` (WebSocket, persistent-connection architecture — genuinely different shape from every other endpoint here; deserves its own ADR before any implementation attempt, not a same-pattern addition)
+
+**Missing but likely low priority:** `/v1/assistants`, `/v1/threads`, `/v1/runs`, `/v1/vector_stores` (the Assistants API). OpenAI itself is sunsetting this family in favor of the Responses API, which this gateway already implements (`/v1/responses`). Building parity for a family the SDK's own vendor is deprecating is in tension with item 34's "if the SDK has it, implement it" principle — recorded as a judgment call to deprioritize, not a decision to never build it.
+
+**Item 32 (batch endpoint scope) reclassified: not a blank-slate gap, needs re-verification instead.** `batch_routing.py` already implements a `RoutingPolicy` that decides sync-vs-batch **per request**, driven by request hints and KV-configured thresholds, dispatching batch-eligible requests to `pg-llm-batch` through an injected OpenAI-compatible `BatchAPIClient`. This may already satisfy item 32's concern ("should the batch endpoint only serve batch models") as a policy decision rather than a hard endpoint restriction — confirming that needs a closer read of `RoutingPolicy`'s actual thresholds and call sites, not new implementation. Left open for whoever picks this up next.
+
+**Item 36 (S3-backed Files API) confirmed as a real gap.** `file_registry.py`'s current `FileOwner`/file-registry logic is a *provider-affinity* registry — it tracks which upstream provider a given gateway file id was proxied to, not a self-hosted store. No S3 (or other object-storage) integration exists. Item 36's "Files API can be self-implemented via S3" is not yet built.
+
+**Suggested implementation order, if/when resumed** (smallest and most independent first, one PR each, not bundled): `/v1/moderations` → `/v1/audio/translations` (extends the existing audio family) → `/v1/images/{edits,variations}` → item 36's S3-backed Files store (infrastructure-shaped, kept separate) → `/v1/uploads` → `/v1/fine_tuning/jobs` (needs persistent job state, more complex) → `/v1/realtime` last, gated behind its own ADR given the architectural shift to a persistent connection model. Item 22 (Keyverse) was scoped in parallel and found mostly already covered by `keyverse#103`'s ADR-accepted draft (ABAC/RBAC PDP + KV + credential store); see that item's own gap-baseline entry for detail.
