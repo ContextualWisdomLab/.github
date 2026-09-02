@@ -68,6 +68,29 @@ jobs:
           python -m py_compile scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           git diff --check
 
+      - name: Retire source-fix drivers before production coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PR #1714 is merged and its writer branch has been deleted. Its
+          # one-shot workflow can therefore no longer have a live push caller;
+          # leaving its Python driver on protected main would falsely turn
+          # temporary repair machinery into an uncovered production surface.
+          prior_writer_head="$(git ls-remote origin refs/heads/fix/autofix-job-timeout | cut -f1)"
+          test -z "$prior_writer_head"
+          test -e scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          test -e .github/workflows/source-fix-pr1714-no-model-job-timeout.yml
+          rm scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          rm .github/workflows/source-fix-pr1714-no-model-job-timeout.yml
+
+          # The current source-fix driver has already materialized its entire
+          # successor and passed syntax/diff checks. Remove it before measuring
+          # owned production coverage; the workflow remains to verify and
+          # publish the exact successor, then self-retires below.
+          rm scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          test ! -e scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          git diff --check
+
       - name: Verify focused Noema timeout authority GREEN
         shell: bash
         run: |
@@ -90,17 +113,18 @@ jobs:
           python -m compileall -q scripts tests .github/actions/noema-review
           git diff --check
 
-      - name: Retire one-shot repair artifacts and verify scope
+      - name: Retire one-shot workflow and verify successor scope
         shell: bash
         run: |
           set -euo pipefail
-          rm scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           rm .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
-          allowed='^(.github/workflows/noema-review.yml|tests/test_noema_orchestrator_workflow_contract.py|tests/test_noema_model_timeout_policy.py|CHANGELOG.md|ARCHITECTURE.md|docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md|docs/doctoring/noema-model-timeout-authority-2026-09-02.md|docs/product-technical-gap-baseline.md|scripts/ci/source_fix_pr1715_no_model_job_timeout.py|.github/workflows/source-fix-pr1715-no-model-job-timeout.yml)$'
+          allowed='^(.github/workflows/noema-review.yml|tests/test_noema_orchestrator_workflow_contract.py|tests/test_noema_model_timeout_policy.py|CHANGELOG.md|ARCHITECTURE.md|docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md|docs/doctoring/noema-model-timeout-authority-2026-09-02.md|docs/product-technical-gap-baseline.md|scripts/ci/source_fix_pr1715_no_model_job_timeout.py|.github/workflows/source-fix-pr1715-no-model-job-timeout.yml|scripts/ci/source_fix_pr1714_no_model_job_timeout.py|.github/workflows/source-fix-pr1714-no-model-job-timeout.yml)$'
           bad="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
           test -z "$bad"
           test ! -e scripts/ci/source_fix_pr1715_no_model_job_timeout.py
           test ! -e .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
+          test ! -e scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          test ! -e .github/workflows/source-fix-pr1714-no-model-job-timeout.yml
           remote_head="$(git ls-remote origin refs/heads/fix/noema-review-no-heuristic-timeouts | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
 
