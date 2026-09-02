@@ -41,6 +41,10 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
         "pull_requests": [{"number": 7, "head": {"sha": "exact-head"}}],
     }
     requested_paths: list[str] = []
+    terminal_path = (
+        f"repos/{repository_name}/actions/runs?status=startup_failure"
+        "&created=%3E%3D2026-08-26T10%3A30%3A00Z&per_page=50"
+    )
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
         """Return deterministic GitHub REST fixtures for the collector."""
@@ -50,7 +54,7 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
             payload: object = {"default_branch": "main"}
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
             payload = [pull_request]
-        elif path == f"repos/{repository_name}/actions/runs?status=startup_failure&per_page=50":
+        elif path == terminal_path:
             payload = {"total_count": 1, "workflow_runs": [startup_failure_run]}
         elif path == f"repos/{repository_name}/actions/runs/701/jobs?per_page=100":
             payload = {"total_count": 0, "jobs": []}
@@ -86,7 +90,7 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
             "workflow_identity": "workflow_id:9001",
         }
     ]
-    assert f"repos/{repository_name}/actions/runs?status=startup_failure&per_page=50" in requested_paths
+    assert terminal_path in requested_paths
     assert f"repos/{repository_name}/actions/runs/701/jobs?per_page=100" in requested_paths
 
     report = queue_health.build_report(
@@ -100,3 +104,82 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
     assert row["jobs_materialized"] is False
     assert row["blocker"] == "startup_failure_before_job_materialization"
     assert row["recommended_action"] == "inspect_actions_control_plane_without_leaf_bypass"
+
+
+def test_collect_snapshot_ignores_unbounded_historical_startup_failures() -> None:
+    """Old startup-failure history must not permanently disable current collection."""
+    repository_name = "owner/repo"
+    pull_request = {
+        "number": 8,
+        "state": "open",
+        "base": {"ref": "main", "repo": {"full_name": repository_name}},
+        "head": {"sha": "current-head"},
+        "updated_at": "2026-09-02T10:29:00Z",
+    }
+    current_startup_failure = {
+        "id": 801,
+        "name": "CodeQL PR",
+        "workflow_id": 9001,
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "head_sha": "current-head",
+        "created_at": "2026-09-02T10:29:00Z",
+        "updated_at": "2026-09-02T10:29:00Z",
+        "run_attempt": 1,
+        "pull_requests": [{"number": 8, "head": {"sha": "current-head"}}],
+    }
+    terminal_path = (
+        f"repos/{repository_name}/actions/runs?status=startup_failure"
+        "&created=%3E%3D2026-08-26T10%3A30%3A00Z&per_page=50"
+    )
+    unbounded_terminal_path = (
+        f"repos/{repository_name}/actions/runs?status=startup_failure&per_page=50"
+    )
+    requested_paths: list[str] = []
+
+    def runner(args: list[str], **_: object) -> CompletedProcess[str]:
+        """Expose a permanently oversized historical result only to unbounded readers."""
+        path = args[-1]
+        requested_paths.append(path)
+        if path == f"repos/{repository_name}":
+            payload: object = {"default_branch": "main"}
+        elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
+            payload = [pull_request]
+        elif path == terminal_path:
+            payload = {"total_count": 1, "workflow_runs": [current_startup_failure]}
+        elif path == unbounded_terminal_path:
+            historical_runs = [
+                {
+                    "id": 10_000 + historical_index,
+                    "name": "CodeQL PR",
+                    "event": "pull_request",
+                    "status": "completed",
+                    "conclusion": "startup_failure",
+                    "head_sha": f"historical-{historical_index}",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "run_attempt": 1,
+                    "pull_requests": [],
+                }
+                for historical_index in range(50)
+            ]
+            payload = {"total_count": 51, "workflow_runs": historical_runs}
+        elif path == f"repos/{repository_name}/actions/runs/801/jobs?per_page=100":
+            payload = {"total_count": 0, "jobs": []}
+        elif path.startswith(f"repos/{repository_name}/actions/runs?status="):
+            payload = {"total_count": 0, "workflow_runs": []}
+        else:  # pragma: no cover - unexpected API expansion must fail loudly.
+            raise AssertionError(f"unexpected GitHub API path: {path}")
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    snapshot = queue_health.collect_snapshot(
+        [repository_name],
+        runner=runner,
+        generated_at="2026-09-02T10:30:00Z",
+    )
+
+    assert snapshot["collection_errors"] == []
+    assert [run["id"] for run in snapshot["repositories"][0]["runs"]] == [801]
+    assert terminal_path in requested_paths
+    assert unbounded_terminal_path not in requested_paths
