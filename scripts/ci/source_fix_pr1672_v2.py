@@ -231,12 +231,25 @@ def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
     TELEMETRY_TEST.write_text(current.rstrip() + extra + "\n", encoding="utf-8")
 
 
+def normalize_trailing_newlines() -> None:
+    """Keep generated text Git-clean with exactly one terminal newline."""
+    for relative_path in (
+        "docs/product-technical-gap-baseline.md",
+        "tests/test_noema_model_output_failure_classification.py",
+        "tests/test_noema_repair_attempt_telemetry.py",
+    ):
+        path = ROOT / relative_path
+        if path.exists():
+            path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n", encoding="utf-8")
+
+
 def main() -> None:
     """Run the owner repair, retain equivalent GREEN regressions, and retire helpers."""
     normalize_primary_materializer()
     runpy.run_path(str(PRIMARY), run_name="__main__")
     remove_stale_retry_tests()
     append_single_request_failure_regressions()
+    normalize_trailing_newlines()
     SELF.unlink(missing_ok=True)
     WORKFLOW.unlink(missing_ok=True)
 
