@@ -1,0 +1,63 @@
+name: Source Fix 1656 Stale Close Contract
+
+on:
+  push:
+    branches: [fix/close-empty-noop-runner-712]
+    paths: [.github/workflows/source-fix-1656-stale-close-contract.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-1656-stale-close-contract
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Revalidate exact remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          local_head="$(git rev-parse HEAD)"
+          test -n "$remote_head"
+          test "$remote_head" = "$local_head"
+
+      - name: Generate validated contract repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/source_fix_1656_close_runner.py
+          python -m compileall -q \
+            scripts/ci/source_fix_1656_close_runner.py \
+            tests/test_required_workflow_queue_contract.py \
+            tests/test_close_empty_pr_queue_pressure.py
+          git diff --check
+
+      - name: Publish only the non-workflow permanent tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The GitHub Actions token is intentionally not granted workflow-file
+          # mutation. Production workflow bytes are published through the owner
+          # connector; this bounded writer carries only the validated test delta.
+          git restore --source=HEAD -- .github/workflows
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_required_workflow_queue_contract.py tests/test_close_empty_pr_queue_pressure.py
+          git diff --cached --check
+          git diff --cached --quiet && { echo "::error::No test-contract repair produced"; exit 1; }
+          git commit -m "test(actions): align runnerless close-event contract"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          parent="$(git rev-parse HEAD^)"
+          test "$remote_head" = "$parent"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
