@@ -2613,3 +2613,57 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## 2026-09-02 backlog item 30: OpenCode Agent "head moved" failure — already fixed, not reproducible on current main
+
+**Task.** A peer session flagged backlog item 30 — a run link
+(`contextual-orchestrator/actions/runs/33548447878/job/100066104033#step:2:1`) reported as evidence
+that "OpenCode Agent isn't working correctly yet, has a UX problem," and asked to check whether the
+same failure pattern still reproduces on recent runs.
+
+**What that specific run actually showed.** The job's step 2 ("Request current-head OpenCode review
+execution," part of `.github/workflows/opencode-review.yml`'s `pull_request_target`-triggered required
+review) failed with `##[error]Pull request head moved while validating live review state.` and exit
+code 1. Reading the step's own script (fetched via `gh api .../actions/jobs/100066104033/logs`): this
+is not an OpenCode Agent defect. It is the review-dispatch script's own intentional guard — it
+re-fetches the PR's live head SHA immediately before dispatching a review and refuses to dispatch
+against a stale head if the two don't match. At the time of that run (created `2026-09-01T19:15:28Z`),
+the guard's mismatch branch was written as a hard failure: `echo "::error::..."; exit 1`, which fails
+the required check and reads to a PR author as "OpenCode Agent broke," even though the underlying cause
+(the PR's head moved between trigger and validation) is not a bug — it is now an *expected*,
+increasingly frequent event, since this session independently confirmed eight different AI
+coding-agent GitHub Apps (`chatgpt-codex-connector`, `devin-ai-integration`, `cursor`, `grok-by-xai`,
+`claude`, `coderabbitai`, `opencode-agent`, `google-labs-jules`) all hold `contents: write` across
+every repository in the organization, so any of them can move a PR's head at any time.
+
+**Already fixed.** `.github/workflows/opencode-review.yml` on current `main` (`63bf498`) no longer has
+this failure mode. Commit `5c561a6` (PR `#1697`, `fix(opencode): retire stale draft/head dispatches
+without false failure`, merged 2026-09-02 17:00:55 KST — after the flagged run) changed exactly this
+branch: the head-mismatch case now reads `echo "Pull request head moved on the live open,
+ready-for-review PR; a fresh dispatch will fire for the current head."; exit 0` — a graceful,
+non-failing skip with an explanation, not a red-X required-check failure. The same pattern is applied
+consistently at two other head-mismatch points in the same file (`git log -S'head moved' --
+.github/workflows/opencode-review.yml` finds three occurrences, all now exit-0/informational). This is
+exactly the "UX problem" the backlog item's own framing anticipated — a real fix already landed for it,
+one day after the flagged run, independently of this investigation.
+
+**Could not observe a fresh reproduction — and why that's expected right now, not a gap.** Checked the
+most recent 100 Actions runs in `contextual-orchestrator`: 70 are still `queued`, 3 `pending`, and of
+the 27 `completed`, zero are `Required OpenCode Review` runs (several `CodeQL PR` runs show
+`startup_failure`, and most other named checks show `cancelled` — superseded by a later push before
+they ran). This is the same organization-wide Actions capacity saturation the gap-baseline entries
+above (floating-runner starvation, `org-queue-sweep`/`scan-pr-queue` cadence) already document and this
+session's own backlog item 15 investigation just re-confirmed is still live. The review workflow isn't
+failing right now — it mostly isn't *running* yet, for nearly every open PR, independent of this fix.
+
+**Conclusion.** No code change needed for this item. The specific failure the flagged run showed was
+already fixed on `main` in `#1697`, for a materially good reason (the "fail loud on a race" behavior
+was itself the UX problem, not the race detection). Re-open only if a *current-head* `Required OpenCode
+Review` run is observed failing with the same `::error::...head moved...` message once the queue
+backlog above clears enough for runs to actually execute and a real post-fix sample becomes available.
+
+**Residual.** This is the second backlog item this session that traces back to the same root incident —
+organization-wide Actions queue saturation — without that incident itself being this item's job to fix
+(see item 15's entry above, and the earlier floating-runner-image and `orchestrator/free` entries in
+this file). If a third unrelated backlog item traces to the same root cause, it's worth escalating queue
+saturation itself as its own tracked item rather than re-diagnosing it from a different angle each time.
