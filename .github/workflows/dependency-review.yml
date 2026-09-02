@@ -1,6 +1,6 @@
-# Reusable Dependency Review (workflow_call), consolidating the four
-# near-identical dependency-review.yml files argos, mightyETL, newsdom-api,
-# and scopeweave each carried independently. See
+# Reusable Dependency Review (workflow_call), consolidating the near-
+# identical dependency-review.yml files argos, mightyETL, newsdom-api,
+# scopeweave, and naruon each carried independently. See
 # docs/adr/0024-dependency-review-reusable-workflow-consolidation.md and
 # docs/doctoring/dependency-review-reusable-workflow-consolidation.md for the
 # per-repo field audit behind these inputs.
@@ -18,7 +18,15 @@
 # adopts the dynamic detection as the common, more-correct behavior for
 # every caller, so no per-repo public/private input is needed.
 #
-# Example caller (.github/workflows/dependency-review.yml in a product repo):
+# Example caller (.github/workflows/dependency-review.yml in a product repo).
+# Pin `uses:` to this file's exact commit SHA, not @main: an unpinned mutable
+# ref would run an unreviewed central change against every PR check in the
+# calling repo (Devin flagged this on the first four callers; fixed in all of
+# them). If the calling repo's branch protection requires a status check
+# literally named after the old standalone job, converting to `uses:` here
+# will rename the published check to "<calling job> / dependency-review" and
+# silently break that required check -- update the branch protection's
+# required-check name to match before or immediately after merging a caller.
 #
 #   name: Dependency Review
 #   on:
@@ -28,7 +36,7 @@
 #     cancel-in-progress: true
 #   jobs:
 #     dependency-review:
-#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<commit-sha>
 #       with:
 #         fail_on_severity: high
 #         allow_ghsas: "GHSA-69w3-r845-3855"
@@ -60,6 +68,17 @@ on:
         required: false
         type: boolean
         default: false
+      comment_summary_in_pr:
+        description: >-
+          Value forwarded to dependency-review-action's comment-summary-in-pr
+          input. Default "on-failure" (scopeweave's original choice, applied
+          uniformly when this input was still hardcoded); naruon explicitly
+          opts out with "never" -- an explicit per-repo choice, not
+          accidental drift, so it must stay an input rather than being
+          flattened to one value.
+        required: false
+        type: string
+        default: "on-failure"
 
 permissions:
   contents: read
@@ -75,6 +94,11 @@ jobs:
       # since it is a forward-compatibility setting, not a per-repo policy.
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -130,7 +154,7 @@ jobs:
         with:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           allow-ghsas: ${{ inputs.allow_ghsas }}
-          comment-summary-in-pr: on-failure
+          comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}
 
       - name: Dependency graph unavailable note
         if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
