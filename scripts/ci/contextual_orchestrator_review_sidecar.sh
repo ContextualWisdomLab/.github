@@ -279,11 +279,17 @@ esac
 
 orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
 case "$orchestrator_pool" in
-  free|auto)
+  free)
     pool_args=(--pool "$orchestrator_pool")
     ;;
   *)
-    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
+    # GitHub Actions Workflow usage of contextual-orchestrator is pinned to
+    # orchestrator/free: the org has not solved cost-safe free+ZDR routing
+    # well enough yet to justify a priced-inclusive "auto" pool in central CI,
+    # so "auto" is rejected here even though the launcher's own --pool flag
+    # (a general-purpose CLI also used outside GitHub Actions) still accepts
+    # it.
+    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"
     ;;
 esac
 
