@@ -128,11 +128,12 @@ def test_cancel_stale_opencode_runs_uses_revalidated_refs(monkeypatch):
         return True
 
     monkeypatch.setattr(sched, "_review_run_still_superseded", still_superseded)
-    monkeypatch.setattr(
-        sched,
-        "force_cancel_workflow_runs",
-        lambda repo, run_ids: cancelled.append((repo, list(run_ids))),
-    )
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, list(run_ids)))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
 
     run_ids = sched.cancel_stale_opencode_runs(
         "owner/repo",
