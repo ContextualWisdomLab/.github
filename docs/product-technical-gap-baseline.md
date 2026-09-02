@@ -2799,3 +2799,56 @@ PRs encountered during the loop, and a future pass hitting the same "PR branch s
 own unrelated contract tests failing" pattern on any other long-lived PR should reach for the same
 diagnosis (check `git rev-list --left-right --count origin/<base>...HEAD` before assuming a real
 regression) rather than re-investigating from scratch.
+
+## 2026-09-02 product-goal-directive.md third revision: two audit gaps deferred, not fabricated
+
+The owner re-issued the full directive a third time overall (second time this same day) as a genuine
+chat-turn message. Most of the revision's new content is process/convention text with no product-gap
+shape (a PR close/repair taxonomy in §2, a naming-scope widening in §5, a Python-exception rule in §6,
+a "core foundation" definitional framing in §9) or content this session directly verified against live
+source before recording (§10's CO pool-pin elaboration, confirmed true against `strix.yml` and
+`scripts/ci/contextual_orchestrator_review_sidecar.sh`). Two pieces of new content are genuine,
+currently-unverified audit gaps, recorded here rather than either asserted as already-compliant or
+silently dropped:
+
+**Gap 6 — `contextual-orchestrator`'s stdlib-Python core against the newly sharpened §6 Python rule.**
+§6 now states plainly that Python is disfavored and must never be chosen for LLM/agent-tooling
+convenience, with exactly one permitted exception (a Python-only ML runtime with no practical Rust
+alternative for that specific part, scope/rationale/removal-condition recorded in an ADR, hot path
+still in Rust). `contextual-orchestrator`'s own `CLAUDE.md` describes it as "a stdlib-Python lab" for
+its core control-plane (HTTP routing, delegation, verification, synthesis) — not itself the
+"수리과학·Psychometrics·EDA·데이터과학 core 연산" this section's Rust mandate names first, but plausibly
+within its broader "속도·안정성·보안이 중요한 일반 소프트웨어" net, since it is the org's central,
+security-critical LLM gateway. Checked, not assumed: `contextual-orchestrator/docs/library_research.md`
+already exists and actively records Python-vs-Rust decisions per subsystem via the repo's own
+"Ponytail design gate," and the one genuinely numeric hot path already found here — LLM token
+accounting — already uses Rust (PyO3 + `tiktoken-rs`, per ADR 0006 and the corresponding
+`library_research.md` rows), not Python. **Not verified in this pass:** whether the rest of that
+file's existing entries meet the newly sharpened bar (an explicit ADR with scope/rationale/removal-
+condition, specifically framed as *the* permitted Python exception, not just a general dependency-
+research note), and whether the control-plane/orchestration logic itself is even in scope of the Rust
+mandate at all — that reading is genuinely ambiguous between "core computation" (clearly out of scope
+for the HTTP-routing/dispatch parts) and "general software where speed/stability/security matter"
+(plausibly in scope, given what this repo *is* to the org). Needs a dedicated future pass, with a
+close read of `contextual-orchestrator`'s existing ADRs and `library_research.md` against this
+revision's exact §6 text, before treating this as either compliant or a violation.
+
+**Gap 7 — §8's CI integration architecture, not yet audited for compliance.** §8 gained a detailed
+CI integration architecture requirement this revision (`.github` reusable-workflow-plus-thin-caller
+composition; exact-SHA verification of build/API-schema-contract/E2E/model-behavior/security/SBOM/
+provenance on every owner PR/release/consumer change; owner-side RED→fix→GREEN→release with a consumer
+version bump on defects; a ban on mutable-head/branch-URL/cross-repo-source/workflow duplication; an
+owner-issue-plus-expiration/deletion condition on any transitional bridge). This matches this repo's
+own already-documented conventions in spirit (`CLAUDE.md`'s "product hourly callers stay thin," the
+central-required-workflow architecture `docs/org-required-workflow-rollout.md` already describes,
+`pr-review-autofix.yml`'s vendored-sidecar-with-exact-SHA-pin pattern), so it is *plausibly* already
+substantially met — but this reconciliation pass recorded the requirement directly from the directive
+text and verified only §10's narrower pool-pin claims against live source, not this broader multi-
+dimensional CI-contract claim against every current owner/consumer relationship in the ecosystem
+(e.g., whether SBOM/provenance is actually checked on every `contextual-orchestrator` consumer change,
+not just central review workflows). Needs a dedicated future audit pass before either claiming full
+compliance or opening a remediation PR.
+
+Neither gap blocks any currently open PR; both are recorded so a future pass (or a `spawn_task`
+suggestion) picks them up, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를
+계속한다."

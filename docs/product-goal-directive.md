@@ -1,7 +1,7 @@
 # Product goal directive — autonomous PR/merge/development loop
 
 **Status:** active standing directive · **Owner intent recorded:** 2026-08-30, revised 2026-09-01,
-2026-09-02 · **Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from
+2026-09-02 (twice, same day) · **Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from
 this org, leveraged in order of product responsibility / reuse boundary / docs / implementation /
 consumption — not by name).
 
@@ -73,6 +73,35 @@ inside §8's general body rather than as the separately-qualified §10 item — 
 §10 for why that does not reopen or loosen the existing, evidence-verified CI-workflow scope
 qualifier.
 
+**2026-09-02 second revision (same day):** the owner re-issued the full directive a third time overall
+(second time this day), again as a genuine chat-turn message, titled "아래는 일반 지침" like the prior
+same-day restatement. §3 and §4 were re-authored in condensed form with no new obligation detected
+(left as-is); every other section gained genuinely new content, updated in place — see
+`docs/doctoring/product-goal-directive.md` for the full per-section record. In summary: §1 gained an
+explicit constraint on what "0 open PRs" may legitimately mean (merge or a verified successor's full
+delta takeover only, never a bare close). §2 gained a detailed six-category PR close/repair taxonomy
+(single-writer/DDD violations, wrong base/conflicts, ADR number collisions, premature Accepted status,
+unprotected dependencies, missing test/fixture/contract are all repair findings, never close reasons)
+with an explicit repair procedure (downgrade to Draft/Proposed, non-force restack/retarget) and a
+four-case-only close policy. §5 widened the two-or-more-word naming rule from DB objects specifically
+to essentially every named code entity, plus an explicit boundary-conversion rule for
+language/framework/external-contract naming conventions. §6 sharpened the Rust-first mandate into an
+explicit Python-disfavored rule with one narrow, ADR-tracked exception. §7 added "rendering" to the
+list of things to replace when the JS bundle/DOM/GC is the bottleneck. §8 gained a "consume via
+released API/client/schema" consumption pattern plus a detailed CI integration architecture (`.github`
+reusable-workflow-plus-thin-caller composition, exact-SHA verification across build/contract/E2E/
+model-behavior/security/SBOM/provenance, owner-side RED→fix→GREEN→release, and an explicit ban on
+mutable-head/branch-URL/cross-repo-source/workflow duplication). §9 gained a definitional framing of
+what "core foundation" actually means (a selective, canonically-owned, versioned-contract-providing
+control plane — never a default install; role/maturity confirmed from the protected branch, not an
+open PR's own claims), a five-domain regrouping of the existing repo catalog, and a concrete
+elaboration of the "immature core" waiting-period mechanics (port/ACL/feature-flag/test-double
+boundary protection; never read the owner's raw source/DB/temp branch directly). §10's existing pin
+gained three specific architectural constraints, each verified against current `strix.yml`/sidecar
+source rather than merely restated (free-pool discovery/routing/fallback stays inside CO; the workflow
+itself has no live path to specify a provider/model/group and only ever sees a local gateway token;
+missing capability fails closed with no paid bypass).
+
 ## Why this file exists
 
 Claude Code's `/goal` session-condition field is capped at 4000 characters. The user's full operating
@@ -96,11 +125,29 @@ elsewhere; link to this file instead.
 
 ## 1. Execution goal and continuous loop
 
-> 실행 목표와 지속 Loop 열린 PR마다 별도 중간 보고 없이 리뷰 확인→수정→GitHub Checks 재검증→병합→다음 개발을 반복하라. PRD를 읽고 Loop·Goal을 자율 생성·수정·제거해 PR을 병합 또는 0개로 만들며 상용화하라. 200억 달러에 판매할 자신이 있을 품질과 구매자가 체감할 제품 Gap 해소가 목표다. ADR·리서치·현행 데이터·PR로 기능 명세·PRD·TRD·UML·Gap·조치 상태를 도출해 docs/product-technical-gap-baseline.md에 갱신하라. 한 시간 간격으로 예약하고 메시지도 개선·갱신하라. PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다. 내가 온전히 소유한 ContextualWisdomLab 저장소를 레버리지 순으로 연계해 PR 병합·추가와 Connector 추가·수정 등 Ecosystem을 구축하라. Ecosystem 전 라이브러리 PRD를 숙지하고 조직·저장소명 대소문자를 지킨다. 리뷰·Checks 대기는 Blocker가 아니며, 실패 원인·수정·재실행 필요에 즉시 대응하며 안전한 작업을 계속한다. 결과 보고에 멈추지 말고 다음 Loop로 이동하라. 저장소는 이름이 아니라 제품 책임·재사용 경계·문서·구현·소비 저장소를 대조해 선택한다. ADR·Goal을 수시로 갱신하고 Goal 수정 불가 시 Loop를 갱신한다.
+> 실행 목표와 지속 Loop 열린 PR마다 별도 중간 보고 없이 리뷰 확인→수정→GitHub Checks 재검증→병합→다음 개발을 반복하라. PRD를 읽고 Loop·Goal을 자율 생성·수정·제거해 PR을 병합 또는 0개로 만들며 상용화하라. PR 0개는 병합이나 검증된 successor의 유효 delta 완전 승계로만 만들고 단순 Close하지 않는다. 200억 달러에 판매할 자신이 있을 품질과 구매자가 체감할 제품 Gap 해소가 목표다. ADR·리서치·현행 데이터·PR로 기능 명세·PRD·TRD·UML·Gap·조치 상태를 도출해 docs/product-technical-gap-baseline.md에 갱신하라. 한 시간 간격으로 예약하고 메시지도 개선·갱신하라. PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다. 내가 온전히 소유한 ContextualWisdomLab 저장소를 레버리지 순으로 연계해 PR 병합·추가와 Connector 추가·수정 등 Ecosystem을 구축하라. Ecosystem 전 라이브러리 PRD를 숙지하고 조직·저장소명 대소문자를 지킨다. 리뷰·Checks 대기는 Blocker가 아니며, 실패 원인·수정·재실행 필요에 즉시 대응하며 안전한 작업을 계속한다. 결과 보고에 멈추지 말고 다음 Loop로 이동하라. 저장소는 이름이 아니라 제품 책임·재사용 경계·문서·구현·소비 저장소를 대조해 선택한다. ADR·Goal을 수시로 갱신하고 Goal 수정 불가 시 Loop를 갱신한다.
 
 ## 2. Concurrent operation, PR handling, and root-cause fixes
 
-> 동시 작업·PR 운영·근본 수정 원격 Agent의 동시 Commit·Push를 경합으로 단정해 Force Push·중단하지 말고 변경 취지·이유를 확인해 이어간다. Commit·Push 전 병합 여부를 확인하고 삭제 근거를 남긴다. Self-modifying/Source-fix Workflow는 목적 달성 후 삭제하고 잔존 시 관찰·제거한다. 가능한 PR은 Stack하고 not-merge-ready를 merge-ready로 전환한다. 유관 프로젝트 원인이 엮이면 함께 처리하고 Stacked PR을 중앙 OpenCode Agent가 리뷰하지 않으면 ContextualWisdomLab/.github를 수정한다. Agent 간 대화·Spawn을 활용한다. 수동 해법은 모두 코드·설정에 반영한다. PYTHONPATH=. 누락은 설정하고 GitHub Actions·런타임 오류는 로그·Root Cause Analysis로 제거한다. 전체 GitHub Checks 실패를 확인·수정한다. ContextualWisdomLab 내부 라이브러리 문제라면 원시 공급자 오류까지 고쳐 PR한다. 필요한 core가 미성숙해도 consumer에서 복제·우회·제외하지 말고 owner에 RED test·계약·기능·문서·release를 개발해 통합 CI GREEN 후 versioned release로 연결한다. 경계가 틀리거나 공통 수요가 없을 때만 ADR 근거로 제외한다. 개발 프로세스에 https://github.com/DietrichGebert/ponytail 및 https://github.com/obra/superpowers 를 사용하되 superpowers의 "무조건 질문" 규칙은 무시한다. https://github.com/tirth8205/code-review-graph 와 https://github.com/colbymchenry/codegraph 도 사용하고 인덱싱은 스스로 수행한다. 이는 명시적으로 허가됐다. 한국어 문구·문서·번역은 https://github.com/epoko77-ai/im-not-ai로 의미·사실·수치·고유명사를 보존하며 윤문한다.
+> 동시 작업·PR 운영·근본 수정 원격 Agent의 동시 Commit·Push를 경합으로 단정해 Force Push·중단하지 말고 변경 취지·이유를 확인해 이어간다. Commit·Push 전 병합 여부를 확인하고 삭제 근거를 남긴다. Self-modifying/Source-fix Workflow는 목적 달성 후 삭제하고 잔존 시 관찰·제거한다. 가능한 PR은 Stack하고 not-merge-ready를 merge-ready로 전환한다. 유관 프로젝트 원인이 엮이면 함께 처리하고 Stacked PR을 중앙 OpenCode Agent가 리뷰하지 않으면 ContextualWisdomLab/.github를 수정한다. Agent 간 대화·Spawn을 활용한다. single-writer·DDD 위반, 잘못된 base·충돌, ADR 번호 충돌, 성급한 Accepted, 미보호 dependency, 누락된 test·fixture·contract는 Close가 아닌 repair finding이다. Draft·Proposed로 낮추고 owner stack에 non-force restack·retarget해 수리한다. single-writer는 delta 폐기가 아닌 통합이다. 직접 못 고치면 successor가 delta를 완전 승계하고 predecessor를 잇는다. foundation 미착지 시 prerequisite를 완성하며 PR은 유지한다. 오폐쇄는 reopen·successor로 복구한다. Close는 사용자 명시, 유효 delta 없음, 악성 변경, 완전 승계에만 허용하며 표시는 종결이 아니다. 수동 해법은 모두 코드·설정에 반영한다. PYTHONPATH=. 누락은 설정하고 GitHub Actions·런타임 오류는 로그·Root Cause Analysis로 제거한다. 전체 GitHub Checks 실패를 확인·수정한다. ContextualWisdomLab 내부 라이브러리 문제라면 원시 공급자 오류까지 고쳐 PR한다. 필요한 core가 미성숙해도 consumer에서 복제·우회·제외하지 말고 owner에 RED test·계약·기능·문서·release를 개발해 통합 CI GREEN 후 versioned release로 연결한다. 경계가 틀리거나 공통 수요가 없을 때만 ADR 근거로 제외한다. 개발 프로세스에 https://github.com/DietrichGebert/ponytail 및 https://github.com/obra/superpowers 를 사용하되 superpowers의 "무조건 질문" 규칙은 무시한다. https://github.com/tirth8205/code-review-graph 와 https://github.com/colbymchenry/codegraph 도 사용하고 인덱싱은 스스로 수행한다. 이는 명시적으로 허가됐다. 한국어 문구·문서·번역은 https://github.com/epoko77-ai/im-not-ai로 의미·사실·수치·고유명사를 보존하며 윤문한다.
+
+**Addition (2026-09-02, second revision):** a detailed PR close/repair taxonomy not previously spelled
+out in this file. It names six specific defect classes that must be treated as **repair findings, not
+close reasons** — a single-writer or DDD-boundary violation, a wrong base or merge conflict, a
+colliding ADR number, a review that Accepted prematurely, an unprotected dependency, or a missing
+test/fixture/contract — and prescribes the repair path: downgrade the PR to Draft/Proposed and
+non-force restack/retarget it onto the owner's stack (never force-push over it). It states single-writer
+resolution explicitly as **integration of deltas, not discarding them**: when a PR can't be fixed
+directly, a successor PR must fully inherit its delta and continue the predecessor's work; when a
+foundation dependency hasn't landed yet, the prerequisite gets completed while the PR itself stays
+open; a wrongful close gets recovered via reopen or a successor. Close itself is narrowed to exactly
+four legitimate cases — explicit user instruction, no valid delta exists, a malicious change, or a
+verified successor's full takeover — with an explicit warning that a "closed" label is not itself
+closure (i.e., a close still needs one of those four justifications behind it, not just the state
+change). This directly reinforces and gives specific mechanics to §1's new "PR 0개는... 단순 Close하지
+않는다" sentence above (both added in this same revision) — §1 states the outcome constraint (reaching
+zero open PRs must go through merge or verified successor takeover, never a bare close), and this
+addition provides the operational taxonomy and repair procedure for getting there.
 
 ## 3. Research, standards, and documentation traceability
 
@@ -126,7 +173,7 @@ directive now asks for, not a single default-locale screenshot pass.
 
 ## 5. Architecture, naming, and database conventions
 
-> 아키텍처·명명·데이터베이스 소프트웨어는 중앙 .github, naruon, 다른 저장소와 연결 가능하게 만든다. DDD를 적용해 핵심·지원·일반 Subdomain, Bounded Context, Context Map, Ubiquitous Language를 ADR에 정의하고 Aggregate·Entity·Value Object·Domain Service·Repository·Domain Event·Invariant를 코드·API·DB·테스트에 일치시킨다. Aggregate는 최소 트랜잭션 경계로 두며 외부·레거시는 Anti-Corruption Layer로 격리하고 Shared Kernel은 최소화한다. 단독·반입 모듈 모두 우수한 모듈러 MSA를 지향하고 단일 소프트웨어가 Monolithic Architecture처럼 비대해지면 책임 경계에 따라 저장소를 분리한다. 소프트웨어명과 내부 호출자·클래스명이 다르거나 옛 이름(예: wardnet)을 쓰면 정식 이름으로 바꾼다. DB 객체명은 두 단어 이상의 snake case, Carmel case 또는 pascal case여야 하고 snake case를 우선한다. 위반명은 전부 치환한다. DB는 제3정규화와 Hot Partition 대비를 준수한다. Lock을 관리하고 불가하면 Read/Write DB를 분리한다. 영속화 경로의 항목별 UPSERT를 추적하고 없으면 계약을 보강한다. 명시적 구매자가 없는 제품은 코드 안팎의 Buyer를 정상 객체명으로 바꾼다. CSAP·SOC 2 인증을 고려한다. PII Masking이 업무를 마비시키므로 규정 준수형 비Masking 보호 대안을 설계한다. 실데이터 테스트·개발의 인명·기관명은 코드·ADR에서 익명화한다. GitHub Secrets의 PYPI API Key와 대부분 Public 배포라는 전제를 반영한다.
+> 아키텍처·명명·데이터베이스 소프트웨어는 중앙 .github, naruon, 다른 저장소와 연결 가능하게 만든다. DDD를 적용해 핵심·지원·일반 Subdomain, Bounded Context, Context Map, Ubiquitous Language를 ADR에 정의하고 Aggregate·Entity·Value Object·Domain Service·Repository·Domain Event·Invariant를 코드·API·DB·테스트에 일치시킨다. Aggregate는 최소 트랜잭션 경계로 두며 외부·레거시는 Anti-Corruption Layer로 격리하고 Shared Kernel은 최소화한다. 단독·반입 모듈 모두 우수한 모듈러 MSA를 지향하고 단일 소프트웨어가 Monolithic Architecture처럼 비대해지면 책임 경계에 따라 저장소를 분리한다. 소프트웨어명과 내부 호출자·클래스명이 다르거나 옛 이름(예: wardnet)을 쓰면 정식 이름으로 바꾼다. DB 객체명은 두 단어 이상의 snake case, Carmel case 또는 pascal case여야 하고 snake case를 우선한다. 위반명은 전부 치환한다. DB는 제3정규화와 Hot Partition 대비를 준수한다. Lock을 관리하고 불가하면 Read/Write DB를 분리한다. 영속화 경로의 항목별 UPSERT를 추적하고 없으면 계약을 보강한다. 명시적 구매자가 없는 제품은 코드 안팎의 Buyer를 정상 객체명으로 바꾼다. CSAP·SOC 2 인증을 고려한다. PII Masking이 업무를 마비시키므로 규정 준수형 비Masking 보호 대안을 설계한다. 실데이터 테스트·개발의 인명·기관명은 코드·ADR에서 익명화한다. GitHub Secrets의 PYPI API Key와 대부분 Public 배포라는 전제를 반영한다. 변수·상수·인자·필드·함수·메서드·클래스·타입·모듈·패키지·API·DB 객체·파일·디렉터리는 두 단어 이상 snake_case·camelCase·PascalCase로 명명하고 snake_case를 우선한다. 언어·framework·외부 계약 관례는 경계에서 변환하며 위반명은 치환한다.
 
 **Reconciliation (flagged by Devin Review on this PR, 2026-08-30 — see `docs/doctoring/product-goal-directive.md`):** taken verbatim and cross-referenced against the rest of the ecosystem's own naming history, this section's quoted text reads backwards in two places:
 
@@ -134,6 +181,18 @@ directive now asks for, not a single default-locale screenshot pass.
 - "위반명은 전부 치환한다" ("replace all violating [DB object] names") would, read literally, force-rename existing CamelCase/PascalCase database objects. That contradicts the binding convention in `docs/CWL-MASTER-CONTEXT.md` §7: *"DB object names = 2+ word snake_case (don't rename existing Camel/Pascal)."* The §7 rule governs: 2+-word snake_case is required for **new** DB objects; existing CamelCase/PascalCase objects are grandfathered and must not be force-renamed.
 
 Per this file's own conflict policy above: this note is the resolution, and `docs/CWL-MASTER-CONTEXT.md` §7 is the document that was right — do not force-rename wardnet or existing Camel/Pascal DB objects on the strength of this section's verbatim wording alone.
+
+**Addition (2026-09-02, second revision):** this revision widens the two-or-more-word naming rule from
+DB objects specifically to essentially every named code entity (variables, constants, arguments,
+fields, functions, methods, classes, types, modules, packages, APIs, DB objects, files, directories),
+still snake_case-preferred among snake_case/camelCase/PascalCase, and adds an explicit boundary-
+conversion rule: a language/framework/external-contract's own naming convention gets converted *at the
+boundary* (an adapter/ACL layer) rather than propagated inward — the same Anti-Corruption-Layer
+principle this section already states for legacy/external systems generally, applied specifically to
+naming. The grandfather clause above is not reopened by this widening: it was scoped to "existing
+CamelCase/PascalCase **DB objects** specifically, per `CWL-MASTER-CONTEXT.md` §7," and that scope,
+along with the wardnet correction, stands unchanged — the broader rule governs *new* identifiers of
+every kind going forward, not a retroactive rename sweep across the whole codebase.
 
 **Addition (2026-09-02):**
 
@@ -156,11 +215,21 @@ combined "everything is a translatable string" table.
 
 ## 6. Implementation language, computation, and measurement principles
 
-> 구현 언어·연산·측정 원칙 Docstring Coverage, Test Coverage, Edge Case Test Coverage를 각각 100%로 만든다. 초보자가 별도 코드 분석 없이 이해할 수 있을 만큼 충분한 docstring을 제공한다. 수리과학, Psychometrics, Exploratory Data Analysis, 데이터과학의 모든 core 연산 레이어는 Python으로 구현하지 말고 무조건 Rust로 작성한다. Vector 연산, Linear Algebra, Matrix Algebra, LLM token size 연산도 포함한다. GPU와 CPU multithreaded 실행을 지원하고 context switching을 최소화한다. 속도·안정성·보안이 중요한 일반 소프트웨어도 Rust를 사용하며, 기존 타 언어 구현은 전환·리팩터링하거나 명확한 Rust API Call 경계로 분리한다. 확률표집 계약에는 표본 설계, 오차 목표, 실패 분모를 명시해 ADR과 감사 코드에 반영한다. Atomistic fallacy를 막도록 다층구조·다중소속 모델링을 고려·구현하고 시간 흐름을 반영하는 모델도 포함한다. 가중치는 임의로 정하지 말고 수리과학·Psychometrics에서 추정된 값, 특히 fast-mlsirm이나 TEPP처럼 논문 근거가 있는 모형을 사용한다. 어떠한 휴리스틱과 Rule of thumbs도 금지하며, 근거 미확정 상태로 방치하지 말고 ContextualWisdomLab의 추론 엔진을 최대한 활용하고 SOLID 원칙을 지킨다. Deprecation Warning은 Suppression하지 말고 근본 문제를 해결한다. 합성 데모 데이터는 Unit test에는 쓸 수 있으나 Production에 반영하지 않는다. Python 웹 서버는 Multithreading을 지원하고 GIL이 문제면 Python 3.14를 사용한다.
+> 구현 언어·연산·측정 원칙 Docstring Coverage, Test Coverage, Edge Case Test Coverage를 각각 100%로 만든다. 초보자가 별도 코드 분석 없이 이해할 수 있을 만큼 충분한 docstring을 제공한다. 수리과학, Psychometrics, Exploratory Data Analysis, 데이터과학의 모든 core 연산 레이어는 Python으로 구현하지 말고 무조건 Rust로 작성한다. Vector 연산, Linear Algebra, Matrix Algebra, LLM token size 연산도 포함한다. GPU와 CPU multithreaded 실행을 지원하고 context switching을 최소화한다. 속도·안정성·보안이 중요한 일반 소프트웨어도 Rust를 사용하며, 기존 타 언어 구현은 전환·리팩터링하거나 명확한 Rust API Call 경계로 분리한다. 확률표집 계약에는 표본 설계, 오차 목표, 실패 분모를 명시해 ADR과 감사 코드에 반영한다. Atomistic fallacy를 막도록 다층구조·다중소속 모델링을 고려·구현하고 시간 흐름을 반영하는 모델도 포함한다. 가중치는 임의로 정하지 말고 수리과학·Psychometrics에서 추정된 값, 특히 fast-mlsirm이나 TEPP처럼 논문 근거가 있는 모형을 사용한다. 어떠한 휴리스틱과 Rule of thumbs도 금지하며, 근거 미확정 상태로 방치하지 말고 ContextualWisdomLab의 추론 엔진을 최대한 활용하고 SOLID 원칙을 지킨다. Deprecation Warning은 Suppression하지 말고 근본 문제를 해결한다. 합성 데모 데이터는 Unit test에는 쓸 수 있으나 Production에 반영하지 않는다. Python 웹 서버는 Multithreading을 지원하고 GIL이 문제면 Python 3.14를 사용한다. Python은 비선호며 LLM 편의로 고르지 않는다. Python 전용 ML runtime에 실용적 Rust 대안이 없을 때만 그 부분에 쓰며 범위·근거·제거 조건을 ADR에 남기고 hot path는 Rust로 둔다. Python web server는 multithread이며 GIL 병목은 3.14나 Rust로 푼다.
+
+**Addition (2026-09-02, second revision):** sharpens the existing "core computation layers in Rust,
+not Python" mandate into an explicit narrow-exception rule: Python is disfavored outright and must
+never be chosen merely for LLM/agent-tooling convenience; the one permitted exception is a
+Python-only ML runtime with no practical Rust alternative, and even then only for that specific part —
+scope, rationale, and removal condition go in an ADR, and the hot path itself still has to be Rust. It
+also names Rust as an explicit alternative to upgrading to Python 3.14 for a GIL bottleneck, alongside
+the version bump already in this section. Neither changes this section's existing Rust-first mandate;
+both make an already-strict rule stricter and more auditable (an ADR trail for the one allowed
+exception) rather than looser.
 
 ## 7. Realistic verification, load, and container testing
 
-> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. 초과하면 알고리즘·query·I/O·rendering을 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·개발 언어를 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up을 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·Frontend stack을 교체한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
+> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. 초과하면 알고리즘·query·I/O·rendering을 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·개발 언어를 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up을 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·Frontend stack을 교체한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·rendering·Frontend stack을 교체한다. close_connection도 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
 **Addition (2026-09-02):** two anti-gaming clauses for the p95≤20ms criterion the 2026-09-01 revision
 added, not previously spelled out: (1) never satisfy the target by shrinking the sample, excluding
@@ -180,7 +249,27 @@ paragraph now contains only the anti-gaming-clause explanation it was written fo
 
 ## 8. LLM, orchestration, and embedding
 
-> LLM·오케스트레이션·Embedding LLM이 필요한 테스트는 contextual-orchestrator 기반 OpenCode Agent로 만든다. contextual-orchestrator는 GitHub Secrets의 BYTEZ_API_KEY, NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, OPENROUTER_API_KEY, OPENAI_API_KEY를 모두 써 auto model discovery로 최적 모형을 제공한다. embedding·responses·completions, audio, video, image, ommi-modal 등 가용 모델을 폭넓게 지원한다. 가능하면 반입해 쓰고 발견한 해당 저장소 문제도 함께 수정한다. LLM Provider group 이름을 코드·설정·테스트·라우팅 조건에 하드코딩하지 않는다. 그룹명은 관리·표시용 별칭으로만 취급하고, modality, context window, reasoning capability·effort, tool calling, structured output, streaming, 가격·지연·가용성·정확도 등 자동 발견·검증된 모델 특성에 따라 선택·fallback·개발 적용을 결정한다. 공급자나 그룹명이 바뀌어도 기능 분기가 깨지지 않게 한다. LLM Model에는 애플리케이션·Agent·Gateway 공통의 획일적 timeout 상한을 두지 않는다. 통신 장애는 upstream LLM provider가 자체 timeout과 오류로 종료하므로 기본값은 무제한(null)로 둔다. 관리자 Web에서 모델별 timeout을 조회·설정·해제·복원할 수 있게 하고 단위, 우선순위, 상속, 입력 검증, 감사 이력과 API 계약을 구현한다. 관리자 설정이 있을 때만 해당 값으로 제한하며 reasoning·streaming·tool call이 진행 중인 요청을 단순 경과시간으로 취소하지 않는다. 사용자 취소, provider 종료, 관리자 timeout을 구분해 기록한다. LLM 사용 소프트웨어와 contextual-orchestrator는 Fugu·Conductor·TRINITY 연구를 근거로 단일 모델 라우팅과 심층 다중 Agent 오케스트레이션 사이의 계산량을 배분한다. 워크플로 단계, 재귀 깊이, 작업 분해, 접근 목록으로 test-time compute를 조절하고 역할별 reasoning effort를 다르게 하며 추론 수준 ablation을 수행한다. 속도는 핵심 고려사항이 아니며 정확성을 우선한다. 중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다. LLM Chat model은 chat completion API와 responses API를 모두 지원하고 json_object와 json_schema를 모두 처리한다. Embedding은 문단·구문·DOM·송수신자 등 의미 단위를 식별해 chunking한다. 본문에 base64 이미지가 있으면 텍스트 인식, 객체 인식, 태그 설명, 이미지 별도 검색 방법을 연구 근거와 함께 DB 설계에 넣고 원래 삽입 위치를 보존해 그림 맥락까지 검색·표현한다. GitHub Actions scheduler는 contextual-orchestrator 기반 OpenCode Agent로 전환한다. COPILOT_GITHUB_TOKEN은 쓰지 않고 기존 리뷰 Agent 키 체계를 유지한다.
+> LLM·오케스트레이션·Embedding LLM이 필요한 테스트는 contextual-orchestrator 기반 OpenCode Agent로 만든다. contextual-orchestrator는 GitHub Secrets의 BYTEZ_API_KEY, NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, OPENROUTER_API_KEY, OPENAI_API_KEY를 모두 써 auto model discovery로 최적 모형을 제공한다. embedding·responses·completions, audio, video, image, ommi-modal 등 가용 모델을 폭넓게 지원한다. 가능하면 반입해 쓰고 발견한 해당 저장소 문제도 함께 수정한다. released API·client·schema로 연결한다. 통합 CI는 .github reusable workflow와 thin caller로 구성한다. owner PR·release·consumer 변경마다 exact SHA로 build·API/schema contract·E2E·model behavior·security·SBOM·provenance를 검증한다. 결함은 owner에서 RED→fix→GREEN→release하고 consumer version을 올린다. mutable head·branch URL·cross-repo source·workflow 복제를 금지하며 bridge에는 owner issue·만료·삭제 조건을 둔다. LLM Provider group 이름을 코드·설정·테스트·라우팅 조건에 하드코딩하지 않는다. 그룹명은 관리·표시용 별칭으로만 취급하고, modality, context window, reasoning capability·effort, tool calling, structured output, streaming, 가격·지연·가용성·정확도 등 자동 발견·검증된 모델 특성에 따라 선택·fallback·개발 적용을 결정한다. 공급자나 그룹명이 바뀌어도 기능 분기가 깨지지 않게 한다. LLM Model에는 애플리케이션·Agent·Gateway 공통의 획일적 timeout 상한을 두지 않는다. 통신 장애는 upstream LLM provider가 자체 timeout과 오류로 종료하므로 기본값은 무제한(null)로 둔다. 관리자 Web에서 모델별 timeout을 조회·설정·해제·복원할 수 있게 하고 단위, 우선순위, 상속, 입력 검증, 감사 이력과 API 계약을 구현한다. 관리자 설정이 있을 때만 해당 값으로 제한하며 reasoning·streaming·tool call이 진행 중인 요청을 단순 경과시간으로 취소하지 않는다. 사용자 취소, provider 종료, 관리자 timeout을 구분해 기록한다. LLM 사용 소프트웨어와 contextual-orchestrator는 Fugu·Conductor·TRINITY 연구를 근거로 단일 모델 라우팅과 심층 다중 Agent 오케스트레이션 사이의 계산량을 배분한다. 워크플로 단계, 재귀 깊이, 작업 분해, 접근 목록으로 test-time compute를 조절하고 역할별 reasoning effort를 다르게 하며 추론 수준 ablation을 수행한다. 속도는 핵심 고려사항이 아니며 정확성을 우선한다. 중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을 수용한다. LLM Chat model은 chat completion API와 responses API를 모두 지원하고 json_object와 json_schema를 모두 처리한다. Embedding은 문단·구문·DOM·송수신자 등 의미 단위를 식별해 chunking한다. 본문에 base64 이미지가 있으면 텍스트 인식, 객체 인식, 태그 설명, 이미지 별도 검색 방법을 연구 근거와 함께 DB 설계에 넣고 원래 삽입 위치를 보존해 그림 맥락까지 검색·표현한다. GitHub Actions scheduler는 contextual-orchestrator 기반 OpenCode Agent로 전환한다. COPILOT_GITHUB_TOKEN은 쓰지 않고 기존 리뷰 Agent 키 체계를 유지한다.
+
+**Addition (2026-09-02, second revision):** two genuinely new sentences not previously in this section.
+First, "released API·client·schema로 연결한다" — consumers connect to a *released* contract, not a
+mutable branch — which is the same "immature core" principle §2 states as a development-process rule
+and §9 states as a repository-selection rule, now stated a third time as the specific consumption
+contract for `contextual-orchestrator` integration itself; it does not contradict the adjacent
+"가능하면 반입해 쓰고... 수정한다" sentence, which is about `contextual-orchestrator` importing and
+fixing *its own* upstream dependencies (provider SDKs, client libraries), a different relationship
+than how *this ecosystem's other repos* consume `contextual-orchestrator`. Second, a detailed CI
+integration architecture: unified CI as `.github` reusable workflows plus thin callers (matching the
+`CLAUDE.md`-documented "product hourly callers stay thin" convention, now elevated into the directive
+itself); on every owner PR/release/consumer change, verify build/API-schema-contract/E2E/model-
+behavior/security/SBOM/provenance at an exact SHA; defects get fixed at the owner via RED→fix→GREEN→
+release with a consumer version bump, never patched around in the consumer; mutable-head references,
+branch URLs, cross-repo source copies, and workflow duplication are all forbidden; and any transitional
+bridge mechanism needs an owner-tracked issue plus an explicit expiration/deletion condition (directly
+echoing this repo's own `pr-review-autofix.yml` vendoring pattern and its `docs/CWL-MASTER-CONTEXT.md`
+§7 "no drift-source repository-local copies" convention). Not yet audited against every current CI
+integration in this session's four in-scope repos for full compliance — recorded as the standard, not
+asserted as already-verified everywhere.
 
 **Note (flagged by CodeRabbit on this PR, 2026-08-30):** section 8's quoted text describes `contextual-orchestrator`'s general product capability — broad model/modality support and all-five-secret auto model discovery as a *design principle for the orchestrator itself*. It does not specify, and must not be read as overriding, which pool each CI consumer routes through: that is governed exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` and its doctoring records — `OpenCode` and `Noema` use the fail-closed, ZDR-prioritized `orchestrator/free` pool; only `Strix` security analysis uses the provider-diverse `orchestrator/auto` pool; private/internal review targets require an attested ZDR-only catalog and never fall back to a non-ZDR provider. Do not loosen any CI consumer's pool or credential scope on the strength of this section's general wording alone.
 
@@ -221,6 +310,8 @@ pinned, for which consumers" record.
 
 > 참고 라이브러리와 호출 @Superpowers @GitHub @Figma @Visualize @Context7 @Product Design @Consensus를 활용한다.
 
+> Core foundation은 전 제품의 공통 설치물이 아니다. 여러 제품에서 반복되는 책임을 한 저장소가 canonical owner로서 독립 배포·versioned contract를 제공하는 선택형 control plane·service·library다. 보호 브랜치의 문서·API/schema·release evidence로 역할·성숙도를 확인하며 open PR은 Proposed 상태다.
+
 - **.github** — https://github.com/ContextualWisdomLab/.github — workflow·review/security/release owner이며 ruleset·얇은 workflow_call로만 쓴다.
 - **enterprise-architecture-core** — https://github.com/ContextualWisdomLab/enterprise-architecture-core — **context-graph-contracts** — https://github.com/ContextualWisdomLab/context-graph-contracts — 전사 결정·versioned context 계약 원장이며 runtime·제품 DB는 제외한다.
 - **ConceptWeave** — https://github.com/ContextualWisdomLab/ConceptWeave — **semantic-data-portal** — https://github.com/ContextualWisdomLab/semantic-data-portal — ontology 생성·publish와 catalog·governance·소비를 분담한다.
@@ -258,9 +349,43 @@ shared functionality to a core owner" closing sentence directly reinforces §2's
 protocol above — the same principle stated once as a development-process rule (§2) and once as a
 repository-selection rule (§9).
 
+**Addition (2026-09-02, second revision):** three genuinely new pieces of content. First, the
+"Core foundation은 전 제품의 공통 설치물이 아니다..." blockquote added above (right after the tool-list
+quote) is a definitional framing not previously present anywhere in this file: a core-foundation repo
+is a *selective*, independently-versioned control plane/service/library owned by one canonical repo
+for a responsibility that repeats across products — never a default install every product must carry —
+and its actual role/maturity is confirmed from the **protected branch's** docs/API-schema/release
+evidence, not from an open PR's own claims (an open PR is "Proposed" status only, regardless of how
+confidently its description is written). This directly matches this session's own established
+practice throughout `.github#1659`'s reconciliation work (treating "Current exact authority" language
+in a PR body as a claim to verify, not a fact) and gives it explicit standing-directive backing.
+Second, the flat, un-categorized repo list above (already reconciled in the 2026-09-02 entry) is
+regrouped by this revision into five named domains, worth recording as a distinct piece of information
+even though the individual repo-to-responsibility mappings mostly match what is already listed above:
+
+> 조직·계약 — .github: 공통 CI·review·security·release; enterprise-architecture-core: 전사 Context Map·architecture decision; context-graph-contracts: assertion·event·schema·fixture·conformance. domain truth는 제품에 남긴다.
+> 의미·데이터 — ConceptWeave: ontology·semantic-layer 생성·검증·release. semantic-data-portal: catalog·governance·검색·제공. EmbedRelay: embedding identity·migration. mhtml-etl-gateway: MHTML 검사·schema proposal·load lineage.
+> AI·운영 — CO: provider discovery·model capability·routing/delegation/verification/admin. noema: GitHub Actions OIDC 단기 repository capability·exact-revision evidence. pg-llm-batch: DB token count·batch 처리.
+> Identity·보안·runtime — keyverse: identity·federation·token. EgressWeave: 안전한 outbound HTTP. OriginWeave: governed browser. pingora-gateway: Rust edge. quarantine-sandbox-runtime: 격리. appguardrail: scan·SARIF·remediation. wardnet: gateway·WAF·IDS·SOC.
+> 재사용 기능 — fast-mlsirm: IRT·MLSIRM. TEPP: 다국어·시간·event·relation 측정. RankWeave: retrieval fusion·evaluation·통계 비교·tuning·TREC. ThreadWeave: JWZ/RFC 5256 threading. inkspan: editor·serialization·문서 변환. DiagramWeave: diagram patch·render·CLI·LSP.
+
+Third, a concrete elaboration of the "immature core" protocol's *waiting-period* mechanics, not
+previously spelled out in either §2 or §9's existing text:
+
+> owner가 미성숙하거나 API가 없어도 consumer가 복제·우회하지 않는다. owner에서 RED test→기능·문서·release를 개발해 CI GREEN과 immutable version을 낸 뒤 채택한다. 그 전에는 port·ACL·feature flag·test double로 경계를 지키고 owner의 source·DB·임시 branch를 직접 읽지 않는다.
+
+This names the specific techniques (a port, an ACL, a feature flag, a test double) a consumer must use
+to hold its boundary *while waiting* for an immature owner to catch up, and adds an explicit
+prohibition §2's original text did not state: never read the owner's raw source, database, or a
+temporary/working branch directly, even as a stopgap. Together with §2's protocol and this section's
+own closing sentence above, this is now the third and most operationally specific statement of the
+same "immature core" principle in this file.
+
 ## 10. Contextual-orchestrator pool pin
 
 > Contextual-Orchestrator의 모델은 GitHub Actions Workflow 이용에 관해 orchestrator/free 로 고정.
+
+> GitHub Actions의 model-backed workflow는 orchestrator/free로 고정한다. 무료 후보 discovery·routing·fallback은 CO 내부에서만 한다. workflow는 provider·model·group명·유료 fallback을 지정하지 않고 gateway token만 쓴다. capability가 없으면 유료 우회 없이 fail closed해 free pool·contract·CI를 보완한다.
 
 **Context (added 2026-09-01, wording refined the same day by a follow-up `/loop` invocation to add
 the scope qualifier "GitHub Actions Workflow 이용에 관해" — i.e. this pin governs CI-consumer
@@ -285,6 +410,27 @@ product-level design principle for the orchestrator itself, not a CI routing pol
 consumer. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains the authoritative
 record for *why*; this item and the §8 notes together are the authoritative record for *what is
 currently pinned, and for which consumers*.
+
+**Addition (2026-09-02, second revision) — verified against current source, not merely restated:**
+this revision adds three specific architectural constraints on top of the existing pin, all confirmed
+true against `.github/workflows/strix.yml` and `scripts/ci/contextual_orchestrator_review_sidecar.sh`
+at the time of this addition, not asserted on the strength of the directive text alone: (1) "free
+후보 discovery·routing·fallback은 CO 내부에서만 한다" — confirmed: the sidecar provisions a full,
+in-process `contextual-orchestrator` instance and Strix talks to it only through a locally generated
+bearer token (`ORCHESTRATOR_TOKEN`/`bearer.token`); all provider discovery, routing, and free-pool
+fallback happen inside that CO process, never in the calling workflow. (2) "workflow는 provider·
+model·group명·유료 fallback을 지정하지 않고 gateway token만 쓴다" — confirmed: `strix.yml`'s `Gate
+Strix secrets` step hardcodes `STRIX_MODEL: contextual-orchestrator/orchestrator/free` and its `case`
+statement rejects any `client_payload.strix_llm` override that isn't empty or that exact same value
+(`::error::Strix model overrides are limited to contextual-orchestrator/orchestrator/free.`) — the
+workflow has no live path to specify a different provider, model, or group, and the Strix runtime
+itself only ever sees the local gateway token, never a raw provider credential. (3) "capability가
+없으면 유료 우회 없이 fail closed" — confirmed: the sidecar's `CONTEXTUAL_ORCHESTRATOR_POOL` validation
+(`fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"` on anything but `free`) is exactly the fail-closed,
+no-paid-bypass enforcement this session's own earlier "`auto` removed as an accepted value" fix put in
+place (see `docs/product-technical-gap-baseline.md`). Like §10's original 2026-09-01 addition, this is
+not a new technical requirement — it is the existing implementation, now made an explicit, checkable
+standing instruction instead of something only discoverable by reading the sidecar/workflow source.
 
 ## How to point a `/goal` session at this directive
 

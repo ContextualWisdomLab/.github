@@ -424,3 +424,92 @@ fixed:
   → 5 passed (this file's only executable contract, unaffected by directive-text edits); confirmed via
   `grep` that no test pins `product-goal-directive.md`'s literal prose.
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 third revision (second same-day chat message): eight sections gained new substantive content
+
+- **Date:** 2026-09-02.
+- **Subject:** the owner re-issued the full directive a third time overall — a second genuine
+  chat-turn message this same day, again titled "아래는 일반 지침." A section-by-section comparison
+  against the then-current stored text (post the two prior 2026-09-02 reconciliations already recorded
+  above) found §3 and §4 re-authored in condensed form with the same substance and no new obligation
+  detected — left as-is, same policy as every prior revision. Every other section (§1, §2, §5, §6, §7,
+  §8, §9, and §10's existing pin) gained genuinely new content, added in place inside the existing
+  verbatim quote blocks or as new dated blockquote additions immediately following them, each with an
+  explanatory English note in the same style as prior revisions:
+  1. **§1** gained one new sentence closing a loophole in "reach 0 open PRs": doing so is legitimate
+     only via merge or a verified successor's full delta takeover, never a bare Close. This directly
+     sets up §2's much larger addition below.
+  2. **§2** gained a detailed six-category PR close/repair taxonomy — single-writer/DDD violations,
+     wrong base/merge conflicts, colliding ADR numbers, prematurely-Accepted reviews, unprotected
+     dependencies, and missing test/fixture/contract are all **repair findings, never close reasons**.
+     The repair path: downgrade to Draft/Proposed, non-force restack/retarget onto the owner's stack
+     (never force-push). Single-writer resolution is explicitly framed as **delta integration, not
+     discarding**: an unfixable PR needs a successor that fully inherits its delta and continues the
+     work; a PR blocked on an unlanded foundation stays open while the prerequisite gets completed; a
+     wrongful close gets recovered via reopen or successor. Close itself narrows to exactly four
+     legitimate cases (explicit user instruction, no valid delta, a malicious change, or a verified
+     successor's full takeover) — a "closed" label by itself is not closure without one of those four
+     behind it.
+  3. **§5** widened the existing two-or-more-word DB-object naming rule to cover essentially every
+     named code entity (variables through directories), still snake_case-preferred, and added an
+     explicit boundary-conversion rule (external language/framework/contract naming conventions get
+     converted at an adapter/ACL boundary, not propagated inward — the same Anti-Corruption-Layer
+     principle this section already states generally, now applied specifically to naming). The
+     existing wardnet/grandfather-clause reconciliation from 2026-08-30 is explicitly noted as not
+     reopened: it stays scoped to existing CamelCase/PascalCase **DB objects** specifically.
+  4. **§6** sharpened the existing Rust-first mandate into an explicit "Python is disfavored, never
+     chosen for LLM/agent convenience" rule with one narrow, ADR-tracked exception (a Python-only ML
+     runtime with no practical Rust alternative, scope/rationale/removal-condition recorded, hot path
+     still Rust), plus naming Rust as an explicit alternative to a Python-3.14 upgrade for GIL
+     bottlenecks.
+  5. **§7** added "rendering" to the list of things to replace when the JS bundle/DOM/GC is the
+     memory/latency driver (previously "dependency·Frontend stack," now "dependency·rendering·Frontend
+     stack").
+  6. **§8** gained two things: a "connect via released API/client/schema" consumption pattern for
+     `contextual-orchestrator` integration (the same "immature core" principle §2 and §9 already state,
+     now stated a third time as the specific CO consumption contract — verified not to contradict the
+     adjacent "가능하면 반입해 쓰고... 수정한다" sentence, which is about CO importing *its own* upstream
+     dependencies, a different relationship); and a detailed CI integration architecture (`.github`
+     reusable-workflow-plus-thin-caller composition; exact-SHA verification across build/API-schema-
+     contract/E2E/model-behavior/security/SBOM/provenance; owner-side RED→fix→GREEN→release with a
+     consumer version bump on defects; a ban on mutable-head/branch-URL/cross-repo-source/workflow
+     duplication; an owner-issue-plus-expiration condition on any transitional bridge) — recorded as
+     the standard, explicitly not asserted as already-verified everywhere (see Gap 7 below).
+  7. **§9** gained three things: a definitional framing of what "core foundation" actually means (a
+     selective, canonically-owned, versioned-contract-providing control plane — never a default
+     install; role/maturity confirmed from the *protected branch's* evidence, not an open PR's own
+     claims — directly matching this session's own established practice of treating "Current exact
+     authority" PR-body language as a claim to verify, not a fact); a five-domain regrouping of the
+     existing flat repo catalog (조직·계약 / 의미·데이터 / AI·운영 / Identity·보안·runtime / 재사용
+     기능); and a concrete elaboration of the "immature core" protocol's waiting-period mechanics
+     (a port/ACL/feature-flag/test-double boundary while waiting on an immature owner; an explicit
+     prohibition on reading the owner's raw source/DB/temp branch directly, not previously stated).
+  8. **§10** gained three specific architectural constraints on its existing `orchestrator/free` pin,
+     each **verified against current source before being recorded**, not merely restated: free-pool
+     discovery/routing/fallback stays inside CO (confirmed — the sidecar provisions an in-process CO
+     instance; Strix talks to it only via a locally generated bearer token); the workflow itself has no
+     live path to specify a provider/model/group and never sees a raw provider credential (confirmed —
+     `strix.yml`'s `Gate Strix secrets` step hardcodes the model and rejects any override that isn't
+     the same value); missing capability fails closed with no paid bypass (confirmed — the sidecar's
+     `CONTEXTUAL_ORCHESTRATOR_POOL` validation is exactly this session's own earlier `auto`-removal
+     fix). Like the original §10 addition, this is the existing implementation made explicit, not a
+     new technical requirement.
+- **Two new gaps recorded, not fabricated:** `docs/product-technical-gap-baseline.md`'s new 2026-09-02
+  entry tracks two audit gaps this revision's new content surfaces but this reconciliation pass did not
+  fully verify — Gap 6 (`contextual-orchestrator`'s stdlib-Python core against the newly sharpened §6
+  Python rule; partial evidence found — `library_research.md` already exists and the one genuinely
+  numeric hot path, LLM token accounting, already uses Rust via PyO3+`tiktoken-rs` — but full compliance
+  against the new bar, and even whether the control-plane logic itself is in scope of the Rust mandate
+  at all, is unverified) and Gap 7 (§8's CI integration architecture, plausibly already substantially
+  met per this repo's own documented conventions, but not audited against every current owner/consumer
+  relationship in this pass).
+- **Verification:** `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
+  → 5 passed; `grep -rln "product-goal-directive" tests/` → no matches (still no test pins this file's
+  prose); `grep -n "�" docs/product-goal-directive.md` → no matches (no corruption introduced). §10's
+  three new architectural-constraint claims were verified directly against
+  `.github/workflows/strix.yml` (the `Gate Strix secrets` step's hardcoded `STRIX_MODEL` and its
+  override-rejecting `case` statement) and `scripts/ci/contextual_orchestrator_review_sidecar.sh` (the
+  locally generated `ORCHESTRATOR_TOKEN`/bearer-token pattern and the `CONTEXTUAL_ORCHESTRATOR_POOL`
+  fail-closed validation) before being written, not merely asserted on the strength of the new
+  directive text.
+- **PR:** `ContextualWisdomLab/.github#1659`.
