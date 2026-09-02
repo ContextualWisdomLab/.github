@@ -94,6 +94,44 @@ def test_nonzero_put_transport_result_is_ambiguous_but_read_failure_is_not(monke
         module._run_gh_json("GET", "repos/ContextualWisdomLab/.github/rulesets/17921150")
 
 
+def test_non_timeout_ambiguous_put_routes_through_history_confirmation(monkeypatch) -> None:
+    """A failed gh PUT result uses the same protected history path as a timeout."""
+
+    module = load_module()
+    target = repository_target(module)
+    first = live_payload()
+    desired = module._desired_payload(first, target)
+    converged = {**first, **desired}
+    get_count = 0
+    confirmed: list[tuple] = []
+
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module, "_assert_canonical_governance", lambda *_args: None)
+    monkeypatch.setattr(module, "_latest_history_version", lambda *_args: 41)
+
+    def fake_api(method, endpoint, *, body=None):
+        nonlocal get_count
+        if method == "GET" and endpoint == target.endpoint:
+            get_count += 1
+            return first if get_count <= 2 else converged
+        if method == "PUT":
+            raise module.AmbiguousRulesetWriteError("ambiguous transport result")
+        raise AssertionError((method, endpoint, body))
+
+    def fake_confirm(seen_target, *, baseline_version, desired, expected_main_sha):
+        confirmed.append((seen_target, baseline_version, desired, expected_main_sha))
+        return converged
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    monkeypatch.setattr(module, "_confirm_ambiguous_put", fake_confirm)
+    assert module._reconcile_target(
+        target,
+        verify_only=False,
+        expected_main_sha="a" * 40,
+    ) is True
+    assert confirmed == [(target, 41, desired, "a" * 40)]
+
+
 def test_delayed_ambiguous_write_is_observed_after_baseline_only_first_poll(monkeypatch) -> None:
     """A first baseline-only history observation cannot be treated as definitive rejection."""
 
