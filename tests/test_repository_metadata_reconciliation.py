@@ -79,12 +79,18 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "DiagramWeave": ("diagram-editor", "plantuml"),
         "semantic-data-portal": ("data-catalog", "semantic-search"),
         "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "noema": ("control-plane", "oidc"),
         "mhtml-etl-gateway": ("mhtml", "etl"),
         "PolicyWeave": ("privacy-policy", "typescript"),
         "supply-chain-control-plane": ("supply-chain", "rust"),
         "learning-management-platform": ("learning-management-system", "rust"),
         "learning-content-studio": ("lcms", "content-authoring"),
         "learning-record-store": ("learning-record-store", "xapi"),
+        "bandscope": ("audio-analysis", "rehearsal"),
+        "saju-caldav": ("caldav", "four-pillars"),
+        "governance-risk-compliance": ("governance", "grc"),
+        "metering-billing-platform": ("metering", "billing"),
+        "learning-interoperability-contracts": ("xapi", "json-schema"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
