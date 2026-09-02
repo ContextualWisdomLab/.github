@@ -186,15 +186,34 @@ def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
-def test_draft_exemption_fails_closed_when_live_head_moved(
+def test_draft_exemption_applies_even_when_live_head_has_moved(
     tmp_path: Path,
     script: str,
 ) -> None:
-    """The event cannot exempt a different live head even when it is still draft."""
+    """The draft exemption still applies when the live head has also moved.
+
+    `#1697` (`fix(opencode): retire stale draft/head dispatches without false
+    failure`) deliberately reordered these steps' checks so live-draft state
+    is tested *before* live-head match, not after: a currently-draft PR needs
+    no review dispatched no matter which head a stale/racing event snapshot
+    or live re-fetch names, so failing hard on a head mismatch here was pure
+    red-X noise for an already-benign case. This test used to assert the
+    pre-`#1697` contract (fail closed with `exit 1` on any head mismatch,
+    draft or not); it was left un-updated by that PR even though its sibling
+    file (`tests/test_opencode_required_verdict_regression.py`,
+    `test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved`
+    and `test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved`)
+    added direct coverage for the new intended behavior. Updated here to
+    match that same contract instead of contradicting it.
+    """
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
-    assert result.returncode == 1
-    assert "head moved while validating live" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert (
+        "still a draft on the live exact head" in result.stdout
+    )
+    assert "head moved" not in result.stdout
+    assert "::error::" not in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
