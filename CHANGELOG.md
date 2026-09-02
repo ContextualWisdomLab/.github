@@ -1,4 +1,4 @@
-### Contextual-orchestrator pin refresh
+- **Accept the stateless GitHub App installation-token format.** Central review, scheduler, rebase, SBOM, and mention workflows now extract only a non-empty JSON string with `jq -e`; they impose no legacy 40/45-character limit, so a longer `ghs_...` token remains intact and malformed/object responses fail closed.\n### Contextual-orchestrator pin refresh
 
 - Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `212ff437dc297613289dba2e6064ade9942e07d8` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
 
