@@ -1325,6 +1325,54 @@ def test_enrich_rest_mergeable_states_uses_bounded_executor_for_multiple_prs(mon
     assert prs[-1]["restMergeableState"] == f"owner/repo:{sched.REST_MERGEABLE_STATE_WORKERS + 2}"
 
 
+def test_enrich_rest_mergeable_states_skips_draft_prs_entirely(monkeypatch):
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("draft PRs must not trigger a REST mergeability fetch")
+
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", fail_fetch)
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", fail_fetch)
+
+    draft_prs = [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+    sched.enrich_rest_mergeable_states("owner/repo", draft_prs)
+
+    assert draft_prs == [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+
+
+def test_enrich_rest_mergeable_states_enriches_only_non_draft_prs_in_mixed_batch(monkeypatch):
+    seen_workers = []
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            seen_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def map(self, func, items):
+            return [func(item) for item in items]
+
+    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
+
+    prs = [
+        {"number": 1, "isDraft": True},
+        {"number": 2, "isDraft": False},
+        {"number": 3},
+    ]
+    sched.enrich_rest_mergeable_states("owner/repo", prs)
+
+    assert "restMergeableState" not in prs[0]
+    assert prs[1]["restMergeableState"] == "owner/repo:2"
+    assert prs[2]["restMergeableState"] == "owner/repo:3"
+    # Two non-draft PRs share the bounded executor; the draft PR is excluded
+    # from the max_workers computation too.
+    assert seen_workers == [2]
+
+
 def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_threads(monkeypatch):
     seen_workers = []
 
