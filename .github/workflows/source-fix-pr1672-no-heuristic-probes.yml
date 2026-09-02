@@ -37,7 +37,9 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install hash-locked review dependencies
-        run: python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
       - name: Prove the current production rule violates the new contract
         run: |
           set -euo pipefail
@@ -93,7 +95,9 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install hash-locked review dependencies
-        run: python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
       - name: Re-materialize and verify exact publish candidate
         env:
           EXPECTED_HEAD: ${{ github.sha }}
