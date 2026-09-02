@@ -42,6 +42,35 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
+      - name: Reproduce reviewed replacement-escape defect and harden generator
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          # RED: Python's replacement-string semantics reject source-like backslashes.
+          try:
+              re.subn(r"x", r"\d", "x", count=1, flags=re.DOTALL)
+          except re.error:
+              pass
+          else:
+              raise SystemExit("RED regression unexpectedly passed")
+
+          path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
+          text = path.read_text(encoding="utf-8")
+          old = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
+          new = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
+          if text.count(old) != 1:
+              raise SystemExit("temporary generator replacement anchor drifted")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # GREEN: callable replacement preserves generated source literally.
+          updated, count = re.subn(r"x", lambda _match: r"\d", "x", count=1, flags=re.DOTALL)
+          if count != 1 or updated != r"\d":
+              raise SystemExit("callable replacement did not preserve generated source")
+          PY
+
       - name: Revalidate exact writer head and apply reviewed repair
         env:
           EXPECTED_HEAD: ${{ github.sha }}
@@ -106,6 +135,17 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ci/temp_pr1672_noema_findings_repair.py")
+          text = path.read_text(encoding="utf-8")
+          old = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
+          new = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
+          if text.count(old) != 1:
+              raise SystemExit("temporary generator replacement anchor drifted")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python3 scripts/ci/temp_pr1672_noema_findings_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
           test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
