@@ -6,6 +6,8 @@ Status: Proposed evidence for PR #1696. This note is not production authority un
 
 This doctoring note records the evidence boundary behind G-17 through G-22 in `docs/product-technical-gap-baseline.md`. It distinguishes observed repository state from organization-level engineering requirements so that a later Agent can revalidate each claim without treating an open PR as released authority.
 
+The governing policy source is [CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md). The repository copy is versioned with this PR so subsequent audits can resolve every policy-attributed requirement to a stable repository path instead of relying on conversation state.
+
 ## Exact-head evidence snapshot
 
 - `ContextualWisdomLab/.github` protected `main`: `acbb8e7ceef6d1fc0fee67d553a622ac5d707a9b` after PR #1708. Branch protection still requires the established security, coverage, Noema, and OpenCode contexts.
@@ -16,7 +18,7 @@ This doctoring note records the evidence boundary behind G-17 through G-22 in `d
 
 ## G-18 — model execution timeout versus transport failure
 
-CWL DEVELOPMENT PHILOSOPHY v2026-09-02B requires the default **model execution timeout** across application, Agent, and Gateway to be `null`; a reasoning, streaming, or tool-call operation must not be terminated merely because elapsed model time crossed a generic ceiling. It separately requires provider communication failure to terminate upstream and requires attribution among user cancellation, provider termination, and an explicitly configured administrator timeout.
+[CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md) requires the default **model execution timeout** across application, Agent, and Gateway to be `null`; a reasoning, streaming, or tool-call operation must not be terminated merely because elapsed model time crossed a generic ceiling. It separately requires provider communication failure to terminate upstream and requires attribution among user cancellation, provider termination, and an explicitly configured administrator timeout.
 
 These are different failure domains. A `null` model-execution deadline does **not** require retaining a dead socket forever. Transport implementations must observe provider/connection termination and propagate communication failures; connection lifecycle and liveness handling remain transport responsibilities. RFC 9112 explicitly separates HTTP connection failures/timeouts and graceful connection closure from application semantics, and does not require either endpoint to have a fixed persistent-connection timeout. Consequently, the repair criterion is:
 
@@ -30,21 +32,21 @@ This resolves the apparent contradiction between long-running inference and reso
 
 ## G-19 — p95 <= 20 ms is an internal SLO, not an external universal threshold
 
-The `p95 <= 20 ms` requirement is an explicit ContextualWisdomLab engineering SLO from CWL DEVELOPMENT PHILOSOPHY v2026-09-02B. It is **not** claimed to be a universal HCI standard or a threshold derived from the cited papers. Peer-reviewed latency research instead supports the narrower premise that interaction latency below the traditional 100 ms guideline can still be perceptible and affect interaction; Forch et al. measured approximately 60 ms perception thresholds in a simple mouse task, while Attig et al. reviewed evidence that sub-100 ms latency can matter.
+The `p95 <= 20 ms` requirement is an explicit ContextualWisdomLab engineering SLO in [CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md). It is **not** claimed to be a universal HCI standard or a threshold derived from the cited papers. Peer-reviewed latency research instead supports the narrower premise that interaction latency below the traditional 100 ms guideline can still be perceptible and affect interaction; Forch et al. measured approximately 60 ms perception thresholds in a simple mouse task, while Attig et al. reviewed evidence that sub-100 ms latency can matter.
 
 Accordingly, G-19 requires each UI-owning product to define the measured page/action boundary, workload, sample design, environment, cold/warm-cache policy, and failure denominator, then prove the organization SLO with executed k6/E2E evidence. The current central baseline records the absence of such evidence **in this audit ledger**; it is not an exhaustive proof that no repository anywhere has ever run a latency test. A product that has current executed evidence should link its exact head/run and make the gap row narrower rather than suppress the SLO.
 
 ## G-20 — i18n topology is a governance requirement
 
-DB-backed, versioned translation resources; screen-key-scoped fetch/cache; separation of UI translations from ontology labels; and review/approval/deploy/rollback authority are organization architecture requirements from CWL DEVELOPMENT PHILOSOPHY v2026-09-02B. They are not presented as a W3C mandate. The gap is that this central baseline currently has no verified canonical-owner release/API evidence for that shared responsibility. Until an owner is verified and released, products preserve the boundary with ports/ACLs/test doubles and do not copy an unreleased owner source tree or download a full browser catalog as a workaround.
+DB-backed, versioned translation resources; screen-key-scoped fetch/cache; separation of UI translations from ontology labels; and review/approval/deploy/rollback authority are organization architecture requirements in [CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md). They are not presented as a W3C mandate. The gap is that this central baseline currently has no verified canonical-owner release/API evidence for that shared responsibility. Until an owner is verified and released, products preserve the boundary with ports/ACLs/test doubles and do not copy an unreleased owner source tree or download a full browser catalog as a workaround.
 
 ## G-21 — Rust-first scope is hot-path and risk based
 
-The Rust-first rule does not authorize a wholesale rewrite of every Python orchestration module. The governing scope is mathematical/psychometric/EDA/data-science core and performance/security-critical runtime, including vector/matrix algebra, token size, CPU multithreading, GPU work, and other measured hot paths. Python remains allowed only for a validated Python-only ML runtime without practical Rust parity, with an ADR that records evidence, bounded scope, and removal conditions. G-21 therefore calls for profiling and boundary identification before migration; an unmeasured `orchestrator.py` rewrite would itself violate the policy.
+The Rust-first rule in [CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md) does not authorize a wholesale rewrite of every Python orchestration module. The governing scope is mathematical/psychometric/EDA/data-science core and performance/security-critical runtime, including vector/matrix algebra, token size, CPU multithreading, GPU work, and other measured hot paths. Python remains allowed only for a validated Python-only ML runtime without practical Rust parity, with an ADR that records evidence, bounded scope, and removal conditions. G-21 therefore calls for profiling and boundary identification before migration; an unmeasured `orchestrator.py` rewrite would itself violate the policy.
 
 ## G-22 — schema migration safety
 
-The two-semantic-word naming rule applies to organization-owned DB objects and fields, but migration must preserve persisted data and released consumer contracts. Repair therefore requires a RED naming/migration contract first, an item-safe migration or compatibility layer, GREEN owner CI, and only then an immutable owner release and consumer bump. Existing one-word external/released boundary names are translated at the anti-corruption boundary until the owner version changes; they are not silently rewritten in consumers.
+The two-semantic-word naming rule in [CWL DEVELOPMENT PHILOSOPHY v2026-09-02B](../CWL-DEVELOPMENT-PHILOSOPHY.md) applies to organization-owned DB objects and fields, but migration must preserve persisted data and released consumer contracts. Repair therefore requires a RED naming/migration contract first, an item-safe migration or compatibility layer, GREEN owner CI, and only then an immutable owner release and consumer bump. Existing one-word external/released boundary names are translated at the anti-corruption boundary until the owner version changes; they are not silently rewritten in consumers.
 
 ## Revalidation checklist
 
