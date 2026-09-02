@@ -502,8 +502,9 @@ def _recover_displaced_history_state(
     becomes the next recovery target. A newer live state observed before a
     recovery write is never overwritten. Privileged recovery revalidates the
     reviewed protected-main SHA immediately before every PUT. Ambiguous recovery
-    results inspect immutable history before retrying or advancing the recovery
-    chain. The loop is bounded and fails closed.
+    results settle against immutable history before any further write, then
+    either continue the proven predecessor chain or fail closed. The loop is
+    bounded and never blindly retries a timed-out recovery PUT.
     """
 
     for _attempt in range(COLLISION_RECOVERY_LIMIT):
@@ -528,7 +529,20 @@ def _recover_displaced_history_state(
                 )
             recovery_version = _history_version_id(history[0])
             if recovery_version == current_version:
-                continue
+                for _poll_index in range(1, AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
+                    time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+                    history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
+                    if not history:
+                        raise RulesetGovernanceError(
+                            "ambiguous ruleset recovery PUT exposed no history"
+                        )
+                    recovery_version = _history_version_id(history[0])
+                    if recovery_version != current_version:
+                        break
+                else:
+                    raise RulesetGovernanceError(
+                        "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
+                    )
             if len(history) < 2:
                 raise RulesetGovernanceError(
                     "ambiguous ruleset recovery PUT exposed no predecessor"

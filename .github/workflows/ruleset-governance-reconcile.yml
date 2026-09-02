@@ -11,6 +11,7 @@ on:
       - "tests/test_ruleset_governance_review_round2.py"
       - "tests/test_ruleset_governance_review_round3.py"
       - "tests/test_ruleset_governance_timeout_regression.py"
+      - "tests/test_ruleset_governance_delayed_recovery_regression.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
       - "tests/test_ruleset_merge_method_shape_regression.py"
@@ -29,6 +30,7 @@ on:
       - "tests/test_ruleset_governance_review_round2.py"
       - "tests/test_ruleset_governance_review_round3.py"
       - "tests/test_ruleset_governance_timeout_regression.py"
+      - "tests/test_ruleset_governance_delayed_recovery_regression.py"
       - "tests/test_central_required_workflow_ruleset_audit.py"
       - "tests/test_ruleset_audit_completeness_regression.py"
       - "tests/test_ruleset_merge_method_shape_regression.py"
@@ -110,6 +112,7 @@ jobs:
               tests/test_ruleset_governance_review_round2.py \
               tests/test_ruleset_governance_review_round3.py \
               tests/test_ruleset_governance_timeout_regression.py \
+              tests/test_ruleset_governance_delayed_recovery_regression.py \
               tests/test_central_required_workflow_ruleset_audit.py \
               tests/test_ruleset_audit_completeness_regression.py \
               tests/test_ruleset_merge_method_shape_regression.py \
