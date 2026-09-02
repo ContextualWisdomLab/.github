@@ -257,9 +257,14 @@ def test_recovery_timeout_before_acceptance_fails_after_settlement_without_retry
     current = live_payload()
     displaced = {**current, "name": "Admin predecessor"}
     put_count = 0
+    history_reads = 0
+    sleep_calls = 0
     monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
-    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
+
+    def fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
 
     def fake_api(method, endpoint, **_kwargs):
         nonlocal put_count
@@ -270,8 +275,14 @@ def test_recovery_timeout_before_acceptance_fails_after_settlement_without_retry
             raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
         raise AssertionError((method, endpoint))
 
+    def fake_history(*_args):
+        nonlocal history_reads
+        history_reads += 1
+        return [{"version_id": 10}]
+
+    monkeypatch.setattr(module.time, "sleep", fake_sleep)
     monkeypatch.setattr(module, "_gh_api", fake_api)
-    monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [{"version_id": 10}])
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
 
     with pytest.raises(
         module.RulesetGovernanceError,
@@ -285,6 +296,8 @@ def test_recovery_timeout_before_acceptance_fails_after_settlement_without_retry
             expected_main_sha="a" * 40,
         )
     assert put_count == 1
+    assert history_reads == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS
+    assert sleep_calls == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1
 
 
 def test_recovery_timeout_with_new_version_requires_predecessor(monkeypatch) -> None:
@@ -342,7 +355,10 @@ def test_recovery_timeout_refuses_unexpected_newer_history_state(monkeypatch) ->
         lambda *_args: [{"version_id": 11}, {"version_id": 10}],
     )
 
-    with pytest.raises(module.RulesetGovernanceError, match="left a newer state"):
+    with pytest.raises(
+        module.RulesetGovernanceError,
+        match="ambiguous ruleset recovery PUT outcome remains unresolved after settlement window",
+    ):
         module._recover_displaced_history_state(
             target,
             current_version=10,
