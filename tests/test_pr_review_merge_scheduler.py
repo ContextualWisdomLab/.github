@@ -8410,6 +8410,38 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
     assert payload["decisions"][1]["contract_decision"] == "WAIT"
 
 
+def test_main_stops_scan_and_propagates_on_mid_scan_rate_limit(monkeypatch, capsys):
+    """A rate limit raised from inside inspect_pr() (not the pre-loop fetch)
+    must stop the sweep and exit non-zero, exactly like the pre-loop path.
+
+    Folding it into an ordinary action_error decision and continuing the
+    loop -- the pre-existing behavior for every other RuntimeError, see
+    test_main_keeps_scanning_after_action_error -- would keep spending the
+    same exhausted shared-installation bucket on every remaining PR, and a
+    zero exit code would never reach pr-review-merge-scheduler.yml's
+    "API rate limit exceeded" skip-and-defer branch, which greps sweep_rc
+    != 0.
+    """
+    prs = [make_pr(number=1), make_pr(number=2)]
+    seen = []
+
+    def fake_inspect(repo, pr, **kwargs):
+        seen.append(pr["number"])
+        raise RuntimeError("gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)")
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+
+    with pytest.raises(RuntimeError, match="API rate limit exceeded"):
+        sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"])
+
+    assert seen == [1]
+    output = capsys.readouterr().out
+    assert "PR #1: action_error: gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)" in output
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert payload["counts"] == {"action_error": 1}
+
+
 def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
     assert sched.scrub_sensitive_data("token mytoken123") == "token ***"

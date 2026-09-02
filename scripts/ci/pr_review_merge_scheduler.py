@@ -5484,6 +5484,38 @@ def main(argv: list[str]) -> int:
                 allow_draft_review_dispatch=args.allow_draft_review_dispatch,
             )
         except RuntimeError as exc:
+            if is_rate_limited_error(exc):
+                # A mid-scan shared-installation rate-limit exhaustion (e.g.
+                # from an active-run read, cancellation, dispatch, merge, or
+                # branch update inside inspect_pr(), as opposed to the
+                # fetch_open_prs()/fetch_pr() calls above the loop) must
+                # propagate exactly like that earlier path does, instead of
+                # being folded into an ordinary action_error decision here.
+                # Swallowing it and continuing the loop would keep spending
+                # the same exhausted bucket on every remaining PR in this
+                # repository; returning 0 afterward would also mean this
+                # never reaches the workflow's "API rate limit exceeded"
+                # skip-and-defer branch (which only fires on a non-zero exit
+                # code), so later repositories in the same org-sweep rotation
+                # would keep spending the shared bucket too. Print the
+                # summary for the PRs already inspected so their decisions
+                # and dispatch/update counts are not lost, then let the error
+                # propagate and exit non-zero like the pre-loop rate-limit
+                # path.
+                decisions.append(
+                    Decision(
+                        pr.get("number", 0),
+                        "action_error",
+                        summarize_action_error(exc),
+                    )
+                )
+                print_summary(
+                    decisions,
+                    dry_run=args.dry_run,
+                    base_branch=args.base_branch,
+                    project_flow=args.project_flow,
+                )
+                raise
             decision = Decision(
                 pr.get("number", 0),
                 "action_error",

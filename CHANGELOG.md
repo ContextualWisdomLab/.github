@@ -1095,6 +1095,17 @@ Semantic Versioning where the repository publishes a release.
   follow-on queue-hygiene reads for every remaining repository. The current
   target is recorded as deferred, the run remains non-fatal for this external
   capacity condition, and later rotations retry the unfinished repository set.
+- Close a gap in the above deferral: a shared-installation rate limit hit
+  mid-scan (inside a single PR's `inspect_pr()` call — an active-run read,
+  cancellation, dispatch, merge, or branch update — rather than the
+  once-per-repository `fetch_open_prs()`/`fetch_pr()` call before the loop)
+  previously fell back to an ordinary `action_error` decision and kept
+  scanning the repository's remaining PRs with the same exhausted bucket,
+  and returned exit 0, so the workflow's "API rate limit exceeded"
+  skip-and-defer branch — which only triggers on a non-zero sweep exit —
+  never saw it and later repositories in the same rotation kept spending
+  the bucket too. It now stops the repository's scan and propagates the
+  error like the pre-loop path already did.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.
