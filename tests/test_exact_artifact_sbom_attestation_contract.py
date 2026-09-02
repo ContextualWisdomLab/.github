@@ -16,7 +16,7 @@ DOCTORING = Path("docs/doctoring/exact-artifact-sbom-attestation.md")
 ATTEST_ACTION_PIN = "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26"
 CHECKOUT_ACTION_PIN = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
 DOWNLOAD_ACTION_PIN = (
-    "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
+    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 )
 UPLOAD_ACTION_PIN = (
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
@@ -148,8 +148,16 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
 
     assert ATTEST_ACTION_PIN in signer
     assert CHECKOUT_ACTION_PIN in workflow
-    assert workflow.count("repository: ${{ job.workflow_repository }}") >= 2
-    assert workflow.count("ref: ${{ job.workflow_sha }}") >= 2
+    # job.workflow_repository/workflow_sha are not real Actions context
+    # properties (actionlint flags them as undefined on the `job` object) and
+    # always resolved empty, silently defaulting checkout away from the
+    # pinned trusted verifier source. ContextualWisdomLab/.github is this
+    # workflow's own repository; github.workflow_sha is the real, documented
+    # property for its pinned commit.
+    assert workflow.count("repository: ContextualWisdomLab/.github") >= 2
+    assert workflow.count("ref: ${{ github.workflow_sha }}") >= 2
+    assert "${{ job.workflow_repository }}" not in workflow
+    assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
     assert "contents: read" in signer

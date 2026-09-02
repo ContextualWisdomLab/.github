@@ -38,7 +38,7 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
-    runner_temp.mkdir()
+    runner_temp.mkdir(mode=0o700)
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"\n".join(SOURCE_LINES) + b"\n")
 
@@ -52,6 +52,9 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         json.dumps(
             {
                 "schema": 1,
+                "head_sha": "head",
+                "run_id": "run",
+                "run_attempt": "attempt",
                 "artifacts": {
                     changed_files.name: hashlib.sha256(
                         changed_files.read_bytes()
@@ -61,6 +64,8 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    manifest.chmod(0o600)
+    changed_files.chmod(0o600)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
@@ -68,6 +73,9 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         "OPENCODE_ARTIFACT_MANIFEST_SHA256",
         hashlib.sha256(manifest.read_bytes()).hexdigest(),
     )
+    opencode_review_normalize_output.current_changed_files.cache_clear()
+    yield
+    opencode_review_normalize_output.current_changed_files.cache_clear()
 
 
 def valid_body(head: str = HEAD) -> str:
