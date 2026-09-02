@@ -20,16 +20,14 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     filename: str,
     evidence_job: str,
 ) -> None:
-    """Workflow concurrency retires prior runs while the compatibility job skips."""
+    """PR-stable concurrency retires close work without a no-op runner."""
     workflow = (WORKFLOWS / filename).read_text(encoding="utf-8")
+    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
 
     assert "types: [opened, synchronize, reopened, ready_for_review, closed]" in workflow
-    assert "cancel-in-progress: true" in workflow
-    sentinel = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split(
-        f"\n{evidence_job}", 1
-    )[0]
-    assert "if: ${{ false }}" in sentinel
-    assert "github.event.action == 'closed'" not in sentinel
-    assert "PR closed; this run only cancels older runs through workflow concurrency." in sentinel
+    assert "github.event.pull_request.number" in concurrency
+    assert "github.event.pull_request.head.sha" not in concurrency
+    assert "cancel-in-progress: true" in concurrency
+    assert "cancel-closed-pr-runs:" not in workflow
     assert "if: github.event.action != 'closed'" in workflow
     assert evidence_job in workflow
