@@ -17,6 +17,7 @@ on:
       - ".github/workflows/pingora-edge-egress-opener-quality-ci.yml"
       - "scripts/ci/pingora_edge_egress_opener.py"
       - "tests/test_pingora_edge_egress_opener.py"
+      - "tests/test_pingora_edge_egress_opener_runner_image_contract.py"
       - "vendor/egressweave"
       - ".gitmodules"
       - "requirements-pingora-egress-ci.txt"
@@ -29,6 +30,7 @@ on:
       - ".github/workflows/pingora-edge-egress-opener-quality-ci.yml"
       - "scripts/ci/pingora_edge_egress_opener.py"
       - "tests/test_pingora_edge_egress_opener.py"
+      - "tests/test_pingora_edge_egress_opener_runner_image_contract.py"
       - "vendor/egressweave"
       - ".gitmodules"
       - "requirements-pingora-egress-ci.txt"
@@ -49,7 +51,7 @@ env:
 jobs:
   full-quality-gate:
     name: Python 3.14 full quality gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Harden runner
@@ -118,4 +120,5 @@ jobs:
         run: |
           python -m compileall -q \
             scripts/ci/pingora_edge_egress_opener.py \
-            tests/test_pingora_edge_egress_opener.py
+            tests/test_pingora_edge_egress_opener.py \
+            tests/test_pingora_edge_egress_opener_runner_image_contract.py
