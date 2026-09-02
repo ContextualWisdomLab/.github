@@ -1486,6 +1486,55 @@ def test_force_cancel_multiple_runs_reports_only_failures(monkeypatch):
     }
 
 
+def test_cancel_revalidated_review_run_refs_preserves_failed_cancellation(monkeypatch):
+    """Keep a review ref busy when GitHub rejects its destructive cancellation.
+
+    Discovered mid-flight during PR #1669's development (the naruon headRefOid
+    incident fix) and intentionally scoped out of that PR; landing fresh here per
+    docs/doctoring/scheduler-stale-headrefoid-cancellation.md. That branch's
+    prototype named this cancellation path ``_cancel_revalidated_review_run_refs``;
+    current main's actual shared choke point for cancelling a revalidated batch of
+    stale/superseded review run refs -- used by both ``dispatch_opencode_review``
+    and ``dispatch_strix_evidence`` -- is :func:`force_cancel_workflow_run_refs`,
+    so this test (kept under the established name) targets that real function.
+    """
+    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    cancelled = sched.force_cancel_workflow_run_refs(stale_refs)
+
+    assert ("owner/repo", "101") not in cancelled
+    assert ("owner/repo", "202") in cancelled
+
+
+def test_cancel_stale_opencode_runs_preserves_failed_cancellation(monkeypatch):
+    """Keep a stale review active when GitHub rejects its cancellation."""
+    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda _repo, _workflow, _pr: ([], stale_refs),
+    )
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    run_ids = sched.cancel_stale_opencode_runs(
+        "owner/repo", "OpenCode Review", make_pr(), dry_run=False
+    )
+
+    assert run_ids == ["202"]
+
+
 def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatch):
     calls = []
     monkeypatch.setattr(sched, "stale_opencode_run_ids", lambda *args: calls.append(args) or ["1"])
@@ -5385,6 +5434,22 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert any("status=in_progress" in " ".join(call) for call in calls)
+
+
+def test_cancel_stale_pr_runs_preserves_failed_cancellation(monkeypatch):
+    """Do not report a stale run cancelled when GitHub rejected the API call."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda _repo, _pr: ["101", "202"])
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    run_ids = sched.cancel_stale_pr_runs("owner/repo", make_pr(), dry_run=False)
+
+    assert run_ids == ["202"]
 
 
 def test_mutations_refuse_local_credentials(monkeypatch):

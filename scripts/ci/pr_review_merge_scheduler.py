@@ -2966,13 +2966,24 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     return failures
 
 
-def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> None:
-    """Force-cancel repository-qualified runs while retaining bounded batches."""
+def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Force-cancel repository-qualified runs and return the ones actually cancelled.
+
+    ``force_cancel_workflow_runs`` reports GitHub's per-run cancellation rejections
+    as a ``{run_id: failure_reason}`` dict rather than raising. A caller that treats
+    every requested ref as gone once this returns would misclassify a run GitHub
+    refused to cancel as cancelled -- letting a duplicate review dispatch alongside
+    a run that is, in fact, still active. Exclude rejected refs from the result so
+    every caller can tell the difference.
+    """
     runs_by_repo: dict[str, list[str]] = {}
     for run_repo, run_id in run_refs:
         runs_by_repo.setdefault(run_repo, []).append(run_id)
+    cancelled: list[tuple[str, str]] = []
     for run_repo, run_ids in runs_by_repo.items():
-        force_cancel_workflow_runs(run_repo, run_ids)
+        failures = force_cancel_workflow_runs(run_repo, run_ids)
+        cancelled.extend((run_repo, run_id) for run_id in run_ids if run_id not in failures)
+    return cancelled
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
@@ -2981,8 +2992,8 @@ def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> lis
         return []
     require_github_actions_control_actor("force-cancel-stale-pr-runs")
     run_ids = stale_pr_run_ids(repo, pr)
-    force_cancel_workflow_runs(repo, run_ids)
-    return run_ids
+    failures = force_cancel_workflow_runs(repo, run_ids)
+    return [run_id for run_id in run_ids if run_id not in failures]
 
 
 def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
@@ -2991,8 +3002,8 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
         return []
     require_github_actions_control_actor("force-cancel-stale-opencode-review")
     _, stale_refs = active_opencode_run_refs(repo, workflow, pr)
-    force_cancel_workflow_run_refs(stale_refs)
-    return [run_id for _, run_id in stale_refs]
+    cancelled_refs = force_cancel_workflow_run_refs(stale_refs)
+    return [run_id for _, run_id in cancelled_refs]
 
 
 def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
@@ -3131,7 +3142,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
     )
-    force_cancel_workflow_run_refs(stale_run_refs)
+    cancelled_refs = force_cancel_workflow_run_refs(stale_run_refs)
     if current_run_refs:
         print(
             "Strix evidence dispatch skipped: active same-head workflow run(s) "
@@ -3142,12 +3153,12 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return "already_running"
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    stale_ids = {run_id for _, run_id in stale_run_refs}
+    cancelled_ids = {run_id for _, run_id in cancelled_refs}
     busy_refs = [
         (dispatch_repo, str(run_data["id"]))
         for run_data in active_workflow_runs(dispatch_repo)
         if run_data.get("id")
-        and str(run_data["id"]) not in stale_ids
+        and str(run_data["id"]) not in cancelled_ids
         and run_data.get("name") == workflow
         and run_data.get("event") == "repository_dispatch"
         and str(run_data.get("display_title") or "").startswith(
