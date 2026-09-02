@@ -235,4 +235,9 @@ non-zero exit with a clear message), and the `--create` path (exact `gh api` arg
 repeated `labels[]` fields) via a monkeypatched `run()` — the same seam
 `pr_review_fix_scheduler.py`'s own tests use for `gh` calls. `coverage run -m pytest tests` and
 `interrogate` must both stay at 100% on `scripts/ci`, matching every other module in this
-repository; no exception is requested for this file.
+repository; no exception is requested for this file. Its module-level `try`/`except
+ModuleNotFoundError` import fallback (the same pattern most cross-referencing `scripts/ci` modules
+use) is exercised by a dedicated test that clears the bare-name cache entry and strips `scripts/ci`
+from `sys.path` before re-executing the module fresh, rather than relying on another test file's
+incidental `sys.path` mutation earlier in collection order — the mechanism most sibling modules
+currently depend on for that branch's coverage.

@@ -2702,11 +2702,15 @@ unattended trigger is deferred until `docs/product-goal-directive.md` names issu
 authorization explicitly (tracked in ADR-0022's deferred items).
 
 **Developer experience.** `coverage run -m pytest tests/test_issue_draft_composer.py` and
-`interrogate scripts/ci/issue_draft_composer.py` both report 100% (28 tests: evidence-gate
+`interrogate scripts/ci/issue_draft_composer.py` both report 100% (29 tests: evidence-gate
 rejection for every required field, malformed repo/oversized title/malformed labels, Markdown
 rendering content, the `--create`-gated `gh api` argv including repeated `labels[]` fields via a
-monkeypatched `run()` — the same seam `pr_review_fix_scheduler.py`'s own tests use — and the CLI's
-draft-only default, error paths, and `__main__` guard via `runpy`).
+monkeypatched `run()` — the same seam `pr_review_fix_scheduler.py`'s own tests use — the CLI's
+draft-only default, error paths, the `__main__` guard via `runpy`, and a dedicated
+`importlib`-driven test that deterministically forces the module's `except ModuleNotFoundError`
+package-qualified import fallback rather than relying on another test file's incidental `sys.path`
+mutation — the codebase-wide try/except-import pattern this module follows is otherwise only
+covered by accident of cross-file test collection order, which this file does not depend on).
 
 **User experience.** Nothing changes for a PR author or reviewer today: no new workflow trigger
 exists, so no issue can appear on any repository as a side effect of this PR. The capability is

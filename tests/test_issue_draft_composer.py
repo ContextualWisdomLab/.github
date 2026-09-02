@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import runpy
 import sys
+from pathlib import Path
 
 import pytest
 
 from scripts.ci import issue_draft_composer as composer
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "issue_draft_composer.py"
+SCRIPTS_CI_DIR = str(MODULE_PATH.parent)
 
 
 def valid_payload(**overrides):
@@ -256,6 +261,30 @@ def test_main_reports_evidence_gate_failure_and_exits_nonzero(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "issue_draft_composer:" in err
     assert "non-empty" in err
+
+
+def test_module_falls_back_to_package_qualified_import(monkeypatch):
+    """When the bare module name can't be resolved, the except branch imports it package-qualified.
+
+    Deterministically reproduces the ModuleNotFoundError path (rather than relying on another test
+    file's incidental sys.path mutation) by clearing the bare cache entry and stripping scripts/ci
+    from sys.path before re-executing the module fresh under a private name.
+    """
+    monkeypatch.delitem(sys.modules, "pr_review_merge_scheduler", raising=False)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p != SCRIPTS_CI_DIR])
+
+    spec = importlib.util.spec_from_file_location(
+        "issue_draft_composer_fallback_import_check", MODULE_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    # Register before exec: the module's dataclasses resolve their string annotations (from
+    # __future__ import annotations) via sys.modules[cls.__module__], which only exists for a
+    # normal `import` statement by default.
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+
+    assert module.run is not None
+    assert module.load_draft(valid_payload()).repo == "ContextualWisdomLab/.github"
 
 
 def test_module_main_guard_exits_zero(monkeypatch, tmp_path):

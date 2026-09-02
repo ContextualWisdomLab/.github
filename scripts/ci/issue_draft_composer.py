@@ -31,7 +31,7 @@ from typing import Any, Sequence
 
 try:
     from pr_review_merge_scheduler import run
-except ModuleNotFoundError:  # pragma: no cover - import shape depends on caller cwd
+except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import run
 
 
