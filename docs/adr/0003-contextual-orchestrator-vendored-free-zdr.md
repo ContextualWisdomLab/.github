@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`464da4715b495b5eaaa593eba3796e2d976ee0c9` today) into `RUNNER_TEMP`. The
+   (`212ff437dc297613289dba2e6064ade9942e07d8` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -113,7 +113,7 @@ all five, and auto-optimize routing by cost.
 
 - **2026-09-02 amendment: advance the governed runtime pin to current CO main.**
   The single sidecar default now advances from `045d17da5e2aea56a97e241ee158ab1628d78660` to the exact
-  `contextual-orchestrator` main revision `464da4715b495b5eaaa593eba3796e2d976ee0c9`, which contains the
+  `contextual-orchestrator` main revision `212ff437dc297613289dba2e6064ade9942e07d8`, which contains the
   current provider-discovery and gateway contracts. The SHA remains immutable;
   this is a reviewed dependency refresh, not a floating branch reference.
 
