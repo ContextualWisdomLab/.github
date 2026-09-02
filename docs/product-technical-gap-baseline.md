@@ -3040,3 +3040,39 @@ past a reviewer-diversity gate in another repo is outside what this session's by
 covers; they will merge normally once the standard OpenCode/Noema review pipeline (whose throughput this
 session already fixed, see the incident entry above) processes them. All four caller diffs were verified
 file-for-file against the intended single-file swap before any merge attempt.
+
+**Two real post-merge findings from Devin's review on the caller PRs, both fixed the same day.** (1)
+*Security:* every caller referenced the central `dependency-review.yml` via `uses: ...@main` -- a
+mutable branch ref runs an unreviewed central change against every caller's PR checks with no review
+in the calling repo. Fixed by pinning all four callers to the exact commit SHA that added the file
+(`0bcd22d8`, unchanged since): `argos#558` (retroactive, since `argos#556` had already merged with the
+unsafe ref), `mightyETL`/`newsdom-api`/`scopeweave` (already pinned by that org's autonomous repair
+loop, verified before trusting it). (2) *Bug:* converting a job to `uses: <reusable workflow>` renames
+its published check-run from the caller job's own name to a combined `<caller> / <called>` name.
+`newsdom-api`'s `develop` branch protection required a status check named literally `dependency-review`
+verbatim -- after conversion that name is never published again, blocking every future merge. Verified
+live which of the four repos were actually affected (`argos`/`mightyETL`: no branch protection at all;
+`scopeweave`: `dependency-review` not in its required list; only `newsdom-api`), then fixed by updating
+`newsdom-api`'s branch protection required-status-checks list directly (`gh api -X PATCH
+.../required_status_checks`) to the real published name `dependency-review / dependency-review`.
+Both findings and fixes documented in `.github#1728`, which also corrects the still-open
+`r-package-check.yml` consolidation's (`#1716`) own example before it can repeat the same mistake --
+both are now the canonical documented pattern for any future reusable-workflow-caller conversion in
+this org: pin to a commit SHA, and check the calling repo's branch protection for a required check
+matching the job's *old* name before or immediately after merging.
+
+**Two peer Claude sessions working the same org in parallel this tick, coordinated directly (not
+through this doc) via cross-session messages.** One (`cool-jackson-...`) took item 25 (contextual-
+orchestrator admin.py Audit-tab staleness) off this session's plate -- and caught that the backlog's
+own citation of "contextual-orchestrator#1010" as precedent was wrong: #1010 was actually closed (not
+merged), rejected on a no-heuristics-timeout-bound RCA basis, so it never touched `admin.py`. That
+citation came from the user's own original `/loop` backlog text, relayed here without independent
+verification; the peer session found the real bug and root-cause-fixed it with a better-scoped
+`refreshAuditEvents()` helper (updates only `recent_audit_events` via `/admin/state`, not a full
+`load()`+`simulate()` re-trigger) instead of blindly following the wrong precedent. **Worth telling the
+user directly**: the standing backlog item 25 text (re-pasted verbatim each `/loop` cycle) cites a
+closed PR as if merged -- future re-pastes of this backlog should drop or correct that citation. The
+other peer (`trusting-wilbur-...`), mid-flight on its own `.github` workflow-consolidation PR #1683,
+was alerted to the same required-status-check-name risk found here and independently confirmed (with
+evidence: the two converted jobs' combined check names checked against the org ruleset's actual
+required list) that its own conversion is unaffected.
