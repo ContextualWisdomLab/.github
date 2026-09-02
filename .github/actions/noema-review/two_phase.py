@@ -77,6 +77,28 @@ def _reviewer_actor(*, allow_refreshed_app: bool = False) -> str:
     return actor
 
 
+def _prepare_control_token() -> str | None:
+    """Return job-lifetime read authority for GitHub calls made after model work.
+
+    Production workflows always identify the selected reviewer source. Once
+    that source is present, a separate read-only job token is mandatory so a
+    one-hour reviewer installation token cannot expire inside a long model or
+    repair request and turn a later exact-head check into HTTP 401. Direct
+    unit callers that do not model a workflow credential source retain the
+    historical local-call behavior.
+    """
+    token_source = os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE", "").strip()
+    if not token_source:
+        return None
+    control_token = os.environ.get("NOEMA_PREPARE_CONTROL_TOKEN", "").strip()
+    if not control_token:
+        raise RuntimeError(
+            "Noema prepare control token is unavailable; refusing to start long model work "
+            "with only the reviewer credential"
+        )
+    return control_token
+
+
 def _write_envelope(path: Path, payload: dict[str, Any]) -> None:
     """Create one private, non-following runner-local verdict envelope."""
     encoded = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
@@ -167,6 +189,10 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
     changed_files = gate.fetch_changed_files(repo, number)
     changed_paths = tuple(file_path for file_path, _status in changed_files)
     review_context = gate.build_review_context(repo, number, pull_request, changed_files)
+    control_token = _prepare_control_token()
+    reviewer_token = os.environ.get("GH_TOKEN")
+    if control_token is not None:
+        os.environ["GH_TOKEN"] = control_token
     try:
         verdict = gate.call_llm(
             repo,
@@ -181,6 +207,12 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
     except gate.StaleHeadDuringRepairRetryError:
         print("Pull request head changed during model repair retry; verdict was not sealed.")
         return 0
+    finally:
+        if control_token is not None:
+            if reviewer_token is None:
+                os.environ.pop("GH_TOKEN", None)
+            else:
+                os.environ["GH_TOKEN"] = reviewer_token
 
     _write_envelope(
         path,
