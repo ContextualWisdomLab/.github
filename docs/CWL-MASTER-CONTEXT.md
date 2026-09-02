@@ -17,7 +17,7 @@ Turn scattered enterprise context into **judgment-ready structure, then action**
 naruon is fundamentally an **email workspace** that connects scattered context → judgment → action. It is **NOT groupware / HRIS / an approval-workflow (전자결재) / ERP engine.** It **OBSERVES, SYNTHESIZES, and SURFACES** judgment-ready structure to the human — it does **NOT own or execute** org processes (approval routing, recusal, escalation, HR actions, evaluations). The whole relationship / org-hierarchy / authority / norm-group / COI model (§4, §5, §5b) exists for **CONTEXT UNDERSTANDING + SURFACING**, NOT for enforcement. Example: for an in-company couple on a direct reporting line, naruon may NOTICE the multiplex tie and, when relevant, SURFACE a judgment-support flag ("this touches your partner / a possible conflict of interest") — it does NOT auto-recuse or route the approval; the actual approval/recusal lives in the external 전자결재 system, which naruon integrates with / observes but does not replace. When drilling the model, do not drift into groupware/workflow-owning features. Judgment (and org action) stays with the human + their existing systems.
 
 ## 2. naruon = the PLATFORM (one platform, many à-la-carte plugins)
-`naruon` is an email-first workspace (FastAPI backend + Next.js frontend + a thin WebSocket connector proxying IMAP/SMTP/CalDAV/WebDAV from customer premises) whose core is a **dense two-tier knowledge graph** over Postgres + pgvector. It is a **TRUE plugin platform** ("진정한 plugin처럼 계속 붙일 수 있는"): plugin manifest/contract, extension points (ingest sources, DOM/analysis processors, KG enrichers, work-item types, UI panels, agents, scheduling), plugin registry, versioned API, isolated execution for untrusted plugins (noema quarantine sandbox). **À-la-carte / opt-in**: each capability is a plugin a user enables by need; nothing mandatory; different users run different combos. Every imported component is **standalone AND submodule** ("따로, 또 같이").
+`naruon` is an email-first workspace (FastAPI backend + Next.js frontend + a thin WebSocket connector proxying IMAP/SMTP/CalDAV/WebDAV from customer premises) whose core is a **dense two-tier knowledge graph** over Postgres + pgvector. It is a **TRUE plugin platform** ("진정한 plugin처럼 계속 붙일 수 있는"): plugin manifest/contract, extension points (ingest sources, DOM/analysis processors, KG enrichers, work-item types, UI panels, agents, scheduling), plugin registry, versioned API, isolated execution for untrusted plugins through **quarantine-sandbox-runtime** (see §6). **À-la-carte / opt-in**: each capability is a plugin a user enables by need; nothing mandatory; different users run different combos. Every imported component is **standalone AND submodule** ("따로, 또 같이").
 
 ## 3. Ecosystem components (product names + roles)
 Product renames (repo slug → product name; domains purchased): `cwl-idp`→**keyverse** (keyverse.io), `waf-ids-ai-soc`→**wardnet** (wardnet.io), `cwl-editor`→**inkspan** (inkspan.io). Other domains: cloud-erd.app (pg-erd-cloud), naruon.net / naruon.io (naruon).
@@ -33,7 +33,7 @@ Product renames (repo slug → product name; domains purchased): `cwl-idp`→**k
 - **codec-carver** — STT / omni-modal speech+video codec (audio/video conversion for LLM input); speaker diarization + consented voiceprint; feeds auto meeting minutes.
 - **fast-mlsirm** — LLM-as-a-Judge output **calibration** + measurement/evaluation-item quality; incorporate `aFIPC` Fixed-Item Parameter Calibration + `kaefa`-style item-fit optimal-model search (R IRT/psychometrics). GPU = GPGPU in the Rust core (wgpu, single numpy|rust backend axis).
 - **semantic-data-portal (SDP)** — the higher **ontology / catalog / governance plane** ABOVE the doc KG (Apache AGE + pgvector). naruon owns the doc KG (content_graph + project_graph in Postgres); SDP is not that store.
-- **noema** — agent runtime (Pydantic-AI / Codex-Python): a GitHub Review Agent in CI + a do-anything agent inside naruon. Untrusted artifact/code analysis runs in a separately quarantined execution plane, owned by **quarantine-sandbox-runtime** (see §6), not inside the Noema Worker process (see §6's note, 2026-09-02).
+- **noema** — GitHub Actions OIDC short-lived repository capability and exact-revision evidence / credential-maintenance control plane. It does **not** own untrusted artifact/code execution; that responsibility belongs to **quarantine-sandbox-runtime** (see §6).
 - **newsdom-api** — PDF → DOM recognition sidecar (generalized beyond JP newspapers). naruon parses non-PDF formats (html/md/plaintext) into its content_graph.
 - **scopeweave** — issue/WBS **management** + ITSM Service Request (two-layer: requester ticket ↔ team issues). Consumes issues naruon extracts from email/conversation/ITSR. (Dev-CODE issues stay in GitHub/GitLab — integrate, don't rebuild GitHub.)
 - **appguardrail** — app security guardrails; collects org security/CI failures + Strix findings as issues.
@@ -188,13 +188,13 @@ flowchart TB
     SCOPE["scopeweave — issues / WBS / ITSM"]
     CODEC["codec-carver — STT / audio→minutes (+voiceprint)"]
     BAND["bandscope — musicians' rehearsal vertical"]
-    NOEMA["noema — agent runtime + review evidence"]
-    QUAR["quarantine-sandbox-runtime — AI SOC sandbox (§6)"]
+    QUAR["quarantine-sandbox-runtime — isolated artifact/code analysis (§6)"]
   end
 
   subgraph INFRA["Infra / governance"]
     CF[("Cloudflare — Pages/Workers/DNS")]
     GH[(".github — governance + Project #1")]
+    NOEMA["noema — GitHub OIDC capability + exact-revision evidence"]
   end
 
   P1 --> WARD
@@ -224,8 +224,9 @@ flowchart TB
   NAR --> ERD
   NAR -->|"extracted issues → manage"| SCOPE
   CODEC -->|"diarize + minutes"| NAR
-  NAR --> NOEMA
+  GH -->|"repository capability / exact-revision evidence"| NOEMA
   WARD -->|"quarantine detonation"| QUAR
+  NAR -->|"untrusted plugin/artifact analysis"| QUAR
   BAND -->|"musicians also use email"| NAR
   BAND -. "rehearsal app" .-> P2
 
@@ -239,4 +240,4 @@ flowchart TB
   class ORCH,KEY,WARD plane;
 ```
 
-**Reading it:** users hit `wardnet` (edge/SOC) → `naruon` (platform); everything authenticates via `keyverse` (which federates external ADFS/LDAP). `naruon` ingests via the `connector` + `newsdom-api`, builds the KG in Postgres, uses `semantic-data-portal` for the ontology plane, and routes ALL LLM work through `contextual-orchestrator` (which load-balances upstreams and routes batch to `pg-llm-batch`). `noema` is the shared agent runtime + quarantine sandbox (used by naruon, the GitHub review agent, and wardnet's AI SOC). Plugins/verticals (`inkspan`, `clearfolio`, `pg-erd-cloud`, `scopeweave`, `codec-carver`, `bandscope`) attach à-la-carte; `fast-mlsirm` calibrates LLM-as-Judge quality. Hosting = Cloudflare; governance + Project #1 live in `.github`.
+**Reading it:** users hit `wardnet` (edge/SOC) → `naruon` (platform); everything authenticates via `keyverse` (which federates external ADFS/LDAP). `naruon` ingests via the `connector` + `newsdom-api`, builds the KG in Postgres, uses `semantic-data-portal` for the ontology plane, and routes ALL LLM work through `contextual-orchestrator` (which load-balances upstreams and routes batch to `pg-llm-batch`). `noema` is the GitHub OIDC/exact-revision evidence control plane and uses `contextual-orchestrator` for model-backed work; `quarantine-sandbox-runtime` owns isolated untrusted artifact/code analysis for wardnet and product/plugin consumers. Plugins/verticals (`inkspan`, `clearfolio`, `pg-erd-cloud`, `scopeweave`, `codec-carver`, `bandscope`) attach à-la-carte; `fast-mlsirm` calibrates LLM-as-Judge quality. Hosting = Cloudflare; governance + Project #1 live in `.github`.
