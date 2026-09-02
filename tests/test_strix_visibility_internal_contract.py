@@ -48,3 +48,10 @@ def test_split_gh_response_keeps_only_the_terminal_body() -> None:
         "HTTP/2 200 OK\r\nContent-Type: application/json\r\n\r\n"
     )
     assert body == "false\n"
+
+
+def test_included_http_protocol_statuses_are_classified() -> None:
+    """Real HTTP/2 included status lines must retain retry/permanent semantics."""
+    assert visibility.classify_gh_failure("HTTP/2 429 Too Many Requests") == "transient"
+    assert visibility.classify_gh_failure("HTTP/2 503 Service Unavailable") == "transient"
+    assert visibility.classify_gh_failure("HTTP/2 403 Forbidden") == "permanent"
