@@ -1,8 +1,11 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted, amended 2026-08-30 (see "2026-08-30 amendment" below — Strix
-  now uses `orchestrator/free`, not the `orchestrator/auto` this header
-  originally recorded)
+- Status: accepted, amended 2026-08-30, owner-confirmed 2026-09-02 (see
+  "2026-08-30 amendment" below — Strix now uses `orchestrator/free`, not the
+  `orchestrator/auto` this header originally recorded — and "2026-09-02
+  amendment" — the repo owner has explicitly reviewed and re-confirmed
+  `orchestrator/free` for both OpenCode and Strix, closing the 2026-08-31
+  correction's "open, unreviewed risk" note)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
@@ -232,3 +235,50 @@ all five, and auto-optimize routing by cost.
   runner capable of completing the work.
   This amendment supersedes all fixed readiness and inference-attempt budgets
   in ADR 0005.
+- **2026-09-02 amendment: owner explicitly reviews and re-confirms
+  `orchestrator/free` for both OpenCode and Strix, closing the 2026-08-31
+  "open, unreviewed risk" note above.** In a session verifying that OpenCode
+  Review and Strix are *실질적으로* (actually, substantively) enforced through
+  the contextual-orchestrator gateway — not merely wired in code — the repo
+  owner reviewed this ADR's 2026-08-31 correction (which records that no
+  owner had reviewed or accepted the 2026-08-30 Strix `orchestrator/auto` →
+  `orchestrator/free` switch) and gave an explicit, current decision,
+  verbatim: "Contextual-Orchestrator의 모델은 GitHub Actions Workflow 이용에
+  관해 `orchestrator/free`로 고정" ("Contextual-Orchestrator's model, for all
+  GitHub Actions workflow usage, is fixed to `orchestrator/free`") — i.e. both
+  OpenCode Review and Strix are to stay pinned to `orchestrator/free`, not
+  `orchestrator/auto`, for every GitHub Actions consumer.
+
+  This closes the 2026-08-31 correction's "open, unreviewed risk" note as of
+  today, **2026-09-02**: unlike the fabricated attribution that correction
+  describes, this is a real, current, in-session owner decision, not a record
+  reconstructed after the fact. It does not retroactively validate the
+  original 2026-08-30 amendment's false "the org owner explicitly directed
+  this" claim — that claim remains false as history, exactly as the
+  2026-08-31 correction states — it supersedes it going forward with a real
+  decision covering the same configuration.
+
+  The underlying technical trade-off this ADR has documented since
+  2026-08-30 is unchanged by this confirmation: Strix still has no external
+  (priced/`orchestrator/auto`) fallback under `orchestrator/free`, and can
+  still go fully dark during a single-outage-domain incident of the kind the
+  2026-08-29 DiskSage scan and the 2026-08-30 live reproduction both recorded,
+  until the free-catalog's stale-model and provider-diversity gaps are
+  separately closed. The owner's 2026-09-02 confirmation is a decision to
+  accept that residual availability risk knowingly, not a claim that the risk
+  no longer exists. `free_account_diversity`
+  (`scripts/ci/contextual_orchestrator_review_policy.py`) remains the live
+  monitoring evidence for when that gap narrows.
+
+  No code or workflow change accompanies this amendment: `strix.yml` and
+  `opencode-review.yml` already hard-pin `orchestrator/free` as of the
+  2026-08-30/2026-08-31 amendments above, and this session's own audit of
+  recent `opencode-review.yml`/`strix.yml` runs (see
+  `docs/doctoring/contextual-orchestrator-gateway-enforcement-audit-20260902.md`)
+  confirms both consumers vendor and invoke the same sidecar
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`) against the same
+  `orchestrator/free` pool. Recorded at exact-head
+  `6a25bc11d58a2e36da9ccea390ade6ccee57ec4d` on the
+  `claude/contextual-orchestrator-integration-8ec7f8` branch;
+  see the doctoring record above for the full verification evidence and the
+  PR that carries this amendment.
