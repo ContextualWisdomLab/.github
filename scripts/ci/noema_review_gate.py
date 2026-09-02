@@ -423,6 +423,63 @@ def parse_diff_path(raw: str, prefix: str) -> str:
     return value.removeprefix(prefix)
 
 
+def _entry_ordinal(position: int, total: int) -> str:
+    """Return an unambiguous array-position label for a validated JSON entry.
+
+    ``position`` is the entry's 1-based place in the array being validated —
+    an array position, not a source-code line number. The historical message
+    text ("Noema reviewed line N is not an exact changed-side line") read as
+    if N named literal file line N; it only ever named "the Nth entry" of
+    ``reviewed_lines``/``probes``, so two failures on entries 1 and 3 of a
+    3-entry array could be misread as complaints about file lines 1 and 3
+    (see the naruon#1503 investigation this fixes). Every caller splices this
+    immediately after the fixed ``"Noema reviewed line "``/``"Noema
+    adversarial probe "`` prefix so ``_stable_failure_diagnostic``'s
+    trusted-prefix allowlist still recognizes the message as trusted
+    structural validator output.
+    """
+    return f"entry {position}/{total} (array index {position - 1}, not a source line)"
+
+
+def _format_location(path: Any, line: Any, side: Any) -> str:
+    """Format one rejected path/line/side citation for a diagnostic message.
+
+    ``repr()`` on each raw value (rather than plain interpolation) keeps a
+    non-string ``path``, a non-int ``line``, or a ``None`` deliberately
+    distinguishable in the rendered text instead of silently coercing to a
+    misleading string.
+    """
+    return f"path={path!r} line={line!r} side={side!r}"
+
+
+def _nearby_changed_locations(
+    locations: set[tuple[str, int, str]], path: Any, line: Any, *, limit: int = 5
+) -> str:
+    """Return a short hint of the closest real changed locations sharing ``path``.
+
+    Scoped to ``locations`` entries whose path matches ``path`` exactly, then
+    sorted nearest-line-first (so a citation just one line off a real changed
+    line is obviously close, rather than buried in an unsorted dump) and
+    capped at ``limit`` entries to keep the GitHub Actions ``::error::``
+    annotation this feeds into readable. Returns ``""`` — no hint — when
+    ``path`` is not a string or no changed location shares it; there is
+    nothing useful to compare against.
+    """
+    if not isinstance(path, str):
+        return ""
+    same_path = [location for location in locations if location[0] == path]
+    if not same_path:
+        return ""
+    if isinstance(line, int):
+        same_path.sort(key=lambda location: (abs(location[1] - line), location[1], location[2]))
+    else:
+        same_path.sort(key=lambda location: (location[1], location[2]))
+    sample = ", ".join(f"{p}:{ln} ({s})" for p, ln, s in same_path[:limit])
+    remaining = len(same_path) - limit
+    more = f", +{remaining} more" if remaining > 0 else ""
+    return f"; nearest changed lines for {path}: {sample}{more}"
+
+
 def validate_substantive_verdict(
     verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
 ) -> None:
@@ -437,15 +494,22 @@ def validate_substantive_verdict(
     reviewed_lines = verdict.get("reviewed_lines")
     if not isinstance(reviewed_lines, list) or not reviewed_lines:
         raise NoemaModelOutputError("Noema formal verdict requires at least one reviewed changed line")
-    for index, reviewed in enumerate(reviewed_lines, start=1):
+    reviewed_total = len(reviewed_lines)
+    for position, reviewed in enumerate(reviewed_lines, start=1):
+        entry = _entry_ordinal(position, reviewed_total)
         if not isinstance(reviewed, dict):
-            raise NoemaModelOutputError(f"Noema reviewed line {index} must be an object")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
-            raise NoemaModelOutputError(f"Noema reviewed line {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema reviewed line {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
-            raise NoemaModelOutputError(f"Noema reviewed line {index} requires concrete analysis")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} requires concrete analysis")
 
     validation = verdict.get("adversarial_validation")
     if not isinstance(validation, dict):
@@ -465,22 +529,29 @@ def validate_substantive_verdict(
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
-    for index, probe in enumerate(probes, start=1):
+    probes_total = len(probes)
+    for position, probe in enumerate(probes, start=1):
+        entry = _entry_ordinal(position, probes_total)
         if not isinstance(probe, dict):
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} must be an object")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
-                raise NoemaModelOutputError(f"Noema adversarial probe {index} requires {field}")
+                raise NoemaModelOutputError(f"Noema adversarial probe {entry} requires {field}")
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} outcome must be falsified or confirmed")
         identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
         if identity in identities:
-            raise NoemaModelOutputError(f"Noema adversarial probe {index} duplicates an earlier probe")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))

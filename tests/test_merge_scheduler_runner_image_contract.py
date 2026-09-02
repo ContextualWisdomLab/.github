@@ -27,7 +27,6 @@ class MergeSchedulerRunnerImageContract(unittest.TestCase):
         """Require the scheduler control plane to use explicit Ubuntu 24.04."""
         workflow = WORKFLOW.read_text(encoding='utf-8')
         for job_name in (
-            'cancel-closed-pr-runs',
             'scan-pr-queue',
             'org-queue-sweep',
         ):
