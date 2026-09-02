@@ -33,18 +33,17 @@ def _class_evidence(
     evidence: dict[str, object] = {}
     for index, field in enumerate(noema.OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[kind], start=1):
         witness = _location()
+        witness["claim_role"] = noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES[kind][field]
         if observations:
             if repeated:
-                witness["observation"] = (
-                    "The `new` assignment preserves one repeated runtime relationship."
-                )
+                witness["observation"] = "new = 1 is the same repeated source observation."
             elif generic_but_different:
                 witness["observation"] = (
                     f"Generic {field.replace('_', ' ')} concern appears in this area."
                 )
             else:
                 witness["observation"] = (
-                    f"The `new` assignment preserves runtime relationship {index} relevant to {field}."
+                    f"new = 1 is exact source evidence for structured witness {index}: {field}."
                 )
         if source_excerpt:
             witness["source_excerpt"] = "new = 1"
@@ -152,7 +151,7 @@ def test_repeated_generic_observations_do_not_satisfy_class_specific_witnesses()
 
 def test_differently_worded_generic_observations_without_source_signal_are_rejected() -> None:
     """Unique prose labels are not evidence unless they name concrete changed-source content."""
-    with pytest.raises(noema.NoemaModelOutputError, match="concrete token from source_excerpt"):
+    with pytest.raises(noema.NoemaModelOutputError, match="quote the exact source_excerpt"):
         noema.validate_substantive_verdict(
             _verdict(
                 observations=True,
@@ -172,6 +171,17 @@ def test_fabricated_source_excerpt_is_rejected() -> None:
     ] = "fabricated = 2"
 
     with pytest.raises(noema.NoemaModelOutputError, match="exact changed-line source_excerpt"):
+        noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+
+def test_invented_claim_role_cannot_replace_class_specific_evidence() -> None:
+    """Free-form labels cannot substitute for the schema's exact class-and-field role."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    verdict["adversarial_validation"]["probes"][0]["class_evidence"]["mutation_attempt"][
+        "claim_role"
+    ] = "banana"
+
+    with pytest.raises(noema.NoemaModelOutputError, match="claim_role must be"):
         noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
 
 

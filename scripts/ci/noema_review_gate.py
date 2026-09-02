@@ -60,6 +60,34 @@ MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+OBSERVED_REVIEW_PROBE_KINDS = frozenset(
+    {
+        "mutable_alias",
+        "time_of_check_time_of_use",
+        "execution_identity",
+        "coercion_boundary",
+        "test_oracle",
+        "cross_contract",
+        "authority_boundary",
+        "dependency_context",
+        "state_machine_race",
+    }
+)
+OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS: dict[str, tuple[str, ...]] = {
+    "mutable_alias": ("alias_origin", "mutation_attempt", "post_validation_observation"),
+    "time_of_check_time_of_use": ("check_observation", "intervening_change", "use_observation"),
+    "execution_identity": ("incoming_identity", "retained_identity", "mismatch_guard"),
+    "coercion_boundary": ("raw_value", "conversion_path", "canonicality_guard"),
+    "test_oracle": ("assertion_under_test", "negative_control", "distinguishing_observation"),
+    "cross_contract": ("first_contract", "second_contract", "contradiction_or_alignment"),
+    "authority_boundary": ("component_authority", "external_authority", "enforcement_boundary"),
+    "dependency_context": ("dependency", "omitted_or_included_context", "causal_effect"),
+    "state_machine_race": ("initial_state", "event_order", "invariant_observation"),
+}
+OBSERVED_REVIEW_PROBE_CLAIM_ROLES: dict[str, dict[str, str]] = {
+    kind: {field: f"{kind}:{field}" for field in fields}
+    for kind, fields in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS.items()
+}
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -409,6 +437,50 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
     return locations
 
 
+def changed_diff_line_texts(diff: str) -> dict[tuple[str, int, str], str]:
+    """Return exact changed-side source text keyed by canonical diff location."""
+    texts: dict[tuple[str, int, str], str] = {}
+    old_path = new_path = ""
+    old_line = new_line = 0
+    in_hunk = False
+    for raw_line in diff.splitlines():
+        if raw_line.startswith("diff --git "):
+            old_path = new_path = ""
+            in_hunk = False
+            continue
+        if not in_hunk and raw_line.startswith("--- "):
+            old_path = parse_diff_path(raw_line[4:], "a/")
+            continue
+        if not in_hunk and raw_line.startswith("+++ "):
+            new_path = parse_diff_path(raw_line[4:], "b/")
+            continue
+        match = DIFF_HUNK_RE.match(raw_line)
+        if match:
+            old_line, new_line = map(int, match.groups())
+            in_hunk = True
+            continue
+        if not in_hunk or raw_line.startswith(r"\ No newline"):
+            continue
+        if raw_line.startswith("+"):
+            if not new_path:
+                return {}
+            source_text = raw_line[1:]
+            if source_text != "[overlong changed line content omitted]":
+                texts[(new_path, new_line, "RIGHT")] = source_text
+            new_line += 1
+        elif raw_line.startswith("-"):
+            if not old_path:
+                return {}
+            source_text = raw_line[1:]
+            if source_text != "[overlong changed line content omitted]":
+                texts[(old_path, old_line, "LEFT")] = source_text
+            old_line += 1
+        else:
+            old_line += 1
+            new_line += 1
+    return texts
+
+
 def parse_diff_path(raw: str, prefix: str) -> str:
     """Decode a Git unified-diff path, including C-quoted UTF-8 paths."""
     value = raw.split("\t", 1)[0]
@@ -421,6 +493,102 @@ def parse_diff_path(raw: str, prefix: str) -> str:
         except (SyntaxError, ValueError, UnicodeError):
             return ""
     return value.removeprefix(prefix)
+
+
+def _canonical_changed_location(record: dict[str, Any], label: str) -> tuple[str, int, str]:
+    """Return a canonical changed-side location without bool/int coercion."""
+    path_value = record.get("path")
+    line_value = record.get("line")
+    side_value = record.get("side")
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise NoemaModelOutputError(f"{label} requires a canonical changed-side path")
+    if type(line_value) is not int or line_value <= 0:
+        raise NoemaModelOutputError(f"{label} requires a canonical positive integer line")
+    if side_value not in {"LEFT", "RIGHT"}:
+        raise NoemaModelOutputError(f"{label} requires canonical LEFT/RIGHT side")
+    return (path_value, line_value, side_value)
+
+
+def _validate_observed_probe_class_evidence(
+    probe: dict[str, Any],
+    probe_kind: str,
+    index: int,
+    location: tuple[str, int, str],
+    diff: str,
+) -> None:
+    """Require defect-class witnesses to bind to the probe's exact changed line."""
+    class_evidence = probe.get("class_evidence")
+    required_fields = OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+    if not isinstance(class_evidence, dict) or set(class_evidence) != set(required_fields):
+        expected = ", ".join(required_fields)
+        raise NoemaModelOutputError(
+            f"Noema adversarial probe {index} class_evidence for {probe_kind} "
+            f"must contain exactly: {expected}"
+        )
+    normalized_observations: list[str] = []
+    source_texts = changed_diff_line_texts(diff)
+    for field in required_fields:
+        source_ref = class_evidence.get(field)
+        if not isinstance(source_ref, dict) or set(source_ref) != {
+            "path",
+            "line",
+            "side",
+            "source_excerpt",
+            "claim_role",
+            "observation",
+        }:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} requires "
+                "path, line, side, exact source_excerpt, class-specific claim_role, and non-empty observation"
+            )
+        source_location = _canonical_changed_location(
+            source_ref, f"Noema adversarial probe {index} class_evidence.{field}"
+        )
+        if source_location != location:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} must bind to "
+                "the probe location"
+            )
+        expected_excerpt = source_texts.get(source_location)
+        source_excerpt = source_ref.get("source_excerpt")
+        if (
+            not isinstance(source_excerpt, str)
+            or expected_excerpt is None
+            or source_excerpt != expected_excerpt
+        ):
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} requires the "
+                "exact changed-line source_excerpt"
+            )
+        observation = source_ref.get("observation")
+        if not isinstance(observation, str) or not observation.strip():
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} requires a "
+                "non-empty observation"
+            )
+        if len(observation) > MAX_THREAD_BODY_CHARS:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} observation "
+                f"exceeds {MAX_THREAD_BODY_CHARS} characters"
+            )
+        source_marker = source_excerpt if source_excerpt else "<blank>"
+        if source_marker not in observation:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} observation "
+                "must quote the exact source_excerpt (or <blank> for an empty line)"
+            )
+        expected_claim_role = OBSERVED_REVIEW_PROBE_CLAIM_ROLES[probe_kind][field]
+        claim_role = source_ref.get("claim_role")
+        if claim_role != expected_claim_role:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {index} class_evidence.{field} claim_role "
+                f"must be {expected_claim_role!r}"
+            )
+        normalized_observations.append(observation.strip().casefold())
+    if len(set(normalized_observations)) != len(normalized_observations):
+        raise NoemaModelOutputError(
+            f"Noema adversarial probe {index} requires distinct class-specific observations"
+        )
 
 
 def validate_substantive_verdict(
@@ -440,7 +608,7 @@ def validate_substantive_verdict(
     for index, reviewed in enumerate(reviewed_lines, start=1):
         if not isinstance(reviewed, dict):
             raise NoemaModelOutputError(f"Noema reviewed line {index} must be an object")
-        location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
+        location = _canonical_changed_location(reviewed, f"Noema reviewed line {index}")
         if location not in locations:
             raise NoemaModelOutputError(f"Noema reviewed line {index} is not an exact changed-side line")
         analysis = reviewed.get("analysis")
@@ -465,10 +633,12 @@ def validate_substantive_verdict(
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
+    probe_kinds: set[str] = set()
+    enforce_observed_taxonomy = bool(changed_paths)
     for index, probe in enumerate(probes, start=1):
         if not isinstance(probe, dict):
             raise NoemaModelOutputError(f"Noema adversarial probe {index} must be an object")
-        location = (probe.get("path"), probe.get("line"), probe.get("side"))
+        location = _canonical_changed_location(probe, f"Noema adversarial probe {index}")
         if location not in locations:
             raise NoemaModelOutputError(f"Noema adversarial probe {index} is not an exact changed-side line")
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
@@ -478,12 +648,25 @@ def validate_substantive_verdict(
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             raise NoemaModelOutputError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
+        if enforce_observed_taxonomy:
+            probe_kind = probe.get("probe_kind")
+            if not isinstance(probe_kind, str) or probe_kind not in OBSERVED_REVIEW_PROBE_KINDS:
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {index} requires probe_kind from the observed defect taxonomy"
+                )
+            _validate_observed_probe_class_evidence(probe, probe_kind, index, location, diff)
+            probe_kinds.add(probe_kind)
         identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
         if identity in identities:
             raise NoemaModelOutputError(f"Noema adversarial probe {index} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
+
+    if enforce_observed_taxonomy and len(probe_kinds) < required_probes:
+        raise NoemaModelOutputError(
+            f"Noema {decision} requires at least {required_probes} distinct probe_kind values"
+        )
 
     if decision == "approve" and confirmed:
         raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
@@ -1232,6 +1415,19 @@ def call_llm(
                             "probes": [
                                 {
                                     **location_example,
+                                    "probe_kind": "mutable_alias",
+                                    "class_evidence": {
+                                        field: {
+                                            **location_example,
+                                            "source_excerpt": "exact changed-line text",
+                                            "claim_role": OBSERVED_REVIEW_PROBE_CLAIM_ROLES["mutable_alias"][field],
+                                            "observation": (
+                                                "Quote the exact source_excerpt (or <blank>) and explain "
+                                                f"the behavior for the structured {field} claim role."
+                                            ),
+                                        }
+                                        for field in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS["mutable_alias"]
+                                    },
                                     "hypothesis": "...",
                                     "attack_or_counterexample": "...",
                                     "evidence": "observed or source-traced result",
@@ -1251,7 +1447,15 @@ def call_llm(
                     },
                     separators=(",", ":"),
                 ),
-                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; material source or test changes require at least two distinct probe_kind values and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Observed defect taxonomy and required source-bound class_evidence keys: "
+                + json.dumps(
+                    {kind: list(fields) for kind, fields in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS.items()},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "Every class_evidence witness must include path, line, side, source_excerpt, claim_role, and observation. source_excerpt must be the exact cited changed-side line, including an empty string for a blank line; an overlong-line omission marker is never source evidence. claim_role is the exact class-and-field role emitted by the schema. The observation must quote that exact source_excerpt (or <blank>) and explain the claimed behavior. The deterministic gate validates source identity and the structural role; it deliberately does not guess causality from an English relation-word list.",
+                "Actively attack mutable alias/immutability escapes, time-of-check/time-of-use or changing-getter behavior, execution/tenant/request identity confusion, coercion boundaries, weak or vacuous test oracles, cross-file/cross-document contract contradictions, internal-vs-external authority overreach, missing causal dependency context, and security/reliability state-machine races. For automation or CI that mutates a branch or source and then relies on later events, verify that the mutation uses a workflow-starting credential/actor and that downstream required checks can actually be created on the successor head. Distinguish confirmed defects from falsified hypotheses; do not manufacture findings to satisfy the taxonomy.",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 *(
                     [
@@ -1404,7 +1608,7 @@ def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
     for probe in (validation.get("probes") or [])[:20]:
         if isinstance(probe, dict):
             lines.append(
-                f"- `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
+                f"- [{probe.get('probe_kind') or 'legacy'}] `{probe.get('path')}:{probe.get('line')} ({probe.get('side')})` "
                 f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
                 f"{str(probe.get('evidence') or '').strip()}"
             )

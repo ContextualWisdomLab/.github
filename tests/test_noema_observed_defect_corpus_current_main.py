@@ -29,7 +29,20 @@ def _source_ref() -> dict[str, object]:
 
 
 def _class_evidence(kind: str) -> dict[str, dict[str, object]]:
-    return {field: _source_ref() for field in noema.OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[kind]}
+    return {
+        field: {
+            **_source_ref(),
+            "source_excerpt": "new = 1",
+            "claim_role": noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES[kind][field],
+            "observation": (
+                f"new = 1 is exact source evidence for structured role {index}: {field}."
+            ),
+        }
+        for index, field in enumerate(
+            noema.OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[kind],
+            start=1,
+        )
+    }
 
 
 def _probe(kind: str, *, hypothesis: str) -> dict[str, object]:
@@ -105,7 +118,14 @@ def test_probe_kind_fails_closed_on_malformed_or_unknown_values(probe_kind: obje
 def test_class_evidence_must_be_source_bound_to_the_probe_location() -> None:
     verdict = _verdict()
     probe = verdict["adversarial_validation"]["probes"][0]
-    probe["class_evidence"]["mutation_attempt"] = {"path": "src/tool.py", "line": 1, "side": "LEFT"}
+    probe["class_evidence"]["mutation_attempt"] = {
+        "path": "src/tool.py",
+        "line": 1,
+        "side": "LEFT",
+        "source_excerpt": "old = 1",
+        "claim_role": noema.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["mutable_alias"]["mutation_attempt"],
+        "observation": "old = 1 is exact source evidence for the mutation-attempt role.",
+    }
 
     with pytest.raises(noema.NoemaModelOutputError, match="must bind to the probe location"):
         noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])

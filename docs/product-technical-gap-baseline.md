@@ -2590,3 +2590,15 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Validation.** Full suite `2407 passed, 1 skipped, 21 subtests`; `coverage` 100% on `scripts/ci`; `interrogate` 100%; all four touched/added workflow files re-parse as valid YAML; `test_opencode_workflow_shell_syntax.py` and related shell-syntax tests pass unchanged.
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
+
+
+### 2026-09-02 — Noema observed-defect false-negative corpus (#1641)
+
+- **Verified gap:** protected current main admitted Noema adversarial evidence by count/prose identity and compared model line coordinates with Python integers without excluding booleans. Thus `true` could alias line `1`, and two differently worded probes could satisfy material-change diversity without proving distinct observed defect shapes.
+- **Repair:** exact changed-side coordinates now require canonical positive integers; production review verdicts use a closed observed-defect taxonomy with class-specific source-bound witnesses whose exact `source_excerpt` must match the cited changed line and whose observation must quote that exact source (or `<blank>`) plus causal behavior without ASCII/token-shape heuristics. Material changes require distinct classes, and the prompt explicitly checks workflow-starting mutation credentials before relying on downstream required checks.
+- **Regression evidence:** `tests/test_noema_observed_defect_corpus_current_main.py` is committed before the causal production change and covers boolean aliasing, malformed/unknown class labels, duplicate-class diversity, witness/source binding, a valid multi-class verdict, and rendered prompt coverage.
+- **Authority boundary:** no reviewer, provider, routing, merge, or repository-write authority is widened. The taxonomy is evaluation/admission evidence only.
+
+- **Noema exact-source follow-up (PR #1641):** bounded-diff overlong-line omission markers are not admissible source evidence; short, symbol-only, blank, and non-ASCII changed lines use exact source equality, while arbitrary source-adjacent words do not satisfy causal evidence.
+
+- **Noema structural-causality follow-up (PR #1641):** removed fixed English relation-word admission. Each class witness now carries an exact schema-derived `claim_role` plus exact changed-line source text; deterministic validation stays language-neutral and semantic causality is tested through reviewer/evaluation regressions rather than guessed from keywords.
