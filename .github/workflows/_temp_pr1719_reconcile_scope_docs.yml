@@ -1,0 +1,88 @@
+name: Temporary PR 1719 required-workflow scope repair
+
+on:
+  push:
+    branches:
+      - fix/org-required-workflow-rollout-doc-accuracy
+    paths:
+      - .github/workflows/_temp_pr1719_reconcile_scope_docs.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temp-pr1719-scope-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.actor_id == '8172694'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact writer head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/org-required-workflow-rollout-doc-accuracy
+          test "$(git rev-parse origin/fix/org-required-workflow-rollout-doc-accuracy)" = "$GITHUB_SHA"
+      - name: Repair stale scope and completion prose
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          rollout = Path('docs/org-required-workflow-rollout.md')
+          text = rollout.read_text(encoding='utf-8')
+          old = '''The active ruleset no longer maintains a repository-name allowlist. Live
+          ruleset inspection on 2026-09-02 KST reports
+          `repository_name.include=["~ALL"]`, so all current and future organization
+          repositories inherit the ten central required workflows on their default
+          branch unless a later ruleset exclusion is added. The table below is the public
+          non-fork inventory snapshot and rollout ledger, not the ruleset target list.'''
+          new = '''The active ruleset uses `repository_name.include=["~ALL"]` together with the
+          canonical exclusions `.github`, `noema`, and `IRT-bibliography-set`, matching
+          `scripts/ci/audit_central_required_workflows.py::EXPECTED_EXCLUSIONS` and the
+          live ruleset contract verified on 2026-09-02 KST. Every current or future
+          organization repository outside that exclusion set inherits the ten central
+          required workflows on its default branch. The table below is the public
+          non-fork inventory snapshot and rollout ledger, not the ruleset target list.'''
+          if old not in text:
+              raise SystemExit('rollout scope text drifted; refusing ambiguous repair')
+          rollout.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          doctoring = Path('docs/doctoring/code-scanning-required-workflow-audit.md')
+          dtext = doctoring.read_text(encoding='utf-8')
+          old_d = '''## Outstanding documentation gate
+
+          `docs/org-required-workflow-rollout.md` already records that the organization administrator expanded the live ruleset to ten paths, but its historical “Follow-up: audit tool coverage” paragraph still describes the source audit as seven-path-only. That prose is now stale relative to `3501ac32...` and must be reconciled before PR #1719 leaves Draft/ADR-0026 becomes Accepted. It is not treated as completion evidence for the source repair.'''
+          new_d = '''## Documentation reconciliation
+
+          The rollout record now distinguishes the historical seven-path incident from the current ten-path exact-inventory audit and documents the live repository exclusions `.github`, `noema`, and `IRT-bibliography-set`. This closes the documentation gate without rewriting the incident chronology; ADR-0026 remains Proposed until ordinary protected integration and exact-head evidence complete.'''
+          if old_d not in dtext:
+              raise SystemExit('doctoring completion text drifted; refusing ambiguous repair')
+          doctoring.write_text(dtext.replace(old_d, new_d, 1), encoding='utf-8')
+
+          test = Path('tests/test_org_required_workflow_scope_contract.py')
+          if test.exists():
+              raise SystemExit('scope regression path already exists; refusing overwrite')
+          test.write_text('''"""Regression contract for organization required-workflow repository scope."""\n\nfrom pathlib import Path\n\nfrom scripts.ci.audit_central_required_workflows import EXPECTED_EXCLUSIONS\n\n\ndef test_rollout_scope_matches_canonical_exclusions() -> None:\n    """Rollout prose must name every canonical exclusion and avoid universal claims."""\n    rollout = Path("docs/org-required-workflow-rollout.md").read_text(encoding="utf-8")\n    assert EXPECTED_EXCLUSIONS == {".github", "IRT-bibliography-set", "noema"}\n    for repository in EXPECTED_EXCLUSIONS:\n        assert f"`{repository}`" in rollout\n    assert "all current and future organization\\nrepositories inherit" not in rollout\n    assert "outside that exclusion set inherits the ten central" in rollout\n\n\ndef test_doctoring_records_documentation_gate_closed() -> None:\n    """Doctoring must describe the repaired documentation state, not an open gate."""\n    doctoring = Path("docs/doctoring/code-scanning-required-workflow-audit.md").read_text(encoding="utf-8")\n    assert "## Documentation reconciliation" in doctoring\n    assert "## Outstanding documentation gate" not in doctoring\n\n\nif __name__ == "__main__":\n    test_rollout_scope_matches_canonical_exclusions()\n    test_doctoring_records_documentation_gate_closed()\n''', encoding='utf-8')
+          PY
+          PYTHONPATH=. python3 tests/test_org_required_workflow_scope_contract.py
+          git diff --check
+      - name: Publish repaired exact-head tree and retire helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/_temp_pr1719_reconcile_scope_docs.yml
+          git add docs/org-required-workflow-rollout.md docs/doctoring/code-scanning-required-workflow-audit.md tests/test_org_required_workflow_scope_contract.py .github/workflows/_temp_pr1719_reconcile_scope_docs.yml
+          git diff --cached --check
+          git config user.name 'ContextualWisdomLab repair bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'fix(governance): align required-workflow scope records'
+          git fetch origin fix/org-required-workflow-rollout-doc-accuracy
+          test "$(git rev-parse origin/fix/org-required-workflow-rollout-doc-accuracy)" = "$GITHUB_SHA"
+          git push origin HEAD:fix/org-required-workflow-rollout-doc-accuracy
