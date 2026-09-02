@@ -3063,19 +3063,27 @@ matching the job's *old* name before or immediately after merging.
 
 **Two peer Claude sessions working the same org in parallel this tick, coordinated directly (not
 through this doc) via cross-session messages.** One (`cool-jackson-...`) took item 25 (contextual-
-orchestrator admin.py Audit-tab staleness) off this session's plate -- and caught that the backlog's
-own citation of "contextual-orchestrator#1010" as precedent was wrong: #1010 was actually closed (not
-merged), rejected on a no-heuristics-timeout-bound RCA basis, so it never touched `admin.py`. That
-citation came from the user's own original `/loop` backlog text, relayed here without independent
-verification; the peer session found the real bug and root-cause-fixed it with a better-scoped
-`refreshAuditEvents()` helper (updates only `recent_audit_events` via `/admin/state`, not a full
-`load()`+`simulate()` re-trigger) instead of blindly following the wrong precedent. **Worth telling the
-user directly**: the standing backlog item 25 text (re-pasted verbatim each `/loop` cycle) cites a
-closed PR as if merged -- future re-pastes of this backlog should drop or correct that citation. The
-other peer (`trusting-wilbur-...`), mid-flight on its own `.github` workflow-consolidation PR #1683,
-was alerted to the same required-status-check-name risk found here and independently confirmed (with
-evidence: the two converted jobs' combined check names checked against the org ruleset's actual
-required list) that its own conversion is unaffected.
+orchestrator admin.py Audit-tab staleness) off this session's plate -- and flagged that
+"contextual-orchestrator#1010" (closed, not merged, rejected on a no-heuristics-timeout-bound RCA
+basis) was the wrong PR to treat as *currently shipped, mergeable precedent*. **Correction (2026-09-02,
+this session, verified directly against the PR's actual diff rather than trusting this restated
+summary):** the claim that #1010 "never touched `admin.py`" is itself false -- `gh pr view 1010 --json
+files` lists `contextual_orchestrator/admin.py` among its eight changed files, and its diff adds the
+entire per-model-timeout admin panel there, including a `refreshAuditEvents()` helper (fetches
+`/admin/state`, repopulates `state.recent_audit_events`) awaited after both the save and clear
+handlers -- the exact fix the original backlog text described. So the backlog's "#1010 found and fixed
+this for the sibling model-timeouts panel" citation was accurate about *what #1010's diff contained*;
+the real problem is that #1010 was closed/rejected (for the RCA basis above, unrelated to this specific
+UI fix) and therefore that fix never shipped in any merged code -- not that the fix never existed. Item
+25's later resolution (`contextual-orchestrator#1026`, merged, documented further below in this doc) is
+an independently-implemented recurrence of the same pattern for `model_groups`, not a copy-forward of
+#1010's own (never-merged) code. **Worth telling the user directly**: the standing backlog item 25 text
+cites a real fix that was subsequently orphaned by its PR's closure, not a nonexistent one -- a subtler
+distinction than "wrong precedent," worth correcting in any future re-paste. The other peer
+(`trusting-wilbur-...`), mid-flight on its own `.github` workflow-consolidation PR #1683, was alerted to
+the same required-status-check-name risk found here and independently confirmed (with evidence: the two
+converted jobs' combined check names checked against the org ruleset's actual required list) that its
+own conversion is unaffected.
 
 ## 2026-09-02: item 18 (GitHub App installation token stateless format) audited, no code change needed
 
@@ -3419,7 +3427,7 @@ This complements the separate, earlier fix in this same doc (`noema-review.yml`/
 
 ## Backlog item 25 confirmed resolved — `contextual-orchestrator#1026` (merged), duplicate `#1011` closed with evidence
 
-**Task.** Item 25's original backlog text asks for "the exact fix delivered for the sibling model-timeouts panel in PR #1010" to be applied to `admin.py`'s `model_groups` save/delete handlers. **That `#1010` citation is inaccurate — already established earlier in this doc** (the "Two peer Claude sessions working the same org in parallel" entry above): `#1010` was closed, not merged, rejected on a no-heuristics-timeout-bound RCA basis, and never touched `admin.py` at all. The underlying bug the citation was trying to point at is real regardless of which PR number it named: the shared Audit tab only populates `state.recent_audit_events` from `load()`'s initial `/admin/state` fetch, so a model-group save/delete records a real audit event server-side but the tab shows stale data ("no audit events" or an outdated list) until a manual reload. A secondary, lower-priority ask was noted alongside it: color-code the model-group feedback text for success vs. error, if the change is small.
+**Task.** Item 25's original backlog text asks for "the exact fix delivered for the sibling model-timeouts panel in PR #1010" to be applied to `admin.py`'s `model_groups` save/delete handlers. **Citation status (corrected twice now — see the "Two peer Claude sessions" entry above for the full history):** the citation is accurate about *content* — `#1010`'s diff genuinely added a `refreshAuditEvents()` helper for the model-timeouts panel's save/clear handlers, verified directly against `gh pr diff 1010`. It is misleading about *availability*: `#1010` was closed without merging (rejected on a no-heuristics-timeout-bound RCA basis, unrelated to this specific UI fix), so that fix never shipped in any merged code — item 25 cannot "apply the same already-shipped fix," because nothing shipped. The underlying bug is real regardless: the shared Audit tab only populates `state.recent_audit_events` from `load()`'s initial `/admin/state` fetch, so a model-group save/delete records a real audit event server-side but the tab shows stale data ("no audit events" or an outdated list) until a manual reload. A secondary, lower-priority ask was noted alongside it: color-code the model-group feedback text for success vs. error, if the change is small.
 
 **Found already resolved, this tick.** `contextual-orchestrator#1026` ("fix(admin): refresh audit events after model-group save/delete", merged `2026-09-02T15:22:21Z`) delivers both: a `refreshAuditEvents()` helper re-fetches `/admin/state` and repopulates `state.recent_audit_events`/re-renders the Audit view, awaited immediately after both the save and delete handlers succeed (via a shared `refreshModelGroupViews()` that also refreshes the model-group list and surfaces a non-fatal amber warning if either refresh itself fails, without ever mislabeling the underlying save/delete as failed); the feedback text now sets `style.color` to `var(--green)` on success and `var(--red)` on error, matching the console's existing status-color convention. `tests/test_admin_contract.py` gained matching contract coverage in the same PR. This fully satisfies item 25's priority ask and its noted-but-optional secondary ask in one landed change — no further action needed on this item.
 
