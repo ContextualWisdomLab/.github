@@ -2943,3 +2943,53 @@ verified live via direct API re-read. Pre-existing queue backlog (runs already q
 landed) drains at normal GitHub Actions runner throughput, not instantly -- expect residual elevated
 queue depth for a period after this entry's timestamp, including a temporary bump from every org repo's
 open PRs receiving their first-ever `codeql-pr.yml`/`scorecard-pr.yml`/`osv-scanner-pr.yml` dispatch.
+
+## 2026-09-02 (later same day): CodeQL ruleset doc reconciliation, and dependency-review.yml consolidation
+
+**CodeQL ruleset doc reconciliation.** After the ruleset fix above landed, `docs/org-required-workflow-rollout.md`'s
+PR (`.github#1719`, opened earlier the same day to *document* the gap as still-open pending org-admin
+action) went stale -- it now described a gap that no longer existed. Updated that PR's branch directly:
+rewrote the "Code scanning required workflow posture" section and the CodeQL inventory table to describe
+the fix instead of the gap, and appended a new dated entry to the rollout evidence log (kept the
+historical entry intact, per that doc's append-only evidence-log convention, rather than rewriting
+history). Full suite re-confirmed green (2626 passed) before push. Then closed the three interim
+local-CodeQL PRs opened earlier the same day as stopgaps (`aFIPC#321`, `bandscope#1144`,
+`pg-erd-cloud#1059`) with evidence-based comments citing the ruleset fix -- each had self-documented
+"remove once ruleset confirmed fixed" in its own description. Remaining real gap, correctly left
+unfixed as a separate change: `scripts/ci/audit_central_required_workflows.py`'s
+`REQUIRED_WORKFLOW_PATHS` still doesn't check for the 3 code-scanning paths' ruleset membership, so a
+future silent regression of this exact gap wouldn't be automatically caught.
+
+**dependency-review.yml consolidation** (continuing the org owner's "standardize per-repo workflows,
+centralize into `.github`, bypass-merge, delete the per-repo duplicates in exchange" directive; the
+4th of 4 standardization candidates a prior `wynkr83x1` survey had identified but never attempted).
+`argos`, `mightyETL`, `newsdom-api`, and `scopeweave` each carried an independently hand-written
+`dependency-review.yml`. A full field-by-field audit (not just job-name/action comparison) found real
+per-repo policy differences -- `fail-on-severity` genuinely varies (`moderate`/`high`/action-default-`low`/`moderate`),
+newsdom-api carries a documented GHSA allowlist exception, argos runs the gate non-blocking
+(`continue-on-error: true`) relying on a separate OSV-Scanner gate instead -- plus one real correctness
+bug: mightyETL inferred Dependency Graph/GHAS availability from `github.event.repository.private`,
+which is wrong in both directions (a private repo can have GHAS; a public repo can lack Dependency
+Graph). scopeweave's original already solved this correctly with a dynamic `dependency-graph/compare`
+API preflight. Added `.github/workflows/dependency-review.yml` (`workflow_call`, 3 inputs for the
+genuinely-varying fields) generalizing scopeweave's preflight design to all four callers, landed as
+`.github#1724` (`docs/adr/0024-...`, `docs/doctoring/...`, 11 new contract tests). **Caught two of my
+own mistakes before merge**, both from initially reading a truncated excerpt of scopeweave's file
+instead of the whole thing: (1) mis-recorded scopeweave's `fail-on-severity` as unset/default when it
+is actually `moderate`; (2) the first draft's preflight collapsed scopeweave's careful
+403/404-means-unavailable vs. any-other-status-means-hard-fail distinction into "any non-200 means
+unavailable," which would have silently skipped the security gate on a genuine failure (auth problem,
+API outage) instead of surfacing it -- restored the original distinction plus the
+pull-request-only event guard and `comment-summary-in-pr: on-failure` (also generalized uniformly; a
+UX-only field, doesn't change pass/fail semantics) before merging anything. Full suite reconfirmed
+green (2637 passed) after the correction, before any of this landed.
+
+Bypass-merged the central workflow (`.github#1724`) per the standing per-repo-workflow-standardization
+bypass-merge authorization, then attempted the same for the four caller PRs. `argos#556` bypass-merged
+cleanly. `mightyETL#330`, `newsdom-api#784`, and `scopeweave#654` hit real repository-ruleset gates
+in those repos (unresolved review conversation, "approval from someone other than the last pusher")
+that `--admin` merge did not bypass there -- correctly left open rather than forced, since self-approving
+past a reviewer-diversity gate in another repo is outside what this session's bypass-merge authorization
+covers; they will merge normally once the standard OpenCode/Noema review pipeline (whose throughput this
+session already fixed, see the incident entry above) processes them. All four caller diffs were verified
+file-for-file against the intended single-file swap before any merge attempt.
