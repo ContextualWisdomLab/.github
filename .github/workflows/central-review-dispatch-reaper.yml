@@ -1,0 +1,96 @@
+name: Central Review Dispatch Reaper
+
+on:
+  schedule:
+    - cron: "13 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: central-review-dispatch-reaper-${{ github.repository }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+
+jobs:
+  reap-stale-review-dispatches:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted control-plane source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Exchange OpenCode app token for target metadata reads
+        id: read_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "Review-dispatch reaper metadata token unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "Review-dispatch reaper metadata token unavailable: OIDC request failed."
+            mark_unavailable
+            exit 0
+          fi
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "Review-dispatch reaper metadata token unavailable: OIDC response was empty."
+            mark_unavailable
+            exit 0
+          fi
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "Review-dispatch reaper metadata token unavailable: app token exchange failed."
+            mark_unavailable
+            exit 0
+          fi
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "Review-dispatch reaper metadata token unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Retire proven closed-target and previous-head review dispatches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCHEDULER_READ_TOKEN: ${{ steps.read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/closed_review_dispatch_reaper.py \
+            --repository "$GITHUB_REPOSITORY"
