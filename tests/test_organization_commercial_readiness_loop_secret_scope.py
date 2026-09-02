@@ -47,10 +47,10 @@ def test_missing_maintainer_secret_uses_bounded_job_oidc_exchange() -> None:
 def test_installation_token_contract_accepts_the_new_long_stateless_shape() -> None:
     """Token validation must not assume the legacy GitHub App token length."""
     source = WORKFLOW_PATH.read_text(encoding="utf-8")
-    token_extract = 'jq -er \' .token | select(type == "string" and length > 0) \''
+    expected = """jq -er '.token | select(type == "string" and length > 0)'"""
     # Keep the assertion tied to the actual jq expression, not to a comment or
     # an unrelated length check elsewhere in the workflow.
-    assert 'jq -er \' .token | select(type == "string" and length > 0) \''
+    assert expected in source
     assert "length == 40" not in source
     assert "length == 45" not in source
     assert "cut -c1-40" not in source
