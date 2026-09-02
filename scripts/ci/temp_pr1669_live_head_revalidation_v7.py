@@ -13,6 +13,16 @@ PATCH = '    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *
 COVERAGE_TESTS = r'''
 
 
+def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
+    """Direct cancellation must preserve the candidate when fresh authority cannot be read."""
+    def fail_api(_path):
+        raise RuntimeError("simulated live-authority outage")
+
+    monkeypatch.setattr(sched, "gh_api_json", fail_api)
+    assert sched._direct_pr_run_still_superseded("owner/repo", 7, "94") is False
+    assert "Preserving workflow run 94 in owner/repo" in capsys.readouterr().out
+
+
 def test_pr1669_review_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
     """Review cancellation must preserve the candidate when fresh authority cannot be read."""
     def fail_api(_path):
@@ -130,7 +140,7 @@ def main() -> int:
         text,
         "def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):",
     )
-    marker = "def test_pr1669_review_revalidation_fails_closed_when_live_authority_is_unreadable"
+    marker = "def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable"
     if marker not in text:
         text += COVERAGE_TESTS
     TESTS.write_text(text, encoding="utf-8")
