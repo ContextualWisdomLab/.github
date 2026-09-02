@@ -150,7 +150,8 @@ def test_recovery_revalidates_protected_main_before_every_recovery_put(monkeypat
     """A stale run must stop before a recovery PUT after protected main advances."""
     module = load_module()
     target = repository_target(module)
-    current_payload = repository_payload()
+    current_state = repository_payload()
+    current_payload = module._editable_projection(current_state)
     displaced_payload = historical_state()
     puts: list[dict] = []
     main_checks: list[str] = []
@@ -159,7 +160,7 @@ def test_recovery_revalidates_protected_main_before_every_recovery_put(monkeypat
 
     def fake_api(method, endpoint, *, body=None):
         if method == "GET" and endpoint == target.endpoint:
-            return current_payload
+            return current_state
         if method == "PUT" and endpoint == target.endpoint:
             puts.append(body)
             return {}
