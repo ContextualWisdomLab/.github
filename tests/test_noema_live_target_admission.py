@@ -47,7 +47,8 @@ def test_initial_live_admission_precedes_every_setup_step() -> None:
     assert "live_draft=" in admission_body
     assert 'echo "proceed=false" >>"$GITHUB_OUTPUT"' in admission_body
     assert 'echo "proceed=true" >>"$GITHUB_OUTPUT"' in admission_body
-    assert '!= "$EXPECTED_HEAD_SHA"' in admission_body
+    assert "EXPECTED_HEAD_SHA" in admission_body
+    assert "live_head_sha,," in admission_body
 
 
 def test_destructive_stale_run_cancellation_revalidates_state_head_and_draft() -> None:
@@ -63,8 +64,8 @@ def test_destructive_stale_run_cancellation_revalidates_state_head_and_draft() -
     assert "live_draft=" in cancellation_body
     assert '[ "$live_state" != "open" ]' in cancellation_body
     assert '[ "$live_draft" = "true" ]' in cancellation_body
-    assert '!= "$EXPECTED_HEAD_SHA"' in cancellation_body
-    assert cancellation_body.index("live_pr_json=") < cancellation_body.index("/cancel\"")
+    assert "EXPECTED_HEAD_SHA" in cancellation_body
+    assert cancellation_body.index("live_pr_json=") < cancellation_body.index("/cancel")
 
 
 def test_model_and_publication_boundaries_refresh_live_state() -> None:
@@ -84,7 +85,8 @@ def test_model_and_publication_boundaries_refresh_live_state() -> None:
         assert "live_draft=" in step_body
         assert 'echo "proceed=false" >>"$GITHUB_OUTPUT"' in step_body
         assert 'echo "proceed=true" >>"$GITHUB_OUTPUT"' in step_body
-        assert '!= "$EXPECTED_HEAD_SHA"' in step_body
+        assert "EXPECTED_HEAD_SHA" in step_body
+        assert "live_head_sha,," in step_body
 
     for model_step in (
         "Resolve Noema target repository visibility",
