@@ -3,6 +3,11 @@ coverage==7.15.4
 # run repos' always-on property tests (tests/fuzz/*) instead of ImportError-ing on
 # collection. Matches the >=6.100 floor used by consumer repos (e.g. contextual-orchestrator).
 hypothesis>=6.100
+# httpx (BSD-3-Clause) so this repo's own full test suite (pytest tests -q) can
+# collect tests/test_pingora_edge_egress_opener.py, which imports it directly.
+# Pinned to the same version requirements-pingora-egress-ci.txt already uses for
+# the pingora-egress-specific CI job, so the two stay in lockstep.
+httpx==0.28.1
 interrogate==1.7.0
 pytest==9.1.1
 pytest-cov==7.1.0
