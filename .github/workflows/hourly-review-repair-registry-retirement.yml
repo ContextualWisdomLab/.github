@@ -3,11 +3,11 @@ name: Hourly Review Repair Registry Retirement
 # One-shot control-plane migration for the single-file hourly review-repair
 # consolidation. GitHub keeps workflow registry identities after YAML paths are
 # removed, so deleting the 18 legacy caller files without retiring their IDs
-# would leave enabled orphan identities. This workflow runs only after the
-# replacement is present on protected main, disables every legacy registry ID,
-# verifies the disabled state, then disables its own registry identity last.
-# After hosted success, remove this source file in a follow-up cleanup; its own
-# registry identity will already be disabled.
+# would leave enabled orphan identities. This workflow runs only from reviewed
+# source on protected main after the replacement is present, disables every
+# legacy registry ID, verifies the disabled state, then disables its own
+# registry identity last. After hosted success, remove this source file in a
+# follow-up cleanup; its own registry identity will already be disabled.
 on:
   push:
     branches:
@@ -15,7 +15,6 @@ on:
     paths:
       - .github/workflows/hourly-review-repair.yml
       - .github/workflows/hourly-review-repair-registry-retirement.yml
-  workflow_dispatch:
 
 permissions:
   actions: write
@@ -23,7 +22,10 @@ permissions:
 
 jobs:
   retire-legacy-identities:
-    if: github.repository == 'ContextualWisdomLab/.github'
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
