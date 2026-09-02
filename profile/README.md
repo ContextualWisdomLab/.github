@@ -120,6 +120,10 @@ These repositories are public product and tool repositories that are not forks, 
 - **[macos_utility_packs](https://github.com/ContextualWisdomLab/macos_utility_packs)**: AI 개발자 워크스테이션을 위한 멱등 macOS 부트스트랩입니다.
 - **[hyosung-itx-slogan-brief](https://github.com/ContextualWisdomLab/hyosung-itx-slogan-brief)**: Hyosung ITX 슬로건 리서치 브리프 산출물입니다.
 
+### 조직 인프라·거버넌스
+- **[.github](https://github.com/ContextualWisdomLab/.github)**: 조직 프로필 소개 자산이자, 전체 저장소가 공유하는 PR 리뷰·보안 스캔·머지 자동화 워크플로우와 DNS/Cloudflare Pages 인프라 코드를 관리하는 특수 저장소입니다.
+- **[ContextualWisdomLab.github.io](https://github.com/ContextualWisdomLab/ContextualWisdomLab.github.io)**: 맥락지혜 연구실 홈페이지로, DIKW·Naruon·로고와 연구-제품 방향을 소개합니다.
+
 ## Forked Projects
 
 These repositories started from external upstream projects and are tracked separately from lab-originated work.
