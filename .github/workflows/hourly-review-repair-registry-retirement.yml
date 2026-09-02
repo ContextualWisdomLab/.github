@@ -1,13 +1,14 @@
 name: Hourly Review Repair Registry Retirement
 
 # One-shot control-plane migration for the single-file hourly review-repair
-# consolidation. GitHub keeps workflow registry identities after YAML paths are
-# removed, so deleting the 18 legacy caller files without retiring their IDs
-# would leave enabled orphan identities. This workflow runs only from reviewed
-# source on protected main after the replacement is present, disables every
-# legacy registry ID, verifies the disabled state, then disables its own
-# registry identity last. After hosted success, remove this source file in a
-# follow-up cleanup; its own registry identity will already be disabled.
+# consolidation. GitHub may retain workflow registry identities after YAML paths
+# are removed, so deleting the 18 legacy caller files alone is not retirement
+# evidence. This workflow runs only from reviewed source on protected main after
+# the replacement is present. For each legacy path it accepts either absence
+# from the complete paginated registry (already retired) or one visible identity,
+# which must be disabled and read back. It then disables its own registry identity
+# last. After hosted success, remove this source file in a follow-up cleanup; its
+# own registry identity will already be disabled.
 on:
   push:
     branches:
@@ -64,10 +65,15 @@ jobs:
             gh api --paginate "/repos/${REPOSITORY}/actions/workflows?per_page=100"
           } | jq -s '[.[].workflows[]]')"
 
-          workflow_id_for_path() {
+          workflow_identity_count() {
+            local path="$1"
+            jq --arg path "$path" '[.[] | select(.path == $path)] | length' <<<"$workflow_inventory"
+          }
+
+          require_single_workflow_id() {
             local path="$1"
             local count
-            count="$(jq --arg path "$path" '[.[] | select(.path == $path)] | length' <<<"$workflow_inventory")"
+            count="$(workflow_identity_count "$path")"
             if [[ "$count" != "1" ]]; then
               echo "::error::Expected exactly one workflow registry identity for ${path}; found ${count}." >&2
               return 1
@@ -75,18 +81,18 @@ jobs:
             jq -r --arg path "$path" '.[] | select(.path == $path) | .id' <<<"$workflow_inventory"
           }
 
-          replacement_id="$(workflow_id_for_path "$REPLACEMENT_PATH")"
+          replacement_id="$(require_single_workflow_id "$REPLACEMENT_PATH")"
           replacement_state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${replacement_id}" --jq '.state')"
           if [[ "$replacement_state" != "active" ]]; then
             echo "::error::Replacement workflow ${REPLACEMENT_PATH} is not active; refusing retirement." >&2
             exit 1
           fi
 
-          disable_and_verify() {
+          disable_and_verify_present() {
             local path="$1"
             local workflow_id
             local state
-            workflow_id="$(workflow_id_for_path "$path")"
+            workflow_id="$(require_single_workflow_id "$path")"
             state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${workflow_id}" --jq '.state')"
             case "$state" in
               active)
@@ -107,15 +113,31 @@ jobs:
             printf 'retired %s (%s)\n' "$path" "$workflow_id"
           }
 
+          retire_legacy_if_present() {
+            local path="$1"
+            local count
+            count="$(workflow_identity_count "$path")"
+            if [[ "$count" == "0" ]]; then
+              printf 'already absent from registry %s\n' "$path"
+              return 0
+            fi
+            if [[ "$count" != "1" ]]; then
+              echo "::error::Expected zero or one workflow registry identity for legacy path ${path}; found ${count}." >&2
+              return 1
+            fi
+            disable_and_verify_present "$path"
+          }
+
           for path in "${legacy_paths[@]}"; do
-            disable_and_verify "$path"
+            retire_legacy_if_present "$path"
           done
 
           # The one-shot migration identity is disabled only after every legacy
-          # caller has been verified disabled and the replacement remains active.
+          # caller is either absent from the complete registry or verified disabled,
+          # and the replacement remains active.
           replacement_state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${replacement_id}" --jq '.state')"
           if [[ "$replacement_state" != "active" ]]; then
             echo "::error::Replacement workflow changed state during retirement; preserving the migration identity." >&2
             exit 1
           fi
-          disable_and_verify "$SELF_PATH"
+          disable_and_verify_present "$SELF_PATH"
