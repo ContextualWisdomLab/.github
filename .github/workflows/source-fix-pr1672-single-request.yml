@@ -17,11 +17,6 @@ permissions:
 
 jobs:
   materialize:
-    # The verified successor deletes this workflow and its driver in the commit
-    # below. GitHub may still evaluate the predecessor definition for that
-    # deletion push, so make the one-shot retirement idempotently successful
-    # instead of leaving a known-red follow-up run.
-    if: github.event.head_commit.message != 'fix(noema): delegate structured repair to orchestrator'
     runs-on: ubuntu-slim
     steps:
       - name: Checkout exact writer head without persisted credentials
@@ -31,21 +26,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fail closed unless this run still owns the live writer head
+      - name: Revalidate writer head and detect retired one-shot
+        id: owner
         shell: bash
         run: |
           set -euo pipefail
           remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
           test -n "$remote_head"
           test "$remote_head" = "$GITHUB_SHA"
+          if [ ! -e scripts/ci/source_fix_pr1672_single_request.py ]; then
+            echo "active=false" >>"$GITHUB_OUTPUT"
+            echo "One-shot PR1672 repair is already retired; successor push needs no materialization."
+            exit 0
+          fi
+          echo "active=true" >>"$GITHUB_OUTPUT"
 
       - name: Set up Python 3.14
+        if: steps.owner.outputs.active == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
           cache: pip
 
       - name: Repair exact-head materializer anchors before execution
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -87,21 +91,22 @@ jobs:
               raise SystemExit('PR1672 two-phase materializer anchor moved; refusing an unverified rewrite')
           text = text.replace(old_two_phase, new_two_phase, 1)
 
-          # The two repaired transformations no longer rely on replacement
-          # backreferences, so replace_once can keep literal replacement
-          # semantics for every other generated-source edit.
+          # The repaired transformations use fixed call forms, so the helper
+          # keeps literal replacement semantics for every unrelated rewrite.
           path.write_text(text, encoding='utf-8')
           PY
           python -m py_compile scripts/ci/source_fix_pr1672_single_request.py
           git diff --check
 
       - name: Install exact hash-verified review test toolchain
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
       - name: Materialize causal-owner repair without credentials in the script environment
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -109,6 +114,7 @@ jobs:
           env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/source_fix_pr1672_single_request.py
 
       - name: Verify permanent single-request contract and focused regressions
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -123,6 +129,7 @@ jobs:
           git diff --check
 
       - name: Verify full repository Python contract
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -132,6 +139,7 @@ jobs:
           python -m compileall -q scripts tests .github/actions/noema-review
 
       - name: Verify exact intended scope, cleanup, and unchanged remote head
+        if: steps.owner.outputs.active == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -144,6 +152,7 @@ jobs:
           test "$remote_head" = "$GITHUB_SHA"
 
       - name: Publish normal non-force repair commit with workflow-starting credential
+        if: steps.owner.outputs.active == 'true'
         env:
           PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
           FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
