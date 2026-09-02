@@ -362,6 +362,21 @@ def test_apply_rejects_post_write_identity_replacement(monkeypatch) -> None:
         module._reconcile_target(target(), verify_only=False)
 
 
+def test_reconcile_mutation_requires_exact_protected_main_sha(monkeypatch) -> None:
+    """The callable mutation boundary cannot bypass the protected-main guard."""
+
+    monkeypatch.setattr(
+        module,
+        "_reconcile_target",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not mutate")),
+    )
+    targets = (target("repository"),)
+    with pytest.raises(module.RulesetGovernanceError, match="required for mutation"):
+        module.reconcile(targets, verify_only=False)
+    with pytest.raises(module.RulesetGovernanceError, match="malformed"):
+        module.reconcile(targets, verify_only=False, expected_main_sha="main")
+
+
 def test_reconcile_orders_repository_before_organization(monkeypatch) -> None:
     """The strengthening repository mutation precedes the organization approval change."""
 
@@ -369,11 +384,25 @@ def test_reconcile_orders_repository_before_organization(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "_reconcile_target",
-        lambda item, verify_only: seen.append((item.scope, verify_only)) or True,
+        lambda item, verify_only, expected_main_sha=None: seen.append(
+            (item.scope, verify_only, expected_main_sha)
+        )
+        or True,
     )
     targets = (target("organization"), target("repository"))
-    assert module.reconcile(targets, verify_only=False) == 2
-    assert seen == [("repository", False), ("organization", False)]
+    expected_main_sha = "a" * 40
+    assert (
+        module.reconcile(
+            targets,
+            verify_only=False,
+            expected_main_sha=expected_main_sha,
+        )
+        == 2
+    )
+    assert seen == [
+        ("repository", False, expected_main_sha),
+        ("organization", False, expected_main_sha),
+    ]
 
 
 def test_gh_api_uses_versioned_stdin_body_and_redacts_failure(monkeypatch) -> None:

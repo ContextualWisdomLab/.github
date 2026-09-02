@@ -745,6 +745,15 @@ def reconcile(
 ) -> int:
     """Reconcile all targets and return the number of successful mutations."""
 
+    if expected_main_sha is not None and (
+        type(expected_main_sha) is not str or not GIT_SHA_RE.fullmatch(expected_main_sha)
+    ):
+        raise RulesetGovernanceError("expected protected main SHA is malformed")
+    if not verify_only and expected_main_sha is None:
+        raise RulesetGovernanceError(
+            "expected protected main SHA is required for mutation"
+        )
+
     mutations = 0
     for target in sorted(targets, key=lambda item: item.scope == "organization"):
         if expected_main_sha is None:
