@@ -2762,3 +2762,22 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **(c) 클론/접근 불가 저장소.** 이번 패스에서 접근 실패로 확인된 저장소는 0개다 — 28개 전부 anonymous git clone으로 존재를 확인했고 `main`(또는 명시된 기본 브랜치)을 읽을 수 있었다. 다만 이 패스는 **GitHub API가 아닌 anonymous git-read 접근만** 사용했다는 제약이 있다: 모든 항목의 `open_pr_count_hint`가 "not checked (no API access)"로 남아 있어 열린 PR 수·리뷰 상태·이슈는 전혀 검증되지 않았고, `PolicyWeave`의 `develop`, `CalendarWeave`의 `docs/adr-baseline`/`feat/rfc5545-*`/`feat/postgres-calendar-store`/`feat/authorization-admission`, `supply-chain-control-plane`의 `feat/disruption-impact-foundation`, `disksage`의 `codex/canonical-prd`처럼 실제 내용이 미병합 브랜치에 있을 가능성이 있는 저장소는 기본 브랜치만 검사했으므로 그 저장소들의 "문서 부재" 판정은 **"존재하지 않음"이 아니라 "기본 브랜치에서 접근 가능한 범위 밖"**일 수 있다는 점을 남겨 둔다. 즉 이번 패스의 "unknown/partial"은 인증 게이트나 브랜치 가시성의 산물일 수 있으며, GitHub API 재검증 전까지 최종 결론으로 취급하지 않는다.
 
 **Follow-up.** 우선순위가 가장 높은 것은 `enterprise-architecture-core`와 `context-graph-contracts`의 claimed_role 중복 자체를 해소하는 것이다 — 두 저장소 중 하나 또는 둘 다에 "전사 결정 원장"과 "versioned context 계약"을 어떻게 나누는지 명시하는 PRD/ARCHITECTURE를 작성해야 다음 실측 패스가 의미를 가진다. 다음으로 PRD/ARCHITECTURE 저작이 시급한 저장소는 `ConceptWeave`(publish 단계와 `semantic-data-portal`과의 경계), `EmbedRelay`(embedding identity·vector migration과 `pg-llm-batch`의 경계), `PolicyWeave`(끊어진 문서 링크부터 정리), `CalendarWeave`(consumer 방향성 재정의), `supply-chain-control-plane`(미병합 브랜치 내용을 `main`으로 승격) 순이다. `semantic-data-portal`의 Ontology Service와 `appguardrail`의 확장된 제품 범위는 문서 부재가 아니라 **범위 재확인/재승인**이 필요한 사례이므로 §9 담당자의 명시적 판단(경계 재정의 또는 claim 수정)을 요청해야 한다. 마지막으로, 이번 패스가 anonymous git-read로만 수행됐으므로 **어떤 merge/거버넌스 조치를 이 28개 저장소에 적용하기 전에도** GitHub API 접근(정확한 브랜치 목록, 열린 PR/이슈, 최신 커밋 SHA)으로 재검증해야 하며, 특히 미병합 브랜치가 확인된 `PolicyWeave`·`CalendarWeave`·`supply-chain-control-plane`·`disksage`·`enterprise-architecture-core`는 그 브랜치들이 `main`으로 병합되기 전까지 이번 실측 결과가 뒤집힐 수 있다.
+
+## 2026-09-02 follow-up: enterprise-architecture-core / context-graph-contracts role overlap resolved by the owner
+
+The survey entry directly above flagged one specific gap as needing owner clarification rather than a
+docs PR: `enterprise-architecture-core` and `context-graph-contracts` both being stub repos assigned the
+*identical* claimed-role string in `docs/product-goal-directive.md` §9, with no document anywhere
+explaining how the two divide "전사 결정·versioned context 계약 원장." Within the same session, the owner
+sent a second, tightening restatement of the full product-goal directive that resolves this directly:
+`enterprise-architecture-core` = "전사 Context Map·architecture decision" (enterprise Context Map +
+architecture decisions), `context-graph-contracts` = "assertion·event·schema·fixture·conformance"
+(interoperability assertions/events/schemas/fixtures/conformance testing) — two clearly distinct
+responsibilities. See `docs/product-goal-directive.md` §9's current text and its "2026-09-02 second
+pass" reading note for the full record, and `docs/doctoring/product-goal-directive.md`'s matching
+history entry for the superseded wording.
+
+This closes the *directive-level* ambiguity. It does not by itself close the *repo-level* doc gap: as of
+this session's survey pass, neither repo's own README/docs on `main` states this split (both were still
+single-line "minimal protected baseline" stubs) — that remains open follow-up work for whoever develops
+those repos next, now with an unambiguous target to document against.
