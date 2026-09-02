@@ -8,6 +8,7 @@ on:
       - tests/test_noema_reviewer_token_lifetime.py
       - tests/test_noema_two_phase_handoff.py
       - tests/test_noema_refreshed_app_identity.py
+      - tests/test_noema_token_lifetime_stale_run_contract.py
       - docs/doctoring/noema-review-token-lifetime.md
       - docs/product-technical-gap-baseline.md
       - CHANGELOG.md
@@ -41,10 +42,12 @@ jobs:
           PYTHONPATH=. python3 -m pytest -q \
             tests/test_noema_reviewer_token_lifetime.py \
             tests/test_noema_two_phase_handoff.py \
-            tests/test_noema_refreshed_app_identity.py
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
           python3 -m compileall -q \
             .github/actions/noema-review/two_phase.py \
             tests/test_noema_reviewer_token_lifetime.py \
             tests/test_noema_two_phase_handoff.py \
-            tests/test_noema_refreshed_app_identity.py
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
           git diff --check
