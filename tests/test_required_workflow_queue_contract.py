@@ -988,8 +988,8 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     visible reason when it cannot mutate sibling repositories. The sweep runs
     hourly so an approval that lands after a PR's last event is
     auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate 30-minute scan, and the job has
-    enough runtime headroom to finish a complete organization walk.
+    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
+    job has enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
