@@ -1,3 +1,4 @@
+# One-shot owner branch repair; self-deletes after verified publication.
 name: Temporary PR1669 live-head cancellation repair
 
 on:
