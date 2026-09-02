@@ -3362,9 +3362,31 @@ not a remaining workflow-level bug, not the scheduler's `workflow-run-no-pr-{rep
 specifically being starved -- it was `.github` receiving its share of an org-wide 60-slot pool shared
 by every one of the org's ~63 repositories simultaneously, entirely consistent with the queue-depth
 (2000+) and queue-age (hours-deep by the 1000th item) evidence gathered earlier this tick. **This
-closes the open question this doc's earlier entries left explicitly unresolved.** The only real fix is
-a GitHub plan upgrade -- a decision only the org owner can make, and (per the same conversation) has
-now been directly informed of with first-party confirmation rather than a hypothesis. The throttle
-this session and its peers adopted (see above) remains the correct interim mitigation available to
-agent sessions: it cannot raise the 60-slot ceiling, but it stops making local demand worse while that
-decision is pending.
+closes the open question this doc's earlier entries left explicitly unresolved.** This confirms the
+ceiling is the GitHub-hosted-runner concurrency limit specifically, not a workflow bug -- so the
+capacity remedies available are exactly the three already named above (line 3310), now grounded in a
+confirmed number instead of a hypothesis, not narrowed to one: (1) a GitHub plan upgrade, which raises
+the 60-slot hosted-runner ceiling itself and is a decision only the org owner can make -- now directly
+informed of with first-party confirmation rather than a hypothesis; (2) self-hosted runner capacity,
+which does not draw from the 60-slot hosted-runner pool at all and is available to the org without a
+plan change, at the cost of standing up and securing the runner infrastructure; (3) deliberately
+throttling how much concurrent PR/push demand agent sessions generate, which the session and its peers
+already adopted (see above) as the immediate interim mitigation -- it cannot raise the 60-slot ceiling
+and does not need a plan change, but it keeps demand inside the existing ceiling rather than adding to
+a queue that is not draining. None of the three is uniquely "the" fix; a plan upgrade is the only one
+that raises the hosted-runner ceiling itself, self-hosted capacity is the only one that sidesteps that
+ceiling entirely, and throttling is the only one available immediately at zero cost -- which one an
+operator should reach for depends on budget, urgency, and appetite for operating self-hosted runners,
+not on this entry declaring one of them the exclusive answer.
+
+## Noema single-request model-control ownership — PR #1672 (2026-09-02)
+
+**Status:** Proposed / exact-head verification required before merge.
+
+**Root cause.** Noema duplicated `contextual-orchestrator` structured-output repair by making a second model request and wrapped that request in an unmeasured 900-second repository wall-clock deadline. This created a self-hosting admission failure: the required review could terminate valid long inference using policy that the gateway already owns.
+
+**Context Map / responsibility boundary.** `.github` owns CI review orchestration, exact-revision evidence, deterministic verdict validation and publication. `contextual-orchestrator` owns provider discovery, capability routing, `orchestrator/free`, structured-output repair/failover and provider completion. No provider/model-specific fallback or caller wall-clock timeout crosses that boundary.
+
+**Action.** Replace recursive caller repair with one structured-output gateway request; remove fixed deadline/signal machinery and sampling temperature; retain exact-head checks before and after model work; sanitize serving-model telemetry; restore exact changed-line diagnostics; retain bounded non-heuristic evidence cardinality and strict local JSON parsing.
+
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks/reviews remain the admission authority; predecessor-head evidence is not transferable.
