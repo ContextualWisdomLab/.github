@@ -159,7 +159,11 @@ def test_repository_dispatch_revalidates_live_state_and_head_before_scan(tmp_pat
 
 
 def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effect() -> None:
-    """Resolved/draft dispatches require explicit true authority before early scan work."""
+    """Dispatch false skips work while native PR events remain admitted without that output."""
+    # These steps are shared with pull_request_target, where dispatch_validation
+    # intentionally has no output. `!= false` therefore means: repository_dispatch
+    # must have explicitly survived live validation, while the native PR path is
+    # not accidentally disabled by an absent dispatch-only output.
     guarded_names = {
         "Resolve target repository visibility",
         "Fetch pull request head for trusted scan",
@@ -168,7 +172,7 @@ def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effec
     }
     for name in guarded_names:
         condition = str(_step(name).get("if", ""))
-        assert "steps.dispatch_validation.outputs.should_scan == 'true'" in condition, name
+        assert "steps.dispatch_validation.outputs.should_scan != 'false'" in condition, name
 
     # Status publication intentionally uses a second, later live-state authority
     # because a PR can close, become draft, or move heads while a long scan runs.
@@ -186,15 +190,18 @@ def test_repository_dispatch_revalidates_live_state_again_before_status_publicat
     validation = _step(validation_name)
     assert refresh.get("id") == "status_target_app_token"
     refresh_condition = str(refresh.get("if", ""))
-    # Exact `true` is fail-closed: absent/malformed outputs must not be treated as
-    # permission to refresh credentials or proceed toward status publication.
+    # This refresh is repository_dispatch-only, so exact `true` is fail-closed:
+    # absent/malformed output is never permission to mint a target credential.
     assert "steps.dispatch_validation.outputs.should_scan == 'true'" in refresh_condition
     assert "github.event_name == 'repository_dispatch'" in refresh_condition
 
     assert validation.get("id") == "dispatch_publish_validation"
     token_expression = str(validation.get("env", {}).get("GH_TOKEN", ""))
-    assert "status_target_app_token.outputs.token" in token_expression
-    assert "target_app_token.outputs.token" not in token_expression
+    assert "steps.status_target_app_token.outputs.token" in token_expression
+    # Do not use the early target token for late publication revalidation. Match
+    # the complete step reference so the status_target_app_token name cannot
+    # create a false positive through substring overlap.
+    assert "steps.target_app_token.outputs.token" not in token_expression
 
     rc, output = _run_status_revalidation(tmp_path / "ready", _live_pr())
     assert rc == 0
