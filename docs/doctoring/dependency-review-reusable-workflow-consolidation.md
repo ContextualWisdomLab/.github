@@ -59,7 +59,7 @@ keeps that repository's original `on:` trigger block (argos keeps its
 `branches: [main, developmental]` restriction — a `workflow_call` target
 cannot itself be what GitHub triggers on pull_request), gains a
 `concurrency` block if it lacked one, and adds one job:
-`uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main`
+`uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03`
 with only that repository's non-default `with:` values.
 
 ### argos caller
@@ -77,7 +77,7 @@ concurrency:
 
 jobs:
   dependency-review:
-    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03
     with:
       fail_on_severity: moderate
       continue_on_error: true
@@ -97,7 +97,7 @@ concurrency:
 
 jobs:
   dependency-review:
-    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03
     with:
       fail_on_severity: high
 ```
@@ -116,7 +116,7 @@ concurrency:
 
 jobs:
   dependency-review:
-    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03
     with:
       fail_on_severity: low
       allow_ghsas: "GHSA-69w3-r845-3855"
@@ -137,7 +137,7 @@ concurrency:
 
 jobs:
   dependency-review:
-    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+    uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03
     with:
       fail_on_severity: moderate
 ```
@@ -152,6 +152,44 @@ same event-name guard internally, so the caller does not need its own
 job-level `if:` to reproduce it — `workflow_dispatch` stays in the trigger
 list and the job still runs, harmlessly skipping the gate exactly as the
 original did.
+
+## Post-merge corrections (2026-09-02, same day)
+
+Two real problems surfaced after the four caller PRs opened, both caught
+before any of them merged (except argos, fixed retroactively):
+
+**1. Mutable `@main` reference (Devin, security finding).** The original
+callers referenced `uses: .../dependency-review.yml@main` — the example
+above now shows the corrected pattern. A mutable branch ref means an
+unreviewed change to `.github`'s `main` (or a reference-tampering attack)
+runs directly against every caller's PR checks with zero review in the
+calling repo. Fixed by pinning every caller to the exact commit SHA that
+added the file, `0bcd22d8bb07650aafb0a8f116e4c2bbb8744f03` (unchanged since
+it merged) — `argos` retroactively (a follow-up PR after its original
+merge), the other three before their first merge. This is now the
+documented pattern in the reusable workflow's own header comment: pin
+`uses:` to a commit SHA for every caller, the same way every *action* step
+inside the reusable workflow itself is already SHA-pinned.
+
+**2. Required-status-check name collision (Devin, bug finding on
+newsdom-api).** Converting a job from inline steps to `uses: <reusable
+workflow>` changes the check-run name GitHub publishes, from the caller
+job's own name (e.g. `dependency-review`) to a combined
+`<caller job name> / <called job name>` (here,
+`dependency-review / dependency-review`). `newsdom-api`'s `develop` branch
+protection required a status check named literally `dependency-review` —
+after conversion, that exact name is never published again, so the
+required check stays pending forever and blocks every future merge.
+Verified live: `argos` and `mightyETL` have no branch protection at all
+(nothing to break); `scopeweave`'s required checks don't include
+`dependency-review`; only `newsdom-api` was affected. Fixed by updating
+`newsdom-api`'s branch protection required-status-checks list directly
+(`gh api -X PATCH repos/.../branches/develop/protection/required_status_checks`),
+replacing `dependency-review` with the actual published name
+`dependency-review / dependency-review`. This is a general gotcha for any
+future "convert a standalone job to a reusable-workflow caller" change —
+check the target repo's branch protection for a required check matching the
+job's *old* name before or immediately after merging the conversion.
 
 ## Verified before merge
 

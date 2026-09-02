@@ -22,7 +22,13 @@
 # read` and `pull-requests: read`; this workflow cannot elevate a caller token
 # that omitted those scopes.
 #
-# Example caller (.github/workflows/dependency-review.yml in a product repo):
+# Example caller (.github/workflows/dependency-review.yml in a product repo).
+# Pin `uses:` to the exact protected-main commit SHA carrying this workflow,
+# never `@main`: a mutable central ref could run an unreviewed workflow change
+# against the caller's PR checks. If branch protection requires the old
+# standalone job name, note that reusable workflow adoption publishes the
+# combined check name `<calling job> / dependency-review`; update the required
+# check name to the exact published context without weakening the gate.
 #
 #   name: Dependency Review
 #   on:
