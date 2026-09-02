@@ -7,6 +7,7 @@ on:
       - .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml
       - scripts/ci/pr_review_merge_scheduler.py
       - tests/test_pr1669_cancel_stale_opencode_runs.py
+      - tests/test_pr_review_merge_scheduler.py
 
 concurrency:
   group: temp-pr1669-failed-cancel-result-${{ github.repository }}-${{ github.ref_name }}
@@ -85,6 +86,44 @@ jobs:
           PY
           git diff --check
 
+      - name: Repair successful-cancellation test doubles to the production return contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          repairs = {
+              Path('tests/test_pr1669_cancel_stale_opencode_runs.py'): (
+                  (
+                      'lambda repo, run_ids: cancelled.append((repo, list(run_ids))),',
+                      'lambda repo, run_ids: (cancelled.append((repo, list(run_ids))), {})[1],',
+                  ),
+              ),
+              Path('tests/test_pr_review_merge_scheduler.py'): (
+                  (
+                      'lambda repo, run_ids: cancelled.append((repo, run_ids)),',
+                      'lambda repo, run_ids: (cancelled.append((repo, run_ids)), {})[1],',
+                  ),
+                  (
+                      'lambda repo, run_ids: cancelled.append((repo, list(run_ids))),',
+                      'lambda repo, run_ids: (cancelled.append((repo, list(run_ids))), {})[1],',
+                  ),
+              ),
+          }
+          for path, replacements in repairs.items():
+              text = path.read_text(encoding='utf-8')
+              changed = False
+              for old, new in replacements:
+                  count = text.count(old)
+                  if count:
+                      text = text.replace(old, new)
+                      changed = True
+              if not changed:
+                  raise SystemExit(f'no successful-cancellation fixture needed repair in {path}')
+              path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+
       - name: Verify focused and repository quality
         run: |
           set -euo pipefail
@@ -106,7 +145,11 @@ jobs:
           test "$remote_head" = "$EXPECTED_HEAD"
           git rm .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml
           changed="$(git status --short | awk '{print $2}' | sort)"
-          expected="$(printf '%s\n' scripts/ci/pr_review_merge_scheduler.py .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml \
+            scripts/ci/pr_review_merge_scheduler.py \
+            tests/test_pr1669_cancel_stale_opencode_runs.py \
+            tests/test_pr_review_merge_scheduler.py | sort)"
           test "$changed" = "$expected"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
