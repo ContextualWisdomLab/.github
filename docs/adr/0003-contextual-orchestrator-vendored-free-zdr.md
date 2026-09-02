@@ -317,9 +317,17 @@ all five, and auto-optimize routing by cost.
   2026-08-30/2026-08-31 amendments above, and this session's own audit of
   recent `opencode-review.yml`/`strix.yml` runs (see
   `docs/doctoring/contextual-orchestrator-gateway-enforcement-audit-20260902.md`)
-  confirms both consumers vendor and invoke the same sidecar
-  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`) against the same
-  `orchestrator/free` pool. Recorded at exact-head
+  confirms `strix.yml` vendors and invokes that sidecar
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`) against the
+  `orchestrator/free` pool with a real job-log trace. The doctoring record's
+  own item 1 states this explicitly for `strix.yml` only: direct log
+  evidence of a real gateway call inside `opencode-review-dispatch.yml` was
+  not collected that session (blocked by a shared secondary rate limit), so
+  `OpenCode`'s use of the identical sidecar/pool is inferred from
+  shared-code identity with the directly-observed `strix` job (same script,
+  same line-pinned pool, same job structure) rather than independently
+  observed — a strong inference, but an inference, not a second confirmed
+  observation. Recorded at exact-head
   `6a25bc11d58a2e36da9ccea390ade6ccee57ec4d` on the
   `claude/contextual-orchestrator-integration-8ec7f8` branch;
   see the doctoring record above for the full verification evidence and the

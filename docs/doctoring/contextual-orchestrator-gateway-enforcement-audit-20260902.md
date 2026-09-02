@@ -45,7 +45,7 @@ land inside the narrow "success and not skipped" window in this environment.
 executing as the `strix` job's sidecar step) shows, in order, from the raw
 job log (timestamps UTC, 2026-09-01):
 
-```
+```text
 09:59:00  provider secrets present: 5 of 5
 09:59:00  vendoring contextual-orchestrator @ 8cd99f139915131ba0239bce12a5d6a5fd85394e
 09:59:03  installing hash-pinned orchestrator dependencies at 8cd99f13...
@@ -79,7 +79,7 @@ connection to the language model") on all 3 of its own retry attempts
 (66s, 4s, 3s later, with 90s/180s backoffs between). The workflow's own
 guard then correctly failed closed:
 
-```
+```text
 10:16:24  Provider-unavailable Strix attempt 3 reached the retry limit; failing closed.
 10:16:24  ::error::Strix could not complete authoritative vulnerability analysis
           because its provider/backend was unavailable ... See the strix-reports

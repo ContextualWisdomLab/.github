@@ -1425,7 +1425,7 @@ escalated (larger) probe can itself get rejected outright by a model whose real 
 the base and escalated budgets — a distinct failure signature from "empty content," previously
 unhandled. Finding #3: an unconditional "one retry per candidate" across up to 12 candidates plus the
 gateway check is an unbounded-looking worst case against Layer 1's own 180s readiness ceiling. Finding
-#4: deferring every numeric constant to "future telemetry" is circular — initial deployment still needs
+\#4: deferring every numeric constant to "future telemetry" is circular — initial deployment still needs
 justified starting values. Finding #5: citations to this repo's own source by line number rot as the
 file changes; needs SHA-pinned permalinks.
 
@@ -2681,7 +2681,7 @@ predating the close), the branch tip already three commits ahead at `c37c465` (a
 addendum pushed six minutes *after* the close, invisible to the closed PR's review). Canonical stack
 confirmed fresh: PR #4 (`cursor/bc-4f046e35-...`, open, `mergeable_state: blocked`, defines
 `ContextAssertion`/`ContextMembership`, owns `docs/adr/0001`-`0007`) plus 13 chained draft PRs through
-#21 (tip owning `0008`-`0015`, `0015` itself still `Proposed`). `develop`/`main` unchanged since the
+\#21 (tip owning `0008`-`0015`, `0015` itself still `Proposed`). `develop`/`main` unchanged since the
 close, `develop` still bare (zero ADR files, zero package code). No successor PR anywhere in the org
 carried the delta forward (`git grep` across the full chain and both integration branches: zero
 `org-hierarchy`/`org_member`/`OrgHierarchy` hits outside #23's own branch).
@@ -2869,7 +2869,7 @@ number + head SHA against the PR's live current head) were directly cancelled ac
 rate), `bandscope`, `fast-mlsirm`, `afipc`, `semantic-data-portal`, and `keyverse`.
 
 **A parallel, independent repair effort collided with this work.** `ContextualWisdomLab/.github` PR
-#1669 ("fix(scheduler): never let a falsy headRefOid cancel every run for a PR") diagnosed a real,
+\#1669 ("fix(scheduler): never let a falsy headRefOid cancel every run for a PR") diagnosed a real,
 separate incident (`naruon#1528`'s Strix run wrongfully force-cancelled while it was the PR's sole,
 unchanged current head -- `stale_pr_run_ids()`/`active_review_run_refs()` computed
 `str(pr.get("headRefOid") or "").lower()` instead of validating via `validate_git_sha()`, so a
