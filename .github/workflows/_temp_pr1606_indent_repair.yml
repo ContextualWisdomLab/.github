@@ -16,19 +16,22 @@ jobs:
   repair:
     runs-on: ubuntu-slim
     timeout-minutes: 10
+    env:
+      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Repair generated call_llm block indentation
         env:
           EXPECTED_HEAD: ${{ github.sha }}
         run: |
           set -euo pipefail
+          test -n "${WORKFLOW_PUSH_TOKEN:-}"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
@@ -65,4 +68,5 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
           git commit -m "ci: fix PR 1606 generated source indentation"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
