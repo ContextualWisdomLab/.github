@@ -3347,3 +3347,24 @@ throttle new PR/push activity for a period to let the existing queue drain, rath
 add to a backlog that is now demonstrably not keeping pace -- both acknowledged; outcome to be
 recorded once observed. This is the single most concrete, immediately actionable step available right
 now, independent of whatever the org's actual GitHub plan concurrency limit turns out to be.
+
+**Definitively resolved, same day: the user personally checked GitHub's own Settings > Actions >
+Runners page and confirmed the hard ceiling directly** (relayed via a peer session). The org's
+GitHub-hosted-runner concurrent-job limit is **60** (50 Linux + 4 Windows + 4 macOS slots, plus a
+small remainder), and at the time of the check the org was already at **58/60** in use, with GitHub's
+own UI stating "To increase your concurrency limit, upgrade your GitHub plan." This confirms, with
+first-party evidence this session's own GitHub-token permissions could never retrieve (the billing API
+this session queried is deprecated -> `410 Gone`), that the "적체" (piling up) complaint's dominant
+cause genuinely is the GitHub plan-tier concurrency ceiling this doc's earlier entries hypothesized --
+not a remaining workflow-level bug, not the scheduler's `workflow-run-no-pr-{repo}` fallback group
+(investigated and ruled out), and not primarily the now-cleared zombie runs. `.github`'s own
+`in_progress` count sitting at only ~5-7 throughout this session's checks was never `.github`
+specifically being starved -- it was `.github` receiving its share of an org-wide 60-slot pool shared
+by every one of the org's ~63 repositories simultaneously, entirely consistent with the queue-depth
+(2000+) and queue-age (hours-deep by the 1000th item) evidence gathered earlier this tick. **This
+closes the open question this doc's earlier entries left explicitly unresolved.** The only real fix is
+a GitHub plan upgrade -- a decision only the org owner can make, and (per the same conversation) has
+now been directly informed of with first-party confirmation rather than a hypothesis. The throttle
+this session and its peers adopted (see above) remains the correct interim mitigation available to
+agent sessions: it cannot raise the 60-slot ceiling, but it stops making local demand worse while that
+decision is pending.
