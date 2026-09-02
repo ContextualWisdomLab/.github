@@ -2613,3 +2613,53 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## 2026-09-02 enterprise org-hierarchy / concurrent-membership ABAC contract: design decision recorded
+
+**Requirement.** ContextualWisdomLab products need a general way to represent an enterprise
+customer's organizational hierarchy (지주(holding) → 계열사(affiliate) → 사업부문(division) →
+사업부(unit) → 파트(part) → 팀(team)) where team/part ordering can invert per tenant, and where a
+person can hold *concurrent* membership in more than one unit (TFT / dual-hat assignments), for
+ABAC/RBAC permission scoping (Keyverse backlog items 20/22: Keyverse becoming a service ABAC/RBAC
+engine) and for any product that needs "which org unit does this user/resource belong to."
+
+**Re-verified before deciding.** `docs/product-goal-directive.md` §9 does not name
+`enterprise-architecture-core` or `context-graph-contracts`; both repositories nonetheless exist
+(created 2026-08-16, active) and neither has any open PR or issue touching org-hierarchy, org-unit,
+tenant, or ABAC/RBAC as of this entry — confirmed by re-reading every open PR/issue title in both
+repos directly via the GitHub API, not by trusting an earlier pass. Keyverse's `README.md` explicitly
+disclaims org-tree ownership ("Keyverse does not copy Orgmetra tables"). Keyverse draft PR
+`ContextualWisdomLab/keyverse#103` (`feat(authorization): hierarchical PDP...`, still draft,
+`mergeable_state: dirty`) hardcodes a single, position-checked 5-level `ORG_PATH_LEVELS` taxonomy with
+no per-tenant reordering and one `org_path` per `AssignmentSnapshot` (no concurrent-membership
+primitive) — verified by reading `org_authorization.py` directly. `Orgmetra`'s `packages/hris-kernel`
+already models a generic, variable-depth, bitemporal, cycle-checked org tree
+(`OrganizationUnitVersion.parent_organization_unit_id`) and already allows concurrent multi-assignment
+per person (`AssignmentFact.allocation_ratio`, portfolio sum ≤ 1.0000 FTE) — verified by reading
+`facts.py`, `employment.py`, `assignment.py`, `organization.py`, and `docs/DATA_MODEL.md` directly.
+
+**Decision.** Hybrid ownership, not a new repository: the org-unit tree and the underlying
+person→position→unit assignment facts stay in **Orgmetra** (already correctly shaped, not
+duplicated); the cross-product interoperability *contract* for reading a membership fact (primary or
+secondary/TFT, with its own effective-date range) is registered in **`context-graph-contracts`**,
+reusing its existing `ContextAssertion`/`ContextMembership` pair (ADR-0006) with a new
+`org_member_primary` / `org_member_secondary` predicate vocabulary — **no schema files change**;
+**Keyverse** remains the ABAC/RBAC PDP implementer, extending its own draft PR #103 as a later,
+separately-reviewed follow-up. `enterprise-architecture-core` was considered and rejected for this
+piece specifically: its in-flight work is architecture-governance process tooling (target-state
+transformation, fitness baselines, CSAP/SOC2 evidence), not a data-interchange schema, and
+`context-graph-contracts`'s stated purpose and existing artifact shapes are the closer structural
+match. Full reasoning, the wire-shape design, an ABAC evaluation-query sketch (ancestor closure
+embedded in each membership assertion, so a "member of X or any descendant of X" policy check needs no
+tree traversal at decision time), and a precise reconciliation with keyverse#103 (which parts are
+compatible vs. specifically incompatible, and why) are recorded in
+[`context-graph-contracts` ADR 0001](https://github.com/ContextualWisdomLab/context-graph-contracts/pull/23)
+(`docs/adr/0001-enterprise-org-hierarchy-membership-contract.md`, PR #23).
+
+**Scope of this pass.** ADR only — no schema, fixture, or code changes in `context-graph-contracts`;
+`keyverse#103` is not modified. Deferred to separately-reviewed follow-up PRs: an explicit,
+non-heuristic primary/secondary field on Orgmetra's `assignment_record` (Orgmetra's own ADR process);
+the closure/materialized-path emitter; extending `org_authorization.py` per the reconciliation record
+(depth-only `parse_org_path`, `AssignmentSnapshot.memberships: list[...]`, dropping `"person"` as a
+tree leaf level); wiring naruon's fixed two-level `Organization`/`OrganizationGroup` tenant model to
+this contract; and conformance fixtures/tests for the two registered predicates.
