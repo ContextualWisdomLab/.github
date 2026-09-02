@@ -83,7 +83,12 @@ jobs:
               r'    try:\\n        verdict = call_llm\\(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths\\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\("Pull request head changed during review; Noema review skipped before repair retry\\."\\)\\n        return 0\\n',
               '    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)\\n',
               'inspect_and_review retry catch',
-          )'''
+          )
+    source = source.replace(
+        '    comparisons below, and before the one ``call_llm`` performs on its own\\n'
+        '    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and\\n',
+        '    comparisons below and the post-model publication check. The CLI and\\n',
+    )'''
           text = replace_labeled_call(text, 'inspect_and_review retry catch', gate_call)
 
           two_phase_call = '''    source = replace_once(
