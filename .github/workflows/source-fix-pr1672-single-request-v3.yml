@@ -74,7 +74,12 @@ jobs:
         run: |
           set -euo pipefail
           python -m coverage run -m pytest tests -q
-          python -m coverage report --show-missing
+          if ! python -m coverage report --show-missing; then
+            echo '::group::Exact Noema source around uncovered lines'
+            nl -ba scripts/ci/noema_review_gate.py | sed -n '980,1070p;1280,1320p'
+            echo '::endgroup::'
+            exit 2
+          fi
           python -m interrogate -c pyproject.toml scripts/ci
           python -m compileall -q scripts tests .github/actions/noema-review
           git diff --check
@@ -95,6 +100,10 @@ jobs:
           test ! -e .github/workflows/source-fix-pr1672-single-request-v3.yml
           test ! -e .github/workflows/source-fix-pr1672-single-request-v2.yml
           test ! -e .github/workflows/source-fix-pr1672-single-request.yml
+          test ! -e scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          test ! -e scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          test ! -e .github/workflows/source-fix-pr1714-no-model-job-timeout.yml
+          test ! -e .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
           remote_head="$(git ls-remote origin refs/heads/fix/noema-repair-attempt-telemetry | cut -f1)"
           test "$remote_head" = "$GITHUB_SHA"
           git config user.name github-actions[bot]
