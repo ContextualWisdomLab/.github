@@ -25,25 +25,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Repair exact-text drift and self-retire
+      - name: Align exact parent prompt for source-fix replay
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
 
-          path = Path('.github/workflows/source-fix-1700-noema-evidence-allocation.yml')
+          path = Path('scripts/ci/noema_review_gate.py')
           text = path.read_text(encoding='utf-8')
-          old = 'source or test/workflow changes require at least two distinct probes and other changes require at least one.'
-          new = 'source or test changes require at least two distinct probes and other changes require at least one.'
+          old = 'source or test changes require at least two distinct probes and other changes require at least one.'
+          new = 'source or test/workflow changes require at least two distinct probes and other changes require at least one.'
           count = text.count(old)
           if count != 1:
-              raise SystemExit(f'exact source-fix prompt drift repair expected one match, found {count}')
+              raise SystemExit(f'exact live prompt alignment expected one match, found {count}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
-          git rm .github/workflows/source-fix-1700-repair-driver-drift.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/source-fix-1700-noema-evidence-allocation.yml
+          git add scripts/ci/noema_review_gate.py
           git diff --cached --check
-          git commit -m 'ci(noema): align source-fix with exact parent prompt'
+          git commit -m 'ci(noema): align parent prompt with source-fix contract'
           git push origin HEAD:fix/noema-evidence-completeness-no-heuristics
