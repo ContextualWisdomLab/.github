@@ -17,8 +17,9 @@ concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: true
 
-# Verification is read-only. Only the final publisher receives a separate
-# workflow-starting mutation credential, and only after full exact-head proof.
+# Verification is read-only. Only the final publisher receives a write-scoped
+# GITHUB_TOKEN after full exact-head proof; that token is not exposed to the
+# materialization steps and is used only to publish the self-deleting successor.
 permissions:
   contents: read
 
@@ -107,7 +108,7 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout exact verified writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -153,7 +154,7 @@ jobs:
       - name: Publish one fast-forward canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
-          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          WORKFLOW_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "$WORKFLOW_PUSH_TOKEN"
