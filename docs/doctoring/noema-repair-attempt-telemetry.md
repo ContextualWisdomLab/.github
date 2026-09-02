@@ -7,7 +7,7 @@
 2026-09-02, having run roughly 48 minutes (`01:40:17`-`02:28:31`). The
 terminal diagnostic:
 
-```
+```text
 ##[error]Noema bounded repair transport was exhausted; initial failure: Noema LLM
 response was not valid JSON (Expecting property name enclosed in double quotes:
 line 1 column 1530 (char 1529)). Raw model output is not logged here (this
@@ -106,10 +106,10 @@ also could not surface, because nothing timed the primary attempt either.
 ## Second gap: the schema was looser than Noema's own check
 
 A second, independently-reported incident during this same change:
-`ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480` (PR
-#1) failed with:
+`ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480` (PR #1)
+failed with:
 
-```
+```text
 ##[error]Noema adversarial validation requires at least 2 concrete probe(s)
 ##[error]Process completed with exit code 1.
 ```
