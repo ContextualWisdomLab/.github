@@ -7,6 +7,25 @@ import pytest
 from scripts.ci import noema_review_gate as gate
 
 
+@pytest.fixture(autouse=True)
+def _default_gateway_dns_resolves_public(monkeypatch):
+    """Resolve any unmocked gateway hostname to a fixed public IP.
+
+    This module's tests use a non-resolving example hostname for
+    ``NOEMA_LLM_API_URL`` and mock the HTTP response layer directly, with
+    no interest in DNS behavior itself. ``reject_private_llm_url`` now
+    fails closed on a resolution failure (Devin Review) rather than
+    silently allowing the URL through unpinned, so these tests need a
+    resolvable hostname to reach the transport behavior they actually
+    test.
+    """
+    monkeypatch.setattr(
+        gate.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("8.8.8.8", 0))],
+    )
+
+
 DIFF = """diff --git a/README.md b/README.md
 index 1111111..2222222 100644
 --- a/README.md

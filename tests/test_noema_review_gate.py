@@ -15,6 +15,36 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+@pytest.fixture(autouse=True)
+def _default_gateway_dns_resolves_public(monkeypatch):
+    """Resolve any unmocked, non-literal gateway hostname to a public IP.
+
+    Most tests in this module use a non-resolving example/test hostname
+    for ``NOEMA_LLM_API_URL`` (RFC 2606) and mock the HTTP response layer
+    directly, with no interest in DNS behavior itself. ``reject_private_
+    llm_url`` now fails closed on a resolution failure (Devin Review,
+    closing a gap where an unresolvable hostname at validation time could
+    still reach an internal address at connect time) rather than silently
+    allowing the URL through unpinned, so those tests need a resolvable
+    hostname to reach the behavior they actually test. A test that cares
+    about DNS resolution itself sets its own ``socket.getaddrinfo`` mock
+    after this fixture runs, which takes precedence. Passes an already-
+    literal IP hostname (e.g. a test URL of ``http://169.254.169.254/``)
+    through unchanged, matching real ``getaddrinfo`` behavior for a
+    literal -- substituting a fake public address for a literal-IP host
+    would silently mask that host's own, separately meaningful rejection.
+    """
+
+    def fake_getaddrinfo(host, port):
+        try:
+            noema.ipaddress.ip_address(host)
+        except ValueError:
+            return [(0, 0, 0, "", ("8.8.8.8", 0))]
+        return [(0, 0, 0, "", (host, 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", fake_getaddrinfo)
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -1439,22 +1469,29 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
-    # Test unresolved hostname does not break
+    # Test unresolved hostname now fails closed instead of silently
+    # allowing the URL through unpinned (Devin Review): a resolution
+    # failure at validation time no longer means "nothing to validate,
+    # allow it" -- a later, independent resolution reaching an internal
+    # address in that gap would otherwise bypass validation entirely.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="could not be resolved"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
-    # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
+    # Test invalid IP string from getaddrinfo (unlikely but theoretically
+    # possible) now fails closed the same way, for the same reason.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="did not resolve to any usable IP"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
 
 def test_noema_redirect_handler_rejects_redirects():

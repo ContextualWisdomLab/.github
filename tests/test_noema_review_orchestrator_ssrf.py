@@ -170,23 +170,32 @@ def test_reject_private_llm_url_scheme_hostname_and_public_dns(monkeypatch):
         noema.reject_private_llm_url("http:///v1/chat")
     monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
-    noema.reject_private_llm_url("https://llm.example.test/v1/chat/completions")
+
+    def public(host, port):
+        return [(0, 0, 0, "", ("8.8.8.8", 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", public)
+    assert noema.reject_private_llm_url(
+        "https://llm.example.test/v1/chat/completions"
+    ) == ["8.8.8.8"]
 
     def boom(host, port):
         raise noema.socket.gaierror("nxdomain")
 
     monkeypatch.setattr(noema.socket, "getaddrinfo", boom)
-    noema.reject_private_llm_url("https://missing.example.test/v1/chat")
+    with pytest.raises(ValueError, match="could not be resolved"):
+        noema.reject_private_llm_url("https://missing.example.test/v1/chat")
 
     def garbage(host, port):
         return [(0, 0, 0, "", ("not-an-ip", 0))]
 
     monkeypatch.setattr(noema.socket, "getaddrinfo", garbage)
-    noema.reject_private_llm_url("https://odd.example.test/v1/chat")
+    with pytest.raises(ValueError, match="did not resolve to any usable IP"):
+        noema.reject_private_llm_url("https://odd.example.test/v1/chat")
 
 
-def test_reject_private_llm_url_returns_pinned_ip_for_public_dns(monkeypatch):
-    """A validated public hostname returns the first resolved IP to pin."""
+def test_reject_private_llm_url_returns_every_pinned_ip_for_public_dns(monkeypatch):
+    """A validated public hostname returns every resolved IP, deduplicated."""
     monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
 
@@ -194,36 +203,87 @@ def test_reject_private_llm_url_returns_pinned_ip_for_public_dns(monkeypatch):
         return [
             (0, 0, 0, "", ("8.8.8.8", 0)),
             (0, 0, 0, "", ("8.8.4.4", 0)),
+            (0, 0, 0, "", ("8.8.8.8", 0)),
         ]
 
     monkeypatch.setattr(noema.socket, "getaddrinfo", multi)
-    assert (
-        noema.reject_private_llm_url("https://llm.example.test/v1/chat")
-        == "8.8.8.8"
-    )
-
-    def garbage(host, port):
-        return [(0, 0, 0, "", ("not-an-ip", 0))]
-
-    monkeypatch.setattr(noema.socket, "getaddrinfo", garbage)
-    assert noema.reject_private_llm_url("https://odd.example.test/v1/chat") is None
+    assert noema.reject_private_llm_url("https://llm.example.test/v1/chat") == [
+        "8.8.8.8",
+        "8.8.4.4",
+    ]
 
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
     assert (
         noema.reject_private_llm_url("http://127.0.0.1:18080/v1/chat/completions")
-        is None
+        == []
     )
 
 
+@pytest.mark.parametrize(
+    "embedded_v4_ipv6",
+    [
+        "::127.0.0.1",
+        "::10.0.0.5",
+        "64:ff9b::7f00:1",
+    ],
+)
+def test_reject_private_llm_url_rejects_reserved_embedded_ipv4(
+    monkeypatch, embedded_v4_ipv6
+):
+    """Reserved IPv6 forms embedding a private/loopback IPv4 target stay closed.
+
+    ``is_private``/``is_loopback``/etc. alone miss the deprecated IPv4-
+    compatible format (``::127.0.0.1``) and the NAT64 well-known prefix
+    (``64:ff9b::/96``, e.g. ``64:ff9b::7f00:1`` = 127.0.0.1) -- both read
+    ``is_reserved=True`` with no false positives against real public
+    addresses, so that is the check that catches them (found by peer
+    review, `trusting-wilbur-195f90-93`).
+    """
+    monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
+
+    def resolves_to_embedded(host, port):
+        return [(0, 0, 0, "", (embedded_v4_ipv6, 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", resolves_to_embedded)
+    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+        noema.reject_private_llm_url("https://llm.example.test/v1/chat")
+
+
 def test_pinned_connection_handlers_selects_by_scheme():
-    """The handler list is empty with no pinned IP, else scheme-selected."""
-    assert noema._pinned_connection_handlers("https://x.test/", None) == []
-    handlers = noema._pinned_connection_handlers("https://x.test/", "203.0.113.9")
+    """The handler list is empty with no pinned IPs, else scheme-selected."""
+    assert noema._pinned_connection_handlers("https://x.test/", []) == []
+    handlers = noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
     assert len(handlers) == 1
     assert isinstance(handlers[0], noema._PinnedHTTPSHandler)
-    handlers = noema._pinned_connection_handlers("http://x.test/", "203.0.113.9")
+    handlers = noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
     assert len(handlers) == 1
     assert isinstance(handlers[0], noema._PinnedHTTPHandler)
+
+
+def test_pinned_connection_handlers_skips_pinning_when_proxy_configured(monkeypatch):
+    """A configured proxy for this scheme disables pinning entirely.
+
+    The pinned connection classes dial the gateway IP directly and do not
+    implement CONNECT tunneling or proxy dialing, so silently pinning
+    through a configured proxy would connect to the wrong endpoint and
+    break HTTPS entirely (Devin Review) -- falling back to an ordinary,
+    proxy-routed request is the deliberate, safe behavior here.
+    """
+    monkeypatch.setattr(
+        noema.urllib.request, "getproxies", lambda: {"https": "http://proxy.test:3128"}
+    )
+    assert noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"]) == []
+    handlers = noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], noema._PinnedHTTPHandler)
+
+    monkeypatch.setattr(
+        noema.urllib.request,
+        "getproxies",
+        lambda: {"http": "http://proxy.test:3128", "https": "http://proxy.test:3128"},
+    )
+    assert noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"]) == []
 
 
 class _EchoHandler(http.server.BaseHTTPRequestHandler):
@@ -257,7 +317,7 @@ def test_pinned_http_connection_connects_to_pinned_ip_not_hostname():
     try:
         port = server.server_address[1]
         opener = urllib.request.build_opener(
-            noema._PinnedHTTPHandler(pinned_ip="127.0.0.1")
+            noema._PinnedHTTPHandler(pinned_ips=["127.0.0.1"])
         )
         request = urllib.request.Request(
             f"http://noema-dns-pin-test.invalid:{port}/echo",
@@ -284,13 +344,13 @@ def test_pinned_https_handler_opens_through_a_pinned_https_connection(monkeypatc
     monkeypatch.setattr(
         urllib.request.AbstractHTTPHandler, "do_open", fake_do_open
     )
-    handler = noema._PinnedHTTPSHandler(pinned_ip="8.8.8.8")
+    handler = noema._PinnedHTTPSHandler(pinned_ips=["8.8.8.8"])
     fake_req = object()
     assert handler.https_open(fake_req) == "opened"
     assert captured["req"] is fake_req
     conn = captured["http_class"]("llm.example.test")
     assert isinstance(conn, noema._PinnedHTTPSConnection)
-    assert conn._pinned_ip == "8.8.8.8"
+    assert conn._pinned_ips == ["8.8.8.8"]
     assert conn._context is handler._context
 
 
@@ -312,10 +372,39 @@ def test_pinned_https_connection_verifies_original_hostname_via_sni(monkeypatch)
         noema.socket, "create_connection", lambda *a, **k: fake_sock
     )
     conn = noema._PinnedHTTPSConnection(
-        "llm.example.test", pinned_ip="203.0.113.9", context=FakeContext()
+        "llm.example.test", pinned_ips=["203.0.113.9"], context=FakeContext()
     )
     conn.port = 443
     conn.connect()
     assert calls["sock"] is fake_sock
     assert calls["server_hostname"] == "llm.example.test"
     assert conn.sock == "wrapped"
+
+
+def test_connect_to_pinned_ips_falls_back_to_next_address_on_failure(monkeypatch):
+    """An unreachable first address falls through to the next validated one.
+
+    Mirrors ``socket.create_connection``'s own multi-address fallback for a
+    hostname target, without re-resolving the hostname (Devin Review): a
+    multi-address gateway previously lost failover entirely once only the
+    first resolved address was pinned.
+    """
+    attempts = []
+
+    def fake_create_connection(address, timeout, source_address):
+        attempts.append(address[0])
+        if address[0] == "203.0.113.1":
+            raise OSError("connection refused")
+        return f"socket-for-{address[0]}"
+
+    monkeypatch.setattr(noema.socket, "create_connection", fake_create_connection)
+    result = noema._connect_to_pinned_ips(
+        ["203.0.113.1", "203.0.113.2"], 443, None, None
+    )
+    assert attempts == ["203.0.113.1", "203.0.113.2"]
+    assert result == "socket-for-203.0.113.2"
+
+    attempts.clear()
+    with pytest.raises(OSError, match="connection refused"):
+        noema._connect_to_pinned_ips(["203.0.113.1"], 443, None, None)
+    assert attempts == ["203.0.113.1"]

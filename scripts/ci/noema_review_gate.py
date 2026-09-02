@@ -922,26 +922,52 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _connect_to_pinned_ips(
+    pinned_ips: Sequence[str], port: int, timeout: Any, source_address: Any
+) -> socket.socket:
+    """Try each pinned IP in order until one connects.
+
+    Mirrors ``socket.create_connection``'s own multi-address fallback
+    semantics for a hostname target -- an unreachable first address falls
+    through to the next validated one instead of failing the whole review
+    (Devin Review) -- without re-resolving the hostname:
+    ``reject_private_llm_url`` already did that once, validated every
+    result, and this reuses that exact list. ``pinned_ips`` is always
+    non-empty by construction (``reject_private_llm_url`` never returns an
+    empty, non-sidecar list), so the loop always either returns or leaves
+    ``last_error`` set to a real connection failure to re-raise.
+    """
+    last_error: OSError = OSError("no pinned IP addresses available to connect to")
+    for ip in pinned_ips:
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as exc:
+            last_error = exc
+    raise last_error
+
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
-    """An ``HTTPConnection`` that connects to a pre-validated IP address.
+    """An ``HTTPConnection`` that connects to pre-validated IP addresses.
 
     Closes the validate-then-connect TOCTOU/DNS-rebinding gap
     (CWE-350/CWE-918): ``reject_private_llm_url`` resolves and validates
-    the hostname once, and this class connects directly to that exact
-    result instead of letting the socket layer re-resolve the hostname
-    independently at connect time, where a changed DNS answer could
-    bypass the earlier validation entirely.
+    the hostname once, and this class connects directly to one of those
+    exact results instead of letting the socket layer re-resolve the
+    hostname independently at connect time, where a changed DNS answer
+    could bypass the earlier validation entirely.
     """
 
-    def __init__(self, host: str, *args: Any, pinned_ip: str, **kwargs: Any) -> None:
-        """Record ``pinned_ip`` alongside the usual connection arguments."""
+    def __init__(
+        self, host: str, *args: Any, pinned_ips: Sequence[str], **kwargs: Any
+    ) -> None:
+        """Record ``pinned_ips`` alongside the usual connection arguments."""
         super().__init__(host, *args, **kwargs)
-        self._pinned_ip = pinned_ip
+        self._pinned_ips = pinned_ips
 
     def connect(self) -> None:
-        """Connect to the pinned IP instead of re-resolving ``self.host``."""
-        self.sock = socket.create_connection(
-            (self._pinned_ip, self.port), self.timeout, self.source_address
+        """Connect to a pinned IP instead of re-resolving ``self.host``."""
+        self.sock = _connect_to_pinned_ips(
+            self._pinned_ips, self.port, self.timeout, self.source_address
         )
 
 
@@ -954,68 +980,81 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     TCP connection itself is made to.
     """
 
-    def __init__(self, host: str, *args: Any, pinned_ip: str, **kwargs: Any) -> None:
-        """Record ``pinned_ip`` alongside the usual connection arguments."""
+    def __init__(
+        self, host: str, *args: Any, pinned_ips: Sequence[str], **kwargs: Any
+    ) -> None:
+        """Record ``pinned_ips`` alongside the usual connection arguments."""
         super().__init__(host, *args, **kwargs)
-        self._pinned_ip = pinned_ip
+        self._pinned_ips = pinned_ips
 
     def connect(self) -> None:
-        """Connect to the pinned IP, then perform TLS for ``self.host``."""
-        sock = socket.create_connection(
-            (self._pinned_ip, self.port), self.timeout, self.source_address
+        """Connect to a pinned IP, then perform TLS for ``self.host``."""
+        sock = _connect_to_pinned_ips(
+            self._pinned_ips, self.port, self.timeout, self.source_address
         )
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
 class _PinnedHTTPHandler(urllib.request.HTTPHandler):
-    """A ``urllib`` handler that opens plain-HTTP connections to a pinned IP."""
+    """A ``urllib`` handler that opens plain-HTTP connections to pinned IPs."""
 
-    def __init__(self, pinned_ip: str) -> None:
-        """Record the IP every request through this handler pins to."""
+    def __init__(self, pinned_ips: Sequence[str]) -> None:
+        """Record the IPs every request through this handler pins to."""
         super().__init__()
-        self._pinned_ip = pinned_ip
+        self._pinned_ips = pinned_ips
 
     def http_open(self, req: urllib.request.Request) -> Any:
         """Open the request through a DNS-pinned ``HTTPConnection``."""
         return self.do_open(
-            functools.partial(_PinnedHTTPConnection, pinned_ip=self._pinned_ip), req
+            functools.partial(_PinnedHTTPConnection, pinned_ips=self._pinned_ips), req
         )
 
 
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
-    """A ``urllib`` handler that opens HTTPS connections to a pinned IP."""
+    """A ``urllib`` handler that opens HTTPS connections to pinned IPs."""
 
-    def __init__(self, pinned_ip: str) -> None:
-        """Record the IP every request through this handler pins to."""
+    def __init__(self, pinned_ips: Sequence[str]) -> None:
+        """Record the IPs every request through this handler pins to."""
         super().__init__()
-        self._pinned_ip = pinned_ip
+        self._pinned_ips = pinned_ips
 
     def https_open(self, req: urllib.request.Request) -> Any:
         """Open the request through a DNS-pinned ``HTTPSConnection``."""
         return self.do_open(
             functools.partial(
-                _PinnedHTTPSConnection, pinned_ip=self._pinned_ip, context=self._context
+                _PinnedHTTPSConnection, pinned_ips=self._pinned_ips, context=self._context
             ),
             req,
         )
 
 
 def _pinned_connection_handlers(
-    api_url: str, pinned_ip: str | None
+    api_url: str, pinned_ips: Sequence[str]
 ) -> list[urllib.request.BaseHandler]:
     """Return the DNS-pinning handler for ``api_url``, or none if unneeded.
 
-    ``pinned_ip`` is ``None`` when ``reject_private_llm_url`` found nothing
-    to pin (the orchestrator-sidecar loopback fast path, or an
-    unresolvable/unparseable hostname) -- in either case the ordinary
-    ``urllib`` handlers already installed by ``build_opener`` are used
-    unchanged, exactly matching this function's pre-pinning behavior.
+    An empty ``pinned_ips`` means ``reject_private_llm_url`` found nothing
+    to pin (the orchestrator-sidecar loopback fast path never performs a
+    DNS lookup at all) -- the ordinary ``urllib`` handlers already
+    installed by ``build_opener`` are used unchanged. Pinning is also
+    skipped when a proxy is configured for this URL's scheme (Devin
+    Review): the connection classes above dial a pinned gateway IP
+    directly and do not implement CONNECT tunneling or proxy dialing, so
+    pinning through a configured proxy would silently connect to the
+    wrong endpoint and break HTTPS entirely. Falling back to an ordinary,
+    proxy-routed request here is a deliberate, narrower scope than
+    reimplementing proxy-aware pinning: an operator who has configured an
+    HTTP(S) proxy already has a network-level control point upstream of
+    this process.
     """
-    if pinned_ip is None:
+    if not pinned_ips:
         return []
-    if urllib.parse.urlparse(api_url).scheme.lower() == "https":
-        return [_PinnedHTTPSHandler(pinned_ip)]
-    return [_PinnedHTTPHandler(pinned_ip)]
+    scheme = urllib.parse.urlparse(api_url).scheme.lower()
+    if urllib.request.getproxies().get(scheme):
+        return []
+    if scheme == "https":
+        return [_PinnedHTTPSHandler(pinned_ips)]
+    return [_PinnedHTTPHandler(pinned_ips)]
 
 
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
@@ -1463,20 +1502,25 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
     return (scheme, hostname, port) == (sidecar_scheme, sidecar_host, sidecar_port)
 
 
-def reject_private_llm_url(api_url: str) -> str | None:
+def reject_private_llm_url(api_url: str) -> list[str]:
     """Reject non-sidecar localhost, private, and non-http(s) LLM targets.
 
-    Returns the single resolved IP address the caller should pin the actual
-    connection to, closing the validate-then-connect TOCTOU/DNS-rebinding
-    gap (CWE-350/CWE-918) between this check and the request issued later
-    -- a DNS answer that changes between this lookup and the connection
-    would otherwise bypass validation entirely. Returns ``None`` when there
-    is nothing to pin, which matches this function's existing (unchanged)
-    behavior of allowing the URL through in each such case: the
-    orchestrator-sidecar loopback fast path never performs a DNS lookup at
-    all (a fixed loopback literal is inherently safe to connect to
-    directly), and an unresolvable hostname or a `getaddrinfo` result with
-    no parseable IP address leaves nothing valid to pin.
+    Returns every resolved public IP address the caller should pin the
+    actual connection to, closing the validate-then-connect TOCTOU/DNS-
+    rebinding gap (CWE-350/CWE-918) between this check and the request
+    issued later -- a DNS answer that changes between this lookup and the
+    connection would otherwise bypass validation entirely. Returns an
+    empty list only for the orchestrator-sidecar loopback fast path, which
+    never performs a DNS lookup at all (a fixed loopback literal is
+    inherently safe to connect to directly, so there is nothing to pin).
+    Every other outcome either raises or returns at least one address now:
+    an unresolvable hostname or a ``getaddrinfo`` result with no parseable
+    IP address used to return with nothing to pin, silently allowing the
+    URL through unpinned; that let a *second*, independent resolution
+    attempt reach an internal address with no validation at all, which is
+    strictly worse than the original TOCTOU gap this function exists to
+    close, not merely equivalent to it (Devin Review) -- both cases now
+    fail closed instead.
     """
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
@@ -1493,25 +1537,34 @@ def reject_private_llm_url(api_url: str) -> str | None:
     if not hostname:
         raise ValueError("URL must have a valid hostname")
     if is_allowed_orchestrator_sidecar_url(api_url):
-        return None
+        return []
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        return None
-    pinned_ip: str | None = None
+    except socket.gaierror as exc:
+        raise ValueError(f"URL hostname could not be resolved: {exc}") from exc
+    pinned_ips: list[str] = []
     for result in addrinfo:
         ip_str = result[4][0]
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+            or ip.is_reserved
+        ):
             raise ValueError("URL cannot target internal IP addresses")
-        if pinned_ip is None:
-            pinned_ip = ip_str
-    return pinned_ip
+        if ip_str not in pinned_ips:
+            pinned_ips.append(ip_str)
+    if not pinned_ips:
+        raise ValueError("URL hostname did not resolve to any usable IP address")
+    return pinned_ips
 
 
 def call_llm(
@@ -1539,7 +1592,7 @@ def call_llm(
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
-    pinned_ip = reject_private_llm_url(api_url)
+    pinned_ips = reject_private_llm_url(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1589,7 +1642,7 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(
-        *_pinned_connection_handlers(api_url, pinned_ip), NoRedirectHandler()
+        *_pinned_connection_handlers(api_url, pinned_ips), NoRedirectHandler()
     )
     attempt_started = time.monotonic()
     active_phase = "connecting"
