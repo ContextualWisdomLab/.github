@@ -1,0 +1,117 @@
+name: TEMP PR1669 failed-cancellation result repair
+
+on:
+  push:
+    branches: [fix/scheduler-stale-headrefoid-cancellation]
+    paths:
+      - .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml
+      - scripts/ci/pr_review_merge_scheduler.py
+      - tests/test_pr1669_cancel_stale_opencode_runs.py
+
+concurrency:
+  group: temp-pr1669-failed-cancel-result-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/scheduler-stale-headrefoid-cancellation'
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install hash-locked review dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove failed-cancellation regressions are RED
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(PYTHONPATH=. python -m pytest -q \
+            tests/test_pr1669_cancel_stale_opencode_runs.py::test_cancel_stale_opencode_runs_preserves_failed_cancellation \
+            tests/test_pr1669_cancel_stale_opencode_runs.py::test_cancel_stale_pr_runs_preserves_failed_cancellation \
+            tests/test_pr1669_cancel_stale_opencode_runs.py::test_cancel_revalidated_review_run_refs_preserves_failed_cancellation 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 1
+          printf '%s\n' "$output" | grep -Eq '3 failed'
+
+      - name: Apply cancellation-result repair
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/ci/pr_review_merge_scheduler.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = (
+              (
+                  '        force_cancel_workflow_runs(repo, [run_id])\n        return run_id\n',
+                  '        failures = force_cancel_workflow_runs(repo, [run_id])\n        return None if run_id in failures else run_id\n',
+              ),
+              (
+                  '        force_cancel_workflow_runs(run_repo, [run_id])\n        return run_id\n',
+                  '        failures = force_cancel_workflow_runs(run_repo, [run_id])\n        return None if run_id in failures else run_id\n',
+              ),
+              (
+                  '        force_cancel_workflow_runs(run_repo, [run_id])\n        return "cancelled", run_ref\n',
+                  '        failures = force_cancel_workflow_runs(run_repo, [run_id])\n        return ("preserved" if run_id in failures else "cancelled"), run_ref\n',
+              ),
+          )
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one cancellation result call site, found {count}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Verify focused and repository quality
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m pytest -q tests/test_pr1669_cancel_stale_opencode_runs.py tests/test_pr_review_merge_scheduler.py
+          PYTHONPATH=. python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate scripts/ci
+          python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Publish verified exact successor and self-retire
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git rm .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml
+          changed="$(git status --short | awk '{print $2}' | sort)"
+          expected="$(printf '%s\n' scripts/ci/pr_review_merge_scheduler.py .github/workflows/_temp_pr1669_failed_cancel_result_repair.yml | sort)"
+          test "$changed" = "$expected"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(scheduler): preserve runs when cancellation fails"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
