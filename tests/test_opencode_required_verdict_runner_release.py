@@ -40,7 +40,22 @@ def test_missing_verdict_uses_exact_run_wake_instead_of_runner_polling() -> None
     assert 'gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in dispatched
     assert 'select(.event == "pull_request_target")' in dispatched
     assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
-    assert "select(.head_sha == $head)" in dispatched
+    # pull_request_target run.head_sha is the protected base, not the PR head.
+    # Exact-run admission must therefore bind the immutable run to the intended
+    # PR and exact head through the run's pull_requests association.
+    assert "PR_NUMBER" in dispatched
+    assert ".pull_requests" in dispatched
+    assert ".head.sha" in dispatched
+    assert "select(.head_sha == $head)" not in dispatched
+
+
+def test_admission_transport_reads_are_bounded_without_bounding_model_work() -> None:
+    """GitHub REST stalls must release the runner without adding a model deadline."""
+    required = _fail_closed_script()
+    assert 'timeout 30 gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in required
+    assert 'timeout 30 gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in required
+    for token in ("poll_deadline_epoch", "max_poll_transport_failures", "sleep "):
+        assert token not in required
 
 
 def test_missing_verdict_fails_after_one_live_read_and_one_review_read(tmp_path: Path) -> None:
