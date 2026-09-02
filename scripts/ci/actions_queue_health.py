@@ -9,9 +9,11 @@ exact timestamp used for queue-age calculations.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import importlib.util
 from pathlib import Path
 import sys
+from urllib.parse import quote
 
 _CORE_MODULE_PATH = Path(__file__).with_name("actions_queue_health_core.py")
 _CORE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -30,6 +32,8 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
 TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure",)
+TERMINAL_DIAGNOSTIC_LOOKBACK = timedelta(days=7)
+TERMINAL_DIAGNOSTIC_MAX_API_PAGES = MAX_API_PAGES
 
 
 def _normalise_run(
@@ -90,6 +94,13 @@ def _pull_request_identity_view(
     }
 
 
+def _terminal_diagnostic_created_filter(snapshot_timestamp: str) -> str:
+    """Return an encoded rolling lower bound for terminal incident evidence."""
+    diagnostic_cutoff = parse_timestamp(snapshot_timestamp) - TERMINAL_DIAGNOSTIC_LOOKBACK
+    cutoff_text = diagnostic_cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
+    return quote(f">={cutoff_text}", safe="")
+
+
 def collect_snapshot(
     repositories: Sequence[str],
     *,
@@ -103,6 +114,11 @@ def collect_snapshot(
     if len(validated_repositories) != len(repositories):
         raise QueueHealthError("collection repository list contains duplicates")
 
+    snapshot_timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+    parse_timestamp(snapshot_timestamp)
+    terminal_created_filter = _terminal_diagnostic_created_filter(snapshot_timestamp)
     collected_repositories: list[dict[str, Any]] = []
     collection_errors: list[dict[str, str]] = []
     active_statuses = ("in_progress", "pending", "queued", "requested", "waiting")
@@ -183,13 +199,16 @@ def collect_snapshot(
                 workflow_runs = _list_payload(
                     github_json(
                         f"repos/{repository_name}/actions/runs?status={terminal_status}"
+                        f"&created={terminal_created_filter}"
                         f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
                         paginate=True,
-                        max_pages=ACTIVE_RUN_MAX_API_PAGES,
+                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
                         runner=runner,
                     ),
                     "workflow_runs",
-                    max_items=WORKFLOW_RUN_PAGE_SIZE * ACTIVE_RUN_MAX_API_PAGES,
+                    max_items=(
+                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
+                    ),
                 )
                 for workflow_run in workflow_runs:
                     workflow_run_id = workflow_run.get("id")
@@ -291,10 +310,6 @@ def collect_snapshot(
             }
         )
 
-    snapshot_timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace(
-        "+00:00", "Z"
-    )
-    parse_timestamp(snapshot_timestamp)
     return {
         "generated_at": snapshot_timestamp,
         "repositories": collected_repositories,
