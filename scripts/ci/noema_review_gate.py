@@ -1035,23 +1035,40 @@ def _pinned_connection_handlers(
 
     An empty ``pinned_ips`` means ``reject_private_llm_url`` found nothing
     to pin (the orchestrator-sidecar loopback fast path never performs a
-    DNS lookup at all) -- the ordinary ``urllib`` handlers already
-    installed by ``build_opener`` are used unchanged. Pinning is also
-    skipped when a proxy is configured for this URL's scheme (Devin
-    Review): the connection classes above dial a pinned gateway IP
-    directly and do not implement CONNECT tunneling or proxy dialing, so
-    pinning through a configured proxy would silently connect to the
-    wrong endpoint and break HTTPS entirely. Falling back to an ordinary,
-    proxy-routed request here is a deliberate, narrower scope than
-    reimplementing proxy-aware pinning: an operator who has configured an
-    HTTP(S) proxy already has a network-level control point upstream of
-    this process.
+    DNS lookup at all, so this never reaches the proxy check below either)
+    -- the ordinary ``urllib`` handlers already installed by
+    ``build_opener`` are used unchanged.
+
+    Raises when a proxy is configured for this URL's scheme and there is
+    something to pin: the connection classes above dial the pinned gateway
+    IP directly and do not implement CONNECT tunneling or proxy dialing,
+    so pinning through a configured proxy would silently connect to the
+    wrong endpoint and break HTTPS entirely -- but *silently falling back*
+    to an ordinary, unpinned, proxy-routed request would just as silently
+    reopen the exact TOCTOU/DNS-rebinding gap this whole mechanism exists
+    to close for that one configuration (Devin Review, second pass): the
+    already-validated addresses would be discarded with no pinning
+    enforced in their place, rather than either pinning correctly or
+    refusing loudly. Failing closed instead is deliberately narrower in
+    scope than reimplementing proxy-aware pinning (CONNECT tunneling,
+    proxy dialing): today no workflow in this repository configures a
+    proxy, and the orchestrator-sidecar loopback path this mechanism
+    exists to protect never reaches this check at all, so refusing to
+    proceed here costs nothing in the deployment this code actually runs
+    in, while a silent degradation would cost real protection in a
+    deployment this code does not yet run in either.
     """
     if not pinned_ips:
         return []
     scheme = urllib.parse.urlparse(api_url).scheme.lower()
     if urllib.request.getproxies().get(scheme):
-        return []
+        raise ValueError(
+            "NOEMA_LLM_API_URL resolved to a public host that requires DNS "
+            "pinning, but an HTTP(S) proxy is configured for this scheme; "
+            "pinning through a proxy is not supported and falling back to "
+            "an unpinned, proxy-routed request would reopen the TOCTOU/"
+            "DNS-rebinding gap this check exists to close"
+        )
     if scheme == "https":
         return [_PinnedHTTPSHandler(pinned_ips)]
     return [_PinnedHTTPHandler(pinned_ips)]

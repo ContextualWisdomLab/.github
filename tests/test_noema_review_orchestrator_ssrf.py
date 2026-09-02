@@ -261,19 +261,26 @@ def test_pinned_connection_handlers_selects_by_scheme():
     assert isinstance(handlers[0], noema._PinnedHTTPHandler)
 
 
-def test_pinned_connection_handlers_skips_pinning_when_proxy_configured(monkeypatch):
-    """A configured proxy for this scheme disables pinning entirely.
+def test_pinned_connection_handlers_fails_closed_when_proxy_needs_pinning(monkeypatch):
+    """A configured proxy for a scheme that needs pinning raises, not falls back.
 
     The pinned connection classes dial the gateway IP directly and do not
-    implement CONNECT tunneling or proxy dialing, so silently pinning
-    through a configured proxy would connect to the wrong endpoint and
-    break HTTPS entirely (Devin Review) -- falling back to an ordinary,
-    proxy-routed request is the deliberate, safe behavior here.
+    implement CONNECT tunneling or proxy dialing, so pinning through a
+    configured proxy would connect to the wrong endpoint and break HTTPS
+    entirely. An earlier version of this fix silently fell back to an
+    ordinary, unpinned, proxy-routed request instead -- but that silently
+    reopens the exact TOCTOU/DNS-rebinding gap this mechanism exists to
+    close for that one configuration (Devin Review, second pass): the
+    validated addresses would just be discarded with nothing enforced in
+    their place. Failing closed instead makes that loud rather than silent.
     """
     monkeypatch.setattr(
         noema.urllib.request, "getproxies", lambda: {"https": "http://proxy.test:3128"}
     )
-    assert noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"]) == []
+    with pytest.raises(ValueError, match="proxy is configured"):
+        noema._pinned_connection_handlers("https://x.test/", ["203.0.113.9"])
+    # A proxy configured for a *different* scheme than the one in use
+    # doesn't block pinning for this request.
     handlers = noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
     assert len(handlers) == 1
     assert isinstance(handlers[0], noema._PinnedHTTPHandler)
@@ -283,7 +290,12 @@ def test_pinned_connection_handlers_skips_pinning_when_proxy_configured(monkeypa
         "getproxies",
         lambda: {"http": "http://proxy.test:3128", "https": "http://proxy.test:3128"},
     )
-    assert noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"]) == []
+    with pytest.raises(ValueError, match="proxy is configured"):
+        noema._pinned_connection_handlers("http://x.test/", ["203.0.113.9"])
+
+    # No pinning needed at all (e.g. the sidecar loopback fast path) means
+    # the proxy check is never reached, regardless of ambient proxy config.
+    assert noema._pinned_connection_handlers("https://x.test/", []) == []
 
 
 class _EchoHandler(http.server.BaseHTTPRequestHandler):
