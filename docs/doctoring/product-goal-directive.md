@@ -226,3 +226,28 @@ fixed:
   edited) and new §10.
 - `.github/workflows/strix.yml` — the live source verified before writing
   §10, not merely cited from memory of the existing note.
+
+## 2026-09-01 second follow-up: §10 wording refined with an explicit scope qualifier
+
+- **Date:** 2026-09-01 (same day, a third `/loop` invocation)
+- **Subject:** the owner re-issued item 10 with an added qualifier:
+  "Contextual-Orchestrator의 모델은 **GitHub Actions Workflow 이용에 관해**
+  orchestrator/free 로 고정" ("...is fixed to orchestrator/free **with
+  respect to GitHub Actions Workflow usage**"). The bare one-line version
+  recorded in the prior follow-up above could be misread as pinning
+  `contextual-orchestrator`'s pool choice for *every* caller, contradicting
+  §8's own general-capability framing (broad model/modality support,
+  five-secret auto-discovery as a product-level design principle for the
+  orchestrator itself). The qualifier makes explicit what the live
+  `strix.yml` evidence already implied: this pin governs the three
+  required-check GitHub Actions Workflows (`OpenCode`, `Noema`, `Strix`),
+  not the orchestrator's general product capability for other callers
+  (e.g. a future non-CI consumer, or an end-user-facing integration).
+- **What changed:** updated §10's verbatim quote to the fuller wording and
+  expanded its context paragraph to state the CI-workflow-scoped reading
+  explicitly, cross-referencing §8's own general-capability framing so the
+  two sections read consistently rather than appearing to conflict.
+- **Decision record:** none new — same as the prior §10 follow-up, this is
+  a wording clarification of an already-implemented, already-recorded pin,
+  not a policy change.
+- **PR:** ContextualWisdomLab/.github (same PR as the two entries above).

@@ -104,23 +104,31 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 ## 10. Contextual-orchestrator pool pin
 
-> orchestrator/free 로 고정.
+> Contextual-Orchestrator의 모델은 GitHub Actions Workflow 이용에 관해 orchestrator/free 로 고정.
 
-**Context (added 2026-09-01):** this one-line item crystallizes, into the primary numbered directive
-itself, a decision that previously lived only in an annotation below §8 (the "Note (2026-08-30,
-superseded...)" above). That note already recorded that `.github/workflows/strix.yml` hardcodes
-`STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` and fails closed on any other
-value — confirmed still true by direct inspection of `strix.yml` at the time of this revision (the
-`case` statements gating `STRIX_MODEL_REQUESTED`/`STRIX_MODEL` accept only
-`orchestrator/free`/`contextual-orchestrator/orchestrator/free` and `::error::` on anything else).
-This item makes that pin an explicit standing instruction rather than something an agent could only
-discover by reading a superseded-vs-superseding note pair below §8. It does not introduce a new
-technical requirement — `OpenCode`, `Noema`, and `Strix` are now all pinned to the fail-closed,
-ZDR-prioritized `orchestrator/free` pool, superseding the older "Strix uses the provider-diverse
-`orchestrator/auto` pool" framing in §8's first (CodeRabbit) note above, which itself predates the
-correction in the second note. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains
-the authoritative record for *why*; this item and the §8 notes together are the authoritative record
-for *what is currently pinned*.
+**Context (added 2026-09-01, wording refined the same day by a follow-up `/loop` invocation to add
+the scope qualifier "GitHub Actions Workflow 이용에 관해" — i.e. this pin governs CI-consumer
+workflows, not `contextual-orchestrator`'s general product capability for other callers):** this
+item crystallizes, into the primary numbered directive itself, a decision that previously lived
+only in an annotation below §8 (the "Note (2026-08-30, superseded...)" above). That note already
+recorded that `.github/workflows/strix.yml` hardcodes `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL`
+to `orchestrator/free` and fails closed on any other value — confirmed still true by direct
+inspection of `strix.yml` at the time of this revision (the `case` statements gating
+`STRIX_MODEL_REQUESTED`/`STRIX_MODEL` accept only `orchestrator/free`/
+`contextual-orchestrator/orchestrator/free` and `::error::` on anything else). This item makes that
+pin an explicit standing instruction rather than something an agent could only discover by reading a
+superseded-vs-superseding note pair below §8. It does not introduce a new technical requirement for
+the workflows already pinned — `OpenCode`, `Noema`, and `Strix` (the three required-check GitHub
+Actions Workflows) are now all pinned to the fail-closed, ZDR-prioritized `orchestrator/free` pool,
+superseding the older "Strix uses the provider-diverse `orchestrator/auto` pool" framing in §8's
+first (CodeRabbit) note above, which itself predates the correction in the second note. The added
+qualifier does clarify scope, though: it binds *GitHub Actions Workflow* consumers specifically, not
+every possible caller of `contextual-orchestrator` — consistent with §8's own general-capability
+framing (broad model/modality support, auto-discovery across all five provider secrets) being a
+product-level design principle for the orchestrator itself, not a CI routing policy for every
+consumer. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains the authoritative
+record for *why*; this item and the §8 notes together are the authoritative record for *what is
+currently pinned, and for which consumers*.
 
 ## How to point a `/goal` session at this directive
 
