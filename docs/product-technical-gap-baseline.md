@@ -2681,11 +2681,11 @@ of this item's (corrected) queue observation.
 
 ## 2026-09-02 backlog item 32 verification: batch-endpoint capability gate already root-cause fixed, pending merge
 
-**Task.** Verify whether `contextual-orchestrator/pull/1021` already fixes backlog item 32 (whether the
+**Task.** Verify whether `ContextualWisdomLab/contextual-orchestrator#1021` already fixes backlog item 32 (whether the
 real Batch API should be gated to agents that actually support it, rather than any general chat
 model), before doing any new investigation.
 
-**Verified: yes, it does, correctly.** PR `#1021` (`fix(batch): gate real Batch API on declared
+**Verified: yes, it does, correctly.** PR `ContextualWisdomLab/contextual-orchestrator#1021` (`fix(batch): gate real Batch API on declared
 batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`) adds an explicit
 `ModelAgent.batch_endpoint_supported: bool | None` field — mirroring the existing
 `reasoning_effort_supported` capability-declaration pattern — and changes `batch_chat()`'s routing so
@@ -2702,7 +2702,7 @@ would 404 or hard-failing the whole batch group for a provider that was never as
 **Conclusion.** No new code needed for this item — the root-cause fix already exists, is well-scoped,
 and is fail-safe by construction (unproven support degrades to emulation, never a guess). It simply
 hasn't merged yet (open, behind `main`, same queue/scheduler backlog every other PR referenced in this
-document is also waiting on). Re-open only if `#1021` is closed without merging, or if its merged form
+document is also waiting on). Re-open only if `ContextualWisdomLab/contextual-orchestrator#1021` is closed without merging, or if its merged form
 diverges from what's described above.
 
 ## 2026-09-02 backlog items 8/9 verification: Bytez and OpenRouter already included in orchestrator/free auto-discovery
@@ -2907,6 +2907,8 @@ NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRout
 
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
+**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
 ## 2026-09-02 scheduler target-list drift — item 16/17 scoping, found live-broken (fixed) and structurally closed
 
 **Task.** Scoping item 16/17 ("GitHub Actions 파일 최대한 통합" — consolidate GitHub Actions files as much as
@@ -2944,7 +2946,8 @@ hourly heartbeat had been silently failing closed every hour, undetected. Fixed 
 `gh variable set` (same safe, narrow mechanism already validated by `#1743`'s live fix), independently
 confirmed applied by a peer session.
 
-**Structural fix.** `.github#1747` adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
+**Structural fix (proposed, not yet on `main`).** `ContextualWisdomLab/.github#1747` (open, not yet
+merged, at time of writing) adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
 hand-maintained mirror of the variable's live value (no GitHub API commits a repository variable's value
 to source control, so this is deliberately a mirror a human updates alongside `gh variable set`, not a
 generator), and a new contract test
@@ -2955,8 +2958,9 @@ fails at review time instead of at the next silent hourly failure. Deliberately 
 auto-mutating workflow to keep the live variable in sync automatically — matches this org's established
 preference (used throughout this repo's `test_*.py` suite) for a loud, human-resolved contract-test
 failure over a workflow that "magically" fixes drift, per explicit peer review of the approach before
-implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` for the full incident
-writeup and root-cause argument.
+implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` (added by the same
+unmerged `#1747`, not yet on `main`) for the full incident writeup and root-cause argument once that
+PR lands.
 
 **Conclusion.** Item 16/17's literal framing ("reduce the number of workflow files") is separately valid
 and already substantially addressed by the earlier duplication audit; this finding is a different axis
@@ -2967,46 +2971,27 @@ regularly-running workflow (checking a live org/repo variable requires network a
 repo's offline `pytest tests` suite) — left as an open follow-up in the doctoring record rather than
 implemented, to keep this fix a pure test-and-mirror addition with zero risk to production scheduler
 workflows.
-
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
 
-## 2026-09-03 backlog items 4/39 verification: fixed Noema/OpenCode repair timeout already removed, not a live gap
+## 2026-09-03 backlog items 4/39 follow-up: a second, later timeout fix on top of PR #1672
 
-**Task.** Items 4 and 39 flagged a fixed ~900-second (later described as up to a few hundred minutes)
-wall-clock cap on Noema/OpenCode repair work as a bug: `docs/product-goal-directive.md` #8 states "Model
-timeout은 application·Agent·Gateway 공통 상한 없이 기본 null이다" (no common upper bound across the
-application/agent/gateway stack; defaults to null) and "정확성을 우선하고 OpenCode·Strix·Noema의 모델당 2시간
-이상을 수용한다" (prioritize accuracy; accommodate over two hours per model) — a fixed cap that could cut a
-model call off mid-repair violates both. The plan going in was to replace any such cap with a Fugu
-(Sakana AI, 2026-04-24)-style recursive-refinement mechanism: treat recursion depth as an inference-time
-dial, detect first-pass shortfall, and spin a corrective pass, rather than an arbitrary wall-clock cutoff.
+**Task.** Independently verifying items 4/39 (the fixed Noema/OpenCode repair timeout) landed on the
+"Noema single-request model-control ownership — PR #1672" entry above as the root-cause fix, already
+merged and documented by a peer session. Checked for anything #1672 left open before concluding the
+item is fully closed.
 
-**Already fixed, and by a simpler, more directly policy-compliant change than the one planned here.**
-`.github#1727` ("fix(workflows): remove job-level timeouts that cap model inference," merged 2026-09-02
-11:12 UTC, commit `8eaa650`) removed `timeout-minutes: 25` from `pr-review-autofix.yml`'s `autofix` job
-and `timeout-minutes: 210` from `noema-review.yml`'s `noema-review` job — both jobs whose dominant,
-synchronous step body *is* the model call (`opencode run` for autofix; `two_phase.py`'s
-`NOEMA_LLM_MODEL=orchestrator/free` call for Noema review), so any job-level cap on either directly
-truncates the model's own reasoning/tool-use time. No replacement bound was added; both now default to
-null, matching the policy exactly rather than rounding "over two hours" up to a new hard ceiling. Full
-root-cause writeup: `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md` — notably,
-this was originally caught by this org's own autonomous self-repair loop (a Devin review on
-`.github#1661` flagged leftover debris from an in-flight but never-landed autofix attempt), so the
-finding this task set out to make had already been made and fixed by the ecosystem itself, one day
-before this verification pass started.
+**One additional, later fix found, not yet cross-referenced above.** `.github#1727` ("fix(workflows):
+remove job-level timeouts that cap model inference," merged 2026-09-02 11:12 UTC, commit `8eaa650`) is
+a distinct fix from #1672: it removed `timeout-minutes: 25` from `pr-review-autofix.yml`'s `autofix` job
+and `timeout-minutes: 210` from `noema-review.yml`'s `noema-review` job — job-level caps added the same
+day for an unrelated, legitimate reason (bounding genuinely-stuck jobs org-wide) that turned out to also
+cap these two jobs' dominant synchronous step, which *is* the model call itself (`opencode run` for
+autofix; `two_phase.py`'s `NOEMA_LLM_MODEL=orchestrator/free` call for Noema review). Full writeup:
+`docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`. Both fixes now leave every
+Noema/OpenCode model-call path at the policy's null default; neither reintroduces a fixed cap.
 
-**Not the same as `opencode-review-dispatch.yml`'s `timeout --kill-after=20 900 ...` sandbox wrapper.**
-Re-checked to be sure this task wasn't looking at the wrong "900": that wrapper bounds how long an
-*untrusted PR's own test/PoC suite* may run inside the isolated `setpriv` sandbox during evidence
-gathering — a resource/security control on adversarial input, not a cap on the review model's reasoning
-time — and is correctly out of scope for this policy. `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`
-itself independently re-checked every other `timeout-minutes` in the org's required workflows
-(`opencode-review.yml`'s `poll_deadline_epoch`, `pr-review-merge-scheduler.yml`'s `scan-pr-queue`,
-`strix.yml`'s bookkeeping jobs) and confirmed none of them bound a step whose body is itself a
-synchronous model call.
-
-**Conclusion.** Items 4/39 are closed as already fixed. The Fugu/TRINITY/Thompson-Sampling test-time-compute
-allocation work item 8's directive text asks for remains live, but scoped to `contextual-orchestrator`'s
-model-routing layer (`_select_agent`'s deterministic top-1 selection, `ReasoningEffortProfile`'s existing
-role-effort catalog) — not to this repository's CI timeouts, which needed no recursive-refinement
-mechanism, only the null default the policy already specifies.
+**Conclusion.** Items 4/39 are closed as already fixed, via #1672 (the original 900-second repair
+deadline) and #1727 (the follow-on job-level caps). Confirms the Context Map boundary #1672 established
+above: recursive test-time-compute strategy (Fugu/Conductor/TRINITY, role-based effort allocation) is a
+`contextual-orchestrator` routing concern, not a `.github` CI-timeout concern — this repository's part is
+finished at "impose no fixed ceiling," not at building the recursion itself.
