@@ -74,10 +74,15 @@ def test_every_disabled_identity_is_read_back_and_verified() -> None:
     """A successful mutation is not evidence until the registry state is re-read."""
     text = _text()
 
-    assert 'state="$(gh api "/repos/${REPOSITORY}/actions/workflows/${workflow_id}" --jq \'\'.state\'\')"' in text
+    assert (
+        "gh api \"/repos/${REPOSITORY}/actions/workflows/${workflow_id}\" --jq '.state'"
+        in text
+    )
     assert 'if [[ "$state" != "disabled_manually" ]]' in text
     assert 'disable_and_verify "$SELF_PATH"' in text
-    assert text.rindex('disable_and_verify "$SELF_PATH"') > text.rindex('for path in "${legacy_paths[@]}"')
+    assert text.rindex('disable_and_verify "$SELF_PATH"') > text.rindex(
+        'for path in "${legacy_paths[@]}"'
+    )
 
 
 def test_retirement_does_not_expose_reviewer_or_provider_credentials() -> None:
