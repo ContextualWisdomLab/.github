@@ -466,7 +466,7 @@ jobs:
             fi
             if [ "${live_poll_head,,}" != "${HEAD_SHA,,}" ]; then
               echo "::notice::Pull request head moved while waiting for a current-head OpenCode verdict; retiring superseded Required OpenCode Review poll."
-              exit 1
+              exit 0
             fi
             if [ "$live_poll_state" = "closed" ]; then
               echo "PR closed while waiting for the current-head OpenCode verdict; the poll is no longer required."
