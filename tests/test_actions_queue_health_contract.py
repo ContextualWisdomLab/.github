@@ -42,6 +42,7 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
     assert payload == {
         "repositories": [
             "ContextualWisdomLab/.github",
+            "ContextualWisdomLab/ConceptWeave",
             "ContextualWisdomLab/TEPP",
             "ContextualWisdomLab/contextual-orchestrator",
             "ContextualWisdomLab/naruon",
