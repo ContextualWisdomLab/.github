@@ -5,6 +5,43 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Consolidate the two genuinely duplicate quality-CI callers behind one reusable
+  `workflow_call` gate; leave the other six alone.** An audit of the 8
+  `.github/workflows/*-quality-ci.yml` bootstrap-templated files found only one pair —
+  `javascript-coverage-quality-ci.yml` and
+  `organization-commercial-readiness-loop-quality-ci.yml` — where the shared skeleton
+  (checkout at the exact PR head, an identical pinned six-package mini-requirements
+  heredoc, `coverage run --branch -m pytest --import-mode=importlib`, `coverage report
+  --fail-under=100`, `compileall`, `git diff --exit-code`) was byte-for-byte the same
+  logic with only the timeout, pytest target, and coverage `--include` path varying per
+  subsystem. Extracted that shared shape into a new
+  `.github/workflows/exact-head-coverage-quality-gate.yml` reusable workflow
+  (`workflow_call`-only, four required inputs: `timeout_minutes`, `pytest_target`,
+  `coverage_include`, `compileall_targets`) and turned both callers into thin
+  `uses:`/`with:` wrappers. Verified first that no branch-protection required status
+  check or the org's required-workflow ruleset references either caller's job name
+  (`exact-head-coverage-contract` / `exact-head-policy`) before restructuring, so nothing
+  downstream depends on their exact shape. Updated the three contract tests that pinned
+  the old inline text
+  (`test_organization_commercial_readiness_loop_policy.py`,
+  `test_organization_commercial_readiness_loop_import_contract.py`) to check the
+  coverage/exact-head mechanics against the shared gate file and the subsystem wiring
+  against each caller, and added
+  `tests/test_exact_head_coverage_quality_gate_contract.py` to pin the gate's own
+  `workflow_call` contract and both callers' input wiring. The other 6 files
+  (`agent-mention-router-quality-ci.yml`, `exact-artifact-sbom-attestation-quality.yml`,
+  `noema-token-lifetime-quality-ci.yml`,
+  `opencode-rust-coverage-toolchain-quality-ci.yml`, `strix-changed-path-quality-ci.yml`,
+  `trusted-uv-materializer-quality-ci.yml`) look superficially similar but each encodes a
+  genuinely different policy -- harden-runner presence, a docstring/interrogate gate,
+  exact-head-verification mechanics (or, for noema, no `ref:` pin at all), multi-Python-
+  version matrices with non-shared extra logic (a tomli-fallback exercise, a Python 3.10
+  compile-only contract), or no `coverage --fail-under` step at all (strix delegates to a
+  bash gate script instead) -- so templatizing them would either weaken what they
+  individually enforce or need enough per-caller toggles to defeat the point of sharing.
+  Left untouched, matching the precedent already set for ruling out the agent-mention
+  dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
+  2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
