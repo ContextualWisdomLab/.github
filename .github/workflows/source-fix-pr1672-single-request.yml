@@ -17,6 +17,11 @@ permissions:
 
 jobs:
   materialize:
+    # The verified successor deletes this workflow and its driver in the commit
+    # below. GitHub may still evaluate the predecessor definition for that
+    # deletion push, so make the one-shot retirement idempotently successful
+    # instead of leaving a known-red follow-up run.
+    if: github.event.head_commit.message != 'fix(noema): delegate structured repair to orchestrator'
     runs-on: ubuntu-slim
     steps:
       - name: Checkout exact writer head without persisted credentials
@@ -40,6 +45,56 @@ jobs:
           python-version: "3.14"
           cache: pip
 
+      - name: Repair exact-head materializer anchors before execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/ci/source_fix_pr1672_single_request.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_gate = r'''    source = replace_once(
+              source,
+              r'    try:\n        verdict = call_llm\((.*?)\n        \)\n    except StaleHeadDuringRepairRetryError:\n        print\("Pull request head changed during review; Noema review skipped before repair retry\."\)\n        return 0\n',
+              r'    verdict = call_llm(\1\n    )\n',
+              'inspect_and_review retry catch',
+          )'''
+          new_gate = r'''    source = replace_once(
+              source,
+              r'    try:\n        verdict = call_llm\(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths\)\n    except StaleHeadDuringRepairRetryError:\n        print\("Pull request head changed during review; Noema review skipped before repair retry\."\)\n        return 0\n',
+              '    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)\n',
+              'inspect_and_review retry catch',
+          )'''
+          if text.count(old_gate) != 1:
+              raise SystemExit('PR1672 materializer gate anchor moved; refusing an unverified rewrite')
+          text = text.replace(old_gate, new_gate, 1)
+
+          old_two_phase = r'''    source = replace_once(
+              source,
+              r'    try:\n        verdict = gate\.call_llm\((.*?)\n        \)\n    except gate\.StaleHeadDuringRepairRetryError:\n        print\("Pull request head changed during model repair retry; verdict was not sealed\."\)\n        return 0\n',
+              r'    verdict = gate.call_llm(\1\n    )\n',
+              'two-phase retry catch',
+          )'''
+          new_two_phase = r'''    source = replace_once(
+              source,
+              r'    try:\n        verdict = gate\.call_llm\(\n            repo,\n            number,\n            pull_request,\n            diff,\n            truncated,\n            expected,\n            review_context,\n            changed_paths,\n        \)\n    except gate\.StaleHeadDuringRepairRetryError:\n        print\("Pull request head changed during model repair retry; verdict was not sealed\."\)\n        return 0\n',
+              '    verdict = gate.call_llm(\n        repo,\n        number,\n        pull_request,\n        diff,\n        truncated,\n        expected,\n        review_context,\n        changed_paths,\n    )\n',
+              'two-phase retry catch',
+          )'''
+          if text.count(old_two_phase) != 1:
+              raise SystemExit('PR1672 two-phase materializer anchor moved; refusing an unverified rewrite')
+          text = text.replace(old_two_phase, new_two_phase, 1)
+
+          # The two repaired transformations no longer rely on replacement
+          # backreferences, so replace_once can keep literal replacement
+          # semantics for every other generated-source edit.
+          path.write_text(text, encoding='utf-8')
+          PY
+          python -m py_compile scripts/ci/source_fix_pr1672_single_request.py
+          git diff --check
+
       - name: Install exact hash-verified review test toolchain
         shell: bash
         run: |
@@ -50,6 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -e scripts/ci/source_fix_pr1672_single_request.py
           env -u GH_TOKEN -u GITHUB_TOKEN python scripts/ci/source_fix_pr1672_single_request.py
 
       - name: Verify permanent single-request contract and focused regressions
