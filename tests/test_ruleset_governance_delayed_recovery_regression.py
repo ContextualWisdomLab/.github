@@ -114,6 +114,136 @@ def test_delayed_recovery_acceptance_settles_before_any_second_put(monkeypatch) 
     assert put_count == 1
 
 
+def test_initial_ambiguous_put_waits_through_intervening_admin_version(monkeypatch) -> None:
+    """An administrator version appearing first cannot end initial PUT settlement."""
+
+    module = load_module()
+    target = repository_target(module)
+    drifted = live_payload()
+    drifted["bypass_actors"] = [
+        {"actor_id": None, "actor_type": "OrganizationAdmin", "bypass_mode": "always"}
+    ]
+    desired = module._desired_payload(drifted, target)
+    desired_state = {**drifted, **desired}
+    administrator_state = {
+        **drifted,
+        "name": "Administrator intervening state",
+        "enforcement": "evaluate",
+    }
+    history_reads = 0
+    recovered: list[tuple[int, int, dict]] = []
+
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
+
+    def fake_history(*_args):
+        nonlocal history_reads
+        history_reads += 1
+        if history_reads == 1:
+            return [{"version_id": 11}, {"version_id": 10}]
+        return [
+            {"version_id": 12},
+            {"version_id": 11},
+            {"version_id": 10},
+        ]
+
+    def fake_history_state(_target, version):
+        return {11: administrator_state, 12: desired_state}[version]
+
+    def fake_recovery(_target, *, current_version, current_payload, displaced_version, **_kwargs):
+        recovered.append((current_version, displaced_version, current_payload))
+
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
+    monkeypatch.setattr(module, "_history_version_state", fake_history_state)
+    monkeypatch.setattr(module, "_recover_displaced_history_state", fake_recovery)
+    monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: desired_state)
+
+    with pytest.raises(module.RulesetGovernanceError, match="concurrent ruleset history detected"):
+        module._confirm_ambiguous_put(
+            target,
+            baseline_version=10,
+            desired=desired,
+            expected_main_sha="a" * 40,
+        )
+
+    assert history_reads == 2
+    assert recovered == [(12, 11, desired)]
+
+
+def test_recovery_ambiguous_put_waits_through_intervening_admin_version(monkeypatch) -> None:
+    """A delayed recovery PUT tracks an administrator predecessor before restoring it."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    restore_state = {
+        **current,
+        "name": "Original administrator state",
+        "enforcement": "evaluate",
+    }
+    intervening_state = {
+        **current,
+        "name": "Intervening administrator state",
+        "enforcement": "evaluate",
+    }
+    live_state = current
+    history_reads = 0
+    put_bodies: list[dict] = []
+
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
+
+    def fake_history_state(_target, version):
+        return {
+            9: restore_state,
+            11: intervening_state,
+            12: restore_state,
+            13: intervening_state,
+        }[version]
+
+    def fake_history(*_args):
+        nonlocal history_reads, live_state
+        history_reads += 1
+        if history_reads == 1:
+            live_state = intervening_state
+            return [{"version_id": 11}, {"version_id": 10}]
+        if history_reads == 2:
+            live_state = restore_state
+            return [{"version_id": 12}, {"version_id": 11}]
+        return [{"version_id": 13}, {"version_id": 12}]
+
+    def fake_api(method, endpoint, *, body=None):
+        nonlocal live_state
+        if method == "GET" and endpoint == target.endpoint:
+            return live_state
+        if method == "PUT" and endpoint == target.endpoint:
+            assert body is not None
+            put_bodies.append(body)
+            if len(put_bodies) == 1:
+                raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+            live_state = {**live_state, **body}
+            return {}
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_history_version_state", fake_history_state)
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+
+    module._recover_displaced_history_state(
+        target,
+        current_version=10,
+        current_payload=module._editable_projection(current),
+        displaced_version=9,
+        expected_main_sha="a" * 40,
+    )
+
+    assert history_reads == 3
+    assert put_bodies == [
+        module._editable_projection(restore_state),
+        module._editable_projection(intervening_state),
+    ]
+
+
 def test_recovery_chain_exhaustion_fails_closed_after_bounded_attempts(monkeypatch) -> None:
     """A perpetual collision chain reaches the bounded terminal error, never an unbounded loop."""
 
