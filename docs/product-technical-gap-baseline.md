@@ -2686,3 +2686,64 @@ an instantaneous depth drop was never the right signal to wait for.
 corroboration" paragraph appended to it (`naruon#1486`'s `strix` check queued-then-cancelled
 observation). Together the two entries are the current, most-complete picture of why Actions runners
 across this organization were saturated through early 2026-09-01/02, and what has been fixed so far.
+
+## 2026-09-02 product-goal-directive.md second revision: three new tracked gaps, one tracked doc-sync follow-up
+
+The owner re-issued the full ten-section `docs/product-goal-directive.md` directive again as a chat
+message (see `docs/doctoring/product-goal-directive.md`'s 2026-09-02 entry for the full
+section-by-section diff reasoning). Three of the five substantively-expanded sections introduce
+concrete, currently-unimplemented product/process gaps worth tracking here per directive §1's own
+instruction; a fourth item is a documentation-sync gap (a set of ecosystem repos this directive now
+names that `docs/CWL-MASTER-CONTEXT.md`'s own catalog does not yet carry), not a product gap.
+
+**Gap 3 — i18n translation ledger must be a versioned DB resource (directive §4).** New requirement:
+any customer-facing UI's translation strings must live in a **versioned DB resource**, never static
+files or a JS bundle; server/native code fetches only the current screen's keys with caching, the
+browser is never handed the whole catalog or heavy i18n JavaScript, and no SPA architecture may be
+assumed. Eight languages are named (한국어·영어·일본어·중국어·베트남어·스페인어·독일어·프랑스어 —
+ko/en/ja/zh/vi/es/de/fr), each requiring its own Storybook/E2E pass checking for width/wrap/CJK/
+text-expansion/font-fallback/locale-format failures (truncation, overlap, meaning-loss), not a single
+default-locale screenshot. If no shared translation-management product exists, a new repository must
+provide per-product translation review/approval/deploy/rollback API plus an admin UI. **Not audited
+in this pass:** whether `naruon/frontend` (the only customer-facing web surface among this session's
+four in-scope repos — `.github`, `noema`, `contextual-orchestrator`, `naruon`) currently stores its
+i18n strings as files/bundle (the likely default for a Next.js app scaffolded without this
+requirement in mind) or already meets this bar. That audit is deliberately deferred to a dedicated
+future Gap increment — this entry only records the requirement and its current unverified-compliance
+status, consistent with directive §1's "one Gap increment at a time" philosophy.
+
+**Gap 4 — Ontology-pipeline repo-responsibility split needs a cross-check, not just a citation
+(directive §5).** New requirement: ConceptWeave owns the
+observe→discover→propose→align→validate→review→publish pipeline and semantic release; SDP owns
+catalog/governance/consumption; context-graph-contracts owns interop contracts;
+enterprise-architecture-core owns the Context Map and cross-cutting decisions. Released
+concepts/relations/dimensions/measures/mappings must carry evidence/provenance/validity/confidence/
+status/deprecation/locale-label metadata; consumers may use only released API/contract/ACL (no file
+copies, no cross-service SQL, no unapproved publication); the UI translation ledger (Gap 3, above)
+and the ontology label ledger must never share a store. This session could confirm `semantic-data-portal`'s
+role against its existing `docs/CWL-MASTER-CONTEXT.md` description (consistent, additive), but could
+**not** reach `ConceptWeave`, `context-graph-contracts`, or `enterprise-architecture-core` (outside
+this session's repository scope) to confirm the pipeline/decision-ownership split actually matches
+what those repos currently implement, or whether the immutable-release metadata contract is already
+enforced anywhere. Needs a follow-up pass with access to those three repos before treating this split
+as verified rather than merely recorded.
+
+**Gap 5 — `docs/CWL-MASTER-CONTEXT.md` ecosystem catalog is missing 14 repo names the directive now
+uses (directives §5, §9).** `ConceptWeave`, `context-graph-contracts`, `enterprise-architecture-core`,
+`EgressWeave`, `OriginWeave`, `pingora-gateway`, `quarantine-sandbox-runtime`, `EmbedRelay`,
+`DiagramWeave`, `mhtml-etl-gateway`, `psychometrics-commons`, `PolicyWeave`, `CalendarWeave`, and
+`supply-chain-control-plane` are all named with specific responsibilities in the 2026-09-02
+`product-goal-directive.md` revision, but none of the fourteen appears in `CWL-MASTER-CONTEXT.md`'s
+own ecosystem catalog or UML diagram as of this entry. This is a documentation-sync gap, not
+necessarily a missing-implementation one — several of these repos may already exist and do exactly
+what the directive says, simply undocumented in the master-context file yet. Needs: an agent (or the
+owner) with access to these repos to confirm each one's actual current state, then add matching
+entries to `CWL-MASTER-CONTEXT.md`'s repo catalog and ecosystem UML so the two documents stay
+consistent — this session's repository access (`.github`, `noema`, `contextual-orchestrator`,
+`naruon`) does not extend far enough to do that confirmation itself.
+
+None of these three gaps blocks any currently open PR; all are recorded so a future pass of this loop
+(or a `spawn_task` suggestion, repository access permitting) picks them up once the open-PR queue is
+exhausted, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다." Gap 4 and
+Gap 5 are the same underlying documentation-completeness issue seen from two angles (pipeline-role
+verification vs. catalog-entry existence) and should likely be closed by the same follow-up pass.

@@ -251,3 +251,131 @@ fixed:
   a wording clarification of an already-implemented, already-recorded pin,
   not a policy change.
 - **PR:** ContextualWisdomLab/.github (same PR as the two entries above).
+
+## 2026-09-02 revision: five sections gained new substantive content
+
+- **Date:** 2026-09-02
+- **Subject:** the owner re-issued the full ten-section directive again, this time as a genuine
+  chat-turn message (not a `/loop` invocation) titled "아래는 일반 지침" ("general guidance below").
+  A section-by-section comparison against the stored text found §1, §3, §6, and §8 re-authored in
+  visibly condensed form — same substance, shorter Korean, no new obligation — left untouched per
+  the same policy as the 2026-09-01 revision. §2, §4, §5, §7, and §9 each contained genuinely new
+  sentences absent from every prior version of this file, added in place (inside the existing
+  verbatim quote blocks, or as a new quoted addition immediately following the existing block where
+  the new material reads as a distinct addendum rather than an in-line insertion):
+
+  1. **§2 (concurrent operation / root-cause fixes)** gained an explicit "immature core" protocol:
+     when a needed core dependency is immature, the consumer must never duplicate, work around, or
+     exclude it — instead develop the missing RED test, contract, feature, docs, and release *in the
+     owner repo*, get it through that repo's own CI to GREEN, and only then connect the consumer to
+     the resulting versioned release. Excluding a dependency is reserved for two cases only: the
+     bounded context itself is wrong, or there is genuinely no shared need. This directly formalizes
+     a discipline this session was already practicing (e.g. this same session's earlier passes fixing
+     `contextual-orchestrator`'s discovery-retry gap at the owner rather than working around it in a
+     consumer) into an explicit, binding rule — and it is the same principle §9 restates from the
+     repository-selection angle ("공통 기능은 core owner로 추출해 통합 CI로 개발한다"), so the two
+     additions cross-reference each other. Also gained one new reference tool:
+     https://github.com/epoko77-ai/im-not-ai for Korean-language phrasing/documentation/translation
+     polishing, explicitly scoped to preserve meaning, facts, figures, and proper nouns (not a
+     free-form rewrite tool) — added alongside the existing ponytail/superpowers/code-review-graph/
+     codegraph tool list already in this section, matching where the new text placed it.
+  2. **§4 (UX/UI and customer-facing expression)** gained the largest single expansion in this
+     revision: (a) an explicit UI-composition principle ("all UI is reusable objects, pages are
+     compositions of them"); (b) a named list of Storybook states to isolate-develop and document
+     (normal/loading/empty/error/permission/responsive/interaction) replacing the vaguer "scene- and
+     edge-case-specific events" wording; (c) an explicit shadcn/ui-vs-Storybook clarification
+     (shadcn/ui is a component *source*, not a Storybook substitute — the two are not in a
+     replace-one-with-the-other relationship); (d) an explicit frontend-stack-flexibility principle
+     (no fixed stack; React/Vite/shadcn/ui/jQuery 4 and others are acceptable when they meet
+     security/maintainability/standards/accessibility/performance bars); (e) a specific Keyverse
+     integration pattern not previously recorded anywhere in this file (Keyverse stays the
+     authentication *backend* via Direct Grant/ROPC or the Keycloak REST API, but login/signup/
+     account-recovery screens are the product's own forms, not a Keyverse-hosted redirect page); and
+     (f) a genuinely new, concrete i18n architecture mandate: eight named languages (한국어·영어·
+     일본어·중국어·베트남어·스페인어·독일어·프랑스어 — ko/en/ja/zh/vi/es/de/fr), per-language
+     Storybook/E2E testing for width/wrap/CJK/text-expansion/font-fallback/locale-format issues
+     (truncation, overlap, meaning-loss — not a single default-locale screenshot pass), and — the
+     load-bearing part — **the translation ledger must be a versioned DB resource, never static
+     files or a JS bundle**: server/native code fetches only the current screen's keys with caching,
+     the browser is never handed the whole catalog or heavy i18n JavaScript, and no SPA architecture
+     may be assumed. If no shared translation-management product exists yet, a new repository must be
+     stood up to provide per-product translation review/approval/deploy/rollback API plus an admin
+     UI. This i18n architecture requirement is recorded as a new, currently-unimplemented,
+     concrete product gap — this session did **not** audit naruon's (or any other product's) current
+     i18n implementation against it in this pass; that audit is deliberately deferred to a future Gap
+     increment (see `docs/product-technical-gap-baseline.md`'s 2026-09-02 entry), consistent with
+     this directive's own "one Gap increment at a time" philosophy rather than trying to verify every
+     product's compliance in the same pass that records the requirement.
+  3. **§5 (architecture, naming, and database conventions)** gained a concrete repo-responsibility
+     split for the org's ontology pipeline, added as a quoted addendum after the existing
+     Devin-Review naming reconciliation (not merged into the original 2026-08-30 quote block, since
+     it reads as new material rather than a correction to it): ConceptWeave owns the
+     observe→discover→propose→align→validate→review→publish pipeline and semantic release;
+     semantic-data-portal owns catalog/governance/consumption; context-graph-contracts owns
+     interop contracts; enterprise-architecture-core owns the Context Map and cross-cutting
+     decisions — domain truth and Ubiquitous Language themselves stay with the product owner, not
+     any of these four. Also new: an immutable-release data contract for ontology concepts
+     (evidence/provenance/validity/confidence/status/deprecation/locale label required on every
+     released concept/relation/dimension/measure/mapping); a consumer-boundary prohibition
+     (consumers use only released API/contract/ACL — no file copies, no cross-service SQL, no
+     unapproved publication); and an explicit rule that the UI translation ledger (§4, above) and the
+     ontology label ledger (this section) must never share a store — two distinct versioned
+     resources with two different owners. Cross-checked `semantic-data-portal`'s description here
+     against its existing entry in `docs/CWL-MASTER-CONTEXT.md` (the higher ontology/catalog/
+     governance plane above naruon's doc KG; SDP is not that store) — consistent, this addition just
+     names the upstream pipeline stages and the two cross-cutting-decision repos that file does not
+     yet name explicitly (see the §9 reconciliation note below for the same verification gap).
+  4. **§7 (realistic verification, load, and container testing)** gained two anti-gaming clauses for
+     the p95≤20ms criterion the 2026-09-01 revision introduced: never satisfy it by shrinking the
+     sample, excluding measurements, or an unrealistic cache warm-up; and when the JS
+     bundle/heap/DOM/hydration/main-thread/GC is the actual memory or latency driver, the fix is to
+     replace the dependency or frontend stack rather than accept the slower ceiling. Both close off
+     the two most tempting ways to make the existing gate pass without fixing anything real, and
+     reinforce (not change) the section's existing profile-first-then-Rust-if-proven-necessary
+     approach.
+  5. **§9 (reference libraries, ecosystem repositories)** roughly tripled in size and gained explicit
+     per-repo responsibility statements for most entries for the first time. New repos named:
+     `.github`, `enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`,
+     `semantic-data-portal`, `noema`, `EgressWeave`, `OriginWeave`, `pingora-gateway`,
+     `quarantine-sandbox-runtime`, `pg-llm-batch`, `EmbedRelay`, `inkspan`, `DiagramWeave`,
+     `mhtml-etl-gateway`, `appguardrail`, plus an explicit "domain product/composition consumer, not
+     core" classification for `naruon`, `LineageWeave`, `psychometrics-commons`, `disksage`,
+     `PolicyWeave`, `CalendarWeave`, and `supply-chain-control-plane`. Cross-checked against
+     `docs/CWL-MASTER-CONTEXT.md`: `semantic-data-portal`, `pg-llm-batch`, `appguardrail`, `inkspan`,
+     `wardnet`, `keyverse`, `naruon`, `TEPP`, `fast-mlsirm`, `RankWeave`, `ThreadWeave`, `disksage`,
+     `LineageWeave`, `contextual-orchestrator`, and `noema` already appear there and this section's
+     descriptions are additive, not contradictory. `ConceptWeave`, `context-graph-contracts`,
+     `enterprise-architecture-core`, `EgressWeave`, `OriginWeave`, `pingora-gateway`,
+     `quarantine-sandbox-runtime`, `EmbedRelay`, `DiagramWeave`, `mhtml-etl-gateway`,
+     `psychometrics-commons`, `PolicyWeave`, `CalendarWeave`, and `supply-chain-control-plane` could
+     **not** be cross-checked: `CWL-MASTER-CONTEXT.md` does not yet name them, and this session's
+     repository access (`.github`, `noema`, `contextual-orchestrator`, `naruon`) does not extend to
+     them. Recorded verbatim anyway, per this file's own conflict/durability policy, with a tracked
+     follow-up gap to add them to `CWL-MASTER-CONTEXT.md`'s catalog once an agent with access (or the
+     owner) can confirm the responsibility split against their actual current state.
+
+  Also updated §8 with a short note (not a change to the verbatim quote) observing that this
+  revision's §8 restatement again mentions "`orchestrator/free` 고정" but as a bare clause inside
+  §8's body rather than the separately scope-qualified §10 item, and that this compression does not
+  reopen or loosen §10's already-evidence-verified "GitHub Actions Workflow 이용에 관해" scope
+  qualifier — a shorter restatement omitting detail recorded elsewhere in the same document is not a
+  reversal of that detail.
+- **Decision record:** none yet in `docs/adr/` for the i18n-DB-versioned-resource architecture or the
+  ontology-pipeline repo split — both are substantial enough to eventually warrant one once a
+  repository begins implementing against them; this doctoring entry and the gap-baseline entry are
+  the interim record, consistent with how the 2026-09-01 admin-timeout-management gap was handled.
+- **PR:** ContextualWisdomLab/.github (same branch/PR as the 2026-09-01 revisions above —
+  `docs/update-product-goal-directive-2026-09-01` — continued rather than forked into a new PR, since
+  this is the same ongoing "keep the directive doc current" effort).
+
+### Audit trail (2026-09-02 revision)
+
+- `docs/product-goal-directive.md` — §2, §4, §5, §7, §9 (new content), §8 (new note), and the
+  top-of-file revision summary.
+- `docs/CWL-MASTER-CONTEXT.md` — cross-checked for every repo name in the new §5/§9 content; the
+  entries it does and does not already carry are both recorded above.
+- `docs/product-technical-gap-baseline.md` — the 2026-09-02 entry tracking the two new,
+  currently-unimplemented product gaps this revision introduces (the i18n DB-versioned-resource
+  translation-ledger architecture; the ontology-pipeline repo-responsibility split awaiting an
+  `enterprise-architecture-core`/`context-graph-contracts`/`ConceptWeave` cross-check), plus the
+  tracked follow-up to add the not-yet-cross-checked §9 repo names to `CWL-MASTER-CONTEXT.md`.

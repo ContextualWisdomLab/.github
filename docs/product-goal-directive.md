@@ -1,9 +1,9 @@
 # Product goal directive — autonomous PR/merge/development loop
 
-**Status:** active standing directive · **Owner intent recorded:** 2026-08-30, revised 2026-09-01 ·
-**Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from this org,
-leveraged in order of product responsibility / reuse boundary / docs / implementation / consumption —
-not by name).
+**Status:** active standing directive · **Owner intent recorded:** 2026-08-30, revised 2026-09-01,
+2026-09-02 · **Scope:** the full ContextualWisdomLab ecosystem (every repo an agent can reach from
+this org, leveraged in order of product responsibility / reuse boundary / docs / implementation /
+consumption — not by name).
 
 **2026-09-01 revision:** the owner re-issued the full directive via a `/loop` invocation. Sections 1, 2,
 4, 5, 6, and 9 were re-authored in largely the same words (cosmetic rephrasing only — no new
@@ -23,6 +23,55 @@ audited, per-model setting with units/priority/inheritance, never a bare elapsed
 in-progress reasoning/streaming/tool-call turn). A follow-up `/loop` invocation the same day added a
 new §10, crystallizing an already-implemented decision (Strix pinned to `orchestrator/free`,
 previously recorded only in a §8 annotation) into the primary numbered directive.
+
+**2026-09-02 revision:** the owner re-issued the full directive again, this time in a visibly
+condensed form for §1/§3/§6/§8 (same substance, shorter wording — left as-is, same policy as
+2026-09-01) but substantially *expanded* for §2, §4, §5, §7, and §9 with genuinely new, concrete
+obligations not previously recorded here. Updated in place; see
+`docs/doctoring/product-goal-directive.md` for the full per-section record. In summary: §2 gained an
+explicit "immature core" protocol (never duplicate/bypass/exclude an immature dependency in the
+consumer — build the missing RED test/contract/feature/docs/release in the *owner* repo through its
+own CI, then consume a versioned release; excluding a dependency via ADR is reserved for a genuinely
+wrong boundary or no shared need) and a new reference tool for Korean-language editing
+(epoko77-ai/im-not-ai, preserving meaning/facts/figures/proper nouns). §4 gained a concrete i18n
+architecture mandate (eight named languages; CJK/width/wrap/font-fallback/locale-format testing
+per language in Storybook/E2E; the translation ledger is a **versioned DB resource**, never static
+files or a JS bundle — runtime fetches only the current screen's keys with caching, the browser never
+receives the whole catalog, and no SPA assumption; stand up a dedicated management repo — translation
+review/approval/deploy/rollback API + admin UI — if no shared one exists yet), a UI-composition
+principle (all UI is reusable objects; pages are compositions of them), an explicit shadcn/ui-vs-
+Storybook clarification (shadcn/ui is a component *source*, not a Storybook substitute), a frontend
+stack-flexibility principle (no fixed stack; React/Vite/shadcn/ui/jQuery 4/etc. are fine when they
+meet security/maintainability/standards/accessibility/performance), and a specific Keyverse
+integration pattern (Keyverse stays the auth *backend* — Direct Grant/ROPC or the Keycloak REST API —
+but login/signup/recovery are the product's own forms, not a Keyverse-hosted page). §5 gained a
+concrete ontology-pipeline repo-responsibility split (ConceptWeave owns the
+observe→discover→propose→align→validate→review→publish pipeline and semantic release;
+semantic-data-portal owns catalog/governance/consumption; context-graph-contracts owns interop
+contracts; enterprise-architecture-core owns the Context Map and cross-cutting decisions — domain
+truth/Ubiquitous Language itself stays with the product owner), an immutable-release data contract
+for ontology concepts (evidence/provenance/validity/confidence/status/deprecation/locale label
+required on every released concept/relation/dimension/measure/mapping), a consumer-boundary
+prohibition (released API/contract/ACL only — no file copies, no cross-service SQL, no unapproved
+publication), and an explicit separation between the UI translation ledger (§4) and the ontology
+label ledger (§5) — the two must never share a store. §7 gained two anti-gaming clauses for the
+existing p95≤20ms criterion (never satisfy it by shrinking the sample, excluding measurements, or an
+unrealistic cache warm-up; when the bottleneck is the JS bundle/heap/DOM/hydration/main
+thread/GC, replace the dependency or frontend stack rather than accepting the ceiling) and reaffirms
+profiling algorithm/query/I/O/rendering first, moving to a Rust-first hot path only when the
+runtime/language/framework itself is the proven cause. §9's repository catalog roughly
+tripled in size and gained explicit per-repo responsibility statements for
+`.github`, `enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`,
+`semantic-data-portal`, `noema`, `EgressWeave`, `OriginWeave`, `pingora-gateway`,
+`quarantine-sandbox-runtime`, `pg-llm-batch`, `EmbedRelay`, `inkspan`, `DiagramWeave`,
+`mhtml-etl-gateway`, `appguardrail`, plus an explicit "domain product/composition consumer, not core"
+classification for `naruon`, `LineageWeave`, `psychometrics-commons`, `disksage`, `PolicyWeave`,
+`CalendarWeave`, and `supply-chain-control-plane` — see the reconciliation note under §9 for which of
+these this session could and could not independently cross-check against
+`docs/CWL-MASTER-CONTEXT.md`. §8's restatement mentions the `orchestrator/free` pin again, but inline
+inside §8's general body rather than as the separately-qualified §10 item — see the note added below
+§10 for why that does not reopen or loosen the existing, evidence-verified CI-workflow scope
+qualifier.
 
 ## Why this file exists
 
@@ -51,7 +100,7 @@ elsewhere; link to this file instead.
 
 ## 2. Concurrent operation, PR handling, and root-cause fixes
 
-> 동시 작업·PR 운영·근본 수정 원격 Agent의 동시 Commit·Push를 경합으로 단정해 Force Push·중단하지 말고 변경 취지·이유를 확인해 이어간다. Commit·Push 전 병합 여부를 확인하고 삭제 근거를 남긴다. Self-modifying/Source-fix Workflow는 목적 달성 후 삭제하고 잔존 시 관찰·제거한다. 가능한 PR은 Stack하고 not-merge-ready를 merge-ready로 전환한다. 유관 프로젝트 원인이 엮이면 함께 처리하고 Stacked PR을 중앙 OpenCode Agent가 리뷰하지 않으면 ContextualWisdomLab/.github를 수정한다. Agent 간 대화·Spawn을 활용한다. 수동 해법은 모두 코드·설정에 반영한다. PYTHONPATH=. 누락은 설정하고 GitHub Actions·런타임 오류는 로그·Root Cause Analysis로 제거한다. 전체 GitHub Checks 실패를 확인·수정한다. ContextualWisdomLab 내부 라이브러리 문제라면 원시 공급자 오류까지 고쳐 PR한다. 개발 프로세스에 https://github.com/DietrichGebert/ponytail 및 https://github.com/obra/superpowers 를 사용하되 superpowers의 "무조건 질문" 규칙은 무시한다. https://github.com/tirth8205/code-review-graph 와 https://github.com/colbymchenry/codegraph 도 사용하고 인덱싱은 스스로 수행한다. 이는 명시적으로 허가됐다.
+> 동시 작업·PR 운영·근본 수정 원격 Agent의 동시 Commit·Push를 경합으로 단정해 Force Push·중단하지 말고 변경 취지·이유를 확인해 이어간다. Commit·Push 전 병합 여부를 확인하고 삭제 근거를 남긴다. Self-modifying/Source-fix Workflow는 목적 달성 후 삭제하고 잔존 시 관찰·제거한다. 가능한 PR은 Stack하고 not-merge-ready를 merge-ready로 전환한다. 유관 프로젝트 원인이 엮이면 함께 처리하고 Stacked PR을 중앙 OpenCode Agent가 리뷰하지 않으면 ContextualWisdomLab/.github를 수정한다. Agent 간 대화·Spawn을 활용한다. 수동 해법은 모두 코드·설정에 반영한다. PYTHONPATH=. 누락은 설정하고 GitHub Actions·런타임 오류는 로그·Root Cause Analysis로 제거한다. 전체 GitHub Checks 실패를 확인·수정한다. ContextualWisdomLab 내부 라이브러리 문제라면 원시 공급자 오류까지 고쳐 PR한다. 필요한 core가 미성숙해도 consumer에서 복제·우회·제외하지 말고 owner에 RED test·계약·기능·문서·release를 개발해 통합 CI GREEN 후 versioned release로 연결한다. 경계가 틀리거나 공통 수요가 없을 때만 ADR 근거로 제외한다. 개발 프로세스에 https://github.com/DietrichGebert/ponytail 및 https://github.com/obra/superpowers 를 사용하되 superpowers의 "무조건 질문" 규칙은 무시한다. https://github.com/tirth8205/code-review-graph 와 https://github.com/colbymchenry/codegraph 도 사용하고 인덱싱은 스스로 수행한다. 이는 명시적으로 허가됐다. 한국어 문구·문서·번역은 https://github.com/epoko77-ai/im-not-ai로 의미·사실·수치·고유명사를 보존하며 윤문한다.
 
 ## 3. Research, standards, and documentation traceability
 
@@ -59,7 +108,21 @@ elsewhere; link to this file instead.
 
 ## 4. UX/UI and customer-facing expression
 
-> UX·UI와 고객 표현 필요하면 Figma와 Storybook(https://github.com/storybookjs/storybook), https://github.com/nextlevelbuilder/ui-ux-pro-max-skill, https://github.com/local-over/Anti-Slop-UI 를 함께 쓴다. 반복 웹 객체는 디자인 토큰화·모듈화하고 Figma File ID를 ADR에 기록한다. Storybook 장면별·Edge case별 Event를 조사·구현한다. UX·UI는 반드시 스크린샷으로 검수하고 ui-ux-pro-max로 Accessibility, Touch & Interaction, Performance, Style Selection, Layout & Responsive, Typography & Color, Animation, Forms & Feedback, Navigation Patterns, Charts & Data를 정의·검토·반영·적용·감사한다. 내부 구현 경계를 고객 화면에 노출하지 않고 문구로 고객의 다음 행동을 돕는다. Frontend는 디자인 토큰 CSS, 버튼 Action Edge, Interaction UX, i18n 번역 일관성까지 테스트한다.
+> UX·UI와 고객 표현 필요하면 Figma와 Storybook(https://github.com/storybookjs/storybook), https://github.com/nextlevelbuilder/ui-ux-pro-max-skill, https://github.com/local-over/Anti-Slop-UI 를 함께 쓴다. UI는 모두 재사용 객체이고 페이지는 조합으로 만든다. 반복 웹 객체는 디자인 토큰화·모듈화하고 Figma File ID를 ADR에 기록한다. Storybook에서 정상·로딩·빈·오류·권한·반응형·상호작용 상태를 격리 개발·문서화하고 스크린샷·E2E로 접근성·터치·성능·타이포그래피·색상·폼·탐색·차트를 감사한다. ui-ux-pro-max로 Accessibility, Touch & Interaction, Performance, Style Selection, Layout & Responsive, Typography & Color, Animation, Forms & Feedback, Navigation Patterns, Charts & Data를 정의·검토·반영·적용·감사한다. shadcn/ui는 component source로 Storybook과 대체 관계가 아니다. Frontend stack은 고정하지 않으며 React·Vite·shadcn/ui·jQuery 4 등은 보안·유지보수·표준·접근성·성능을 충족할 때 쓴다. 내부 경계를 숨기고 다음 행동을 안내한다. Keyverse는 인증 backend로 유지하되(Direct Grant/ROPC 또는 Keycloak REST API), 로그인·가입·복구는 제품 자체 form으로 만든다. token CSS·Action Edge·Interaction UX를 검증한다. i18n은 한국어·영어·일본어·중국어·베트남어·스페인어·독일어·프랑스어를 지원한다. UI 폭·줄바꿈·CJK·텍스트 팽창·font fallback·locale 형식을 고려하고 언어별 Storybook·E2E로 잘림·겹침·의미 축약을 막는다. 번역 원장은 파일·JS bundle이 아닌 DB의 versioned resource다. server/native가 화면 key만 조회·cache하며 browser에 전체 catalog·무거운 i18n JavaScript를 싣지 않고 SPA를 전제하지 않는다. 공통 관리 제품이 없으면 새 저장소를 만들어 제품별 번역·검토·승인·배포·rollback API·관리 UI를 제공한다.
+
+**Context (2026-09-02):** the 2026-09-01 text already required i18n translation-consistency testing
+in general terms; this revision makes the architecture itself an explicit, checkable requirement —
+not "translate the strings" but "the translation ledger is a versioned DB resource that server/native
+code queries per-screen-key with caching, never a static file or JS bundle the browser loads whole,
+and never assumed to run inside an SPA." This is a genuinely new, currently-unimplemented product gap
+for any ContextualWisdomLab product with a customer-facing UI (tracked in
+`docs/product-technical-gap-baseline.md`, not yet audited against naruon's or any other product's
+current i18n implementation as of this revision — that audit is deliberately left as a future Gap
+increment, not done in this reconciliation pass). The eight named languages (ko/en/ja/zh/vi/es/de/fr)
+and the "no shared management product yet ⇒ stand up a dedicated repo" clause are both new,
+concrete, and testable — a Storybook/E2E suite per language that specifically checks for
+truncation/overlap/meaning-loss under CJK width and text-expansion is the acceptance evidence this
+directive now asks for, not a single default-locale screenshot pass.
 
 ## 5. Architecture, naming, and database conventions
 
@@ -72,13 +135,42 @@ elsewhere; link to this file instead.
 
 Per this file's own conflict policy above: this note is the resolution, and `docs/CWL-MASTER-CONTEXT.md` §7 is the document that was right — do not force-rename wardnet or existing Camel/Pascal DB objects on the strength of this section's verbatim wording alone.
 
+**Addition (2026-09-02):**
+
+> 통합 온톨로지는 ConceptWeave가 observe→discover→propose→align→validate→review→publish와 semantic release를, semantic-data-portal이 catalog·governance·소비를, context-graph-contracts가 상호운용 계약을, enterprise-architecture-core가 Context Map·결정을 맡는다. domain truth·Ubiquitous Language는 제품 owner에 남긴다. 개념·관계·dimension·measure·mapping은 evidence·provenance·validity·confidence·status·deprecation·locale label을 가진 immutable release로 배포한다. consumer는 released API/contract·ACL만 쓰고 파일 복사·cross-service SQL·미승인 publication을 금지한다. UI 번역과 ontology label의 원장은 분리한다.
+
+This is a genuinely new, concrete repo-responsibility split for the org's ontology pipeline, not
+previously recorded in this file. It is consistent with (not contradicted by) `semantic-data-portal`'s
+existing description in `docs/CWL-MASTER-CONTEXT.md` (§35 there: "the higher ontology/catalog/
+governance plane ABOVE the doc KG... naruon owns the doc KG... SDP is not that store") — this
+addition names the upstream half of that pipeline (ConceptWeave's
+observe→discover→propose→align→validate→review→publish stages feeding SDP's catalog) and the two
+cross-cutting-decision repos (`context-graph-contracts` for interop contracts,
+`enterprise-architecture-core` for the Context Map itself) that `CWL-MASTER-CONTEXT.md` does not yet
+name explicitly as of this revision — see §9's reconciliation note below for the same gap across
+several repo names at once, and `docs/product-technical-gap-baseline.md` for the tracked follow-up to
+add them there. The "UI translation ledger and ontology label ledger must never share a store" clause
+directly cross-references §4's new i18n-DB-resource mandate above: they are two distinct versioned
+resources with different owners (a product's own i18n management repo vs. ConceptWeave/SDP), not one
+combined "everything is a translatable string" table.
+
 ## 6. Implementation language, computation, and measurement principles
 
 > 구현 언어·연산·측정 원칙 Docstring Coverage, Test Coverage, Edge Case Test Coverage를 각각 100%로 만든다. 초보자가 별도 코드 분석 없이 이해할 수 있을 만큼 충분한 docstring을 제공한다. 수리과학, Psychometrics, Exploratory Data Analysis, 데이터과학의 모든 core 연산 레이어는 Python으로 구현하지 말고 무조건 Rust로 작성한다. Vector 연산, Linear Algebra, Matrix Algebra, LLM token size 연산도 포함한다. GPU와 CPU multithreaded 실행을 지원하고 context switching을 최소화한다. 속도·안정성·보안이 중요한 일반 소프트웨어도 Rust를 사용하며, 기존 타 언어 구현은 전환·리팩터링하거나 명확한 Rust API Call 경계로 분리한다. 확률표집 계약에는 표본 설계, 오차 목표, 실패 분모를 명시해 ADR과 감사 코드에 반영한다. Atomistic fallacy를 막도록 다층구조·다중소속 모델링을 고려·구현하고 시간 흐름을 반영하는 모델도 포함한다. 가중치는 임의로 정하지 말고 수리과학·Psychometrics에서 추정된 값, 특히 fast-mlsirm이나 TEPP처럼 논문 근거가 있는 모형을 사용한다. 어떠한 휴리스틱과 Rule of thumbs도 금지하며, 근거 미확정 상태로 방치하지 말고 ContextualWisdomLab의 추론 엔진을 최대한 활용하고 SOLID 원칙을 지킨다. Deprecation Warning은 Suppression하지 말고 근본 문제를 해결한다. 합성 데모 데이터는 Unit test에는 쓸 수 있으나 Production에 반영하지 않는다. Python 웹 서버는 Multithreading을 지원하고 GIL이 문제면 Python 3.14를 사용한다.
 
 ## 7. Realistic verification, load, and container testing
 
-> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
+> 현실성 있는 검증과 부하·컨테이너 테스트는 제품 특성에 맞는 현실 사례와 정확성 기준을 포함한다. Psychometrics는 true parameter 대비 estimation RMSE와 true parameter 추정 재현성을 검증하고, 음악 분석은 실제 음원이 기대 분석값을 내는지 확인한다. 웹을 지원하면 Asynchronous 처리를 구현해 무응답을 방지하고 k6 end-to-end load test로 동시 접속 능력과 병목을 측정·개선한다. E2E 테스트의 합격 조건은 페이지당 처리시간 p95 20ms 이하이며, 초과 시 병목을 제거하고 재검증한다. 모든 페이지가 통과해야 한다. 초과하면 알고리즘·query·I/O·rendering을 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·개발 언어를 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up을 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·Frontend stack을 교체한다. close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다.
+
+**Addition (2026-09-02):** two anti-gaming clauses for the p95≤20ms criterion the 2026-09-01 revision
+added, not previously spelled out: (1) never satisfy the target by shrinking the sample, excluding
+measurements, or an unrealistic cache warm-up before measuring — the bar is real traffic patterns,
+not a benchmark rigged to pass; (2) when the JS bundle/heap/DOM/hydration/main-thread/GC is the actual
+memory or latency driver, the fix is to replace the dependency or the frontend stack itself, not to
+accept the slower ceiling. Both reinforce, rather than change, the profile-first-then-fix-the-real-
+cause approach already in this section (algorithm/query/I/O/rendering profiling before reaching for a
+Rust rewrite) — the new text just forecloses the two most tempting ways to "pass" the check without
+actually fixing anything. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
 ## 8. LLM, orchestration, and embedding
 
@@ -88,19 +180,57 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 **Note (2026-08-30, superseded by the merged pin flip — see the correction below):** an earlier draft of this note said Strix stayed on `orchestrator/auto` pending `free_family_diversity` reaching `>= 2`. That is no longer true and must not be read as current: `.github/workflows/strix.yml` now hardcodes `STRIX_MODEL`/`CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` and fails closed on any other value. This note originally went on to say that ADR-0003's 2026-08-30 amendment "records the owner's decision to accept the residual single-outage-domain risk immediately rather than wait for the evidence-gated threshold this note originally described" — that framing was false, as ADR-0003's own 2026-08-31 correction now records: no owner reviewed or accepted this switch or its risk. `free_account_diversity` (`scripts/ci/contextual_orchestrator_review_policy.py`; renamed from `free_family_diversity` once every KV credential became an independent discovery account rather than being grouped into a vendor "family", see #1468) remains useful as ongoing monitoring evidence for that open, unreviewed risk, not as a gate blocking the pin.
 
+**Note (2026-09-02):** this revision's re-issued §8 text again says "`orchestrator/free` 고정" ("pinned
+to orchestrator/free"), but states it as a bare clause inside §8's general body rather than as a
+separately scope-qualified item. Read together with §10 below (added 2026-09-01, wording refined the
+same day to add "GitHub Actions Workflow 이용에 관해" — i.e. this governs CI-consumer workflows, not
+`contextual-orchestrator`'s general product capability for other callers) and with this section's own
+first (CodeRabbit) note above, that scope qualifier is not being reopened or loosened by this
+restatement: it was independently verified against `strix.yml`'s actual `case` statements, not merely
+asserted, and a shorter restatement omitting a qualifier already established elsewhere in the same
+document is a compression artifact, not a reversal. §10 remains the authoritative "what is currently
+pinned, for which consumers" record.
+
 ## 9. Reference libraries, tool invocations, and ecosystem repositories
 
 > 참고 라이브러리와 호출 @Superpowers @GitHub @Figma @Visualize @Context7 @Product Design @Consensus를 활용한다.
 
-- **TEPP** — https://github.com/ContextualWisdomLab/TEPP — 다국어·시간·관계 측정용 Temporal Event Psychometrics Platform이며 통계·심리측정 산술은 Rust로 구현한다.
-- **contextual-orchestrator** — https://github.com/ContextualWisdomLab/contextual-orchestrator — 논문 근거의 contextual model orchestration lab·enterprise admin design.
-- **fast-mlsirm** — https://github.com/ContextualWisdomLab/fast-mlsirm — simple-structure MLSIRM/MLS2PLM은 Jeon, Jin, Schweinberger, and Baugh(2021), Kang and Jeon(2025), Molenaar and Jeon(2026)을 따른다. 인접 화면: Angoff delta-plot DIF(docs/delta_plot_dif.md), Bradley–Terry MM ranking(docs/bradley_terry_mm.md). 주요 인용·결정: docs/traceability/research-basis.md, docs/adr/README.md. 점수 해석·공정성은 AERA·APA·NCME(2014)를 따르며 이는 CWE/OWASP/NIST 통제가 아니다.
-- **keyverse** — https://github.com/ContextualWisdomLab/keyverse — Keycloak 기반 독립 컴포넌트(Apache-2.0)이자 ContextualWisdom ecosystem 중앙 Identity Provider.
-- **RankWeave** — https://github.com/ContextualWisdomLab/RankWeave — Python 3.10+용 무의존성·저장소 비종속 retrieval fusion/evaluation/statistical comparison/tuning/TREC benchmarking/auditable CLI workflow.
-- **ThreadWeave** — https://github.com/ContextualWisdomLab/ThreadWeave — runtime dependency 없는 Python용 표준 기반 JWZ/RFC 5256 이메일 reference threading.
+- **.github** — https://github.com/ContextualWisdomLab/.github — workflow·review/security/release owner이며 ruleset·얇은 workflow_call로만 쓴다.
+- **enterprise-architecture-core** — https://github.com/ContextualWisdomLab/enterprise-architecture-core — **context-graph-contracts** — https://github.com/ContextualWisdomLab/context-graph-contracts — 전사 결정·versioned context 계약 원장이며 runtime·제품 DB는 제외한다.
+- **ConceptWeave** — https://github.com/ContextualWisdomLab/ConceptWeave — **semantic-data-portal** — https://github.com/ContextualWisdomLab/semantic-data-portal — ontology 생성·publish와 catalog·governance·소비를 분담한다.
+- **contextual-orchestrator** — https://github.com/ContextualWisdomLab/contextual-orchestrator — 논문 근거의 contextual model orchestration lab·enterprise admin design. **noema** — https://github.com/ContextualWisdomLab/noema — 모델 orchestration과 GitHub OIDC 단기 권한·exact-head evidence를 contextual-orchestrator와 분담한다.
+- **keyverse** — https://github.com/ContextualWisdomLab/keyverse — Keycloak 기반 독립 컴포넌트(Apache-2.0)이자 ContextualWisdom ecosystem 중앙 Identity Provider. 제품은 OIDC/OAuth·SCIM·자체 form을 쓰고 table은 복제하지 않는다.
+- **EgressWeave** — https://github.com/ContextualWisdomLab/EgressWeave — **OriginWeave** — https://github.com/ContextualWisdomLab/OriginWeave — **pingora-gateway** — https://github.com/ContextualWisdomLab/pingora-gateway — **quarantine-sandbox-runtime** — https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime — outbound·browser·edge·격리 core이며 부족한 기능은 owner에서 완성한다.
+- **pg-llm-batch** — https://github.com/ContextualWisdomLab/pg-llm-batch — **EmbedRelay** — https://github.com/ContextualWisdomLab/EmbedRelay — batch/token과 embedding identity·vector migration owner다.
+- **fast-mlsirm** — https://github.com/ContextualWisdomLab/fast-mlsirm — simple-structure MLSIRM/MLS2PLM은 Jeon, Jin, Schweinberger, and Baugh(2021), Kang and Jeon(2025), Molenaar and Jeon(2026)을 따른다. 인접 화면: Angoff delta-plot DIF(docs/delta_plot_dif.md), Bradley–Terry MM ranking(docs/bradley_terry_mm.md). 주요 인용·결정: docs/traceability/research-basis.md, docs/adr/README.md. 점수 해석·공정성은 AERA·APA·NCME(2014)를 따르며 이는 CWE/OWASP/NIST 통제가 아니다. **TEPP** — https://github.com/ContextualWisdomLab/TEPP — 다국어·시간·관계 측정용 Temporal Event Psychometrics Platform이며 통계·심리측정 산술은 Rust로 구현한다. 둘 다 IRT/MLSIRM과 다국어·시간·event·relation 측정 owner이며 kernel 재구현을 금지한다.
+- **RankWeave** — https://github.com/ContextualWisdomLab/RankWeave — Python 3.10+용 무의존성·저장소 비종속 retrieval fusion/evaluation/statistical comparison/tuning/TREC benchmarking/auditable CLI workflow. **ThreadWeave** — https://github.com/ContextualWisdomLab/ThreadWeave — runtime dependency 없는 Python용 표준 기반 JWZ/RFC 5256 이메일 reference threading. 둘 다 retrieval fusion/evaluation/TREC와 JWZ/RFC 5256 threading owner다.
+- **inkspan** — https://github.com/ContextualWisdomLab/inkspan — **DiagramWeave** — https://github.com/ContextualWisdomLab/DiagramWeave — editor/serialization과 diagram patch/render/CLI/LSP package다.
+- **mhtml-etl-gateway** — https://github.com/ContextualWisdomLab/mhtml-etl-gateway — MHTML 검사·schema proposal·load·lineage owner다.
+- **appguardrail** — https://github.com/ContextualWisdomLab/appguardrail — **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline. 둘 다 SAST/SARIF와 Rust gateway/SOC baseline owner이며 범위를 과장하지 않는다.
 - **disksage** — https://github.com/ContextualWisdomLab/disksage — Windows/Linux/macOS 디스크 공간 관리자. 드라이브를 스캔하고 완전 오프라인 온디바이스 LLM이 삭제 안전성을 조언하며 OWL ontology로 파일을 정리한다.
-- **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline.
 - **LineageWeave** — https://github.com/ContextualWisdomLab/LineageWeave — 명시적 선후행 링크 없는 짧은 timestamped record에서 git-branch식 lineage DAG를 재구성해 평면 자료를 탐색 가능한 branching thread로 바꾼다. 수리 연산은 소관이 아니므로 다른 라이브러리로 이관한다.
+
+> naruon·LineageWeave·psychometrics-commons·disksage·PolicyWeave·CalendarWeave·supply-chain-control-plane은 완성도가 아니라 domain product/composition consumer라 분류한다. 공통 기능은 core owner로 추출해 통합 CI로 개발한다.
+
+**Reconciliation (2026-09-02):** this revision roughly triples §9's repo catalog and gives most
+entries an explicit responsibility statement for the first time in this file. Cross-checked against
+`docs/CWL-MASTER-CONTEXT.md` where possible: `semantic-data-portal`, `pg-llm-batch`, `appguardrail`,
+`inkspan`, `wardnet`, `keyverse`, `naruon`, `TEPP`, `fast-mlsirm`, `RankWeave`, `ThreadWeave`,
+`disksage`, `LineageWeave`, `contextual-orchestrator`, and `noema` all already appear there and this
+section's descriptions are consistent with (additive to, not contradicting) that file. This session
+could **not** independently verify `ConceptWeave`, `context-graph-contracts`,
+`enterprise-architecture-core`, `EgressWeave`, `OriginWeave`, `pingora-gateway`,
+`quarantine-sandbox-runtime`, `EmbedRelay`, `DiagramWeave`, `mhtml-etl-gateway`,
+`psychometrics-commons`, `PolicyWeave`, `CalendarWeave`, or `supply-chain-control-plane` against
+`docs/CWL-MASTER-CONTEXT.md` (that file's own catalog does not yet name them as of this revision, and
+this session's repository access does not extend to them) — recorded here verbatim per this file's
+own policy (durable knowledge belongs in the repo, not private memory) rather than held back pending
+verification, with a tracked follow-up in `docs/product-technical-gap-baseline.md` to add them to
+`CWL-MASTER-CONTEXT.md`'s own ecosystem catalog once an agent with access to those repos (or the
+owner) can confirm the responsibility split above against their actual current state. The "extract
+shared functionality to a core owner" closing sentence directly reinforces §2's new "immature core"
+protocol above — the same principle stated once as a development-process rule (§2) and once as a
+repository-selection rule (§9).
 
 ## 10. Contextual-orchestrator pool pin
 
