@@ -1,0 +1,131 @@
+# One-shot PR #1672 remediation. Self-deletes after verified publication.
+name: Temporary PR1672 Noema findings repair
+
+on:
+  push:
+    branches:
+      - fix/noema-repair-attempt-telemetry
+    paths:
+      - .github/workflows/_temp_pr1672_noema_findings_repair.yml
+      - scripts/ci/temp_pr1672_noema_findings_repair.py
+
+concurrency:
+  group: temp-pr1672-noema-findings-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/noema-repair-attempt-telemetry'
+    runs-on: ubuntu-slim
+    timeout-minutes: 75
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install hash-locked review dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Revalidate exact writer head and apply reviewed repair
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          python scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
+          test ! -e tests/test_noema_repair_deadline_alarm_safety.py
+          ! grep -q 'NOEMA_REPAIR_DEADLINE_SECONDS' scripts/ci/noema_review_gate.py
+          ! grep -q 'NoemaRepairDeadlineExceeded' scripts/ci/noema_review_gate.py
+          ! grep -q '_repair_wall_clock_deadline' scripts/ci/noema_review_gate.py
+          git diff --check
+
+      - name: Verify focused Noema contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m pytest \
+            tests/test_noema_repair_attempt_telemetry.py \
+            tests/test_noema_model_output_failure_classification.py \
+            tests/test_noema_review_gate.py \
+            tests/test_noema_model_output_transport.py \
+            -q
+
+      - name: Verify complete repository coverage and docstrings
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          python -m interrogate scripts/ci
+          python -m compileall -q scripts tests
+          git diff --check
+
+  publish:
+    needs: verify
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/noema-repair-attempt-telemetry'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact verified writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate and materialize canonical successor
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          python3 scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
+          test ! -e tests/test_noema_repair_deadline_alarm_safety.py
+          git diff --check
+
+      - name: Publish one fast-forward canonical successor
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m "fix(noema): remove arbitrary repair deadline"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
