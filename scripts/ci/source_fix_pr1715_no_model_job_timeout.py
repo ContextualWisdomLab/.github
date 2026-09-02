@@ -1,4 +1,4 @@
-"""One-shot exact-head repair for PR #1715's Noema model timeout contract."""
+"""One-shot exact-head repair for the merged PR #1715 timeout-policy regression."""
 
 from __future__ import annotations
 
@@ -15,14 +15,28 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     """Replace one literal block and fail closed when branch contents moved."""
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"PR1715 {label}: expected one literal block, found {count}")
+        raise SystemExit(f"PR1715 successor {label}: expected one literal block, found {count}")
     return text.replace(old, new, 1)
 
 
 def patch_workflow() -> None:
-    """Keep bounded cleanup but remove elapsed-time authority from model work."""
+    """Remove repository-authored elapsed-time termination from both Noema jobs."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    old = '''    # Bound this job well short of GitHub's 360-minute platform default. Its
+    cleanup_old = '''    # Bound this job well short of GitHub's 360-minute platform default. Its
+    # only step is a single-repository, status-filtered gh api --paginate
+    # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
+    # or merge -- lighter than pr-review-merge-scheduler.yml's scan-pr-queue
+    # job (PR #1702), which got timeout-minutes: 30 for a comparable
+    # single-repo scan that also dispatches a review and updates a branch.
+    timeout-minutes: 20
+'''
+    cleanup_new = '''    # No repository-authored wall-clock cutoff: this housekeeping job relies
+    # on GitHub Actions' platform execution contract plus explicit API failure.
+    # A shorter local deadline would be an unsupported hand-selected policy.
+'''
+    text = replace_once(text, cleanup_old, cleanup_new, "cleanup timeout block")
+
+    model_old = '''    # Bound this job well short of GitHub's 360-minute platform default. Its
     # "Prepare Noema model verdict" step calls into two_phase.py's call_llm
     # via the same contextual-orchestrator gateway whose unbounded wait was
     # confirmed to stall runs for 7-20 hours in opencode-review.yml before
@@ -38,69 +52,69 @@ def patch_workflow() -> None:
     # provisioning, publication), while staying well under GitHub's default.
     timeout-minutes: 210
 '''
-    new = '''    # Model-backed Noema intentionally has no job-level wall-clock timeout.
-    # contextual-orchestrator/orchestrator/free owns provider termination;
-    # GitHub admission must not stop reasoning, streaming, or tool work only
-    # because elapsed time crossed a repository-side deadline. Stale heads,
-    # closed/draft PRs, provider completion, and explicit cancellation remain
-    # authoritative termination signals. The non-model cleanup job above is
-    # independently bounded because it performs only GitHub API housekeeping.
+    model_new = '''    # Model-backed Noema intentionally has no repository-authored wall-clock
+    # timeout. contextual-orchestrator/orchestrator/free owns provider routing
+    # and normal model completion; live PR/head state and explicit cancellation
+    # remain authoritative stop signals. GitHub's platform execution ceiling is
+    # an external runtime constraint, not a model-selection or compute policy.
 '''
-    WORKFLOW.write_text(
-        replace_once(text, old, new, "model job timeout block"), encoding="utf-8"
-    )
+    text = replace_once(text, model_old, model_new, "model job timeout block")
+    WORKFLOW.write_text(text, encoding="utf-8")
 
 
 def patch_test() -> None:
-    """Replace the stale timeout-positive assertion with the owner contract."""
+    """Replace timeout-positive regressions with no-local-deadline contracts."""
     text = TEST.read_text(encoding="utf-8")
-    marker = "def test_noema_review_job_has_a_bounded_runtime_above_the_two_hour_model_allowance() -> None:\n"
+    marker = "def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:\n"
     start = text.find(marker)
     if start < 0 or text.find(marker, start + 1) >= 0:
-        raise SystemExit("PR1715 stale model-timeout test marker moved or duplicated")
-    replacement = '''def test_noema_review_model_job_has_no_elapsed_time_termination() -> None:
-    """Model-backed Noema delegates termination to orchestrator/provider authority."""
+        raise SystemExit("PR1715 successor timeout-test marker moved or duplicated")
+    replacement = '''def test_noema_jobs_do_not_invent_repository_wall_clock_deadlines() -> None:
+    """Noema model/support jobs must not encode hand-selected elapsed-time cutoffs."""
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\\n", 1)[1]
+    cleanup = workflow.split("  cancel-closed-pr-runs:\\n", 1)[1].split(
+        "\\n  noema-review:\\n", 1
+    )[0]
+    model = workflow.split("  noema-review:\\n", 1)[1]
 
-    assert re.search(r"^    timeout-minutes:", job, flags=re.MULTILINE) is None
+    assert re.search(r"^    timeout-minutes:", cleanup, flags=re.MULTILINE) is None
+    assert re.search(r"^    timeout-minutes:", model, flags=re.MULTILINE) is None
     assert "contextual-orchestrator/orchestrator/free" in workflow
-    assert "Model-backed Noema intentionally has no job-level wall-clock timeout" in job
-    assert "timeout-minutes: 20" in workflow.split(
-        "  cancel-closed-pr-runs:\\n", 1
-    )[1].split("\\n  noema-review:\\n", 1)[0]
+    assert "unsupported hand-selected policy" in cleanup
+    assert "no repository-authored wall-clock" in model
 '''
     TEST.write_text(text[:start] + replacement, encoding="utf-8")
 
 
 def append_traceability() -> None:
-    """Record why support housekeeping may be bounded while model work may not."""
-    changelog_note = (
-        "\n- PR #1715: keep the non-model Noema close-cleanup job bounded, but remove "
-        "the proposed 210-minute job timeout from model-backed `noema-review`; "
-        "`orchestrator/free`/provider completion, live PR/head state, or explicit "
-        "cancellation are the termination authorities rather than elapsed time.\n"
-    )
+    """Record the causal owner and replacement authority."""
     changelog = CHANGELOG.read_text(encoding="utf-8")
-    if "PR #1715: keep the non-model Noema close-cleanup job bounded" not in changelog:
-        CHANGELOG.write_text(changelog + changelog_note, encoding="utf-8")
+    note = (
+        "\n- Successor to merged PR #1715: remove repository-authored 20/210-minute "
+        "Noema workflow deadlines. GitHub's platform runtime contract governs ordinary "
+        "Actions execution; contextual-orchestrator/provider completion, exact live state, "
+        "and explicit cancellation govern model work. No inferred local buffer remains.\n"
+    )
+    if "Successor to merged PR #1715: remove repository-authored 20/210-minute" not in changelog:
+        CHANGELOG.write_text(changelog + note, encoding="utf-8")
 
-    baseline_note = '''
-
-### Noema model-job timeout authority — PR #1715
-
-- **Root cause:** a queue-operability repair proposed `timeout-minutes: 210` on the model-backed `noema-review` job, turning elapsed wall time into an admission/model termination authority.
-- **Contract:** the lightweight closed-PR Actions cleanup remains bounded, while Noema model work has no repository-owned wall-clock cutoff. `orchestrator/free` and its upstream provider own normal model completion; live PR/head validation, provider end, or explicit cancellation remain authoritative stop conditions.
-- **Regression:** `test_noema_review_model_job_has_no_elapsed_time_termination` rejects a job-level timeout on the model job while retaining the 20-minute bound on non-model cleanup.
-- **Status:** Implemented on the PR #1715 writer branch; exact-head CI/review must be regenerated after the one-shot repair commit.
-'''
     baseline = BASELINE.read_text(encoding="utf-8")
-    if "### Noema model-job timeout authority — PR #1715" not in baseline:
-        BASELINE.write_text(baseline + baseline_note, encoding="utf-8")
+    section = '''
+
+### Noema workflow elapsed-time authority — PR #1715 successor
+
+- **Live gap:** merged PR #1715 introduced local `timeout-minutes: 20` and `timeout-minutes: 210`. The former was inferred by analogy to another queue job; the latter combined an inherited 180-minute allowance with an invented 30-minute buffer. Neither value had executable mathematical, statistical, psychometric, standards, or experimentally validated provenance.
+- **Causal owner:** `.github/.github/workflows/noema-review.yml`; contextual-orchestrator remains owner of model routing/provider completion and test-time-compute policy.
+- **Repair:** remove both repository-authored deadlines. Non-model housekeeping uses GitHub Actions' documented platform execution contract and API failures; model-backed Noema additionally uses exact PR/head state, explicit cancellation, and contextual-orchestrator/provider completion. No paid/provider/model fallback is introduced.
+- **Regression:** `test_noema_jobs_do_not_invent_repository_wall_clock_deadlines` rejects local timeout policy on both jobs and retains the exact `orchestrator/free` routing contract.
+- **Status:** Proposed until this one-shot self-removes and fresh exact-head required Checks are GREEN.
+'''
+    if "### Noema workflow elapsed-time authority — PR #1715 successor" not in baseline:
+        BASELINE.write_text(baseline + section, encoding="utf-8")
 
 
 def main() -> None:
-    """Apply the minimal owner repair and its permanent regression/docs."""
+    """Apply production, regression, and traceability repairs."""
     patch_workflow()
     patch_test()
     append_traceability()
