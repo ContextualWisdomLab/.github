@@ -266,16 +266,3 @@ resolver conflict.
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
   — loopback-only web E2E readiness polling and APA 7th citations.
-
-## Model execution timeout authority (2026-09-02)
-
-Central model-backed review jobs (`OpenCode`, `Noema`, and `Strix`) delegate model
-selection and inference lifecycle to `ContextualWisdomLab/contextual-orchestrator`.
-The GitHub Actions job that contains reasoning, streaming, or tool execution must
-not invent a fixed elapsed-time ceiling. Intentional termination authorities are
-an explicit user/operator cancellation, provider termination, superseded-head
-retirement after live-head validation, or an explicitly configured
-contextual-orchestrator administrative timeout. Queue/runner hygiene must be
-expressed as measured control-plane contracts rather than hand-selected model
-runtime budgets. GitHub's hosting limit remains an external capacity constraint,
-not `.github` model policy.

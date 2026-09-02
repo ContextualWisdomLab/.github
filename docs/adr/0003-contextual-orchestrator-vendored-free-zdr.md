@@ -250,17 +250,3 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
-
-- **2026-09-02 correction: PR #1715's Noema deadlines were not a new timeout decision.**
-  The accepted 2026-08-31 amendment above already states that OpenCode, Noema,
-  Strix, and contextual-orchestrator inference have no repository/application
-  fixed wall-clock timeout. PR #1715 added `timeout-minutes: 20` to the
-  housekeeping job by analogy to another queue job and `timeout-minutes: 210`
-  to the model-bearing Noema job by combining an inherited allowance with an
-  invented buffer. Neither local number had standards, measured-runtime, or
-  experimentally validated provenance, and the model-bearing value directly
-  contradicted this ADR. Both local deadlines are therefore removed. Provider
-  termination, exact live-head invalidation, explicit user/operator cancellation,
-  or an explicitly configured contextual-orchestrator administrative timeout
-  remain intentional model termination authorities; GitHub's hosting ceiling is
-  documented as an external runtime constraint rather than repository policy.
