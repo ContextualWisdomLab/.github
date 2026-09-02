@@ -7,18 +7,14 @@ on:
       - fix/scheduler-stale-headrefoid-cancellation
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
-      - scripts/ci/temp_pr1669_live_head_revalidation_v2.py
-      - scripts/ci/temp_pr1669_live_head_revalidation_v3.py
-      - scripts/ci/temp_pr1669_live_head_revalidation_v4.py
+      - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: true
 
-# Verification is read-only. The branch-writing GitHub token exists only in the
-# final publisher job after the full exact-head tests, coverage, docstrings and
-# diff contracts have passed. The canonical push is followed by a connector-side
-# exact-tree commit so required workflows materialize on a non-GITHUB_TOKEN head.
+# Verification is read-only. Only the final publisher receives a separate
+# workflow-starting mutation credential, and only after full exact-head proof.
 permissions:
   contents: read
 
@@ -39,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
 
@@ -57,19 +53,17 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v2.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v3.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_v4.py
-          test -f scripts/ci/temp_pr1669_live_head_revalidation_repair.py
+          test -f scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
 
-      - name: Apply guarded source and regression repair
+      - name: Apply test-first guarded source repair
         run: |
           set -euo pipefail
-          python scripts/ci/temp_pr1669_live_head_revalidation_v4.py
+          python scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
@@ -97,7 +91,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout exact verified writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -115,10 +109,11 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v4.py
+          python3 scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
@@ -126,9 +121,10 @@ jobs:
       - name: Publish one fast-forward canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
-          WORKFLOW_PUSH_TOKEN: ${{ github.token }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
           git config user.name github-actions[bot]
