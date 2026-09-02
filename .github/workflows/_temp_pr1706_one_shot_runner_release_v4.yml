@@ -17,7 +17,7 @@ concurrency:
 jobs:
   repair:
     if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - name: Checkout exact trigger head without persisted mutation credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
