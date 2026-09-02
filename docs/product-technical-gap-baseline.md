@@ -3169,3 +3169,45 @@ also gain `harden-runner` with no `with:` change (their un-set `comment_summary_
 to the unchanged `"on-failure"` default): `argos#559` (merged, retroactive follow-up), `mightyETL#330`,
 `newsdom-api#784`, `scopeweave#654` (all three still open, pin updated on their existing branches
 before their first merge rather than needing a second migration PR later).
+
+## 2026-09-02: the user's "적체" (piling up, not draining) complaint traced to a concrete cause --
+## pre-fix opencode-review.yml runs still occupying scarce org concurrency slots
+
+Direct re-investigation of the user's repeated complaint that queue depth "keeps piling up rather than
+shrinking" despite the earlier incident fixes (opencode-review.yml's `poll_deadline_epoch`, #1707;
+scan-pr-queue's timeout, #1702; strix.yml/noema-review.yml timeouts, #1713/#1727). Sampled `in_progress`
+run counts across 8 repositories (`.github`, `bandscope`, `contextual-orchestrator`, `argos`,
+`mightyETL`, `newsdom-api`, `scopeweave`, `naruon`): only **~15 jobs running concurrently org-wide**
+against **thousands queued** (`.github` alone: 1975 queued at time of check) -- confirming the org's
+actual bottleneck right now is a hard concurrency ceiling (consistent with a GitHub Team-plan
+concurrent-job limit), not individual runs being stuck for absurd durations the way the original
+incident's runs were.
+
+**However, a subset of that scarce concurrency was itself being wasted on genuinely zombie runs**:
+`.github#1707` (the `opencode-review.yml` `poll_deadline_epoch` fix) merged at
+**2026-09-02T08:45:08Z**. Any `opencode-review.yml` run whose triggering event fired *before* that
+timestamp resolved its workflow definition from the pre-fix `main`, so its "Fail closed without a
+current-head OpenCode verdict" step still has no wall-clock bound at all -- it can spin indefinitely,
+permanently occupying one of the ~15 available concurrent-job slots. Found and force-cancelled three
+confirmed instances (verified each run's embedded head SHA still matched the PR's live current head
+before cancelling, so this is not the earlier "stale/superseded head" cleanup class -- these are
+current-head runs that are simply never going to terminate on their own):
+
+- `ContextualWisdomLab/.github#1555`, run `33476433002`, created `2026-09-01T06:09:52Z` (~30h before
+  cancellation)
+- `ContextualWisdomLab/newsdom-api#768`, run `33477238808`, created `2026-09-01T06:21:14Z`
+- `ContextualWisdomLab/naruon#1496`, run `33549296318`, created `2026-09-01T19:24:14Z`
+
+A fresh dispatch (via the normal scheduler sweep or the next push/event on each PR) will re-run these
+using the fixed, properly-bounded workflow definition. Delegated a broader sweep of the remaining ~55
+repositories not directly sampled to a peer session (checking each for `in_progress` "Required OpenCode
+Review" runs created before `2026-09-02T08:45:08Z`), to avoid one session alone re-triggering the
+shared secondary rate limit hit earlier this tick. `noema-review.yml` runs were explicitly excluded
+from this sweep -- that workflow is deliberately unbounded (`.github#1727`) per the org's no-model-
+timeout policy, so a long-running `noema-review` is not, on its own, evidence of the same bug.
+
+**Open question, not yet resolved**: even after this cleanup, ~15 concurrent jobs against an org with
+this much PR/CI volume (compounded this tick by three Claude sessions simultaneously pushing many PRs)
+may still be a genuine plan-tier capacity ceiling that no further workflow-level fix can raise --
+worth the org owner checking the GitHub organization's Settings > Billing > Actions concurrency limit
+directly rather than assuming further code changes can solve it.
