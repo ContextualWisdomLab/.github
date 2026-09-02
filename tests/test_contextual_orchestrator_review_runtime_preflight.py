@@ -116,9 +116,9 @@ def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_ev
     """OpenRouter rows are exempt from evidence_only while every row still shows it.
 
     Regression for a confirmed bug, fixed upstream at
-    ``ContextualWisdomLab/contextual-orchestrator#949`` (merged, not yet
-    pinned in this repo as of this writing -- see
-    ``ContextualWisdomLab/.github#1477``): ``contextual-orchestrator``'s
+    ``ContextualWisdomLab/contextual-orchestrator#949`` and pinned in this
+    repo by ``ContextualWisdomLab/.github#1477`` (merged 2026-08-31):
+    ``contextual-orchestrator``'s
     OpenRouter ``ProviderModelSource`` currently hardcodes
     ``evidence_only=True`` for every discovered model unconditionally (not
     computed per model from real evidence) -- so today's real signature is
@@ -162,8 +162,8 @@ def test_routable_discovered_models_exempts_openrouter_when_every_row_reports_ev
 def test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence() -> None:
     """The historical exemption turns off the moment per-model evidence appears.
 
-    Once ``ContextualWisdomLab/.github#1477`` lands the
-    ``ContextualWisdomLab/contextual-orchestrator#949`` pin bump, OpenRouter starts reporting real
+    Now that ``ContextualWisdomLab/.github#1477`` has landed the
+    ``ContextualWisdomLab/contextual-orchestrator#949`` pin bump, OpenRouter reports real
     per-model ``evidence_only`` (at minimum ``False`` for its genuinely
     ZDR-attested free models). This is the post-fix signature: a run whose
     OpenRouter rows are no longer uniformly ``True`` must go back through

@@ -161,12 +161,21 @@ def _openrouter_reports_per_model_evidence(discovered: list[object]) -> bool:
     which commit is nominally pinned. See ``ContextualWisdomLab/.github#1476``
     (this change) and ``ContextualWisdomLab/contextual-orchestrator#949``
     (the merged upstream fix; pinned by ``ContextualWisdomLab/.github#1477``)
-    for the full history; once ``#1477`` merges, no further change is
-    required here -- this check starts reporting ``True`` as soon as the
-    vendored pin actually includes the fix and OpenRouter has discovered at
-    least one model that run (``#949`` makes ``evidence_only=False``
-    unconditional for OpenRouter, not contingent on that model being
-    ZDR-attested).
+    for the full history. ``#1477`` merged on 2026-08-31, bumping
+    ``ORCHESTRATOR_PIN_SHA`` (in
+    ``scripts/ci/contextual_orchestrator_review_sidecar.sh``) to
+    ``045d17da5e2aea56a97e241ee158ab1628d78660`` -- confirmed by
+    ``git merge-base --is-ancestor 8cd99f139915131ba0239bce12a5d6a5fd85394e
+    045d17da5e2aea56a97e241ee158ab1628d78660`` to already include ``#949``'s
+    merge commit -- so this check now reports ``True`` as soon as
+    OpenRouter has discovered at least one model that run (``#949`` makes
+    ``evidence_only=False`` unconditional for OpenRouter, not contingent on
+    that model being ZDR-attested). The observed-behavior approach
+    documented above is kept rather than switched to a direct pin-ancestry
+    comparison: it needs no new plumbing, and it keeps working even if a
+    future pin ever regresses behind ``#949`` (a downgrade, a re-vendor from
+    a stale fork) without a matching ``ORCHESTRATOR_PIN_SHA`` edit being
+    noticed first.
 
     KNOWN, ACCEPTED LIMITATION: a genuinely-fixed vendored copy that
     happens to report ``evidence_only=True`` for *every* OpenRouter row in
@@ -227,8 +236,10 @@ def _routable_discovered_models(discovered: list[object] | None) -> list[object]
     ``evidence_only=True`` for every discovered model unconditionally (a
     confirmed bug, fixed upstream at
     ``ContextualWisdomLab/contextual-orchestrator#949``, merged at
-    ``8cd99f139915131ba0239bce12a5d6a5fd85394e`` -- not yet pinned in this
-    repo as of this writing; see ``ContextualWisdomLab/.github#1477``) --
+    ``8cd99f139915131ba0239bce12a5d6a5fd85394e`` -- pinned in this repo by
+    ``ContextualWisdomLab/.github#1477``, merged 2026-08-31, whose current
+    ``ORCHESTRATOR_PIN_SHA`` (``045d17da5e2aea56a97e241ee158ab1628d78660``)
+    is confirmed to descend from that fix commit) --
     not computed per model from real evidence, even though
     genuine per-model ZDR evidence is fetched and parsed for OpenRouter in
     that same module. Applying this filter to OpenRouter verbatim while
@@ -249,19 +260,18 @@ def _routable_discovered_models(discovered: list[object] | None) -> list[object]
     ``_has_text_output``, in ``main()``) regardless of which branch this
     function takes.
 
-    This exemption is expected to have real, live effect once merged (not
-    only once ``contextual-orchestrator``'s own per-model ``evidence_only``
-    fix and a matching ``ORCHESTRATOR_PIN_SHA`` bump land): OpenRouter
-    discovery already runs in this sidecar today, so genuinely chat-capable
-    OpenRouter rows -- currently blocked here regardless of what
-    ``contextual-orchestrator`` reports -- start reaching selection
-    immediately. What remains genuinely blocked on the upstream fix is
-    OpenRouter rows being correctly excluded from ``evidence_only`` on a
-    real per-model basis (e.g. a non-chat listing); until
-    ``ContextualWisdomLab/.github#1477`` lands the ``#949`` pin bump and a
-    run observes real per-model variation, this function's remaining
-    protection against those is the same downstream chat-capability check,
-    not ``evidence_only``.
+    This exemption has real, live effect as of this merge, on two
+    timelines that were originally expected to be sequential but have both
+    already landed by the time this docstring was last corrected:
+    OpenRouter discovery already runs in this sidecar, so genuinely
+    chat-capable OpenRouter rows -- previously blocked here regardless of
+    what ``contextual-orchestrator`` reported -- reach selection
+    immediately upon this PR merging; and, separately,
+    ``ContextualWisdomLab/.github#1477`` already landed the ``#949`` pin
+    bump (see above), so a run that observes real per-model variation gets
+    OpenRouter rows correctly excluded from ``evidence_only`` on a genuine
+    per-model basis (e.g. a non-chat listing) rather than relying solely on
+    the downstream chat-capability check for that protection.
 
     A row is also excluded whenever ``getattr(model, "spend_admitted",
     True) is False`` -- the same treatment as ``evidence_only=True``, with
