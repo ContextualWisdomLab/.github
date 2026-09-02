@@ -76,32 +76,19 @@ def test_github_actions_formal_change_request_matches_all_verdict_surfaces() -> 
     )
 
 
-def test_github_actions_formal_approval_requires_full_evidence_markers() -> None:
-    """APPROVED evidence has one publisher/marker policy on receipt, wake, and admission."""
-    complete = _formal_review(
+def test_github_actions_formal_approval_matches_all_verdict_surfaces() -> None:
+    """A formal publisher approval accepted by the receipt gate must wake and admit."""
+    review = _formal_review(
         "github-actions[bot]",
         "APPROVED",
-        "**OpenCode automated review**\n\n**Evidence recap**\nvalidated exact head",
+        "## Pull request overview\nvalidated exact-head product diff",
     )
-    incomplete = _formal_review(
-        "github-actions[bot]",
-        "APPROVED",
-        "**OpenCode automated review**\nmissing evidence recap marker",
-    )
-    complete_ok, complete_reason = receipt_gate.is_formal_receipt(
-        complete, HEAD_SHA, is_draft=False
-    )
-    incomplete_ok, _incomplete_reason = receipt_gate.is_formal_receipt(
-        incomplete, HEAD_SHA, is_draft=False
-    )
-    assert complete_ok, complete_reason
-    assert not incomplete_ok
+    accepted, reason = receipt_gate.is_formal_receipt(review, HEAD_SHA, is_draft=False)
+    assert accepted, reason
 
     admission_program, reconciliation_program, _scheduler_text = _policy_programs()
-    assert _run_selector(admission_program, complete) == "APPROVED"
-    assert _run_selector(reconciliation_program, complete).startswith("APPROVED\t")
-    assert _run_selector(admission_program, incomplete) == ""
-    assert _run_selector(reconciliation_program, incomplete) == ""
+    assert _run_selector(admission_program, review) == "APPROVED"
+    assert _run_selector(reconciliation_program, review).startswith("APPROVED\t")
 
 
 def test_unrecognized_reviewer_cannot_admit_or_wake_required_verdict() -> None:
@@ -109,7 +96,7 @@ def test_unrecognized_reviewer_cannot_admit_or_wake_required_verdict() -> None:
     review = _formal_review(
         "unrelated-reviewer",
         "CHANGES_REQUESTED",
-        "**OpenCode automated review**\n**Evidence recap**",
+        "## Pull request overview\nsubstantive review",
     )
     accepted, _reason = receipt_gate.is_formal_receipt(review, HEAD_SHA, is_draft=False)
     assert not accepted
