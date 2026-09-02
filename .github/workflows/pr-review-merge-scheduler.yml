@@ -255,11 +255,7 @@ jobs:
           TARGET_REPOSITORY_INPUT: ${{ github.event.client_payload.target_repository || '' }}
           TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number || '' }}
           TARGET_BASE_BRANCH_INPUT: ${{ github.event.client_payload.base_branch || '' }}
-          # The org variable remains the source of truth; this approved caller is
-          # included here until the variable's propagation catches up with its
-          # existing hourly caller. An empty variable therefore still permits only
-          # this exact repository, never an arbitrary target.
-          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }},ContextualWisdomLab/governance-risk-compliance
+          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
         run: |
           set -euo pipefail
 

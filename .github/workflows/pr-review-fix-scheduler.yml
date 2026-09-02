@@ -101,11 +101,7 @@ jobs:
           DISPATCH_ACTOR: ${{ github.triggering_actor }}
           DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
           ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
-          # The org variable remains the source of truth; this approved caller is
-          # included here until the variable's propagation catches up with its
-          # existing hourly caller. An empty variable therefore still permits only
-          # this exact repository, never an arbitrary target.
-          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }},ContextualWisdomLab/governance-risk-compliance
+          ALLOWED_TARGET_REPOSITORIES: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
         run: |
           set -euo pipefail
 
