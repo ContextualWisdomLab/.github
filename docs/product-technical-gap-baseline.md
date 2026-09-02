@@ -2648,11 +2648,6 @@ exact same head showing both files at 100% branch coverage with zero missing bra
 this evidence on the review thread and did not widen the PR's diff for a claim that does not hold
 against this repo's own tooling.
 
-**One test in the full suite remains a known, pre-existing flake**, unrelated to this change:
-`tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`
-intermittently exits 141 (SIGPIPE) under full-suite parallel load; reproduces identically on
-unmodified `origin/main` and passes cleanly in file isolation. Not remediated here — out of scope
-for a coverage-gap-only PR, and not itself a coverage regression.
 **One test in the full suite remained a known, pre-existing flake**, unrelated to this change:
 `tests/test_opencode_required_verdict_regression.py::test_scheduler_wake_reuses_trusted_receipt_predicate`
 intermittently exited 141 (SIGPIPE) under full-suite parallel load; reproduced identically on
