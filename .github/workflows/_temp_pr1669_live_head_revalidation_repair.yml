@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
       - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
+      - tests/test_pr1669_parallel_stale_cancellation.py
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
@@ -71,7 +72,7 @@ jobs:
       - name: Verify focused cancellation contracts
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py -q
+          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py tests/test_pr1669_parallel_stale_cancellation.py -q
 
       - name: Verify complete repository coverage and docstrings
         run: |
