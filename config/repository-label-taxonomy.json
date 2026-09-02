@@ -142,6 +142,11 @@
       "type": "documentation"
     },
     {
+      "repository": "bandscope",
+      "issue": 1116,
+      "type": "documentation"
+    },
+    {
       "repository": "saju-caldav",
       "issue": 44,
       "type": "documentation"
@@ -157,6 +162,11 @@
       "type": "documentation"
     },
     {
+      "repository": "OriginWeave",
+      "issue": 238,
+      "type": "documentation"
+    },
+    {
       "repository": "semantic-data-portal",
       "issue": 90,
       "type": "documentation"
@@ -167,8 +177,18 @@
       "type": "documentation"
     },
     {
+      "repository": "accounting-information-platform",
+      "issue": 37,
+      "type": "documentation"
+    },
+    {
       "repository": "clearfolio",
       "issue": 538,
+      "type": "documentation"
+    },
+    {
+      "repository": "disksage",
+      "issue": 315,
       "type": "documentation"
     },
     {
