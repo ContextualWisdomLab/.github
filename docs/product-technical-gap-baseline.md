@@ -2704,3 +2704,37 @@ and is fail-safe by construction (unproven support degrades to emulation, never 
 hasn't merged yet (open, behind `main`, same queue/scheduler backlog every other PR referenced in this
 document is also waiting on). Re-open only if `#1021` is closed without merging, or if its merged form
 diverges from what's described above.
+
+## 2026-09-02 backlog items 8/9 verification: Bytez and OpenRouter already included in orchestrator/free auto-discovery
+
+**Task.** Verify whether `contextual-orchestrator`'s `orchestrator/free` auto-discovery actually includes
+Bytez (`BYTEZ_API_KEY`) and OpenRouter (`OPENROUTER_API_KEY`), per the standing directive's requirement
+that discovery use all five provider secrets, before assuming either is missing.
+
+**Verified: both are fully wired in, not just credential-registered.** Read `model_discovery.py`
+directly rather than trusting the backlog title alone:
+
+- `PROVIDER_MODEL_SOURCES` (the central discovery-source registry) includes both `openrouter`
+  (`credential_name="OPENROUTER_API_KEY"`, `list_url="https://openrouter.ai/api/v1/models?output_modalities=all"`)
+  and `bytez` (`credential_name="BYTEZ_API_KEY"`, `list_url="https://api.bytez.com/models/v2/list/models"`,
+  its own `auth_scheme`/`style`/`task_filter` since Bytez's API shape differs from the OpenAI-compatible
+  others) — registered identically in structure to `openai`, `nvidia_nim`, and `nvidia_nim_sub`.
+- Both have **provider-specific zero-cost detection**, not generic pricing checks: `_bytez_meter_price_is_free()`
+  parses Bytez's GPU-second meter pricing (e.g. `"0.0006478333 / sec"`) and explicitly treats a
+  non-numeric/unparseable value as *not* a trustworthy zero-cost signal (fail-closed, matching this
+  org's own convention) rather than defaulting to free; `_openrouter_free_model_endpoints()` filters
+  OpenRouter's own catalog for `is_free`/zero pricing. Both feed the same `DiscoveredModel.is_free` flag
+  that `free_discovered_models()` — "the complete zero-cost model inventory... fitness for the
+  general-purpose blind serving pool (`orchestrator/free`)" per its own docstring — filters on.
+- This is not new: the very first commit visible in this session's own git log
+  (`fix(sidecar): admit verified zero-cost Bytez routes (#1651)`) already recorded Bytez-specific
+  free-route handling landing in central CI before this session began.
+
+**Test evidence.** `pytest tests/test_model_discovery.py tests/test_openrouter_free_canary.py
+tests/test_discovery_bootstrap_selection.py -k "bytez or openrouter or free"` — 79 passed, 0 failed.
+
+**Conclusion.** No code change needed for items 8/9. Both providers were already correctly integrated
+into `orchestrator/free` discovery, each with fail-closed, provider-appropriate zero-cost detection
+rather than a shared generic heuristic. Re-open only if a specific model or route from either provider
+is observed being admitted to the free pool without genuine zero-cost evidence, or excluded despite
+having it.
