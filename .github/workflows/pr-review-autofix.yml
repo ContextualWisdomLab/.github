@@ -23,6 +23,16 @@ permissions:
 jobs:
   autofix:
     runs-on: ubuntu-latest
+    # Bound the job well short of GitHub's 360-minute platform default. Setup
+    # (checkout, OIDC token exchange, OpenCode CLI install, context collection)
+    # is API/IO-bound and normally finishes in a few minutes; the one
+    # `opencode run` call (12 agent steps, single fixed model, no
+    # multi-provider fallback pool unlike opencode-review-dispatch.yml's
+    # review job) is the dominant cost, followed by fast local validation
+    # and a single git commit/push. 25 minutes gives that single LLM run
+    # generous per-step room while still failing a hung invocation well
+    # before the platform cap.
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
