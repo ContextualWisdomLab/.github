@@ -1,10 +1,9 @@
-"""Collect the established runtime-preflight regressions with one repaired oracle.
+"""Collect established runtime-preflight regressions with one repaired oracle.
 
 The regression corpus remains byte-for-byte in the adjacent non-collectable
 case module. This collection shim re-exports every existing test except the
 obsolete constructor-text assertion, then replaces that assertion with the
-actual bounded-retry and deadline-free serving contract introduced for the
-DeepSeek incident.
+provider-neutral bounded-retry and universal deadline-free inference contract.
 """
 
 from __future__ import annotations
