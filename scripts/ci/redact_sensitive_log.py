@@ -10,6 +10,12 @@ from typing import Any
 
 REDACTED = "[REDACTED]"
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+# Every character with which a valid top-level JSON document can start:
+# object, array, string, number (including a leading '-'), and the
+# true/false/null/NaN/Infinity/-Infinity literals Python's json module
+# accepts. Used by _redact_line's fast pre-check, which must never exclude a
+# character that could legitimately begin a JSON value.
+_JSON_VALUE_START_CHARS = frozenset('{["-0123456789tfnNI')
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
     r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
@@ -148,10 +154,18 @@ def _redact_unstructured(text: str) -> str:
 
 def _redact_line(line: str) -> str:
     """Redact one log line, preferring recursive JSON handling when valid."""
-    # ⚡ Bolt: Fast O(1) character check to bypass expensive json.loads()
-    # throwing JSONDecodeError for obvious non-JSON log lines.
+    # Fast O(1) character check to skip the expensive json.loads() +
+    # JSONDecodeError exception path for a line that obviously cannot start
+    # a JSON value. Every character a valid top-level JSON document (object,
+    # array, string, number, or the true/false/null/NaN/Infinity/-Infinity
+    # literals Python's json module accepts) can begin with is covered, so
+    # this only ever skips json.loads() for input it would have rejected
+    # anyway -- it must never skip a line json.loads() could have parsed, or
+    # a whole-line JSON scalar (e.g. a bare quoted string or number) would
+    # fall through to the unstructured text redactor and come back as
+    # malformed JSON instead of being preserved untouched.
     stripped = line.lstrip(" \t")
-    if stripped and (stripped[0] == "{" or stripped[0] == "["):
+    if stripped and stripped[0] in _JSON_VALUE_START_CHARS:
         try:
             value = json.loads(line)
             return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
