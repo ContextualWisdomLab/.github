@@ -86,3 +86,105 @@ fixed:
   conventions this record reconciles against.
 - ContextualWisdomLab/.github#1429 — the PR carrying this change and Devin
   Review's findings.
+
+## Revision (2026-09-02): directive text replaced in full
+
+- **Date:** 2026-09-02
+- **Subject:** The owner supplied a revised nine-section directive (pasted
+  directly into an interactive session, not as a PR) that is substantially
+  longer and more specific than the 2026-08-30 text it replaces. Per this
+  file's own stated policy ("edit this file in place... do not fork a second
+  copy elsewhere"), `docs/product-goal-directive.md`'s nine quoted sections
+  were replaced in full, verbatim, with the new text; only the two
+  reconciliation notes (§5 naming, §8 CI pool routing) and the surrounding
+  scaffolding (title, "why this file exists," `/goal` pointer) were kept and
+  updated, not the directive text itself.
+- **PR:** ContextualWisdomLab/.github#1691 (product-goal-directive branch;
+  see the PR for the exact diff).
+
+### What changed in substance (not exhaustive — read the new §1-9 directly)
+
+- **§1** adds an explicit anti-pattern: a PR reaching zero open state must
+  come from a merge, or from a verified successor fully carrying forward its
+  valid delta — never from a bare Close.
+- **§2** is substantially expanded: Close is redefined as a repair-not-close
+  action for most failure modes (single-writer/DDD violations, wrong
+  base/conflicts, ADR number collisions, premature Accepted status,
+  unprotected dependencies, missing test/fixture/contract) — demote to
+  Draft/Proposed and non-force restack/retarget instead of closing. Close
+  itself is now restricted to four cases: explicit user instruction, no valid
+  delta, a malicious change, or full successor carry-forward. Also newly
+  names https://github.com/epoko77-ai/im-not-ai for Korean phrasing/document
+  translation review (meaning/facts/figures/proper nouns must be preserved).
+- **§3** adds an explicit decision-record bar: reconstructable by a first-time
+  reader (problem, constraints, alternatives, why chosen/rejected, evidence,
+  risk, effect, follow-up), evidenced against exact-head/logs/issues/PRs/ADRs.
+- **§4** is new in large part: shadcn/ui is named as the product-owned
+  component source with Storybook as the verification environment; Keyverse
+  is scoped specifically to Direct Grant/ROPC or the Keycloak REST API as an
+  auth backend, with login/signup/recovery built as product-owned forms; and
+  a full i18n subsection is new — 8 supported languages, a DB-backed
+  versioned translation ledger (not files or a JS bundle), key-only
+  lookup/cache on server/native, and a dedicated repo for translation
+  workflow tooling if none exists yet.
+- **§5** adds an ontology/semantic-layer ownership split (creation/publish vs.
+  catalog/consumption vs. interoperability contracts vs. EA decisions each
+  have a distinct owner; product domain truth/UL never moves) and loosens
+  identifier casing from "snake_case" to "snake_case, camelCase, or
+  PascalCase, snake_case preferred" for non-DB identifiers — see the
+  in-file reconciliation note for what still applies to DB objects
+  specifically.
+- **§6** softens the earlier "all core math/perf code must be Rust, full
+  stop" framing: Python is now explicitly deprioritized rather than banned,
+  and a documented exception path exists (ADR-recorded scope/justification/
+  removal condition) for the case where no practical Rust alternative exists
+  for a Python-only ML runtime dependency, with the hot path still kept in
+  Rust.
+- **§7** adds a concrete performance target (p95 ≤ 20ms on every page, via
+  async processing + k6 E2E) and a frontend-performance subsection (bundle
+  size, heap, DOM, hydration, main thread, GC as replacement triggers for
+  dependencies/rendering approach/frontend stack).
+- **§8** adds explicit, mechanical CI-routing rules that were previously only
+  implied: GitHub Actions model-backed workflows must pin to
+  `orchestrator/free` and must not name a provider/model/group or a paid
+  fallback — only a gateway token; missing capability fails closed rather
+  than routing around the free pool. Also adds an explicit default-null model
+  timeout policy (no app/agent/gateway-wide cap; upstream provider owns
+  timing out a stalled call) and admin-web requirements for per-model
+  enable/disable/restore with audit and API access.
+- **§9** replaces the old flat repo list with a structured "core foundation"
+  ownership taxonomy (org/contracts; meaning/data; AI/ops;
+  identity/security/runtime; reusable capabilities), each entry naming its
+  canonical-owner repo and scope, plus an explicit anti-bypass rule: a
+  consumer must not copy/route around an immature or API-less owner repo —
+  the owner ships RED→GREEN→immutable-release first, the consumer adopts
+  after, and uses ports/ACLs/feature flags/test doubles as the boundary in
+  the meantime.
+
+### Reconciliation notes re-checked against the new text
+
+1. **§5 wardnet example.** The new text no longer names "wardnet" (or any
+   other product) as an "old name" example, so the specific conflict the
+   2026-08-30 note flagged (wardnet is the *current* canonical name, not a
+   legacy one) no longer has a live trigger in the quoted text. Kept a
+   shortened note covering the still-relevant point: the DB-object grandfather
+   clause in `docs/CWL-MASTER-CONTEXT.md` §7.
+2. **§8 CI pool routing.** The new text now states directly that GitHub
+   Actions model-backed workflows pin to `orchestrator/free` — which, as of
+   2026-09-02, matches the owner-confirmed live state for **both** OpenCode
+   Review and Strix (see `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+   2026-08-30/2026-09-02 amendments). The 2026-08-30 note's original point
+   (this section describes orchestrator product capability, not CI routing
+   policy) is kept as historical context, with a status update on top stating
+   the risk it was tracking is now resolved and owner-reviewed.
+
+## Audit trail (revision)
+
+- `docs/product-goal-directive.md` — the revised directive and both
+  reconciliation notes.
+- `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` — the
+  2026-08-30/2026-09-02 amendments confirming the `orchestrator/free` pin for
+  both OpenCode Review and Strix.
+- `docs/CWL-MASTER-CONTEXT.md` §7 — the DB-naming grandfather clause the §5
+  note still cites.
+- ContextualWisdomLab/.github#1691 — the PR carrying this revision.
