@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / "config" / "repository-label-taxonomy.json"
+OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reconciliation.md"
 
 
 def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
@@ -23,7 +24,11 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
     }
     # Keep assignments exact so reviewed target drift cannot silently escape CI.
     assert payload["assignments"] == [
+        {"repository": ".github", "issue": 1579, "type": "feature"},
         {"repository": ".github", "issue": 1582, "type": "feature"},
+        {"repository": ".github", "issue": 1622, "type": "feature"},
+        {"repository": ".github", "issue": 1625, "type": "bug"},
+        {"repository": ".github", "issue": 1634, "type": "documentation"},
         {"repository": "CalendarWeave", "issue": 1, "type": "documentation"},
         {"repository": "ConceptWeave", "issue": 1, "type": "feature"},
         {
@@ -70,5 +75,85 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
             "type": "feature",
         },
         {"repository": "noema", "issue": 530, "type": "feature"},
+        {"repository": "bandscope", "issue": 1125, "type": "documentation"},
+        {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
+        {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
+        {
+            "repository": "semantic-data-portal",
+            "issue": 90,
+            "type": "documentation",
+        },
+        {
+            "repository": "accounting-information-platform",
+            "issue": 45,
+            "type": "documentation",
+        },
+        {"repository": "clearfolio", "issue": 538, "type": "documentation"},
+        {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
+        {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
+        {"repository": "keyverse", "issue": 103, "type": "feature"},
+        {
+            "repository": "mhtml-etl-gateway",
+            "issue": 56,
+            "type": "documentation",
+        },
+        {"repository": "j-planner", "issue": 2, "type": "documentation"},
+        {
+            "repository": "learning-record-store",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-content-studio",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "learning-management-platform",
+            "issue": 1,
+            "type": "documentation",
+        },
+        {
+            "repository": "metering-billing-platform",
+            "issue": 157,
+            "type": "documentation",
+        },
+        {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
+        {
+            "repository": "supply-chain-control-plane",
+            "issue": 1,
+            "type": "feature",
+        },
+        {
+            "repository": "governance-risk-compliance",
+            "issue": 65,
+            "type": "documentation",
+        },
+        {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
+        {"repository": "life-os", "issue": 211, "type": "documentation"},
+        {"repository": "scopeweave", "issue": 650, "type": "documentation"},
+        {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
+        {"repository": "kaefa", "issue": 81, "type": "documentation"},
+        {"repository": "kaefa", "issue": 82, "type": "documentation"},
+        {"repository": "aFIPC", "issue": 261, "type": "documentation"},
+        {"repository": "nonnest2", "issue": 115, "type": "documentation"},
     ]
     assert len(set(payload["type"].values())) == len(payload["type"])
+
+
+def test_repository_label_operating_record_matches_assignment_inventory() -> None:
+    """The operator record must enumerate the exact active taxonomy inventory."""
+
+    payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+    assignments = payload["assignments"]
+    operating_record = OPERATING_RECORD.read_text(encoding="utf-8")
+
+    assert (
+        f"explicit label assignments cover {len(assignments)} active evidence-backed targets"
+        in operating_record
+    )
+    for assignment in assignments:
+        target = (
+            f"`ContextualWisdomLab/{assignment['repository']}#{assignment['issue']}`"
+        )
+        assert target in operating_record

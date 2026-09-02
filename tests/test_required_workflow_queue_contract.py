@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -539,7 +540,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "noema-review.yml",
         "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
+        "python-security.yml",
+        "sast-semgrep.yml",
+        "sbom-generation.yml",
         "scorecard-pr.yml",
+        "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
     )
@@ -579,12 +584,27 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+        elif filename in {
+            "close-empty-pr.yml",
+            "codeql-pr.yml",
+            "osv-scanner-pr.yml",
+            "pr-review-merge-scheduler.yml",
+            "python-security.yml",
+            "sast-semgrep.yml",
+            "sbom-generation.yml",
+            "scorecard-pr.yml",
+            "secret-scan.yml",
+            "security-scan.yml",
+        }:
+            assert "cancel-closed-pr-runs:" not in workflow
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
+            assert "github.event.pull_request.number" in concurrency_contract
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
+            assert "cancel-in-progress:" in concurrency_contract
         else:
-            assert "cancel-closed-pr-runs:" in workflow
-            assert (
-                "PR closed; this run only cancels older runs through workflow concurrency."
-                in workflow
-            )
+            raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
@@ -958,6 +978,26 @@ def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
     )[1].splitlines()[0]
 
 
+def test_scan_pr_queue_has_a_bounded_runtime() -> None:
+    """scan-pr-queue must not fall back to GitHub's 360-minute platform default.
+
+    Without a job-level timeout-minutes, a stuck run (rate-limited GitHub API,
+    a hung gh invocation) can occupy a shared runner for up to six hours,
+    contributing to org-wide Actions capacity saturation. The bound must be
+    shorter than org-queue-sweep's timeout-minutes: 60, since scan-pr-queue
+    only scans this one repository's queue while org-queue-sweep walks every
+    target repository in the organization.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+
+    match = re.search(r"^    timeout-minutes: (\d+)$", scan_job, flags=re.MULTILINE)
+    assert match is not None, "scan-pr-queue must declare a job-level timeout-minutes"
+    scan_timeout = int(match.group(1))
+    assert 1 <= scan_timeout <= 45
+    assert scan_timeout < 60
+
+
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 
@@ -969,8 +1009,8 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     visible reason when it cannot mutate sibling repositories. The sweep runs
     hourly so an approval that lands after a PR's last event is
     auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate 30-minute scan, and the job has
-    enough runtime headroom to finish a complete organization walk.
+    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
+    job has enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -1018,11 +1058,14 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert '"pull_request" or .event == "pull_request_target"' in workflow
     assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
     assert ".head_sha != $current_default_sha" in workflow
-    assert "do not match an open PR or default-branch Current HEAD" in workflow
+    assert "classified as not matching an open PR or default-branch Current HEAD" in workflow
     assert '.current_head // "closed-or-no-open-pr"' in workflow
     assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
     assert "select($current_pr_heads[$head_key] == null)" in workflow
-    assert "Could not cancel superseded run" in workflow
+    revalidate_script = (
+        REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
+    ).read_text(encoding="utf-8")
+    assert "Could not cancel ${cancellation_mode} run" in revalidate_script
     assert "No run will be cancelled from incomplete evidence" in workflow
     assert "queue_hygiene_ready=false" in workflow
     # Organization sweep budgets must be consumed across the repository loop;
@@ -1084,7 +1127,7 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "current_head=closed-or-no-open-pr" in result.stdout
+    assert "classified_head=closed-or-no-open-pr" in result.stdout
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
