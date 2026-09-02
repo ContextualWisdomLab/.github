@@ -13,12 +13,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "strix.yml"
 
 
+def _workflow() -> dict[str, object]:
+    """Load the production Strix workflow for cross-job contract checks."""
+    return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
 def _steps() -> list[dict[str, object]]:
-    workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    return workflow["jobs"]["strix"]["steps"]
+    """Return the ordered steps of the authoritative Strix scan job."""
+    return _workflow()["jobs"]["strix"]["steps"]
 
 
 def _step(name: str) -> dict[str, object]:
+    """Return a named step from the authoritative Strix scan job."""
     return next(step for step in _steps() if step.get("name") == name)
 
 
@@ -123,3 +129,15 @@ def test_repository_dispatch_skip_signal_guards_every_downstream_admission_effec
     for name in guarded_names:
         condition = str(_step(name).get("if", ""))
         assert "steps.dispatch_validation.outputs.should_scan != 'false'" in condition, name
+
+
+def test_repository_dispatch_skip_signal_crosses_the_status_job_boundary() -> None:
+    """Closed/draft dispatches must not launch a separate privileged status publisher."""
+    workflow = _workflow()
+    scan_job = workflow["jobs"]["strix"]
+    status_job = workflow["jobs"]["publish-manual-pr-evidence-status"]
+
+    assert scan_job.get("outputs", {}).get("should_scan") == "${{ steps.dispatch_validation.outputs.should_scan }}"
+    status_condition = str(status_job.get("if", ""))
+    assert "needs.strix.outputs.should_scan == 'true'" in status_condition
+    assert "github.event_name == 'repository_dispatch'" in status_condition
