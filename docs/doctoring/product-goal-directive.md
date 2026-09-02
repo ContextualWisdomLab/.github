@@ -513,3 +513,47 @@ fixed:
   fail-closed validation) before being written, not merely asserted on the strength of the new
   directive text.
 - **PR:** `ContextualWisdomLab/.github#1659`.
+
+## 2026-09-02 Devin Review, round 2: one real §1/§2 self-contradiction, two acknowledged-not-actioned observations
+
+- **Date:** 2026-09-02.
+- **Subject:** a second Devin Review pass on this PR (after the third revision's commit `b3f96812`)
+  found 3 new items. One `BUG`-severity finding was real and fixed; two `ANALYSIS`-severity
+  observations are valid but deliberately not actioned in this pass, with reasoning recorded here.
+  1. **"Last valid close cannot reach zero" (real, fixed).** §1's new "PR 0개는 병합이나 검증된
+     successor의 유효 delta 완전 승계로만 만들고 단순 Close하지 않는다" and §2's four-case close policy
+     (explicit user instruction / no valid delta / malicious change / verified successor takeover)
+     conflict for exactly the case where the *last* open PR is legitimately closed under one of §2's
+     other three cases — §1's shorthand names only "merge or successor takeover" as legitimate paths
+     to zero, which taken literally would forbid ever reaching zero via a no-valid-delta, malicious, or
+     user-directed close, directly contradicting §2's own policy one paragraph earlier. **Fix:** added
+     a reconciliation note (not an edit to either verbatim quote) explaining the correct reading — §1's
+     constraint targets specifically the disposition of a PR *with a valid, unmerged delta* (merge and
+     successor-takeover are the two ways named because both preserve that delta, which a bare Close
+     would silently lose); the other three legitimate close cases don't have that problem (no delta to
+     lose, nothing worth preserving, or a supervening user instruction), so reaching zero through any
+     of §2's four legitimate paths is consistent with, not a violation of, §1's actual intent.
+  2. **"Obsolete routing guidance remains prominent" (acknowledged, not actioned).** The first
+     (CodeRabbit, 2026-08-30) note under §8 still describes the superseded "Strix uses
+     `orchestrator/auto`" framing prominently, even though two later notes in the same section already
+     mark it superseded and explain why. Devin's suggestion (move the historical guidance to the
+     doctoring record) is reasonable in isolation, but this file's own established convention — visible
+     across every prior revision reconciled here — is to leave a superseded note in place with a clear
+     "superseded by X" marker rather than relocate or delete it, so the in-place reasoning trail (why
+     the old framing existed, what changed, when) survives for a reader working through the section
+     top-to-bottom. Moving it to `docs/doctoring/` would break that in-place trail for a reader of
+     `product-goal-directive.md` itself, who would then need to cross-reference a second file mid-
+     section. Left as-is; noted here as a considered, not overlooked, decision.
+  3. **"Revision history obscures current policy" (acknowledged, not actioned).** A broader structural
+     observation: current rules now appear in three places (the top preamble's revision-history
+     paragraphs, in-section commentary notes, and this doctoring file), and a future edit to one could
+     leave the others stale. Valid, and a natural consequence of three same-day revision passes each
+     appending its own preamble paragraph and section notes rather than restructuring the file. A full
+     consolidation (e.g., collapsing the preamble to point at a single canonical changelog rather than
+     narrating each revision inline) is a legitimate improvement but a materially larger, separate
+     effort than a review-response fix — restructuring this file's organization is not something to
+     do reactively inside an unrelated PR round. Not actioned here; worth a dedicated future pass if
+     the preamble keeps growing at this rate.
+- **Verification:** `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
+  → 5 passed; `grep -n "�"` → no matches (no corruption).
+- **PR:** `ContextualWisdomLab/.github#1659`.

@@ -149,6 +149,26 @@ change). This directly reinforces and gives specific mechanics to §1's new "PR 
 zero open PRs must go through merge or verified successor takeover, never a bare close), and this
 addition provides the operational taxonomy and repair procedure for getting there.
 
+**Reconciliation (flagged by Devin Review on this PR, 2026-09-02):** read too literally, §1's "병합이나
+검증된 successor의 유효 delta 완전 승계로만 만들고 단순 Close하지 않는다" and this section's four-case
+close policy conflict for exactly one case: if the **last** open PR is legitimately closed under §2's
+"유효 delta 없음" (no valid delta), "악성 변경" (malicious change), or "사용자 명시" (explicit user
+instruction) case, that close also reaches zero open PRs — a path §1's shorthand names only two ways
+to reach ("병합이나... 완전 승계로만"), taken word-for-word forbidding this. That reading cannot be the
+intent: it would force keeping open a PR with no valid delta, or one that's malicious, or one the user
+explicitly told the agent to close, purely to avoid the open-PR count hitting zero — directly
+contradicting the four-case close policy this same section states one paragraph earlier. The correct
+reading, consistent with both sentences and with why §1 names *merge or successor takeover* 
+specifically: §1's constraint targets the disposition of a PR that **has a valid, unmerged delta** —
+merge and successor-takeover are the two ways named because both are the ways to preserve that delta,
+which is exactly what a bare Close would silently lose. The other three legitimate close cases in this
+section by construction do not have that problem: "no valid delta" has nothing to preserve, "malicious
+change" has nothing worth preserving, and "explicit user instruction" is a supervening authority that
+overrides the default rule entirely. Reaching zero open PRs through any of this section's four
+legitimate close paths is therefore consistent with §1's intent; what §1 actually forbids is reaching
+zero via a Close that discards a still-valid, unmerged delta without first ensuring a successor
+inherits it.
+
 ## 3. Research, standards, and documentation traceability
 
 > 연구·표준·문서 추적성 모든 개발은 최신 권위 국제 표준·논문을 조사해 APA 7th로 인용하고 doctoring에 기록하며 누락 근거를 보충한다. Local Zotero API가 되면 기존 자료를 읽거나 OA 논문을 추가한다. 논문·표준은 exact-head·전체 PR·내부 모듈·API에 모순 없이 결합하고 충돌을 수정한다. AGENTS.md, CLAUDE.md, ARCHITECTURE.md, CHANGELOG.md 등 ADR 문서를 상시 갱신하고 Core ERD, UML, PRD, TRD, user stories, storyboard, wireframes, Storybook inventory, security·test·operability baseline 및 필요한 그림을 포함한다. 릴리즈 가능하면 버전을 올려 배포하고 CHANGELOG.md를 갱신한다. GitHub.io를 언급하려면 페이지를 실제 출판한다. 모든 의사결정은 작성자 자신이 맥락을 잊었거나 처음 보는 사람이 읽더라도 문제, 제약, 검토한 대안, 선택·기각 이유, 근거, 위험, 기대 효과와 후속 조치를 재구성할 수 있게 구체적이고 자세히 기록한다. 결론만 적거나 암묵적 전제를 생략하지 말고, 실제 사용자·운영·장애 장면이 떠오를 만큼 생생한 사례와 증거를 남긴다. 기록은 exact-head, 로그, 이슈·PR·ADR·실험 결과에 연결해 다른 Agent가 같은 판단을 검증·수정·계속할 수 있어야 한다.
