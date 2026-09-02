@@ -3076,3 +3076,48 @@ other peer (`trusting-wilbur-...`), mid-flight on its own `.github` workflow-con
 was alerted to the same required-status-check-name risk found here and independently confirmed (with
 evidence: the two converted jobs' combined check names checked against the org ruleset's actual
 required list) that its own conversion is unaffected.
+
+## 2026-09-02: item 18 (GitHub App installation token stateless format) audited, no code change needed
+
+GitHub announced App installation tokens will move to a new stateless `ghs_...` format, possibly
+~520 characters (up from the current shorter format) -- backlog item 18 asks whether this org's code
+has hardcoded length assumptions that would break. Searched thoroughly rather than assuming either
+"probably fine" or "needs a fix":
+
+- `scripts/ci/noema_review_gate.py`, `scripts/ci/pr_review_merge_scheduler.py`,
+  `scripts/ci/redact_sensitive_log.py` all redact GitHub tokens via
+  `gh[pousr]_[A-Za-z0-9_]+` / `gh[pousr]_[A-Za-z0-9_]{20,}` -- the character class already covers `s`
+  (`ghs_`), and both patterns are open-ended on the upper bound (`+` / `{20,}`, no `{20,N}` ceiling), so
+  a longer token still matches and gets redacted correctly. No truncation risk here.
+- `ContextualWisdomLab/noema` (the org's dedicated GitHub App token-minting Cloudflare Worker --
+  the single most directly relevant repo, since it mints and returns these tokens) was read in full
+  (`src/*.ts`): every `.length` check found bounds the *incoming OIDC JWT* (a real, JWT-format
+  structural constraint -- 3 dot-separated segments, a `jti` length ceiling, a trace-header length
+  ceiling), never the *outgoing* GitHub App installation token noema mints and returns. No length
+  validation, substring, or truncation of the minted token was found anywhere in its source.
+- Org-wide GitHub code search (`org:ContextualWisdomLab "ghs_"`, `"len(token)"`, `"VARCHAR" token`)
+  found no hardcoded token-length checks or fixed-width token storage columns in any repository.
+
+**Conclusion: no code in this org currently assumes a fixed GitHub App token length**, so the
+announced format change should not break anything here. This is a real, evidence-based negative
+result, not an unexamined assumption -- worth recording so a future loop iteration doesn't re-open
+this item without checking whether the search above is now stale (e.g., a new repo or script added
+since 2026-09-02 that does length-validate tokens).
+
+## 2026-09-02: R-CMD-check consolidation (#1716) caller-sync gap found via peer review, fixed
+
+A peer Claude session reviewing `.github#1716` (not yet merged) ran a fresh Devin pass and found
+`ContextualWisdomLab/kaefa#84` (the thin-caller PR the ADR's own text names as the intended consumer)
+still used the removed `pre_check_script` free-form-shell input and referenced
+`uses: .../r-package-check.yml@main`. Verified directly: `.github#1716`'s own security fix (RED
+`5e838ab3` -> production `931c8f32` -> GREEN `6ca30803`, then docs) already renamed that input to two
+bounded-data fields, `install_package_before_pre_check` (boolean) and `pre_check_test_file` (a
+validated relative test-file path, never interpolated as shell source) -- the *documentation* (ADR-0023,
+the doctoring doc) was already correctly updated to the new names, but the actual `kaefa#84` caller
+PR, a separate repository, had not been synchronized to match. Fixed directly on `kaefa#84`'s branch.
+`@main` still does not resolve (the reusable workflow does not exist on `.github`'s `main` until
+`#1716` merges) -- `kaefa#84` cannot pass its own checks until then; re-pin to the exact merge SHA at
+that point, per the same convention `.github#1728` established for `dependency-review.yml`'s callers.
+`#1716` itself was deliberately left unmerged by the reviewing peer session, respecting this org's
+"OpenCode/Noema judges, GitHub Actions merges mechanically" governance model rather than bypass-merging
+without an approving review -- consistent with this session's own discipline throughout.
