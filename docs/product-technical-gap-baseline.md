@@ -2486,6 +2486,21 @@ ADR·owner 판단이 필요하다. (b) `noema-review`의 GitHub App 토큰 TTL�
 `always()` 단계로 업로드되는 `strix-reports` 아티팩트를 다음 발생 시 직접
 받아 확인해야 한다.
 
+**(b) 2026-09-02 재확인 — 이미 해소됨.** `main`의
+`.github/workflows/noema-review.yml`을 직접 읽어 확인: `noema_prepare` 스텝(모델
+단계, 임의로 길어질 수 있음) 이후 `prepared == true`일 때만 별도 스텝이 리뷰어
+credential을 **다시 mint**하고(`REFRESHED_APP_TOKEN_SOURCE`), 그 새 토큰으로만
+publish 스텝이 verdict를 post한다 — 위에서 관측한 "모델 preflight로 실행 시간이
+길어져 토큰이 만료된 뒤 post" 실패 모드를 구조적으로 제거한다. 이 remint는
+`#1616`("Noema reviewer credential-lifetime delta", 위 2690행 항목)이 도입했고,
+`#1648`("fix(noema): validate refreshed App token at publication boundary",
+`83ae03f6`, 2026-09-02T08:00:01+09:00)이 발행 경계에서 그 refreshed 토큰 자체를
+검증하도록 마무리했다. 두 커밋 모두 현재 `main`에 있다. 같은 세션에서 이 문서를
+갱신하며 `naruon#1503`의 실패했던 `noema-review` 잡을 재실행(`rerun_failed_jobs`,
+run `33489389355`)해 두었으니, 그 결과가 이 항목의 실측 재확인 증거가 된다 — 401
+없이 verdict가 나오면 (b) 완전 종결, 여전히 401이면 이 재확인을 되돌리고 재조사할
+것.
+
 ## 2026-09-01 post-#1546 `scripts/ci` coverage regression on protected main: root-caused and closed
 
 **Context**: `#1546` (merged, exact head `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`) reconciled
