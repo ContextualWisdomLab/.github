@@ -69,35 +69,6 @@ on:
   repository_dispatch:
     types: [strix-scan]
 
-concurrency:
-  # Include the event name so default-branch repository_dispatch evidence cannot cancel
-  # or interleave with the required pull_request_target Strix context that branch
-  # protection reads. Closed PR events use a separate group so their cancellation
-  # job can run immediately instead of waiting behind the scan it must cancel.
-  #
-  # Rate-limit root-cause fix (2026-08-24): the group is scoped per REPOSITORY
-  # (not per PR) so sibling pull requests in the same repository scan
-  # sequentially instead of concurrently. Concurrent per-PR scans each retry
-  # the shared NVIDIA NIM key up to three times, producing guaranteed
-  # litellm.RateLimitError storms and fail-closed gate failures across every
-  # open PR (observed 2026-08-23/24). Serializing per repository and event
-  # class keeps at most one provider-backed PR scan in flight per class. Push
-  # and scheduled scans retain the branch ref so one protected branch cannot
-  # supersede another branch's pending evidence. GitHub's native concurrency
-  # contract retains one active and one pending run; the scheduler re-dispatches
-  # the exact current head after pending-run supersession, and accuracy is
-  # prioritized over scan latency.
-  group: >-
-    strix-${{
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'closed' &&
-      format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number) ||
-      (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
-      format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository) ||
-      format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
-    }}
-  cancel-in-progress: false
-
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
 permissions:
@@ -106,56 +77,93 @@ permissions:
   models: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
+  cancel-superseded-pr-runs:
+    if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
+    runs-on: ubuntu-24.04
     # Prefer the established scheduler credential, but let the close event use
     # its job-scoped token so abandoned scans are cancelled even when that
     # optional secret is unavailable. This job never checks out PR code.
     permissions:
       actions: write
       contents: read
+      pull-requests: read
     env:
       GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
-      CLOSED_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+      TARGET_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_ACTION: ${{ github.event.action }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Cancel queued and running scans for the closed pull request
+      - name: Cancel queued and running scans for superseded or closed pull request heads
         shell: bash
         run: |
           set -euo pipefail
 
+          live_target_matches() {
+            local live_pr_json live_action
+            if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not verify the live pull request; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
+              return 1
+            fi
+            live_action="$(jq -r '[.state, .head.sha // ""] | @tsv' <<<"$live_pr_json")"
+            { [ "$PR_ACTION" = "closed" ] && [ "$live_action" = $'closed\t'"$TARGET_PR_HEAD_SHA" ]; } ||
+              { [ "$PR_ACTION" = "synchronize" ] && [ "$live_action" = $'open\t'"$TARGET_PR_HEAD_SHA" ]; }
+          }
+
           cancel_runs() {
             local status="$1"
+            if ! live_target_matches; then
+              echo "::notice::Strix cleanup target changed before run selection; leaving runs unchanged."
+              return 0
+            fi
             local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
             local runs_json
-            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-close-gh-error)"; then
-              echo "::warning::Strix close cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
-              sed 's/^/  /' /tmp/strix-close-gh-error >&2 || true
+            if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not inspect ${TARGET_REPOSITORY}; leaving runs unchanged."
+              sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
               return 0
             fi
             local run_ids
-            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" --arg head_sha "$CLOSED_PR_HEAD_SHA" \
-              --arg current "$CURRENT_RUN_ID" '
+            if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
+              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
                 | select(.name == "Strix Security Scan")
                 | select(.event == "pull_request_target")
-                | select(.head_sha == $head_sha or any(.pull_requests[]?; ((.number | tostring) == $pr)))
+                | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
+                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
+                | select($title_matches or $metadata_matches)
+                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr)
+                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
+                  )) as $metadata_is_current
+                | ((.pull_requests // []) | any(
+                    ((.number | tostring) == $pr) and ((.head.sha // "") != "")
+                  )) as $metadata_has_head
+                | select(
+                    $action == "closed"
+                    or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
+                  )
                 | .id
               ' <<<"$runs_json")"; then
-              echo "::warning::Strix close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
+              echo "::warning::Strix cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
               return 0
             fi
             while IFS= read -r run_id; do
               [ -n "$run_id" ] || continue
-              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-close-cancel-error; then
-                echo "Cancelled Strix run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}."
+              if ! live_target_matches; then
+                echo "::notice::Strix cleanup target changed before cancellation; leaving runs unchanged."
+                return 0
+              fi
+              if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-cleanup-cancel-error ||
+                gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/strix-cleanup-cancel-error; then
+                echo "Cancelled obsolete Strix run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
               else
-                echo "::warning::Strix close cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
-                sed 's/^/  /' /tmp/strix-close-cancel-error >&2 || true
+                echo "::warning::Strix cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
+                sed 's/^/  /' /tmp/strix-cleanup-cancel-error >&2 || true
               fi
             done <<<"$run_ids"
           }
@@ -166,13 +174,23 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # Large repositories can require a legitimate full-hour review. The scanner
-    # gets a 90-minute process budget and a 95-minute total retry budget; the
-    # 100-minute step and 120-minute job leave deterministic time to preserve
-    # partial reports and publish a concrete failure reason. Hitting any cap is
-    # fail-closed and never turns an incomplete scan into an approval.
-    timeout-minutes: 120
-    runs-on: ubuntu-latest
+    concurrency:
+      # Keep provider-backed scans serial per repository and event class while
+      # allowing the trusted cleanup job above to retire an obsolete head now.
+      group: >-
+        strix-${{
+          (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
+          format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository) ||
+          format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
+        }}
+      cancel-in-progress: false
+    # Large, actively-growing repositories (e.g. contextual-orchestrator) can
+    # legitimately require well over two hours to scan -- this org's own
+    # standing operating directive accepts that central OpenCode/Strix/Noema
+    # scans may take more than two hours per model (docs/product-goal-directive.md).
+    # Inference has no wall-clock deadline; cancellation is reserved for an
+    # explicit operator action or a superseded head.
+    runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
     # from the scan job only.
@@ -725,7 +743,6 @@ jobs:
 
       - name: Run Strix (quick)
         if: steps.gate.outputs.enabled == 'true'
-        timeout-minutes: 100
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
         # temporary scope with execute bits stripped, then scans that scope as
@@ -766,12 +783,10 @@ jobs:
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
-          budget_suffix="TIME""OUT"
-          process_budget_seconds="5400"
-          export "LLM_${budget_suffix}=900"
-          export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=300"
-          export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
+          export LLM_TIMEOUT=0
+          export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
+          export STRIX_PROCESS_TIMEOUT_SECONDS=0
+          export STRIX_TOTAL_TIMEOUT_SECONDS=0
 
           # Recognized signals that the LLM backend was unavailable / starved.
           # Defined before the gate loop so the bounded retry decision below
@@ -794,22 +809,15 @@ jobs:
           # vulnerability result exists.
           #
           # A typed provider outage with no reported vulnerability finding is
-          # retried with bounded linear backoff inside this step so transient
+          # retried with linear backoff inside this step so transient
           # provider failures do not fail the required check on the first
           # attempt. Genuine findings, configuration failures, and unexpected
-          # exit codes never retry; the deadline keeps every path inside the
-          # deterministic 120-minute job budget, and all-terminal outcomes
-          # remain fail-closed.
+          # exit codes never retry, and all-terminal outcomes remain fail-closed.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           : > "$strix_run_log"
           strix_terminal_log="$strix_run_log"
           strix_rc=0
           strix_gate_attempt=1
-          strix_gate_deadline=$(( SECONDS + 6000 ))
-          # Reserve the scanner process budget, not the gate's total wrapper
-          # budget.  The latter includes setup/cleanup overhead already spent
-          # by the current attempt and can make every retry impossible.
-          strix_gate_attempt_budget_seconds="$process_budget_seconds"
           set +e
           while : ; do
             strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_${strix_gate_attempt}.log"
@@ -846,10 +854,8 @@ jobs:
               break
             fi
             backoff_seconds=$(( ${STRIX_GATE_RETRY_BACKOFF_SECONDS:-90} * strix_gate_attempt ))
-            retry_reserve_seconds=$(( strix_gate_attempt_budget_seconds + backoff_seconds ))
-            remaining_seconds=$(( strix_gate_deadline - SECONDS ))
-            if [ "$strix_gate_attempt" -ge 3 ] || [ "$remaining_seconds" -lt "$retry_reserve_seconds" ]; then
-              echo "Provider-unavailable Strix attempt ${strix_gate_attempt} reached the bounded retry limit or the remaining job time budget (${remaining_seconds}s) is too small to retry; failing closed." >&2
+            if [ "$strix_gate_attempt" -ge 3 ]; then
+              echo "Provider-unavailable Strix attempt ${strix_gate_attempt} reached the retry limit; failing closed." >&2
               break
             fi
             echo "Strix provider outage on attempt ${strix_gate_attempt}; retrying after ${backoff_seconds}s backoff." >&2
@@ -1013,7 +1019,7 @@ jobs:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       statuses: write # Required for downscoped OIDC status publication.
