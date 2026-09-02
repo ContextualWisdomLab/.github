@@ -2864,17 +2864,31 @@ signal — throws away exactly the "verified characteristic" evidence the direct
 today wrongly withholds 8 genuinely free, general-purpose, tool-capable chat models from
 `orchestrator/free`.
 
-**Status: fix in progress**, same day, same session, as a root-cause (not symptom) change: extend the
-existing tool-call-evidence infrastructure (`model_discovery.py`'s `_parallel_tool_call_evidence`/
-`discovery_tool_call_tags`/`DISCOVERY_TOOL_CALL_*_TAG` machinery) with a basic "declares tool-calling
-support" signal from `supported_parameters`, and narrow `chat_capability.requires_non_text_input`'s
-consumers (`orchestrator._is_general_free_agent`/`_agent_requires_non_text_input`,
-`model_discovery.general_free_serving_candidates`) so a model/agent carrying *verified* tool-call
-evidence is not excluded from the general free pool purely for its input modality. Providers with no
-such signal (NVIDIA NIM, and any OpenRouter row where `supported_parameters` is absent, malformed, or
-lacks `"tools"`) keep today's exact fail-closed exclusion — this is additive/narrowing only, never a
-weakening of the existing incident-driven safety net. TDD (RED before fix, GREEN after) required per this
-repo's own contract; see the follow-up entry once merged for exact file/test evidence and PR number.
+**Status: fix implemented and PR opened** —
+[contextual-orchestrator#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028).
+Investigation notes on *why NIM is excluded by evidence, not by a hardcoded provider name* (repository
+owner explicitly required checking this, not just asserting it): the existing `_parallel_tool_call_evidence`/
+`discovery_tool_call_tags`/`DISCOVERY_TOOL_CALL_*_TAG` names were found to be **unwired dead code** (
+`discovery_tool_call_tags` reads a `DiscoveredModel.supports_parallel_tool_calls` attribute that does not
+exist on the dataclass — calling it raises `AttributeError`; zero callers anywhere) — not usable
+infrastructure, so the fix adds a new tri-state `DiscoveredModel.supports_tool_calls` field instead,
+sourced from the *raw* `supported_parameters` value (a field-absent-defaults-to-`[]` local would
+misrepresent NIM's honest absence of evidence as a verified negative). Three third-party/first-party
+capability sources were checked, live, before concluding NIM has no usable signal today: **models.dev**
+(`tool_call: true` for the exact incident model, contradicting the real HTTP-400 incident — a proven false
+positive, re-verified live 2026-09-02), **LiteLLM's `model_prices_and_context_window.json`** (zero
+chat/vision entries under `litellm_provider: "nvidia_nim"`, only 3 rerank-model entries — despite
+`supports_function_calling: true` for the *identical* model checkpoint via Azure AI and Oracle Cloud,
+confirming capability is deployment-specific not model-architecture-specific), and **NVIDIA's own official
+API reference** (`docs.api.nvidia.com`, structural: NIM's "Visual Models APIs" category — confirmed on
+both the incident model and `google/gemma-3-27b-it`, a genuinely general-purpose chat model — uses a
+different async `infer`+`statuspolling` REST contract incompatible with `tools`/`tool_choice` passthrough,
+not a missing-metadata gap). Live probing was considered and explicitly rejected (side effects, cost,
+reliability) per repository-owner direction. `provider_catalog_store._restore_model_semantics` also needed
+the same tag restored, found during implementation — without it the exemption would have been silently
+inert (fail-closed, not unsafe, but non-functional) through the real `bootstrap_provider_catalog_runtime`
+path. TDD: 11 new/changed tests, all genuinely RED before the fix (stashed source, `AttributeError`),
+GREEN after. Full suite: 3361 passed, 1 skipped, 0 failed (baseline 3350). `interrogate`: 100%.
 
 Re-open only with evidence that a *text-only* free OpenRouter/Bytez model is being wrongly excluded (that
 would be a genuine regression of `#933`'s own tested contract) or that the tool-call signal itself proves
