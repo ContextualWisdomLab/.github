@@ -80,30 +80,30 @@ core foundation은 전 제품의 공통 설치물이 아니라, 여러 제품에
 
 | 분류 | Canonical owner | 소유 core 기능 |
 |---|---|---|
-| 조직·계약 | `.github` | 공통 CI·review·security·release |
-| 조직·계약 | `enterprise-architecture-core` | 전사 Context Map·architecture decision |
-| 조직·계약 | `context-graph-contracts` | assertion·event·schema·fixture·conformance (domain truth·Ubiquitous Language는 제품에 남긴다) |
-| 의미·데이터 | `ConceptWeave` | ontology·semantic-layer 생성·검증·release |
-| 의미·데이터 | `semantic-data-portal` | catalog·governance·검색·제공 |
-| 의미·데이터 | `EmbedRelay` | embedding identity·migration |
-| 의미·데이터 | `mhtml-etl-gateway` | MHTML 검사·schema proposal·load lineage |
-| AI·운영 | `contextual-orchestrator` | provider discovery·model capability·routing/delegation/verification·admin |
-| AI·운영 | `noema` | 공유 agent runtime·GitHub review agent·GitHub Actions OIDC 단기 repository capability·exact-revision evidence |
-| AI·운영 | `pg-llm-batch` | DB token count·batch 처리 |
-| Identity·보안·runtime | `keyverse` | identity·federation·token (유일한 identity ledger; Keycloak 기반 인증 백엔드) |
-| Identity·보안·runtime | `EgressWeave` | 안전한 outbound HTTP |
-| Identity·보안·runtime | `OriginWeave` | governed browser |
-| Identity·보안·runtime | `pingora-gateway` | Rust edge |
-| Identity·보안·runtime | `quarantine-sandbox-runtime` | 격리[^sandbox-ownership] |
-| Identity·보안·runtime | `appguardrail` | scan·SARIF·remediation |
-| Identity·보안·runtime | `wardnet` | gateway·WAF·IDS·SOC |
-| 재사용 기능 | `fast-mlsirm` | IRT·MLSIRM |
-| 재사용 기능 | `TEPP` | 다국어·시간·event·relation 측정 |
-| 재사용 기능 | `RankWeave` | retrieval fusion·evaluation·통계 비교·tuning·TREC |
-| 재사용 기능 | `ThreadWeave` | JWZ/RFC 5256 threading |
-| 재사용 기능 | `inkspan` | editor·serialization·문서 변환 |
-| 재사용 기능 | `DiagramWeave` | diagram patch·render·CLI·LSP |
-| 도메인 제품 소비 | `naruon` / `LineageWeave` / `psychometrics-commons` / `disksage` / `PolicyWeave` / `CalendarWeave` / `supply-chain-control-plane` | core foundation을 소비하는 도메인 제품 저장소; domain truth·Ubiquitous Language는 여기 남고 위 core로 옮기지 않는다 |
+| 조직·계약 | [`ContextualWisdomLab/.github`](https://github.com/ContextualWisdomLab/.github) | 공통 CI·review·security·release |
+| 조직·계약 | [`ContextualWisdomLab/enterprise-architecture-core`](https://github.com/ContextualWisdomLab/enterprise-architecture-core) | 전사 Context Map·architecture decision |
+| 조직·계약 | [`ContextualWisdomLab/context-graph-contracts`](https://github.com/ContextualWisdomLab/context-graph-contracts) | assertion·event·schema·fixture·conformance (domain truth·Ubiquitous Language는 제품에 남긴다) |
+| 의미·데이터 | [`ContextualWisdomLab/ConceptWeave`](https://github.com/ContextualWisdomLab/ConceptWeave) | ontology·semantic-layer 생성·검증·release |
+| 의미·데이터 | [`ContextualWisdomLab/semantic-data-portal`](https://github.com/ContextualWisdomLab/semantic-data-portal) | catalog·governance·검색·제공 |
+| 의미·데이터 | [`ContextualWisdomLab/EmbedRelay`](https://github.com/ContextualWisdomLab/EmbedRelay) | embedding identity·migration |
+| 의미·데이터 | [`ContextualWisdomLab/mhtml-etl-gateway`](https://github.com/ContextualWisdomLab/mhtml-etl-gateway) | MHTML 검사·schema proposal·load lineage |
+| AI·운영 | [`ContextualWisdomLab/contextual-orchestrator`](https://github.com/ContextualWisdomLab/contextual-orchestrator) | provider discovery·model capability·routing/delegation/verification·admin |
+| AI·운영 | [`ContextualWisdomLab/noema`](https://github.com/ContextualWisdomLab/noema) | 공유 agent runtime·GitHub review agent·GitHub Actions OIDC 단기 repository capability·exact-revision evidence |
+| AI·운영 | [`ContextualWisdomLab/pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch) | DB token count·batch 처리 |
+| Identity·보안·runtime | [`ContextualWisdomLab/keyverse`](https://github.com/ContextualWisdomLab/keyverse) | identity·federation·token (유일한 identity ledger; Keycloak 기반 인증 백엔드) |
+| Identity·보안·runtime | [`ContextualWisdomLab/EgressWeave`](https://github.com/ContextualWisdomLab/EgressWeave) | 안전한 outbound HTTP |
+| Identity·보안·runtime | [`ContextualWisdomLab/OriginWeave`](https://github.com/ContextualWisdomLab/OriginWeave) | governed browser |
+| Identity·보안·runtime | [`ContextualWisdomLab/pingora-gateway`](https://github.com/ContextualWisdomLab/pingora-gateway) | Rust edge |
+| Identity·보안·runtime | [`ContextualWisdomLab/quarantine-sandbox-runtime`](https://github.com/ContextualWisdomLab/quarantine-sandbox-runtime) | 격리[^sandbox-ownership] |
+| Identity·보안·runtime | [`ContextualWisdomLab/appguardrail`](https://github.com/ContextualWisdomLab/appguardrail) | scan·SARIF·remediation |
+| Identity·보안·runtime | [`ContextualWisdomLab/wardnet`](https://github.com/ContextualWisdomLab/wardnet) | gateway·WAF·IDS·SOC |
+| 재사용 기능 | [`ContextualWisdomLab/fast-mlsirm`](https://github.com/ContextualWisdomLab/fast-mlsirm) | IRT·MLSIRM |
+| 재사용 기능 | [`ContextualWisdomLab/TEPP`](https://github.com/ContextualWisdomLab/TEPP) | 다국어·시간·event·relation 측정 |
+| 재사용 기능 | [`ContextualWisdomLab/RankWeave`](https://github.com/ContextualWisdomLab/RankWeave) | retrieval fusion·evaluation·통계 비교·tuning·TREC |
+| 재사용 기능 | [`ContextualWisdomLab/ThreadWeave`](https://github.com/ContextualWisdomLab/ThreadWeave) | JWZ/RFC 5256 threading |
+| 재사용 기능 | [`ContextualWisdomLab/inkspan`](https://github.com/ContextualWisdomLab/inkspan) | editor·serialization·문서 변환 |
+| 재사용 기능 | [`ContextualWisdomLab/DiagramWeave`](https://github.com/ContextualWisdomLab/DiagramWeave) | diagram patch·render·CLI·LSP |
+| 도메인 제품 소비 | [`naruon`](https://github.com/ContextualWisdomLab/naruon) / [`LineageWeave`](https://github.com/ContextualWisdomLab/LineageWeave) / [`psychometrics-commons`](https://github.com/ContextualWisdomLab/psychometrics-commons) / [`disksage`](https://github.com/ContextualWisdomLab/disksage) / [`PolicyWeave`](https://github.com/ContextualWisdomLab/PolicyWeave) / [`CalendarWeave`](https://github.com/ContextualWisdomLab/CalendarWeave) / [`supply-chain-control-plane`](https://github.com/ContextualWisdomLab/supply-chain-control-plane) | core foundation을 소비하는 도메인 제품 저장소; domain truth·Ubiquitous Language는 여기 남고 위 core로 옮기지 않는다 |
 
 owner가 미성숙하거나 API가 없어도 소비 저장소는 복제·우회하지 않는다. owner 저장소에서 RED test → 기능/문서/release를 개발해 CI GREEN과 immutable version을 낸 뒤 소비측이 채택한다. 그 전에는 port·ACL·feature flag·test double로 경계를 지키고 owner의 source·DB·임시 branch를 직접 읽지 않는다.
 
