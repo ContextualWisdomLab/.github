@@ -64,9 +64,6 @@ jobs:
               raise SystemExit('unexpected reconciliation run-block indentation')
           script = '\n'.join(line[10:] if line.startswith('          ') else '' for line in lines) + '\n'
 
-          # Repair the malformed generated parse_block in memory. The canonical
-          # workflow file itself is left untouched because the Actions token does
-          # not have GitHub's separate workflow-file mutation authority.
           start_marker = "parse_block = '''"
           end_marker = "\n'''\ntext = text[:parse_start] + parse_block + text[parse_end:]"
           block_start = script.index(start_marker) + len(start_marker)
@@ -85,19 +82,8 @@ jobs:
               raise SystemExit('parse_block indentation was already repaired')
           script = script[:block_start] + repaired_block + script[block_end:]
 
-          old_intended = '''intended=(
-  CHANGELOG.md
-  scripts/ci/noema_review_gate.py
-  tests/test_noema_truncated_completion_contract.py
-)'''
-          new_intended = '''intended=(
-  CHANGELOG.md
-  scripts/ci/noema_review_gate.py
-  tests/test_noema_truncated_completion_contract.py
-  .github/workflows/reconcile-pr1606-current-main.yml
-  .github/workflows/_temp_pr1606_indent_repair.yml
-  .github/workflows/_temp_pr1606_execute_reconcile.yml
-)'''
+          old_intended = "intended=(\n  CHANGELOG.md\n  scripts/ci/noema_review_gate.py\n  tests/test_noema_truncated_completion_contract.py\n)"
+          new_intended = "intended=(\n  CHANGELOG.md\n  scripts/ci/noema_review_gate.py\n  tests/test_noema_truncated_completion_contract.py\n  .github/workflows/reconcile-pr1606-current-main.yml\n  .github/workflows/_temp_pr1606_indent_repair.yml\n  .github/workflows/_temp_pr1606_execute_reconcile.yml\n)"
           if script.count(old_intended) != 1:
               raise SystemExit('unexpected intended-path block')
           script = script.replace(old_intended, new_intended, 1)
@@ -115,5 +101,3 @@ jobs:
           bash -n /tmp/pr1606-reconcile.sh
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           bash /tmp/pr1606-reconcile.sh
-
-# Connector-owned trigger revision: exact source transaction, no workflow self-mutation.
