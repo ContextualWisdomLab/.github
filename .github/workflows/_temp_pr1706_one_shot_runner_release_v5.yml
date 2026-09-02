@@ -191,24 +191,90 @@ jobs:
             esac
           done < <(git diff --name-only HEAD)
 
-      - name: Publish only from unchanged exact writer head
+      - name: Materialize a verified merge commit without mutating the writer ref
         env:
+          GH_TOKEN: ${{ github.token }}
           EXPECTED_REMOTE_HEAD: ${{ github.sha }}
-          # Prefer a workflow-triggering PAT when configured. The temporary
-          # materializer may use its scoped contents:write GITHUB_TOKEN only to
-          # publish the already-verified repair; the automation then makes the
-          # required traceability commit through the owner connector so fresh
-          # exact-head required workflows are generated before any merge.
-          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
         shell: bash
         run: |
           set -euo pipefail
           remote_head="$(git ls-remote origin refs/heads/fix/opencode-poll-wall-clock-bound | cut -f1)"
           test "$remote_head" = "$EXPECTED_REMOTE_HEAD"
+          live_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          reconciled_main="$(git rev-parse origin/main)"
+          test "$live_main" = "$reconciled_main"
           git add -A
           git diff --cached --check
-          git commit -m "fix(opencode): release required runner after one verdict read"
-          remote_head="$(git ls-remote origin refs/heads/fix/opencode-poll-wall-clock-bound | cut -f1)"
-          test "$remote_head" = "$EXPECTED_REMOTE_HEAD"
-          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:refs/heads/fix/opencode-poll-wall-clock-bound
+          python3 - "$GITHUB_REPOSITORY" "$EXPECTED_REMOTE_HEAD" "$live_main" <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          repo, writer_parent, main_parent = sys.argv[1:4]
+
+          def run(*args: str, input_text: str | None = None) -> str:
+              proc = subprocess.run(args, input=input_text, text=True, capture_output=True, check=False)
+              if proc.returncode != 0:
+                  raise SystemExit(f"command failed: {' '.join(args)}\n{proc.stderr}")
+              return proc.stdout.strip()
+
+          changed = run("git", "diff", "--cached", "--name-status", "origin/main", "--")
+          entries: list[dict[str, object]] = []
+          for line in changed.splitlines():
+              if not line:
+                  continue
+              status, path = line.split("\t", 1)
+              if status.startswith("D"):
+                  old = run("git", "ls-tree", "origin/main", "--", path)
+                  if not old:
+                      continue
+                  mode = old.split(None, 1)[0]
+                  entries.append({"path": path, "mode": mode, "type": "blob", "sha": None})
+                  continue
+              index_row = run("git", "ls-files", "-s", "--", path)
+              if not index_row:
+                  raise SystemExit(f"missing staged file metadata for {path}")
+              mode = index_row.split(None, 1)[0]
+              data = Path(path).read_bytes()
+              blob_payload = json.dumps({"content": base64.b64encode(data).decode("ascii"), "encoding": "base64"})
+              blob_sha = run(
+                  "gh", "api", "--method", "POST", f"repos/{repo}/git/blobs", "--input", "-", "--jq", ".sha",
+                  input_text=blob_payload,
+              )
+              entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob_sha})
+
+          base_tree = run("git", "rev-parse", "origin/main^{tree}")
+          tree_payload = json.dumps({"base_tree": base_tree, "tree": entries})
+          tree_sha = run(
+              "gh", "api", "--method", "POST", f"repos/{repo}/git/trees", "--input", "-", "--jq", ".sha",
+              input_text=tree_payload,
+          )
+          parents = [writer_parent]
+          if run("git", "merge-base", "--is-ancestor", "origin/main", writer_parent) != "":
+              pass
+          # git merge-base --is-ancestor is status-only; retain main as a second parent
+          # whenever the writer does not already contain it.
+          ancestor = subprocess.run(
+              ["git", "merge-base", "--is-ancestor", "origin/main", writer_parent],
+              capture_output=True,
+              check=False,
+          ).returncode == 0
+          if not ancestor:
+              parents.append(main_parent)
+          commit_payload = json.dumps({
+              "message": "fix(opencode): release required runner after one verdict read",
+              "tree": tree_sha,
+              "parents": parents,
+          })
+          candidate_sha = run(
+              "gh", "api", "--method", "POST", f"repos/{repo}/git/commits", "--input", "-", "--jq", ".sha",
+              input_text=commit_payload,
+          )
+          print(f"CANDIDATE_COMMIT_SHA={candidate_sha}")
+          print(f"CANDIDATE_TREE_SHA={tree_sha}")
+          print(f"CANDIDATE_PARENT_SHA={writer_parent}")
+          print(f"CANDIDATE_MAIN_SHA={main_parent}")
+          PY
