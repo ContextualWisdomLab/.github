@@ -36,6 +36,8 @@ jobs:
           test "$remote_head" = "$EXPECTED_HEAD"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
 
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch origin main
           main_head="$(git rev-parse origin/main)"
           base="$(git merge-base HEAD origin/main)"
@@ -93,7 +95,5 @@ jobs:
 
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "merge: reconcile PR 1606 with current main"
           git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
