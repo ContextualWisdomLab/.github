@@ -79,7 +79,7 @@ permissions:
 jobs:
   cancel-superseded-pr-runs:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Prefer the established scheduler credential, but let the close event use
     # its job-scoped token so abandoned scans are cancelled even when that
     # optional secret is unavailable. This job never checks out PR code.
@@ -190,7 +190,7 @@ jobs:
     # scans may take more than two hours per model (docs/product-goal-directive.md).
     # Inference has no wall-clock deadline; cancellation is reserved for an
     # explicit operator action or a superseded head.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
     # from the scan job only.
@@ -783,7 +783,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha }}
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
-          export LLM_TIMEOUT=0
+          export LLM_TIMEOUT=300
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
           export STRIX_PROCESS_TIMEOUT_SECONDS=0
           export STRIX_TOTAL_TIMEOUT_SECONDS=0
@@ -1019,7 +1019,7 @@ jobs:
     name: publish-manual-pr-evidence-status
     needs: strix
     if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       statuses: write # Required for downscoped OIDC status publication.
