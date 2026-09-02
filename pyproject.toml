@@ -26,9 +26,18 @@ source = ["scripts/ci"]
 # coverage exactly as contextual-orchestrator omits its own runtime-only
 # __main__.py and server.py. The policy and ZDR decision logic it consumes are
 # fully tested offline.
+#
+# pingora_edge_egress_opener.py imports the vendored EgressWeave library from
+# the vendor/egressweave git submodule (pinned per
+# docs/adr/0021-pingora-edge-policy-egressweave-migration.md), which a plain
+# checkout does not populate without `git submodule update --init`. It is
+# omitted here for the same reason as the launcher above; its own dedicated
+# pingora-edge-egress-opener-quality-ci.yml workflow always initializes the
+# submodule and enforces 100% coverage of this file there.
 omit = [
     "tests/*",
     "scripts/ci/contextual_orchestrator_review_launcher.py",
+    "scripts/ci/pingora_edge_egress_opener.py",
 ]
 
 [tool.coverage.report]
