@@ -52,10 +52,9 @@ _POLICY = EgressPolicy.from_hosts(GITHUB_API_HOSTNAME, allowed_methods={"GET"})
 class EgressAdapterError(RuntimeError):
     """Raised when a trusted, parsed JSON document cannot be returned.
 
-    Covers a missing token, a non-GitHub-API URL, an EgressWeave policy
-    denial, a non-2xx GitHub response, and a GitHub response that is not
-    valid JSON — mirroring the single generic failure mode
-    ``pingora_edge_policy.py``'s own ``PolicyError`` provides today.
+    Covers malformed or non-GitHub-API URLs, pinned-client construction and
+    policy failures, HTTP transport/status failures, and malformed response
+    JSON so callers receive one stable adapter-boundary failure type.
     """
 
 
@@ -83,29 +82,41 @@ def _default_client() -> httpx.Client:
     return _client
 
 
-def github_open_json(url: str, token: str, *, client: object | None = None) -> object:
+def _validate_github_api_url(url: str) -> None:
+    """Fail closed unless ``url`` is a syntactically valid GitHub API URL."""
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+    except (TypeError, ValueError) as exc:
+        raise EgressAdapterError("refusing to open a malformed GitHub API URL") from exc
+    if parsed.scheme != "https" or hostname != GITHUB_API_HOSTNAME:
+        raise EgressAdapterError(f"refusing to open a non-GitHub-API URL: {url!r}")
+
+
+def github_open_json(url: str, token: str) -> object:
     """Fetch one bounded GitHub REST JSON document via the pinned client.
 
-    ``url`` must be an ``https://api.github.com/...`` URL; every other
-    destination authority, redirect, and oversized-response protection is
-    enforced by the injected EgressWeave policy rather than reimplemented
-    here. ``token`` is sent as a ``Bearer`` credential and must be non-empty.
-    ``client`` defaults to the module's lazily-built, process-wide pinned
-    ``httpx.Client``; tests inject a fake exposing a compatible
-    ``get(url, *, headers) -> response`` method instead of exercising real
-    network I/O. The returned response must expose ``raise_for_status()``
-    and ``json()`` the way ``httpx.Response`` does.
+    ``url`` must be a syntactically valid ``https://api.github.com/...`` URL.
+    Destination authority, redirect, proxy, DNS-rebinding, and oversized-body
+    controls remain owned by the EgressWeave client constructed internally;
+    callers cannot inject an alternate transport into this public boundary.
+    ``token`` is sent as a ``Bearer`` credential and must be non-empty.
 
-    Raises :class:`EgressAdapterError` for a missing token, a non-GitHub-API
-    URL, an EgressWeave policy denial, a non-2xx HTTP status, or a response
-    body that is not valid JSON. Never raises any other exception type.
+    Raises :class:`EgressAdapterError` for malformed/untrusted URLs, client
+    construction or policy failure, HTTP transport/status failure, or a
+    response body that is not valid JSON.
     """
     if not token:
         raise EgressAdapterError("a GitHub token is required")
-    parsed = urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname != GITHUB_API_HOSTNAME:
-        raise EgressAdapterError(f"refusing to open a non-GitHub-API URL: {url!r}")
-    active_client = _default_client() if client is None else client
+    _validate_github_api_url(url)
+
+    try:
+        active_client = _default_client()
+    except Exception as exc:
+        raise EgressAdapterError(
+            f"failed to construct pinned GitHub API client: {type(exc).__name__}"
+        ) from exc
+
     try:
         response = active_client.get(
             url,
@@ -127,6 +138,11 @@ def github_open_json(url: str, token: str, *, client: object | None = None) -> o
         raise EgressAdapterError(
             f"GitHub API request failed: {type(exc).__name__}"
         ) from exc
+    except Exception as exc:
+        raise EgressAdapterError(
+            f"GitHub API client failed: {type(exc).__name__}"
+        ) from exc
+
     try:
         return response.json()
     except ValueError as exc:
