@@ -70,6 +70,14 @@ jobs:
               end = marker_pos + len(marker)
               return source[:start] + replacement + source[end:]
 
+          def insert_after_labeled_call(source: str, label: str, addition: str) -> str:
+              marker = f"        '{label}',\n    )"
+              marker_pos = source.find(marker)
+              if marker_pos < 0 or source.find(marker, marker_pos + 1) >= 0:
+                  raise SystemExit(f'PR1672 {label} marker moved or duplicated; refusing insertion')
+              end = marker_pos + len(marker)
+              return source[:end] + "\n" + addition + source[end:]
+
           gate_call = '''    source = replace_once(
               source,
               r'    try:\\n        verdict = call_llm\\(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths\\)\\n    except StaleHeadDuringRepairRetryError:\\n        print\\("Pull request head changed during review; Noema review skipped before repair retry\\."\\)\\n        return 0\\n',
@@ -85,6 +93,14 @@ jobs:
               'two-phase retry catch',
           )'''
           text = replace_labeled_call(text, 'two-phase retry catch', two_phase_call)
+
+          stale_exception_call = '''    source = replace_once(
+              source,
+              r'class StaleHeadDuringRepairRetryError\\(RuntimeError\\):\\n    """Raised when the PR head moves before ``call_llm``.s repair-retry request fires\\."""\\n\\n'.replace('``.s', "``'s"),
+              '',
+              'stale repair exception',
+          )'''
+          text = insert_after_labeled_call(text, 'deadline exception', stale_exception_call)
 
           path.write_text(text, encoding='utf-8')
           PY
