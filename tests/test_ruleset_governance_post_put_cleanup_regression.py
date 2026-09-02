@@ -199,3 +199,79 @@ def test_ambiguous_put_restores_displaced_admin_after_main_advances(monkeypatch)
     assert main_checks == 2
     assert history_reads == 2
     assert put_bodies == [desired, module._editable_projection(administrator)]
+
+
+def test_successful_put_restores_displaced_admin_after_main_advances(monkeypatch) -> None:
+    """A successful PUT also finishes predecessor restoration before stale-main failure."""
+
+    module = load_module()
+    target = repository_target(module)
+    first = live_payload()
+    desired = module._desired_payload(first, target)
+    converged = {**first, **desired}
+    administrator = {
+        **first,
+        "name": "Administrator intervening state",
+        "enforcement": "evaluate",
+    }
+    main_checks = 0
+    get_count = 0
+    history_reads = 0
+    put_bodies: list[dict] = []
+
+    monkeypatch.setattr(module, "_assert_canonical_governance", lambda *_args: None)
+    monkeypatch.setattr(module, "_latest_history_version", lambda *_args: 41)
+
+    def assert_main(_expected_sha: str) -> None:
+        nonlocal main_checks
+        main_checks += 1
+        if main_checks > 2:
+            raise module.RulesetGovernanceError("protected main advanced")
+
+    def history(*_args):
+        nonlocal history_reads
+        history_reads += 1
+        if history_reads == 1:
+            return [
+                {"version_id": 43},
+                {"version_id": 42},
+                {"version_id": 41},
+            ]
+        return [{"version_id": 44}, {"version_id": 43}]
+
+    def history_state(_target, version_id):
+        return {42: administrator, 43: converged, 44: administrator}[version_id]
+
+    def api(method, endpoint, *, body=None):
+        nonlocal get_count
+        if method == "GET" and endpoint == target.endpoint:
+            get_count += 1
+            if get_count <= 2:
+                return first
+            if get_count <= 4:
+                return converged
+            return administrator
+        if method == "PUT" and endpoint == target.endpoint:
+            assert body is not None
+            put_bodies.append(body)
+            return {}
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_assert_current_main", assert_main)
+    monkeypatch.setattr(module, "_gh_api_list", history)
+    monkeypatch.setattr(module, "_history_version_state", history_state)
+    monkeypatch.setattr(module, "_gh_api", api)
+
+    with pytest.raises(
+        module.RulesetGovernanceError,
+        match="restored newest displaced administrator state",
+    ):
+        module._reconcile_target(
+            target,
+            verify_only=False,
+            expected_main_sha="a" * 40,
+        )
+
+    assert main_checks == 2
+    assert history_reads == 2
+    assert put_bodies == [desired, module._editable_projection(administrator)]
