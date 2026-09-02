@@ -2769,3 +2769,33 @@ verification vs. catalog-entry existence) and should likely be closed by the sam
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## 2026-09-02 `.github#1659` reconciled with `main` (15 commits behind); no new gap, process note only
+
+**Observed.** This directive/baseline-reconciliation PR's branch
+(`docs/update-product-goal-directive-2026-09-01`) had drifted 15 commits behind `main` while still 6
+ahead (its own doc-only commits), and its own CI run showed 11 failing tests, all in contract-test
+files this PR never touches (`test_current_head_run_coalescer.py`,
+`test_merge_scheduler_runner_image_contract.py`, `test_opencode_live_draft_state_regression.py`,
+`test_opencode_required_verdict_regression.py`, `test_queue_cancellation_scheduler_contract.py`,
+`test_required_security_runner_image_contract.py`, `test_required_workflow_queue_contract.py`,
+`test_strix_llm_timeout_contract.py`). Confirmed by branch-divergence count (`git rev-list
+--left-right --count origin/main...HEAD` → `15 6`) that these were pre-existing test/workflow drift
+from `main` moving forward underneath this branch (the `ubuntu-24.04` runner-image pin, the
+`LLM_TIMEOUT=0` Strix change, the hourly-review-repair single-file consolidation, and others already
+recorded above), not a regression this PR's doc-only commits introduced.
+
+**Fix.** Ordinary `git merge origin/main` (no rebase, no force-push, per this session's standing
+policy) into the PR branch. One conflict, in this same file (`docs/product-technical-gap-baseline.md`)
+— both sides had appended new dated sections after the same anchor paragraph; resolved by keeping both
+sections in sequence (this file is append-only by convention, so no content was dropped or
+reinterpreted, only the marker lines removed). Re-ran the 8 previously-failing files after the merge:
+`PYTHONPATH=. python3 -m pytest <8 files> -q` → **177 passed**. Pushed the merge commit
+(`21ea46c4`) to the PR branch and converted the PR from draft to ready-for-review.
+
+**Not a new gap.** Recorded here only as a process note (branch-staleness reconciliation, not a
+product or security gap) since the standing directive's §1 instructs deriving gap/status updates from
+PRs encountered during the loop, and a future pass hitting the same "PR branch stale behind main, its
+own unrelated contract tests failing" pattern on any other long-lived PR should reach for the same
+diagnosis (check `git rev-list --left-right --count origin/<base>...HEAD` before assuming a real
+regression) rather than re-investigating from scratch.
