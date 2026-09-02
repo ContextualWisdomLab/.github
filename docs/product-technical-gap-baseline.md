@@ -2627,3 +2627,68 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## 2026-09-02 `test_strix_quick_gate.sh` stale cron assertion left broken by the `#1630` cadence lengthening
+
+**Problem.** The required `exact-head-path-policy` check (which runs `bash
+scripts/ci/test_strix_quick_gate.sh` against the exact PR head) was failing on
+multiple, unrelated open PRs (observed directly on `.github#1476`, a PR whose own
+diff never touches this script or the scheduler workflow) with:
+
+```
+FAIL: scheduler wakes frequently enough to clear auto-merge PRs that become stale
+after their initial PR events (missing 'cron: "*/30 * * * *"')
+```
+
+**Root cause.** `#1630` (referenced in `docs/doctoring/actions-queue-saturation-hourly-sweep.md`)
+deliberately lengthened `pr-review-merge-scheduler.yml`'s repository-local heartbeat
+from a quarter-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
+reduce Actions-capacity pressure during the sustained organization-wide queue
+saturation this session repeatedly documented. The Python regression
+`tests/test_actions_queue_saturation_scheduler_cadence.py` was correctly updated at
+the time (it now asserts `'- cron: "30 * * * *"' in workflow` and explicitly
+`'*/30 * * * *' not in workflow`) — but the parallel bash contract test,
+`scripts/ci/test_strix_quick_gate.sh`, was not, and kept asserting the literal old
+string. This is a genuine, reproducible defect on protected `main` itself, not a
+symptom of any one PR being stale: I confirmed it by running the script directly
+against an unmodified, freshly cloned `main` (commit `8c085835`) before making any
+change, and it failed with the identical message.
+
+**Why this matters at organization scale.** `exact-head-path-policy` is a required
+check for every PR touching Strix-quick-gate-covered paths, checked out against
+each PR's own exact head but running this trusted base-branch script. Since the
+assertion can never pass against the current, correctly-updated workflow file, this
+was a standing, silent block on an unbounded number of unrelated PRs across the
+whole `.github` PR queue until fixed at the root -- exactly the class of "root
+cause outside any one PR's diff" issue this session's operating directive requires
+be fixed at the canonical location rather than worked around per-PR.
+
+**Fix.** Updated the one stale assertion (`scripts/ci/test_strix_quick_gate.sh`)
+from `'cron: "*/30 * * * *"'` to `'cron: "30 * * * *"'`, matching the workflow's
+actual current value and the already-correct Python-side assertion. Also corrected
+an adjacent stale human-readable description ("scheduler isolates the 15-minute
+organization sweep from the separate 30-minute scheduled scan") to the current
+hourly/hourly cadence -- both `org-queue-sweep` and this repository-local scan are
+now hourly, so the old minute figures described a schedule that no longer exists.
+
+**Verification.** `bash scripts/ci/test_strix_quick_gate.sh` — confirmed FAIL on
+unmodified `main` before the change, confirmed PASS after. Full suite:
+`coverage run -m pytest tests -q` — all passed; `coverage report --fail-under=100`
+— 100% on `scripts/ci/`; `interrogate` — 100%. This is a bash-string-only fix with
+no Python production code touched, so the full-suite pass is a non-regression
+check, not evidence the fix itself works — the direct before/after script run is
+that evidence.
+
+**Risk of this fix itself.** Essentially none: a one-line literal-string update in
+a test assertion, verified to both fail before and pass after against the exact
+same unmodified `main` checkout. No workflow, script, or other test file changed.
+
+**Expected effect.** `exact-head-path-policy` stops failing organization-wide PRs
+on this assertion once this fix reaches protected `main`; any PR whose branch has
+already synced past this point (or syncs after) picks it up automatically.
+
+**Follow-up.** None identified — this closes the specific gap. If a future cadence
+change lands again, the durable fix is process, not code: update every test that
+asserts the literal cron string (currently exactly these two files) in the same PR
+that changes the cron value, per this repo's own "contract tests pin workflows AND
+prose" convention already stated in `CLAUDE.md`.
