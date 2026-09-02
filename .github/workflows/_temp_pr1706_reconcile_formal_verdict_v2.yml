@@ -41,14 +41,18 @@ jobs:
 
           driver = Path("scripts/ci/source_fix_pr1706_formal_verdict.py")
           text = driver.read_text(encoding="utf-8")
-          old = '''    if TEST.exists():
-              raise SystemExit(f"refusing to overwrite existing {TEST}")
-          TEST.write_text(TEST_CONTENT, encoding="utf-8")'''
-          new = '''    if TEST.exists():
-              if TEST.read_text(encoding="utf-8") != TEST_CONTENT:
-                  raise SystemExit(f"existing {TEST} drifted from the expected RED regression")
-          else:
-              TEST.write_text(TEST_CONTENT, encoding="utf-8")'''
+          old = (
+              "    if TEST.exists():\n"
+              "        raise SystemExit(f\"refusing to overwrite existing {TEST}\")\n"
+              "    TEST.write_text(TEST_CONTENT, encoding=\"utf-8\")\n"
+          )
+          new = (
+              "    if TEST.exists():\n"
+              "        if TEST.read_text(encoding=\"utf-8\") != TEST_CONTENT:\n"
+              "            raise SystemExit(f\"existing {TEST} drifted from the expected RED regression\")\n"
+              "    else:\n"
+              "        TEST.write_text(TEST_CONTENT, encoding=\"utf-8\")\n"
+          )
           if text.count(old) != 1:
               raise SystemExit("transition driver test-existence guard drifted; refusing to patch")
           driver.write_text(text.replace(old, new, 1), encoding="utf-8")
