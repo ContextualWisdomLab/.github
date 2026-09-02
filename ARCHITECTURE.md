@@ -92,26 +92,22 @@ non-cancellable so a newer heartbeat cannot abandon partially updated fleet
 state. See ADR-0020 and the operational baseline for the authority and
 live-verification contract.
 
-## OriginWeave hourly caller
+## Hourly product callers
 
-`originweave-hourly-review-repair.yml` is a thin, read-only caller at minute
-10. It names `ContextualWisdomLab/OriginWeave` and protected `main`, maps
-only established scheduler credentials, and grants job-scoped
-`id-token: write`. The reusable engine stays product-neutral.
-
-## nonnest2 hourly caller
-
-`nonnest2-hourly-review-repair.yml` is a thin, read-only caller at minute
-16. It names `ContextualWisdomLab/nonnest2` and protected `master`, maps
-only established scheduler credentials, and grants job-scoped
-`id-token: write`. The reusable engine stays product-neutral.
-
-## aFIPC hourly caller
-
-`afipc-hourly-review-repair.yml` is a thin, read-only caller at minute
-2. It names `ContextualWisdomLab/aFIPC` and protected `master`, maps
-only established scheduler credentials, and grants job-scoped
-`id-token: write`. The reusable engine stays product-neutral.
+`hourly-review-repair.yml` is one thin, read-only caller for all 18 product
+repositories (formerly 18 near-identical files, one per repository; see
+ADR-0021 and
+`docs/doctoring/hourly-review-repair-single-file-consolidation.md`). Its
+`on.schedule` list carries all 17 distinct cron minutes; a `resolve-target`
+job reads `github.event.schedule` to look up which repository (or, for the
+one shared minute, repositories) fired, and a matrix `dispatch-review-repair`
+job calls the reusable scheduler once per resolved target with job-scoped
+`id-token: write` and each repository's own independent,
+non-cancelling `concurrency.group`. OriginWeave (minute 10, protected
+`main`), nonnest2 (minute 16, protected `master`), and aFIPC (minute 2,
+protected `master`) are three of the 18 resolved targets; every target maps
+only established scheduler credentials. The reusable engine stays
+product-neutral.
 
 ## Hourly contextual-orchestrator repair gate
 

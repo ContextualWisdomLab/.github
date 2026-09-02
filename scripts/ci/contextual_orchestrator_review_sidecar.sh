@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-8cd99f139915131ba0239bce12a5d6a5fd85394e}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-045d17da5e2aea56a97e241ee158ab1628d78660}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -108,7 +108,9 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
+import contextlib
 import http.client
+import io
 import json
 import threading
 
@@ -127,7 +129,9 @@ class CaptureClient(ModelClient):
 
     def proxy_send(self, agent, endpoint, payload):
         self.proxy_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
-        return super().proxy_send(agent, endpoint, payload)
+        # This contract exercises the loopback gateway only; provider egress
+        # would turn an offline startup check into an availability dependency.
+        return self._mock_raw(agent, endpoint, payload)
 
 
 client = CaptureClient()
@@ -145,19 +149,25 @@ thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    connection.request(
-        "POST",
-        "/v1/chat/completions",
-        body=b"",
-        headers={
-            "Authorization": "Bearer contract",
-            "Content-Type": "application/json",
-            "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
-        },
+    expected_rejection_log = io.StringIO()
+    with contextlib.redirect_stderr(expected_rejection_log):
+        connection.request(
+            "POST",
+            "/v1/chat/completions",
+            body=b"",
+            headers={
+                "Authorization": "Bearer contract",
+                "Content-Type": "application/json",
+                "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 413, response.status
+        response.read()
+    assert (
+        "request_failed status=413 code=request_too_large"
+        in expected_rejection_log.getvalue()
     )
-    response = connection.getresponse()
-    assert response.status == 413, response.status
-    response.read()
     connection.close()
 
     def post_payload(payload):
@@ -269,11 +279,17 @@ esac
 
 orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
 case "$orchestrator_pool" in
-  free|auto)
+  free)
     pool_args=(--pool "$orchestrator_pool")
     ;;
   *)
-    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
+    # GitHub Actions Workflow usage of contextual-orchestrator is pinned to
+    # orchestrator/free: the org has not solved cost-safe free+ZDR routing
+    # well enough yet to justify a priced-inclusive "auto" pool in central CI,
+    # so "auto" is rejected here even though the launcher's own --pool flag
+    # (a general-purpose CLI also used outside GitHub Actions) still accepts
+    # it.
+    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"
     ;;
 esac
 

@@ -1037,11 +1037,14 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert '"pull_request" or .event == "pull_request_target"' in workflow
     assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
     assert ".head_sha != $current_default_sha" in workflow
-    assert "do not match an open PR or default-branch Current HEAD" in workflow
+    assert "classified as not matching an open PR or default-branch Current HEAD" in workflow
     assert '.current_head // "closed-or-no-open-pr"' in workflow
     assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
     assert "select($current_pr_heads[$head_key] == null)" in workflow
-    assert "Could not cancel superseded run" in workflow
+    revalidate_script = (
+        REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
+    ).read_text(encoding="utf-8")
+    assert "Could not cancel ${cancellation_mode} run" in revalidate_script
     assert "No run will be cancelled from incomplete evidence" in workflow
     assert "queue_hygiene_ready=false" in workflow
     # Organization sweep budgets must be consumed across the repository loop;
@@ -1103,7 +1106,7 @@ def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "current_head=closed-or-no-open-pr" in result.stdout
+    assert "classified_head=closed-or-no-open-pr" in result.stdout
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
