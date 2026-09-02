@@ -5,6 +5,49 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review. Also ensures every cancellation path (`cancel_stale_pr_runs`, `cancel_stale_opencode_runs`, `_cancel_revalidated_review_run_refs`) treats a run as cancelled only when `force_cancel_workflow_runs` actually reports success, not merely when live revalidation proved it stale -- superseding PR #1712's simpler `force_cancel_workflow_run_refs` wrapper (removed as dead code; its safety guarantee is preserved inline at every call site by this more thorough revalidate-then-cancel design).
+- **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
+  invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
+  every non-draft PR before any eligibility gate, and several other call sites
+  (`active_review_run_refs`, `dispatch_strix_evidence`'s busy check) ask the
+  identical unfiltered `(repo, ("queued", "in_progress"))` question again --
+  all against the one repository a scheduler invocation ever targets, with zero
+  caching anywhere in the file. At the default `MAX_PRS=100` this reissued the
+  same repository-wide, paginated `gh api .../actions/runs` fetch well over a
+  hundred times per run. `active_workflow_runs` now memoizes its result keyed on
+  the full `(repo, statuses, event, created, head_sha)` call shape for one
+  `main()` invocation, with explicit cache invalidation immediately after the
+  four places that mutate GitHub Actions run state
+  (`force_cancel_workflow_runs`, `rerun_actions_job`, `dispatch_opencode_review`,
+  `dispatch_strix_evidence`) so a later read in the same run can never replay a
+  pre-mutation snapshot. The four pre-existing `ThreadPoolExecutor` sites and the
+  correctly-sequential per-PR mutation-budget loop are untouched. See
+  ADR-0022.
+- **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
+  At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
+  `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
+  `contextual-orchestrator-`, `disksage-`, `fast-mlsirm-`, `github-`,
+  `governance-risk-compliance-`, `inkspan-`, `lineageweave-`,
+  `metering-billing-platform-`, `nonnest2-`, `orgmetra-`, `originweave-`,
+  `psychometrics-commons-`, `quarantine-sandbox-`, and
+  `semantic-data-portal-hourly-review-repair.yml` with one file,
+  `.github/workflows/hourly-review-repair.yml`: a single `on.schedule` list (all 17
+  distinct minutes, staggering comments preserved) plus a `github.event.schedule`
+  lookup table that resolves each minute's repository, base branch, and retry floor,
+  fanned out through a `strategy.matrix` job that keeps every repository's own
+  independent, non-cancelling `concurrency.group`. `pr-review-fix-scheduler.yml`,
+  the reusable engine every caller dispatches to, is unchanged. Auditing the 18
+  originals for this consolidation found `fast-mlsirm` and `metering-billing-platform`
+  had independently collided on the same minute (49) and that
+  `clearfolio-hourly-review-repair.yml` was the only one of the 18 missing its
+  job-level `id-token: write` grant; both are called out and the latter closed
+  uniformly across the consolidated matrix. 13 dedicated per-repository test files
+  are replaced by `tests/test_hourly_review_repair_callers.py`, which extracts and
+  executes the lookup script for every schedule against the exact parameters the
+  deleted files used; four other test files that used a since-deleted caller as a
+  representative example were updated in place. See
+  `docs/doctoring/hourly-review-repair-single-file-consolidation.md` and
+  ADR-0021.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several

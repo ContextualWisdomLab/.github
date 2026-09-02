@@ -73,7 +73,23 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: "*/30 * * * *"
+    # scan-pr-queue's own repository-local heartbeat. org-queue-sweep below
+    # explicitly excludes ContextualWisdomLab/.github from its target list
+    # (a PR in THIS repository, including one editing the governance
+    # workflows themselves, is never covered by the org-wide sweep), so this
+    # is the only periodic fallback for this repository's own PR queue. It
+    # also plugs a real event-coverage gap shared by every repository:
+    # required checks such as Security Scan and SAST Semgrep have no
+    # workflow_run listener anywhere in this file, so a PR where either is
+    # the last required check to go green has no event-driven re-wake at
+    # all. Offset by 30 minutes from org-queue-sweep's "0 * * * *" tick so
+    # the two heartbeats do not collide. Lengthened from */30 to hourly for
+    # the same Actions-capacity reason, and by the same lever, as the
+    # org-queue-sweep hourly cadence below (see
+    # docs/doctoring/actions-queue-saturation-hourly-sweep.md, #1630) — do
+    # NOT remove it outright; that would leave this repository's own queue
+    # with zero fallback heartbeat.
+    - cron: "30 * * * *"
     # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
     # repositories only receive scheduler runs on PR events, review/security
     # workflow completion, and protected-branch pushes; a PR whose approval or
@@ -137,6 +153,13 @@ jobs:
         github.event.client_payload.org_sweep != true
       )
     runs-on: ubuntu-24.04
+    # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
+    # 360-minute platform default. This is a single-repository queue scan
+    # (paginated GraphQL reads plus at most one review dispatch and one
+    # branch update per run) -- much lighter than org-queue-sweep's full
+    # organization walk below, so it gets a shorter bound than that job's
+    # timeout-minutes: 60.
+    timeout-minutes: 30
     permissions:
       actions: write
       checks: read
