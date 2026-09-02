@@ -11,6 +11,7 @@ name: Contextual Orchestrator Review Repair Quality CI
 # execution is routed through contextual-orchestrator/orchestrator/free.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, closed]
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
       - scripts/ci/pr_review_fix_scheduler.py
@@ -128,6 +129,7 @@ concurrency:
 
 jobs:
   contract:
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     name: Scheduler, contextual-orchestrator, writer, and conflict-scope contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 20
