@@ -69,13 +69,24 @@ jobs:
             --require-hashes \
             -r "${RUNNER_TEMP}/exact-head-coverage-quality-gate-requirements.txt"
       - name: Verify exact-head policy and full branch coverage
+        env:
+          PYTEST_TARGET: ${{ inputs.pytest_target }}
+          COVERAGE_INCLUDE: ${{ inputs.coverage_include }}
+          COMPILEALL_TARGETS: ${{ inputs.compileall_targets }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          python -m coverage run --branch -m pytest --import-mode=importlib ${{ inputs.pytest_target }} -q
+          # PYTEST_TARGET/COMPILEALL_TARGETS are deliberately unquoted: callers
+          # pass space-separated lists and glob patterns that must still word-
+          # split and expand. Routing workflow_call inputs through env instead
+          # of interpolating them directly into the script keeps a caller-
+          # controlled value from ever being re-parsed as shell syntax.
+          # shellcheck disable=SC2086
+          python -m coverage run --branch -m pytest --import-mode=importlib $PYTEST_TARGET -q
           python -m coverage report \
-            --include='${{ inputs.coverage_include }}' \
+            --include="$COVERAGE_INCLUDE" \
             --show-missing \
             --fail-under=100
-          python -m compileall -q ${{ inputs.compileall_targets }}
+          # shellcheck disable=SC2086
+          python -m compileall -q $COMPILEALL_TARGETS
           git diff --exit-code

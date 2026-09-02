@@ -55,6 +55,46 @@ def test_gate_enforces_exact_head_and_full_branch_coverage() -> None:
     assert "persist-credentials: false" in workflow
 
 
+def _run_blocks(workflow: str) -> list[str]:
+    """Return every indentation-bounded multiline shell body in a workflow."""
+    lines = workflow.splitlines()
+    blocks: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != "run: |":
+            index += 1
+            continue
+        run_indent = len(lines[index]) - len(lines[index].lstrip())
+        index += 1
+        body: list[str] = []
+        while index < len(lines) and (
+            lines[index].strip() == ""
+            or len(lines[index]) - len(lines[index].lstrip()) > run_indent
+        ):
+            body.append(lines[index])
+            index += 1
+        blocks.append("\n".join(body))
+    return blocks
+
+
+def test_gate_never_interpolates_caller_inputs_directly_into_shell() -> None:
+    """Caller-controlled inputs must enter shell commands only through env vars."""
+    workflow = _text(GATE_WORKFLOW)
+
+    run_blocks = _run_blocks(workflow)
+    assert run_blocks, "gate workflow must declare multiline run blocks"
+    for block in run_blocks:
+        assert "${{ inputs." not in block, (
+            "workflow_call input must enter shell commands through an "
+            f"environment variable, not direct interpolation: {block}"
+        )
+
+    for env_var in ("PYTEST_TARGET", "COVERAGE_INCLUDE", "COMPILEALL_TARGETS"):
+        assert f"{env_var}: ${{{{ inputs." in workflow, (
+            f"expected {env_var} to be bound from a workflow_call input via env:"
+        )
+
+
 def test_javascript_and_organization_loop_callers_wire_distinct_subsystem_inputs() -> None:
     """Each caller delegates to the shared gate with its own subsystem scope."""
     js_caller = _text(JS_CALLER)

@@ -1263,7 +1263,15 @@ def fetch_compare_branch_freshness(repo: str, pr: dict[str, Any]) -> dict[str, A
 
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
-    """Attach REST mergeability evidence to GraphQL pull request payloads."""
+    """Attach REST mergeability evidence to non-draft GraphQL pull request payloads.
+
+    ``inspect_pr`` returns for a draft PR (dispatching at most a draft review)
+    before it ever reads ``restMergeableState``/``compareStatus``/
+    ``compareBehindBy``, so refreshing those for a draft is two REST calls
+    (``pulls/{number}`` and ``compare/...``) spent on evidence no decision
+    ever consults. Skipping drafts here is pure dead-call elimination, not a
+    change to which non-draft PR gets merged/updated/reviewed.
+    """
 
     def enrich(pr: dict[str, Any]) -> None:
         """Attach REST mergeability evidence to one pull request payload."""
@@ -1278,17 +1286,18 @@ def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
         except RuntimeError as exc:
             pr["compareBranchFreshnessError"] = bounded_error_summary(str(exc))
 
-    if not prs:
+    mergeable_candidates = [pr for pr in prs if not pr.get("isDraft")]
+    if not mergeable_candidates:
         return
 
-    if len(prs) <= 1:
-        for pr in prs:
+    if len(mergeable_candidates) <= 1:
+        for pr in mergeable_candidates:
             enrich(pr)
         return
 
-    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(prs))
+    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(mergeable_candidates))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for _ in executor.map(enrich, prs):
+        for _ in executor.map(enrich, mergeable_candidates):
             pass
 
 

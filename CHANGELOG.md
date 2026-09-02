@@ -42,6 +42,31 @@ Semantic Versioning where the repository publishes a release.
   Left untouched, matching the precedent already set for ruling out the agent-mention
   dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
   2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
+- **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
+  At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
+  `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
+  `contextual-orchestrator-`, `disksage-`, `fast-mlsirm-`, `github-`,
+  `governance-risk-compliance-`, `inkspan-`, `lineageweave-`,
+  `metering-billing-platform-`, `nonnest2-`, `orgmetra-`, `originweave-`,
+  `psychometrics-commons-`, `quarantine-sandbox-`, and
+  `semantic-data-portal-hourly-review-repair.yml` with one file,
+  `.github/workflows/hourly-review-repair.yml`: a single `on.schedule` list (all 17
+  distinct minutes, staggering comments preserved) plus a `github.event.schedule`
+  lookup table that resolves each minute's repository, base branch, and retry floor,
+  fanned out through a `strategy.matrix` job that keeps every repository's own
+  independent, non-cancelling `concurrency.group`. `pr-review-fix-scheduler.yml`,
+  the reusable engine every caller dispatches to, is unchanged. Auditing the 18
+  originals for this consolidation found `fast-mlsirm` and `metering-billing-platform`
+  had independently collided on the same minute (49) and that
+  `clearfolio-hourly-review-repair.yml` was the only one of the 18 missing its
+  job-level `id-token: write` grant; both are called out and the latter closed
+  uniformly across the consolidated matrix. 13 dedicated per-repository test files
+  are replaced by `tests/test_hourly_review_repair_callers.py`, which extracts and
+  executes the lookup script for every schedule against the exact parameters the
+  deleted files used; four other test files that used a since-deleted caller as a
+  representative example were updated in place. See
+  `docs/doctoring/hourly-review-repair-single-file-consolidation.md` and
+  ADR-0021.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
