@@ -405,7 +405,7 @@ def test_gh_api_uses_versioned_stdin_body_and_redacts_failure(monkeypatch) -> No
 
 
 def test_main_validation_needs_no_token_and_live_modes_do(tmp_path: Path, monkeypatch, capsys) -> None:
-    """PR validation is offline while apply/verify require the protected credential."""
+    """PR validation is offline; live mutation additionally requires an exact main guard."""
 
     manifest = write_manifest(tmp_path, valid_manifest())
     monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -415,10 +415,26 @@ def test_main_validation_needs_no_token_and_live_modes_do(tmp_path: Path, monkey
         module.main(["--manifest", str(manifest)])
 
     monkeypatch.setenv("GH_TOKEN", "not-printed")
-    monkeypatch.setattr(module, "reconcile", lambda targets, verify_only: 0)
+    monkeypatch.setattr(
+        module,
+        "reconcile",
+        lambda targets, verify_only, expected_main_sha=None: 0,
+    )
     assert module.main(["--manifest", str(manifest), "--verify-only"]) == 0
     assert "verified 2" in capsys.readouterr().out
-    assert module.main(["--manifest", str(manifest)]) == 0
+    with pytest.raises(module.RulesetGovernanceError, match="expected protected main SHA"):
+        module.main(["--manifest", str(manifest)])
+    assert (
+        module.main(
+            [
+                "--manifest",
+                str(manifest),
+                "--expected-main-sha",
+                "a" * 40,
+            ]
+        )
+        == 0
+    )
     assert "reconciled 2" in capsys.readouterr().out
 
 
