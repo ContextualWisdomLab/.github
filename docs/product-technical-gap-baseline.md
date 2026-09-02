@@ -2774,3 +2774,69 @@ missing integration — each provider already gets its complete metadata from th
 to provide it, and models.dev is reserved for providers whose own APIs are comparatively sparse. Re-open
 only if a specific OpenRouter or Bytez model is observed missing pricing/context/modality data that
 models.dev has and neither provider's own API exposes.
+
+## 2026-09-02 backlog items 8/9/10/11 follow-up: one real (latent, non-urgent) gap confirmed, one apparent gap ruled out with incident evidence
+
+**Task.** The repository owner pushed back on the two entries above as too shallow — they verified the
+code *exists* but not that it actually produces the right result at runtime. A 4-agent trace workflow
+(one per hypothesis, plus a cross-checking synthesis agent that re-cloned the exact vendored pin SHA and
+re-traced the org's actual execution path rather than trusting the traces' own conclusions) and a
+follow-up solo check requested by the owner ("does `_parse_openai_compatible`'s OpenRouter path ever
+produce `is_free=False` for a genuinely free model, and if so does that need Bytez-style provider-specific
+handling?") together produced two results that revise the items 8/9 entry above.
+
+**Finding A — real, but latent and already contained (no fix needed today).**
+`contextual_orchestrator.credentials.get_credential()` resolves exclusively from a KV backend and never
+reads `os.environ` (`credentials.py:240`, "ORG PRINCIPLE — No os.getenv, values from KV"). The plain
+`python -m contextual_orchestrator serve --auto-discover-model-agents` CLI path
+(`__main__.py:1081`) never promotes `.env`/`os.environ` into that KV — live-reproduced: with
+`OPENROUTER_API_KEY` set only in `os.environ`, `discover_provider_models()` for the `openrouter` source
+returns `[]` at `model_discovery.py:1533-1539`, silently, at DEBUG log level only; after explicitly
+calling `register_credential("OPENROUTER_API_KEY", ...)` the identical fetch produces a correctly
+`is_free=True` model. **But** this is not the code path this organization's automation actually runs.
+The real path is `scripts/ci/contextual_orchestrator_review_sidecar.sh` →
+`contextual_orchestrator_review_launcher.py`, which calls `register_review_credentials(os.environ)`
+(`review_gateway.py:35-46`) immediately before `discover_all_models()` in the same process
+(`contextual_orchestrator_review_launcher.py:806, 817`) — this explicitly promotes every
+`PROVIDER_CREDENTIAL_NAMES` env value into the KV first. `openrouter`'s `ProviderModelSource` does not
+override `bootstrap_required` (default `True`, `model_discovery.py:127`), so `OPENROUTER_API_KEY` is
+included in that promotion today. Net: no gap in the pipeline this org runs. **Residual, worth a small
+regression test, not urgent:** this correctness depends on an *unpinned vendor default*
+(`bootstrap_required=True` on the vendored `openrouter` source) with no contract test in this repo — if
+contextual-orchestrator ever reclassifies `openrouter` as `bootstrap_required=False`, the sidecar would
+silently stop registering `OPENROUTER_API_KEY` and reproduce exactly the CLI-path symptom above,
+undetected. Suggested follow-up (optional hardening, not a current bug): add a regression test to
+`tests/test_contextual_orchestrator_review_sidecar_contract.py` pinning the pinned-SHA `openrouter`
+source's `bootstrap_required` to `True`/unset, in the same spirit as the #1651 doctoring record. Also
+unverified by this session: an actual live network round-trip against OpenRouter's real API with a real
+key — every check above is static/KV-level, not an end-to-end network probe.
+
+**Finding B — apparent gap ruled out, with a documented production incident as the reason, not an
+oversight.** Live-queried `https://openrouter.ai/api/v1/models?output_modalities=all` today (569
+models): 75 currently report `pricing.prompt`/`pricing.completion` both exactly `"0"` while declaring a
+non-text input modality (e.g. `minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`) — several of these (e.g.
+`recraft/recraft-v4-styles-pro`) also carry a real nonzero `pricing.image_token`, confirming
+`_pricing_is_free()` (`model_discovery.py:800-810`, which already sums *every* key in the row's own
+`pricing` dict, not just prompt/completion) is doing real, necessary work by rejecting those. For the
+remainder, whose entire published `pricing` object really is all-zero, `_row_is_free()` still returns
+`False` — but tracing *why* (`git log -S"_unit_prices_are_free"`, then `git show ba5e00c`, the merged PR
+`#933`) surfaced that this is not a pricing-verification gap at all: commit `ba5e00c` documents a real
+production incident (`ContextualWisdomLab/.github` PR #1198, Strix Security Scan run `33325907333`) where
+a zero-priced-but-vision-capable NVIDIA NIM model (`meta/llama-3.2-90b-vision-instruct`) was admitted to
+the capability-blind `orchestrator/free` pool and broke three independent tool-calling requests with an
+identical HTTP `400 invalid_request_error`, exhausting the pool against one bad candidate. The fix
+excludes any model declaring a non-text input *or* output modality from the blind general-chat free pool
+— on serving-compatibility grounds, independent of whether its price is honestly zero. Critically, the
+PR's own second review round records a reviewer (Devin) explicitly proposing the exact loosening this
+investigation was about to suggest — spare a model that "also supports text as a standalone input" (i.e.
+text+image, not vision-only) — and the author explicitly rejected it: "the incident model itself declares
+both `text` and `image`... that narrowing would have silently re-admitted the exact model this fix is
+about." So today's 75 zero-priced multimodal OpenRouter models being excluded from `orchestrator/free`
+is the intended, incident-tested behavior, not a false negative needing a Bytez-style provider-specific
+carve-out.
+
+**Conclusion.** Items 8/9's original "already fully wired in" verdict stands for the pipeline this org
+actually runs (Finding A), with one optional non-urgent hardening test recommended. No change needed for
+the multimodal-exclusion question (Finding B) — re-open only with evidence that a *text-only* free
+OpenRouter/Bytez model is being wrongly excluded, which would be a genuine regression of `#933`'s own
+tested contract, not this document's prior conclusion.
