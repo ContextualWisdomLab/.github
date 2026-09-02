@@ -517,6 +517,7 @@ def _settle_ambiguous_recovery_history(
     payload and lets the caller recover its actual immutable predecessor.
     """
 
+    observed_unexpected_newer_state = False
     for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
         history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
         if not history:
@@ -528,8 +529,13 @@ def _settle_ambiguous_recovery_history(
             newest_state = _history_version_state(target, newest_version)
             if _editable_projection(newest_state) == expected_payload:
                 return history
+            observed_unexpected_newer_state = True
         if poll_index < AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
             time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+    if observed_unexpected_newer_state:
+        raise RulesetGovernanceError(
+            "ambiguous ruleset recovery PUT left a newer state after settlement window; refusing overwrite"
+        )
     raise RulesetGovernanceError(
         "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
     )
@@ -645,7 +651,7 @@ def _verify_ruleset_history_transition(
     newest_state = _history_version_state(target, newest_id)
     if _editable_projection(newest_state) != desired:
         raise RulesetMutationStillSettlingError(
-            "latest ruleset history changed before the reviewed mutation became visible"
+            "latest ruleset history does not match reviewed mutation; history changed before the reviewed mutation became visible"
         )
     if predecessor_id == baseline_version:
         return
