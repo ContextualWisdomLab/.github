@@ -59,12 +59,6 @@ jobs:
           path = Path('scripts/ci/source_fix_pr1672_single_request.py')
           text = path.read_text(encoding='utf-8')
 
-          helper_old = "updated, count = re.subn(pattern, lambda _m: replacement, text, count=1, flags=flags)"
-          helper_new = "updated, count = re.subn(pattern, lambda match: match.expand(replacement), text, count=1, flags=flags)"
-          if text.count(helper_old) != 1:
-              raise SystemExit('PR1672 replace_once helper moved; refusing an unverified rewrite')
-          text = text.replace(helper_old, helper_new, 1)
-
           def replace_labeled_call(source: str, label: str, replacement: str) -> str:
               marker = f"        '{label}',\n    )"
               marker_pos = source.find(marker)
@@ -91,19 +85,6 @@ jobs:
               'two-phase retry catch',
           )'''
           text = replace_labeled_call(text, 'two-phase retry catch', two_phase_call)
-
-          forbidden_anchor = "    forbidden = (\n"
-          class_removal = '''    source = replace_once(
-              source,
-              r'class StaleHeadDuringRepairRetryError\\(RuntimeError\\):\\n    """[^"\\n]*"""\\n\\n',
-              '',
-              'stale repair retry exception',
-          )
-
-'''
-          if text.count(forbidden_anchor) != 1:
-              raise SystemExit('PR1672 forbidden-token anchor moved; refusing an unverified rewrite')
-          text = text.replace(forbidden_anchor, class_removal + forbidden_anchor, 1)
 
           path.write_text(text, encoding='utf-8')
           PY
