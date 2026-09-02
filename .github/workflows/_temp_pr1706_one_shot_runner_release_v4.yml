@@ -8,7 +8,7 @@ on:
       - .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: temp-pr1706-one-shot-runner-release-v4
@@ -62,6 +62,7 @@ jobs:
           set -euo pipefail
           PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release.py
           PYTHONPATH=. python3 scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
+          # Product baseline has its own single-writer lane; do not compete with it here.
           git restore --source=HEAD -- docs/product-technical-gap-baseline.md
 
       - name: Verify focused GREEN and exact-run identity contracts
@@ -85,7 +86,7 @@ jobs:
           fi
           git diff --check
 
-      - name: Remove completed one-shot machinery before publication
+      - name: Remove completed one-shot machinery and verify publication scope
         run: |
           set -euo pipefail
           rm -f \
@@ -96,13 +97,34 @@ jobs:
           test ! -e scripts/ci/temp_pr1706_one_shot_runner_release.py
           test ! -e scripts/ci/temp_pr1706_one_shot_runner_release_v2.py
           git diff --check
+          while IFS= read -r changed; do
+            case "$changed" in
+              .github/workflows/opencode-review.yml|\
+              .github/workflows/opencode-review-dispatch.yml|\
+              .github/workflows/_temp_pr1706_one_shot_runner_release_v4.yml|\
+              scripts/ci/temp_pr1706_one_shot_runner_release.py|\
+              scripts/ci/temp_pr1706_one_shot_runner_release_v2.py|\
+              tests/test_opencode_required_verdict_runner_release.py|\
+              tests/test_opencode_poll_rate_budget.py|\
+              tests/test_opencode_poll_self_retirement.py|\
+              tests/test_opencode_required_verdict_regression.py|\
+              tests/test_opencode_live_draft_state_regression.py|\
+              docs/doctoring/opencode-stale-poll-self-retirement.md|\
+              ARCHITECTURE.md|CHANGELOG.md) ;;
+              *) echo "::error::Unexpected publication path: $changed"; exit 1 ;;
+            esac
+          done < <(git diff --name-only HEAD)
 
-      - name: Publish only from unchanged exact writer head
+      - name: Publish only from unchanged exact writer head with a workflow-triggering credential
         env:
           EXPECTED_REMOTE_HEAD: ${{ github.sha }}
-          GITHUB_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error::Publication requires PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN so the new exact head can start required workflows; github.token fallback is intentionally refused."
+            exit 1
+          fi
           git fetch origin fix/opencode-poll-wall-clock-bound
           live_head="$(git rev-parse origin/fix/opencode-poll-wall-clock-bound)"
           if [ "$live_head" != "$EXPECTED_REMOTE_HEAD" ]; then
@@ -124,5 +146,5 @@ jobs:
             ARCHITECTURE.md CHANGELOG.md
           git diff --cached --check
           git commit -m "fix(opencode): release required runner after one verdict read"
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/ContextualWisdomLab/.github.git"
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/ContextualWisdomLab/.github.git"
           git push origin HEAD:fix/opencode-poll-wall-clock-bound
