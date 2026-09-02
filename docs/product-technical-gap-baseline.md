@@ -2590,3 +2590,58 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Validation.** Full suite `2407 passed, 1 skipped, 21 subtests`; `coverage` 100% on `scripts/ci`; `interrogate` 100%; all four touched/added workflow files re-parse as valid YAML; `test_opencode_workflow_shell_syntax.py` and related shell-syntax tests pass unchanged.
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
+
+## 2026-09-02 contextual-orchestrator#1010 repair-not-close recheck: valid explicit-user-instruction closure, no successor PR opened
+
+**Task.** The org's repair-not-close policy ("close is reserved for: explicit user instruction, no
+diff, a malicious change, or all valid delta verified as inherited by a successor/merged PR")
+was applied to `ContextualWisdomLab/contextual-orchestrator#1010` ("per-model LLM timeout
+view/set/clear/restore admin surface", closed same-day by the repo owner pointing at `#971` as
+the canonical timeout owner) to determine whether `#971` actually inherited `#1010`'s delta and,
+if not, whether that delta needed to move to a new successor PR.
+
+**File-level re-verification (independent, against a fresh clone: `main` `8839081`, `#971` head
+`92ff90b`, `#1010` head `56a6e45`).** `#971` inherits none of `#1010`'s delta at the file level.
+`git diff main...971` (53 files, +3328/-318) contains zero case-insensitive occurrences of
+`model_timeout` anywhere in the diff. `admin.py` is untouched; `api_contract.py`'s one changed
+line is an unrelated `provider_readiness` summary-string edit; `server.py`'s 53 changed lines are
+DNS/cancellation plumbing, not `/api/v1/model_timeouts` routing; `orchestrator.py`'s 406 changed
+lines add cancellation/ZDR-pinning/provider-probe-timeout removal, not
+`MIN/MAX_MODEL_TIMEOUT_SECONDS`, `model_timeout_resolver`, or any `TaskOrchestrator.*_model_timeout`
+method. `tests/test_model_timeouts.py` and `docs/planning/adrs/0042-*.md` do not exist on `#971`
+at all. `#971` is open, unapproved (84 `COMMENTED` reviews, zero `APPROVED`), `mergeable_state:
+behind`, and most required checks still `queued` — not an imminent landing either. So the
+"successor inherited" branch of the close policy does not apply here, and a naive reading would
+conclude `#1010`'s ~995 lines of delta were silently orphaned by a misidentified successor.
+
+**But the closure is independently valid under the policy's separate "explicit user instruction"
+ground, and re-litigating it would be wrong.** `gh api issues/1010` confirms `closed_by:
+seonghobae`, account type `User` — the repo owner personally reviewed and closed this PR the same
+day (`2026-09-02T05:10:46Z`) with a first-person, evidence-based closing comment, not an agent's
+unverified "looks superseded" inference. That comment's objection is broader than the single
+`MIN/MAX_MODEL_TIMEOUT_SECONDS` bound an earlier read of this PR summarized it as: it states "the
+current manual timeout-setting semantics must not become production authority", cites four
+distinct unresolved implementation findings in the enforcement wiring itself (local queue path
+ignores the override, passthrough/tool requests bypass it, failed persistence can leave the live
+timeout mutated, admin refresh races can misreport/stale audit state), names `#971`'s
+no-implicit-inference-timeout contract as the canonical policy owner, and explicitly scopes reuse
+to the future: "If a research-/standard-backed timeout allocator with executable provenance is
+later implemented, the UI/persistence work can be selectively reused behind that owner rather than
+reviving the 1/14400 rule." That is a categorical, reasoned rejection of this PR's live
+`model_timeout_resolver` wiring becoming production authority now — not merely a complaint about
+how `14400` was derived. Opening a new PR today that ports the enforcement wiring back into
+`ModelClient.chat`/`stream_chat` (even with a relabeled or deferred bound) would reintroduce
+exactly the mechanism this same-day, first-person ruling rejected, and would still carry its four
+unresolved correctness findings — overriding the repo owner's own explicit prior ruling rather than
+repairing an agent's mistaken closure. No successor PR was opened for that reason.
+
+**Delta is preserved, not orphaned.** `#1010`'s two commits (`523867fa`, `56a6e45f`) remain fully
+intact on the closed PR's branch, and the closer's own comment already records the exact reuse
+condition — selective reuse of the admin/persistence/API exploration once a research-/standard-backed
+timeout allocator exists. A comment recording this file-level evidence, the quoted closing
+rationale, and this determination was posted on `#1010` itself
+(`contextual-orchestrator#1010#issuecomment-5505968844`) so the closed PR's history correctly shows
+why no successor PR carries its delta forward yet, rather than leaving it silently unaccounted for.
+
+**Owner**: `ContextualWisdomLab/contextual-orchestrator`, `#1010` / `#971`.
+**Status**: closure confirmed valid; no code action taken; traceability comment posted on `#1010`.
