@@ -187,21 +187,22 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-24.04
-    # Bound this job well short of GitHub's 360-minute platform default. Its
-    # "Prepare Noema model verdict" step calls into two_phase.py's call_llm
-    # via the same contextual-orchestrator gateway whose unbounded wait was
-    # confirmed to stall runs for 7-20 hours in opencode-review.yml before
-    # PR #1707's fix -- and noema_review_gate.py's own comment says that
-    # step "remains governed by contextual-orchestrator rather than a fixed
-    # inference timeout", so nothing upstream of this job bounds it either.
-    # 210 minutes gives that step the same ~180-minute (3-hour) allowance
-    # PR #1707 set for its analogous model-wait deadline -- comfortably
-    # above this org's documented "accommodate over 2 hours per model"
-    # policy (docs/product-goal-directive.md #8) -- plus a 30-minute buffer
-    # for this job's other steps (tarball fetch, credential mint, the
-    # superseded-run cleanup sweep, visibility-lookup retries, sidecar
-    # provisioning, publication), while staying well under GitHub's default.
-    timeout-minutes: 210
+    # No job-level timeout-minutes here, deliberately. This job's "Prepare
+    # Noema model verdict" step calls two_phase.py's call_llm synchronously
+    # via the contextual-orchestrator gateway and blocks on the model's own
+    # response -- a job-level wall-clock bound here would cap the model's
+    # reasoning/tool-use time directly, which docs/product-goal-directive.md
+    # #8 prohibits ("Model timeout은 application·Agent·Gateway 공통 상한 없이
+    # 기본 null이다"; "OpenCode·Strix·Noema의 모델당 2시간 이상을 수용한다"). An
+    # earlier version of this job set timeout-minutes: 210, reasoning it gave
+    # that step "the same ~180-minute allowance" PR #1707 gave an unrelated
+    # step -- that reasoning was wrong: #1707's poll_deadline_epoch bounds a
+    # step that polls GitHub for whether a *separately triggered* review
+    # process has posted a verdict yet (an async external wait), not a step
+    # that itself runs the model synchronously. Any fixed cap on a job whose
+    # body IS the synchronous model call is exactly the fixed inference-time
+    # cap the policy forbids. See
+    # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
       github.event_name == 'repository_dispatch'
       || (
