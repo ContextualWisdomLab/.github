@@ -1,3 +1,7 @@
+### Scheduler target admission
+
+- Added the existing `ContextualWisdomLab/governance-risk-compliance` hourly caller to both central scheduler validation surfaces. The organization variable remains authoritative; the literal is a narrow propagation bridge so the scheduled repair loop no longer fails before it can inspect the repository.
+
 ## [Unreleased]
 
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
