@@ -1,3 +1,4 @@
+# One-shot test-contract writer; remove after the exact-head repair publishes.
 name: Source Fix 1656 Stale Close Contract
 
 on:
@@ -47,9 +48,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The GitHub Actions token is intentionally not granted workflow-file
-          # mutation. Production workflow bytes are published through the owner
-          # connector; this bounded writer carries only the validated test delta.
           git restore --source=HEAD -- .github/workflows
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
