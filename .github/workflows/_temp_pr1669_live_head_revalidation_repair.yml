@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
       - scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+      - scripts/ci/temp_pr1669_live_head_revalidation_v3.py
   workflow_dispatch:
 
 concurrency:
@@ -14,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
@@ -22,7 +23,7 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 60
     env:
-      WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      WORKFLOW_PUSH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -51,14 +52,16 @@ jobs:
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
           test -f scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+          test -f scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test -f scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
 
       - name: Apply guarded source and regression repair
         run: |
           set -euo pipefail
-          python scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+          python scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
@@ -86,6 +89,7 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test "$remote_head" = "$EXPECTED_HEAD"
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git config user.name github-actions[bot]
