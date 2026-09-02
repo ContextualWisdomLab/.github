@@ -1928,6 +1928,23 @@ shallow clone 한계와 뒤섞여 있어 tag 존재 여부의 독립 확인(예:
    서베이도 OpenAPI spec이 `sessions.yaml`/`results.yaml` 둘뿐임을 확인했다 — Measure→Understand
    파이프라인의 첫 단계가 도메인/영속성 계층은 있는데 HTTP로 도달 불가능하다. 소유 저장소 PR에서 이
    두 endpoint를 우선한다.
+
+   **후속 확인(같은 세션)**: 직접 clone해 저장소 자신의 gap-baseline 문서 전체와 `src/`·`migrations/`
+   디렉터리를 읽었다 — 위 항목의 전제를 일부 정정한다. 이것은 "아직 손대지 않은 gap"이 아니라
+   **이미 진행 중인 대형 저장소**(protected main head `70c9344a`, 그 문서 자체가 기록한 시점 기준
+   GitHub 열린 PR 60개, `cursor/bc-*` 접두 브랜치가 다수라 여기도 여러 자율 에이전트가 동시 작업
+   중임을 시사)다. `item_delivery.rs`/`response.rs`/`session_http.rs`/`postgres_item_delivery.rs`
+   등 도메인·영속성 코드는 이미 존재하고, 정확히 이 gap을 메우는 HTTP PR들도 이미 열려 있다 —
+   `#165`(list startable published instruments over HTTP), `#195`(record active-session responses
+   over HTTP), `#197`(record and reload item deliveries over HTTP), `#204`(apply participant
+   session commands over HTTP) 전부 그 저장소 자신의 PR 표에서 "Draft" 상태로 기록되어 있다(반면
+   같은 표의 `#185`는 기존 item-delivery 로직의 fix로 "Ready"). 즉 P0 gap 자체는 실재하지만
+   "미착수"가 아니라 "착수했으나 아직 Draft로 완성 전"이 정확한 상태다. 이 저장소는 자체 상세
+   gap-baseline·PR 우선순위 표를 이미 운영하고 있어, 이번 세션이 처음부터 새로 구현하면 진행 중인
+   작업과 중복되거나 충돌할 위험이 크다 — 이 pass에서는 코드를 작성하지 않았다. 다음 pass가 이
+   저장소를 맡으려면, `naruon`을 이 세션 초반에 온보딩한 것과 같은 깊이로 이 저장소의 review
+   convention·Draft→Ready 기준을 먼저 파악한 뒤, 이미 열린 `#165`/`#195`/`#197`/`#204` 중 하나를
+   Draft에서 Ready로 미는 것이 새 PR을 여는 것보다 우선한다.
 3. `disksage` — 자체 OWL/Turtle 온톨로지(`src-tauri/resources/ontology/default.ttl`, `oxrdf` 의존)를
    이미 구현해 파일 정리에 쓰고 있는데, directive가 명명한 "ontology generation/publish pipeline
    owner"인 `ConceptWeave`는 scaffold_placeholder(파일 1개)다. `disksage`가 자체 온톨로지를 계속 독자
