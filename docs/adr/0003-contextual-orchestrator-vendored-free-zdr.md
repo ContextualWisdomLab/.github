@@ -1,11 +1,12 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted, amended 2026-08-30, owner-confirmed 2026-09-02 (see
-  "2026-08-30 amendment" below — Strix now uses `orchestrator/free`, not the
-  `orchestrator/auto` this header originally recorded — and "2026-09-02
-  amendment" — the repo owner has explicitly reviewed and re-confirmed
-  `orchestrator/free` for both OpenCode and Strix, closing the 2026-08-31
-  correction's "open, unreviewed risk" note)
+- Status: accepted, amended 2026-08-30 and 2026-09-02, owner-confirmed
+  2026-09-02 (see amendment history below — Strix now uses
+  `orchestrator/free`, not the `orchestrator/auto` this header originally
+  recorded; the 2026-09-02 Bytez amendment advances the vendored pin; and a
+  separate 2026-09-02 amendment records the repo owner's explicit review and
+  re-confirmation of `orchestrator/free` for both OpenCode and Strix, closing
+  the 2026-08-31 correction's "open, unreviewed risk" note)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
@@ -27,7 +28,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
+   (`045d17da5e2aea56a97e241ee158ab1628d78660` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -38,25 +39,30 @@ all five, and auto-optimize routing by cost.
    transport only; request-time credential reads go through the KV.
 2. **Auto model discovery + governed virtual pools**: discovery runs with the
    orchestrator's own `discover_all_models()` against the KV credentials.
-   OpenCode and Noema admit only zero-priced routes. Strix admits two explicit
-   evidence tiers: zero-priced first, then routes with finite,
-   nonnegative prompt and completion prices plus an explicit currency. Routes
-   without a complete published price vector remain counted for audit but are
-   not admitted to CI review. A missing pair is never relabeled free or
-   price-attested; a partial price vector, malformed numeric value, conflicting
-   free marker, or missing currency for a published vector fails closed. The gateway's
-   `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
-   enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
-   may admit priced routes only through this evidence-bearing
-   policy, never through a direct-provider model identifier.
-   The auto pool probes the free catalog first. Only when every selected free
-   route rejects the real runtime request contract does it rebuild once from
-   fully price-attested routes and record the rejected primary attempt. This is
-   evidence-triggered failover, not an arbitrary free/paid mixing ratio.
-   Both stages share one twelve-route startup budget: no more than eight routes
-   enter the free primary stage and only its remaining capacity may enter priced
-   fallback. Full discovery counts remain in policy evidence, and the transient
-   priced catalog is removed immediately after loading.
+   OpenCode, Noema, and — as of the 2026-08-30/2026-09-02 amendments below —
+   Strix all admit only zero-priced routes, via the gateway's
+   `orchestrator/free` virtual id, which fails closed (`400 invalid_model`)
+   unless an enabled zero-cost agent exists. A missing pair is never
+   relabeled free or price-attested; a partial price vector, malformed
+   numeric value, conflicting free marker, or missing currency for a
+   published vector fails closed.
+
+   The gateway separately exposes `orchestrator/auto`, an evidence-tiered
+   pool (zero-priced first, then routes with finite, nonnegative prompt and
+   completion prices plus an explicit currency; routes without a complete
+   published price vector remain counted for audit but are not admitted).
+   The auto pool probes the free catalog first and only rebuilds once from
+   fully price-attested routes when every selected free route rejects the
+   real runtime request contract, recording the rejected primary attempt —
+   evidence-triggered failover, not an arbitrary free/paid mixing ratio. Both
+   stages share one twelve-route startup budget: no more than eight routes
+   enter the free primary stage and only its remaining capacity may enter
+   priced fallback. Full discovery counts remain in policy evidence, and the
+   transient priced catalog is removed immediately after loading. No current
+   `.github` central-review consumer routes through `orchestrator/auto`
+   as of the 2026-09-02 owner confirmation below (see amendment history) —
+   this pool remains available in the gateway for a future consumer that
+   needs priced fallback, but Strix does not use it today.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
    of time"; zero retention also implies no training) and is deliberately
@@ -107,7 +113,12 @@ all five, and auto-optimize routing by cost.
    OpenAI image-input limit of 512 MB total payload per request; it is not
    treated as a universal JSON default or as the Files API's separate 512 MB
    per-file limit. The sidecar startup probe verifies the configured HTTP
-   boundary before any review model runs.
+   boundary before any review model runs. The over-limit request must still
+   return HTTP 413, but its expected server diagnostic is captured and asserted
+   instead of being shown as an operational failure. Accepted-size and tool
+   schema probes use the pinned client's deterministic mock response explicitly,
+   so this startup contract has no provider-egress or provider-availability
+   dependency.
 
 ## Consequences
 
@@ -235,6 +246,19 @@ all five, and auto-optimize routing by cost.
   runner capable of completing the work.
   This amendment supersedes all fixed readiness and inference-attempt budgets
   in ADR 0005.
+- **2026-09-02 amendment: Bytez price discovery and body-limit probe isolation.**
+  The vendored pin advances from `8cd99f139915131ba0239bce12a5d6a5fd85394e`
+  to `045d17da5e2aea56a97e241ee158ab1628d78660`, the first reviewed revision
+  that maps Bytez catalog `meterPrice` evidence into the discovery model's
+  `is_free` classification. Only an exact zero price is eligible for
+  `orchestrator/free`; missing, malformed, or nonzero price evidence remains
+  fail-closed. A Bytez catalog HTTP failure remains a bounded, non-fatal
+  provider-discovery error and is never reclassified as successful discovery.
+  The startup over-limit request still has to return HTTP 413, but its expected
+  server diagnostic is captured and asserted rather than exposed as a runtime
+  fault. Accepted-size and tool-schema probes call the pinned client's
+  deterministic mock response explicitly and therefore perform no provider
+  call.
 - **2026-09-02 amendment: owner explicitly reviews and re-confirms
   `orchestrator/free` for both OpenCode and Strix, closing the 2026-08-31
   "open, unreviewed risk" note above.** In a session verifying that OpenCode

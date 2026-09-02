@@ -5,6 +5,31 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
+  Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
+  `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
+  review-workflow polling loops with retry-with-backoff) left 7 stale assertions: one
+  genuinely dead-code check (`_run_matches_head_identity` already rejects any non-PR-event
+  candidate before a later, narrower "not a pull-request" check could ever run -- removed
+  the redundant check and updated the test to the correct, now-authoritative "head moved"
+  message), two synthetic-sentinel-vs-real-retry-loop mismatches (a fixture's unmocked-call
+  exit code no longer reaches the script's own exit status once a 3-attempt backoff loop
+  absorbs it), two literal-text contract drifts ("sleep 30" -> `poll_interval_seconds`; the
+  reviews endpoint gained `?per_page=100`), and two renamed/relocated message assertions (a
+  jq field rename `current_head`->`classified_head`; a diagnostic moved from the workflow
+  YAML into the `scripts/ci/revalidate_queue_cancellation.sh` helper it now delegates to).
+  While re-verifying `current_head_run_coalescer.py`'s own coverage in isolation, found and
+  closed two more, unrelated gaps in the same file: a second dead-code instance
+  (`select_duplicate_queued_run_ids` re-derived `workflow_id` behind a redundant guard
+  `_run_identity_matches` already guarantees) and six genuinely-reachable but untested
+  early-return guard clauses in `_run_pr_scope_is_safe` plus one in the sibling-authority
+  loop, closed with eight new targeted regression tests. `#1656` (removing ten no-op
+  `cancel-closed-pr-runs` runner jobs) and `#1658` (removing the 300s `LLM_TIMEOUT` cap, in
+  service of the org's now-unlimited-by-default LLM timeout policy) each left their own
+  runner-image-count and literal-value contract tests asserting pre-change reality; updated
+  four more test files to match. Full suite: 2600+ passed, 100% branch coverage, 100%
+  docstrings; no production behavior change except the two dead-code removals (both
+  provably unreachable, so behavior-neutral).
 - **Pin the three central required review workflows (Strix, OpenCode Review, Noema Review) off the observed starved floating `ubuntu-latest` runner image.** Following the same repair already rolled out to security gates (`#1618`) and the merge scheduler (`#1609`), `strix.yml`, `opencode-review.yml`, and `noema-review.yml` now request the explicit `ubuntu-24.04` image on every job. These three workflows are the org's own required-workflow gate for every sibling repository, so a starved floating image here directly contributes to organization-wide required-check queuing. New `tests/test_required_review_runner_image_contract.py` asserts no job in any of the three files still requests the floating image. Also fixed 4 pre-existing, unrelated test failures on `main` left by `#1630`'s organization-sweep rotation cadence change (every 15 minutes to hourly, to reduce control-plane pressure under the same Actions saturation): `tests/test_required_workflow_queue_contract.py`'s rotation-index tests still asserted the old `/ 900` (15-minute) divisor against the new `/ 3600` (hourly) production value.
 - **Refresh Noema reviewer App authority after long model work (`#1616`).** A real `naruon#1497` review outlived its repository-scoped GitHub App installation token and failed the next exact-head GitHub operation with HTTP 401. The trusted workflow now prepares the validated verdict into a private runner-local envelope, remints the same least-privilege repository-scoped App authority after model work, independently re-fetches exact live head/reviewer identity, and only then publishes. Skipped preparation creates no envelope, predecessor App tokens cannot authorize publication, PAT/OIDC remain explicit fail-closed sources, malformed handoffs are cleaned up, and executable plus step-scoped regressions cover stale-head, identity, alias, workflow wiring, and migration of legacy broader-suite contracts away from the retired single-process reviewer path.
 - Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before

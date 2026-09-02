@@ -45,7 +45,7 @@ def test_reconciled_scheduler_preserves_current_main_control_plane_fixes() -> No
 
     assert '- cron: "0 * * * *"' in workflow
     assert '*/15 * * * *' not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") >= 3
+    assert workflow.count("runs-on: ubuntu-24.04") >= 2
     scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
     assert "github.event_name == 'pull_request_review'" in scan_job.split(
         "TRIGGER_REVIEWS:", 1

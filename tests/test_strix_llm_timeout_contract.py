@@ -44,7 +44,7 @@ def test_strix_timeout_compat_is_installed_after_the_pinned_runtime() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     token_loader = TOKEN_LOADER.read_text(encoding="utf-8")
 
-    assert "export LLM_TIMEOUT=300" in workflow
+    assert "export LLM_TIMEOUT=0" in workflow
     assert 'if [ -n "${STRIX_EXECUTABLE_PATH:-}" ]; then' in token_loader
     assert "install_strix_timeout_compat.py" in token_loader
     assert INSTALLER.is_file()

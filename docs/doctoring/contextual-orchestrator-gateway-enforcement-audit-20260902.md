@@ -131,6 +131,17 @@ loop. `opencode-review-dispatch.yml` shares 100% of the
 sidecar-provisioning code with the `strix` job evidenced above; nothing in
 either workflow calls a different sidecar script or a different pool.
 
+**Confidence on this OpenCode claim, stated explicitly (raised in review):**
+direct log evidence of a real gateway call inside `opencode-review-dispatch.yml`
+was not collected this session (blocked by the rate limit above), so this is
+inferred from shared-code identity with the directly-observed `strix` job,
+not independently observed. That inference is strong — it is the identical
+script, same line-pinned pool, same job structure — but it is inference, not
+observation, and should be labeled that way rather than folded into item 1's
+"verified" claim without qualification. Closing this gap directly (pulling
+an actual `opencode-review-dispatch.yml` job log once the rate limit clears)
+is a small, well-scoped follow-up for the next loop iteration.
+
 ## Item 2 — a real, previously-undocumented enforcement gap (not the one hypothesized)
 
 The task's hypothesis was a *code-level* silent-skip (e.g., a missing KV
@@ -196,6 +207,18 @@ call by some other actor in this heavily concurrent, many-autonomous-agent
 org) merged this PR, and GitHub's `enforce_admins: false` let it through
 without ever needing the required checks — or the scheduler's own gate — to
 show a genuine pass.
+
+**Confidence on the merge-mechanism claim, stated explicitly (raised in
+review):** the check-run/status history above is directly observed evidence
+that this PR's required checks did not show a genuine pass at merge time —
+that part is solid. The specific mechanism (which credential, which caller,
+which exact `gh pr merge`/API call) is reconstructed from the available
+signals, not observed directly — this session did not have access to
+GitHub's organization audit log (a scope-gated API this token was not
+granted), which would be the authoritative source for the exact actor and
+call. Do not cite the specific-mechanism sentence above as a confirmed fact;
+the check-bypass fact itself is confirmed, the mechanism is the most likely
+explanation given what was observable.
 
 This is exactly the substance of what the owner asked to rule out ("실질적으로
 시행" — actually, substantively enforced, not just wired) — just one layer
