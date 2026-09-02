@@ -2,9 +2,14 @@
 set -euo pipefail
 
 : "${GITHUB_OUTPUT:=/dev/null}"
+OPENCODE_VALID_NO_CONCLUSION=0
 
 record_review_status() {
-	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
+	local status="$1"
+	if [ "$status" = "success" ] && [ "${OPENCODE_VALID_NO_CONCLUSION:-0}" = "1" ]; then
+		status="no_conclusion"
+	fi
+	printf 'review_status=%s\n' "$status" >>"$GITHUB_OUTPUT"
 }
 
 record_review_model() {
@@ -22,6 +27,45 @@ finish_pool_without_model() {
 	return 1
 }
 
+is_current_run_needs_info_output() {
+	local output_file="$1"
+	local gate_output gate_status
+
+	if ! python3 - "$output_file" "$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+head_sha, run_id, run_attempt = sys.argv[2:]
+text = path.read_text(encoding="utf-8", errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
+sentinel = (
+    f"<!-- opencode-review-gate head_sha={head_sha} "
+    f"run_id={run_id} run_attempt={run_attempt} -->"
+)
+marker = (
+    f"<!-- opencode-review-needs-info head_sha={head_sha} "
+    f"run_id={run_id} run_attempt={run_attempt} -->"
+)
+if lines != [sentinel, marker]:
+    raise SystemExit(1)
+if "opencode-review-control-v1" in text:
+    raise SystemExit(1)
+PY
+	then
+		return 1
+	fi
+
+	set +e
+	gate_output="$(
+		bash "$GITHUB_WORKSPACE/scripts/ci/opencode_review_approve_gate.sh" \
+			"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$output_file" 2>/dev/null
+	)"
+	gate_status=$?
+	set -e
+	[ "$gate_status" -eq 4 ] && [ "$gate_output" = "NO_CONCLUSION" ]
+}
+
 normalize_opencode_output() {
 	local output_file="$1"
 
@@ -36,8 +80,20 @@ normalize_opencode_output() {
 	# publish step will accept, and leave output_file pristine for the publish
 	# step to normalize itself.
 	local probe rc
+	OPENCODE_VALID_NO_CONCLUSION=0
 	probe="$(mktemp)"
 	perl -pe 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$output_file" >"$probe" 2>/dev/null || cp "$output_file" "$probe"
+
+	# A current-run needs-info marker is deliberately not a control verdict. It
+	# must survive the model-pool transport unchanged and reach the terminal
+	# approval gate, which returns NO_CONCLUSION. Validate that exact fail-closed
+	# shape here so it is not misclassified as malformed provider output and
+	# retried across the model pool.
+	if is_current_run_needs_info_output "$probe"; then
+		OPENCODE_VALID_NO_CONCLUSION=1
+		rm -f "$probe"
+		return 0
+	fi
 
 	if python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_normalize_output.py" \
 		"$HEAD_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$probe"; then
