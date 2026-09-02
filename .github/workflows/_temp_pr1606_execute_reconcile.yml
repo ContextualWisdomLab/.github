@@ -115,3 +115,5 @@ jobs:
           bash -n /tmp/pr1606-reconcile.sh
           git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           bash /tmp/pr1606-reconcile.sh
+
+# Connector-owned trigger revision: exact source transaction, no workflow self-mutation.
