@@ -65,16 +65,24 @@ on:
           Value forwarded to check-r-package's args input. Default matches
           that action's own upstream default
           (c("--no-manual", "--as-cran")); override to change what
-          rcmdcheck runs (e.g. to skip re-running tests already run in
-          pre_check_script).
+          rcmdcheck runs (e.g. to skip re-running tests already run by a
+          bounded pre-check test file).
         required: false
         type: string
         default: 'c("--no-manual", "--as-cran")'
-      pre_check_script:
+      install_package_before_pre_check:
         description: >-
-          Optional shell commands run in a step between setup-r-dependencies
-          and check-r-package (e.g. a repo-specific regression test).
-          Skipped entirely when empty (the default).
+          Install the current package from source before the optional fixed
+          testthat pre-check. This is a boolean capability, not caller-authored
+          shell source.
+        required: false
+        type: boolean
+        default: false
+      pre_check_test_file:
+        description: >-
+          Optional repository-relative testthat file under tests/testthat/
+          ending in .R. The value is passed as data through an environment
+          variable and is never evaluated as shell source.
         required: false
         type: string
         default: ""
@@ -115,9 +123,28 @@ jobs:
           extra-packages: ${{ inputs.extra_packages }}
           needs: check
 
-      - if: inputs.pre_check_script != ''
-        name: Run pre-check script (repo-specific)
-        run: ${{ inputs.pre_check_script }}
+      - if: inputs.pre_check_test_file != '' && inputs.install_package_before_pre_check
+        name: Install package for bounded pre-check
+        run: Rscript -e 'install.packages(".", repos = NULL, type = "source")'
+        shell: bash
+
+      - if: inputs.pre_check_test_file != ''
+        name: Run bounded testthat pre-check
+        env:
+          PRE_CHECK_TEST_FILE: ${{ inputs.pre_check_test_file }}
+        run: |
+          case "$PRE_CHECK_TEST_FILE" in
+            tests/testthat/*.R) ;;
+            *)
+              echo "::error::pre_check_test_file must be a repository-relative tests/testthat/*.R path"
+              exit 1
+              ;;
+          esac
+          if [[ "$PRE_CHECK_TEST_FILE" == *".."* || "$PRE_CHECK_TEST_FILE" == /* || "$PRE_CHECK_TEST_FILE" == *$'\n'* || "$PRE_CHECK_TEST_FILE" == *$'\r'* ]]; then
+            echo "::error::pre_check_test_file contains a forbidden path/control sequence"
+            exit 1
+          fi
+          Rscript -e 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))'
         shell: bash
 
       - uses: r-lib/actions/check-r-package@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
