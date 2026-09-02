@@ -70,7 +70,7 @@ def live_payload() -> dict:
 
 
 def exercise_ambiguous_put(monkeypatch, *, history_outcome: str) -> tuple[object, list[tuple]]:
-    """Run one privileged mutation whose PUT times out after an unknown server outcome."""
+    """Prepare one privileged mutation whose PUT times out after an unknown server outcome."""
 
     module = load_module()
     target = repository_target(module)
@@ -160,6 +160,275 @@ def test_put_timeout_after_acceptance_with_collision_preserves_recovery_failure(
             expected_main_sha="a" * 40,
         )
     assert any(call[0] == "HISTORY" for call in calls)
+
+
+def test_ambiguous_put_without_history_guard_is_rejected(monkeypatch) -> None:
+    """Internal callers cannot turn a timed-out unguarded mutation into a claimed success."""
+
+    module = load_module()
+    target = repository_target(module)
+    desired = module._desired_payload(live_payload(), target)
+    with pytest.raises(module.RulesetGovernanceError, match="requires protected-main history guard"):
+        module._confirm_ambiguous_put(
+            target,
+            baseline_version=1,
+            desired=desired,
+            expected_main_sha=None,
+        )
+
+
+def test_reconcile_timeout_without_history_baseline_fails_closed(monkeypatch) -> None:
+    """A direct unguarded internal mutation still rejects an ambiguous PUT timeout."""
+
+    module = load_module()
+    target = repository_target(module)
+    first = live_payload()
+    get_count = 0
+    monkeypatch.setattr(module, "_assert_canonical_governance", lambda *_args: None)
+
+    def fake_api(method, endpoint, *, body=None):
+        nonlocal get_count
+        if method == "GET" and endpoint == target.endpoint:
+            get_count += 1
+            return first
+        if method == "PUT" and endpoint == target.endpoint:
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+        raise AssertionError((method, endpoint, body))
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    with pytest.raises(module.RulesetGovernanceError, match="requires protected-main history guard"):
+        module._reconcile_target(target, verify_only=False)
+    assert get_count == 2
+
+
+def test_transport_timeout_distinguishes_reads_from_ambiguous_puts(monkeypatch) -> None:
+    """Read timeouts become redacted domain errors while PUT timeouts remain distinguishable."""
+
+    module = load_module()
+
+    def timeout_run(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+
+    monkeypatch.setattr(subprocess, "run", timeout_run)
+    with pytest.raises(module.RulesetGovernanceError, match="request timed out"):
+        module._run_gh_json("GET", "repos/ContextualWisdomLab/.github/rulesets/17921150")
+    with pytest.raises(subprocess.TimeoutExpired):
+        module._run_gh_json(
+            "PUT",
+            "repos/ContextualWisdomLab/.github/rulesets/17921150",
+            body={"name": "Lock default branch"},
+        )
+
+
+def test_recovery_timeout_without_history_fails_closed(monkeypatch) -> None:
+    """An ambiguous recovery timeout cannot proceed when immutable history is unavailable."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Admin predecessor"}
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, endpoint, **_kwargs: current
+        if method == "GET"
+        else (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)),
+    )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [])
+
+    with pytest.raises(module.RulesetGovernanceError, match="exposed no history"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_recovery_timeout_before_acceptance_retries_boundedly(monkeypatch) -> None:
+    """A recovery PUT absent from history is retried only within the bounded recovery loop."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Admin predecessor"}
+    put_count = 0
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+
+    def fake_api(method, endpoint, **_kwargs):
+        nonlocal put_count
+        if method == "GET":
+            return current
+        if method == "PUT":
+            put_count += 1
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [{"version_id": 10}])
+
+    with pytest.raises(module.RulesetGovernanceError, match="exceeded bounded attempts"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+    assert put_count == module.COLLISION_RECOVERY_LIMIT
+
+
+def test_recovery_timeout_with_new_version_requires_predecessor(monkeypatch) -> None:
+    """A visible timed-out recovery write still needs its immutable predecessor proof."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Admin predecessor"}
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, endpoint, **_kwargs: current
+        if method == "GET"
+        else (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)),
+    )
+    monkeypatch.setattr(module, "_gh_api_list", lambda *_args: [{"version_id": 11}])
+
+    with pytest.raises(module.RulesetGovernanceError, match="exposed no predecessor"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_recovery_timeout_refuses_unexpected_newer_history_state(monkeypatch) -> None:
+    """A timed-out recovery never overwrites a newer state that is not its intended restore body."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Admin predecessor"}
+    unrelated = {**current, "name": "Newer administrator state"}
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+
+    def history_state(_target, version_id):
+        return unrelated if version_id == 11 else displaced
+
+    monkeypatch.setattr(module, "_history_version_state", history_state)
+    monkeypatch.setattr(
+        module,
+        "_gh_api",
+        lambda method, endpoint, **_kwargs: current
+        if method == "GET"
+        else (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args: [{"version_id": 11}, {"version_id": 10}],
+    )
+
+    with pytest.raises(module.RulesetGovernanceError, match="left a newer state"):
+        module._recover_displaced_history_state(
+            target,
+            current_version=10,
+            current_payload=module._editable_projection(current),
+            displaced_version=9,
+            expected_main_sha="a" * 40,
+        )
+
+
+def test_recovery_timeout_after_acceptance_without_collision_converges(monkeypatch) -> None:
+    """A timed-out recovery accepted by GitHub completes only with matching history and live state."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    displaced = {**current, "name": "Admin predecessor", "enforcement": "evaluate"}
+    get_count = 0
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
+
+    def fake_api(method, endpoint, **_kwargs):
+        nonlocal get_count
+        if method == "GET":
+            get_count += 1
+            return current if get_count == 1 else displaced
+        if method == "PUT":
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    monkeypatch.setattr(
+        module,
+        "_gh_api_list",
+        lambda *_args: [{"version_id": 11}, {"version_id": 10}],
+    )
+
+    module._recover_displaced_history_state(
+        target,
+        current_version=10,
+        current_payload=module._editable_projection(current),
+        displaced_version=9,
+        expected_main_sha="a" * 40,
+    )
+
+
+def test_recovery_timeout_after_acceptance_with_collision_continues_chain(monkeypatch) -> None:
+    """A timed-out restore that displaced another version continues to the newest predecessor."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    first_restore = {**current, "name": "First restore", "enforcement": "evaluate"}
+    second_restore = {**current, "name": "Newest displaced", "enforcement": "evaluate"}
+    get_states = iter([current, first_restore, first_restore, second_restore])
+    put_count = 0
+    list_count = 0
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+
+    def history_state(_target, version_id):
+        return {9: first_restore, 8: second_restore, 11: first_restore, 12: second_restore}[version_id]
+
+    def fake_api(method, endpoint, **_kwargs):
+        nonlocal put_count
+        if method == "GET":
+            return next(get_states)
+        if method == "PUT":
+            put_count += 1
+            if put_count == 1:
+                raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+            return {}
+        raise AssertionError((method, endpoint))
+
+    def fake_history(*_args):
+        nonlocal list_count
+        list_count += 1
+        if list_count == 1:
+            return [{"version_id": 11}, {"version_id": 8}]
+        return [{"version_id": 12}, {"version_id": 11}]
+
+    monkeypatch.setattr(module, "_history_version_state", history_state)
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
+
+    module._recover_displaced_history_state(
+        target,
+        current_version=10,
+        current_payload=module._editable_projection(current),
+        displaced_version=9,
+        expected_main_sha="a" * 40,
+    )
+    assert put_count == 2
 
 
 def test_manual_mutation_requires_exact_protected_main_guard(monkeypatch) -> None:
