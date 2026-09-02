@@ -3,10 +3,14 @@
 ## Decision
 
 Clearfolio's one-hour review → repair → revalidation support heartbeat is owned
-by a dedicated central caller workflow,
-`.github/workflows/clearfolio-hourly-review-repair.yml`. The product-neutral
-engine remains `.github/workflows/pr-review-fix-scheduler.yml` and contains no
-scheduled trigger or Clearfolio repository literal.
+by the central caller workflow `.github/workflows/hourly-review-repair.yml`
+(minute 23 of every hour; formerly its own dedicated file,
+`clearfolio-hourly-review-repair.yml`, before the 18-file single-file
+consolidation recorded in
+[`docs/doctoring/hourly-review-repair-single-file-consolidation.md`](hourly-review-repair-single-file-consolidation.md)).
+The product-neutral engine remains
+`.github/workflows/pr-review-fix-scheduler.yml` and contains no scheduled
+trigger or Clearfolio repository literal.
 
 This split is an architecture decision rather than a naming preference. A
 scheduled workflow executes in the repository that contains it. Letting a
