@@ -75,6 +75,12 @@ def _converged() -> dict[str, object]:
     return {**live, **module._desired_payload(live, _target())}
 
 
+def _desired() -> dict[str, object]:
+    """Return exactly the editable payload submitted to GitHub PUT."""
+
+    return module._desired_payload(_live(), _target())
+
+
 def _manifest(tmp_path: Path) -> Path:
     """Write the exact two-target manifest accepted by the production parser."""
 
@@ -237,13 +243,13 @@ def test_history_transition_accepts_exactly_one_new_reviewed_version(monkeypatch
         lambda *_args, **_kwargs: [{"version_id": 8}, {"version_id": 7}],
     )
     monkeypatch.setattr(module, "_history_version_state", lambda _target, version: _converged())
-    module._verify_ruleset_history_transition(_target(), 7, _converged())
+    module._verify_ruleset_history_transition(_target(), 7, _desired())
 
 
 def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypatch) -> None:
     """Missing predecessor, absent version advance, or mismatched latest state fail closed."""
 
-    desired = _converged()
+    desired = _desired()
     monkeypatch.setattr(module, "_gh_api_list", lambda *_args, **_kwargs: [{"version_id": 8}])
     with pytest.raises(module.RulesetGovernanceError, match="did not expose a predecessor"):
         module._verify_ruleset_history_transition(_target(), 7, desired)
@@ -269,7 +275,8 @@ def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypa
 def test_history_collision_restores_immediate_predecessor_before_failing(monkeypatch) -> None:
     """A hidden pre-PUT administrator edit is restored and history-proven before failing."""
 
-    desired = _converged()
+    desired_state = _converged()
+    desired = _desired()
     external = _live()
     external["conditions"] = {"ref_name": {"include": ["refs/heads/reviewed"], "exclude": []}}
     histories = iter(
@@ -282,10 +289,10 @@ def test_history_collision_restores_immediate_predecessor_before_failing(monkeyp
     monkeypatch.setattr(
         module,
         "_history_version_state",
-        lambda _target, version: desired if version == 10 else external,
+        lambda _target, version: desired_state if version == 10 else external,
     )
     calls: list[tuple[str, object | None]] = []
-    replies = iter([desired, {}, external])
+    replies = iter([desired_state, {}, external])
 
     def fake_api(method, endpoint, *, body=None):
         calls.append((method, body))
@@ -301,7 +308,8 @@ def test_history_collision_restores_immediate_predecessor_before_failing(monkeyp
 def test_history_collision_does_not_overwrite_a_newer_post_put_admin_edit(monkeypatch) -> None:
     """If live state advanced again after our PUT, collision recovery preserves that newer state."""
 
-    desired = _converged()
+    desired_state = _converged()
+    desired = _desired()
     external = _live()
     newer = _live()
     newer["conditions"] = {"ref_name": {"include": ["refs/heads/newer"], "exclude": []}}
@@ -313,7 +321,7 @@ def test_history_collision_does_not_overwrite_a_newer_post_put_admin_edit(monkey
     monkeypatch.setattr(
         module,
         "_history_version_state",
-        lambda _target, version: desired if version == 10 else external,
+        lambda _target, version: desired_state if version == 10 else external,
     )
     monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: newer)
     with pytest.raises(module.RulesetGovernanceError, match="advanced again"):
@@ -323,7 +331,8 @@ def test_history_collision_does_not_overwrite_a_newer_post_put_admin_edit(monkey
 def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
     """A failed predecessor restore is surfaced rather than treated as collision recovery."""
 
-    desired = _converged()
+    desired_state = _converged()
+    desired = _desired()
     external = _live()
     external["conditions"] = {"ref_name": {"include": ["refs/heads/external"], "exclude": []}}
     histories = iter(
@@ -336,9 +345,9 @@ def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "_history_version_state",
-        lambda _target, version: desired if version == 10 else external,
+        lambda _target, version: desired_state if version == 10 else external,
     )
-    replies = iter([desired, {}, desired])
+    replies = iter([desired_state, {}, desired_state])
     monkeypatch.setattr(module, "_gh_api", lambda *_args, **_kwargs: next(replies))
     with pytest.raises(module.RulesetGovernanceError, match="rollback did not converge"):
         module._verify_ruleset_history_transition(_target(), 7, desired)
@@ -347,7 +356,8 @@ def test_history_collision_requires_rollback_convergence(monkeypatch) -> None:
 def test_history_collision_recovers_admin_write_between_recovery_get_and_put(monkeypatch) -> None:
     """A second administrator version displaced by rollback becomes the next restore target."""
 
-    desired = _converged()
+    desired_state = _converged()
+    desired = _desired()
     first_admin = _live()
     first_admin["conditions"] = {"ref_name": {"include": ["refs/heads/first-admin"], "exclude": []}}
     second_admin = _live()
@@ -363,7 +373,7 @@ def test_history_collision_recovers_admin_write_between_recovery_get_and_put(mon
 
     states = {
         9: first_admin,
-        10: desired,
+        10: desired_state,
         11: second_admin,
         12: first_admin,
         13: second_admin,
@@ -371,7 +381,7 @@ def test_history_collision_recovers_admin_write_between_recovery_get_and_put(mon
     monkeypatch.setattr(module, "_history_version_state", lambda _target, version: states[version])
 
     calls: list[tuple[str, object | None]] = []
-    replies = iter([desired, {}, first_admin, first_admin, {}, second_admin])
+    replies = iter([desired_state, {}, first_admin, first_admin, {}, second_admin])
 
     def fake_api(method, endpoint, *, body=None):
         calls.append((method, body))
@@ -442,8 +452,8 @@ def test_docs_state_github_has_no_ruleset_put_compare_and_swap() -> None:
 
     text = DOCTORING.read_text(encoding="utf-8")
     assert "does not support conditional unsafe REST updates" in text
-    assert "ruleset history" in text
-    assert "restores the immediate pre-write version" in text
+    assert "ruleset-history" in text
+    assert "restores the newest displaced administrator state" in text
     assert "cannot make the final GET-to-PUT interval atomic" in text
 
 
