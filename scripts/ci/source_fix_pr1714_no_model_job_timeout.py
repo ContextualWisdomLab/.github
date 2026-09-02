@@ -79,8 +79,35 @@ def patch_workflow() -> None:
 
 
 def patch_test() -> None:
-    """Replace the timeout-positive regression with fail-closed authority contracts."""
+    """Replace heuristic-positive regressions with fail-closed authority contracts."""
     text = TEST.read_text(encoding="utf-8")
+    reasoning_old = '''def test_writer_uses_the_gateway_free_pool_with_high_reasoning() -> None:
+    """Pin the write-capable pool and its deliberate high-reasoning budget."""
+    workflow = _workflow_text()
+
+    assert f'"model": "{_TARGET_MODEL}"' in workflow
+    assert '"orchestrator/free": {' in workflow
+    assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
+    assert '"reasoningEffort": "high"' in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+'''
+    reasoning_new = '''def test_writer_uses_the_gateway_free_pool_without_leaf_compute_policy() -> None:
+    """Pin the gateway pool while forbidding leaf-owned test-time-compute policy."""
+    workflow = _workflow_text()
+
+    assert f'"model": "{_TARGET_MODEL}"' in workflow
+    assert '"orchestrator/free": {' in workflow
+    assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
+    assert '"reasoningEffort":' not in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+'''
+    text = replace_once(
+        text,
+        reasoning_old,
+        reasoning_new,
+        "stale high-reasoning positive regression",
+    )
+
     marker = "def test_autofix_job_has_a_bounded_runtime() -> None:\n"
     start = text.find(marker)
     if start < 0 or text.find(marker, start + 1) >= 0:
