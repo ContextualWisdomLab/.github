@@ -59,24 +59,30 @@ def test_normalize_license_defaults_to_noassertion():
 
 def test_parse_spdx_skips_root_and_defaults_license():
     """SPDX parsing drops the DESCRIBES root and defaults missing licenses."""
-    components = agg.parse_spdx_sbom(SPDX_DOCUMENT)
-    names = [c.name for c in components]
-    assert "acme-app" not in names
-    assert names == ["left-pad", "mystery", "readline"]
-    by_name = {c.name: c for c in components}
-    assert by_name["left-pad"].license == "MIT"
-    assert by_name["readline"].license == "GPL-3.0-or-later"
-    assert by_name["mystery"].license == agg.NOASSERTION
+    sbom_components = agg.parse_spdx_sbom(SPDX_DOCUMENT)
+    component_names = [component.component_name for component in sbom_components]
+    assert "acme-app" not in component_names
+    assert component_names == ["left-pad", "mystery", "readline"]
+    components_by_name = {
+        component.component_name: component for component in sbom_components
+    }
+    assert components_by_name["left-pad"].license_expression == "MIT"
+    assert components_by_name["readline"].license_expression == "GPL-3.0-or-later"
+    assert components_by_name["mystery"].license_expression == agg.NOASSERTION
 
 
 def test_parse_cyclonedx_extracts_license_id_and_expression():
     """CycloneDX parsing reads both license.id and expression forms."""
-    components = agg.parse_cyclonedx_sbom(CYCLONEDX_DOCUMENT)
-    by_name = {c.name: c for c in components}
-    assert by_name["requests"].license == "Apache-2.0"
-    assert by_name["chardet"].license == "LGPL-2.1-only"
-    assert by_name["nameonly"].license == agg.NOASSERTION
-    assert "9.9.9" not in {c.name for c in components}
+    sbom_components = agg.parse_cyclonedx_sbom(CYCLONEDX_DOCUMENT)
+    components_by_name = {
+        component.component_name: component for component in sbom_components
+    }
+    assert components_by_name["requests"].license_expression == "Apache-2.0"
+    assert components_by_name["chardet"].license_expression == "LGPL-2.1-only"
+    assert components_by_name["nameonly"].license_expression == agg.NOASSERTION
+    assert "9.9.9" not in {
+        component.component_name for component in sbom_components
+    }
 
 
 def test_parse_sbom_dispatches_by_format():
@@ -90,69 +96,112 @@ def test_parse_sbom_dispatches_by_format():
 
 def test_build_inventory_rolls_up_licenses_and_flags():
     """Roll-up aggregates counts, license totals, and policy flags."""
-    inventories = [
-        agg.RepoInventory(repo="acme/app", components=agg.parse_spdx_sbom(SPDX_DOCUMENT)),
-        agg.RepoInventory(repo="acme/lib", components=agg.parse_cyclonedx_sbom(CYCLONEDX_DOCUMENT)),
-        agg.RepoInventory(repo="acme/broken", error="sbom unavailable"),
+    repository_inventories = [
+        agg.RepositorySbomInventory(
+            repository_name="acme/app",
+            software_components=agg.parse_spdx_sbom(SPDX_DOCUMENT),
+        ),
+        agg.RepositorySbomInventory(
+            repository_name="acme/lib",
+            software_components=agg.parse_cyclonedx_sbom(CYCLONEDX_DOCUMENT),
+        ),
+        agg.RepositorySbomInventory(
+            repository_name="acme/broken", fetch_error="sbom unavailable"
+        ),
     ]
-    inventory = agg.build_inventory(inventories)
-    summary = inventory["summary"]
-    assert summary["repo_count"] == 3
-    assert summary["component_count"] == 6
+    inventory_payload = agg.build_inventory(repository_inventories)
+    summary_payload = inventory_payload["summary"]
+    assert summary_payload["repo_count"] == 3
+    assert summary_payload["component_count"] == 6
     # GPL, LGPL, NOASSERTION(x2 from mystery + nameonly) -> 4 flagged.
-    assert summary["flagged_count"] == 4
-    assert summary["policy"] == "commercial-license-only"
-    assert inventory["license_totals"]["MIT"] == 1
-    # Repos are sorted; broken repo preserves its error.
-    repos = {r["repo"]: r for r in inventory["repos"]}
-    assert repos["acme/broken"]["error"] == "sbom unavailable"
-    flagged_repos = {item["repo"] for item in inventory["flagged_licenses"]}
-    assert flagged_repos == {"acme/app", "acme/lib"}
-    # Round-trips as JSON.
-    assert json.loads(json.dumps(inventory))["schema"] == "cwl-sbom-inventory/v1"
+    assert summary_payload["flagged_count"] == 4
+    assert summary_payload["policy"] == "commercial-license-only"
+    assert inventory_payload["license_totals"]["MIT"] == 1
+    # Repos are sorted; broken repo preserves its error. The keys are v1 wire compatibility.
+    repository_payloads = {
+        repository_payload["repo"]: repository_payload
+        for repository_payload in inventory_payload["repos"]
+    }
+    assert repository_payloads["acme/broken"]["error"] == "sbom unavailable"
+    flagged_repository_names = {
+        license_record["repo"] for license_record in inventory_payload["flagged_licenses"]
+    }
+    assert flagged_repository_names == {"acme/app", "acme/lib"}
+    # Round-trips as the published JSON contract.
+    assert json.loads(json.dumps(inventory_payload))["schema"] == "cwl-sbom-inventory/v1"
 
 
 def test_render_markdown_contains_rollup_and_flags():
     """Markdown renders summary, license roll-up, and flagged components."""
-    inventory = agg.build_inventory(
-        [agg.RepoInventory(repo="acme/app", components=agg.parse_spdx_sbom(SPDX_DOCUMENT))]
+    inventory_payload = agg.build_inventory(
+        [
+            agg.RepositorySbomInventory(
+                repository_name="acme/app",
+                software_components=agg.parse_spdx_sbom(SPDX_DOCUMENT),
+            )
+        ]
     )
-    markdown = agg.render_inventory_markdown(inventory, generated_at="2026-07-08T00:00:00Z")
-    assert "# Organization SBOM inventory" in markdown
-    assert "2026-07-08T00:00:00Z" in markdown
-    assert "GPL-3.0-or-later" in markdown
-    assert "commercial-license-only" in markdown
-    assert "| readline |" in markdown
+    inventory_markdown = agg.render_inventory_markdown(
+        inventory_payload, generated_at="2026-07-08T00:00:00Z"
+    )
+    assert "# Organization SBOM inventory" in inventory_markdown
+    assert "2026-07-08T00:00:00Z" in inventory_markdown
+    assert "GPL-3.0-or-later" in inventory_markdown
+    assert "commercial-license-only" in inventory_markdown
+    assert "| readline |" in inventory_markdown
 
 
 def test_render_markdown_handles_empty_and_error_repos():
     """Markdown covers the no-flags, empty-repo, and error-repo branches."""
-    inventory = agg.build_inventory(
+    inventory_payload = agg.build_inventory(
         [
-            agg.RepoInventory(
-                repo="acme/clean",
-                components=[agg.Component(name="mit-lib", version="1.0", license="MIT")],
+            agg.RepositorySbomInventory(
+                repository_name="acme/clean",
+                software_components=[
+                    agg.SbomComponent(
+                        component_name="mit-lib",
+                        component_version="1.0",
+                        license_expression="MIT",
+                    )
+                ],
             ),
-            agg.RepoInventory(repo="acme/empty", components=[]),
-            agg.RepoInventory(repo="acme/broken", error="not found"),
+            agg.RepositorySbomInventory(
+                repository_name="acme/empty", software_components=[]
+            ),
+            agg.RepositorySbomInventory(
+                repository_name="acme/broken", fetch_error="not found"
+            ),
         ]
     )
-    markdown = agg.render_inventory_markdown(inventory, generated_at="now")
-    assert "No copyleft or NOASSERTION components detected." in markdown
-    assert "No components reported." in markdown
-    assert "SBOM unavailable: not found" in markdown
+    inventory_markdown = agg.render_inventory_markdown(
+        inventory_payload, generated_at="now"
+    )
+    assert "No copyleft or NOASSERTION components detected." in inventory_markdown
+    assert "No components reported." in inventory_markdown
+    assert "SBOM unavailable: not found" in inventory_markdown
 
 
 def test_write_inventory_emits_both_files(tmp_path):
     """write_inventory produces inventory.json and inventory.md."""
-    inventory = agg.build_inventory(
-        [agg.RepoInventory(repo="acme/app", components=agg.parse_spdx_sbom(SPDX_DOCUMENT))]
+    inventory_payload = agg.build_inventory(
+        [
+            agg.RepositorySbomInventory(
+                repository_name="acme/app",
+                software_components=agg.parse_spdx_sbom(SPDX_DOCUMENT),
+            )
+        ]
     )
-    markdown = agg.render_inventory_markdown(inventory, generated_at="now")
-    agg.write_inventory(inventory, markdown, tmp_path / "sbom")
-    written = json.loads((tmp_path / "sbom" / "inventory.json").read_text())
-    assert written["summary"]["repo_count"] == 1
-    assert (tmp_path / "sbom" / "inventory.md").read_text().startswith("# Organization SBOM inventory")
+    inventory_markdown = agg.render_inventory_markdown(
+        inventory_payload, generated_at="now"
+    )
+    agg.write_inventory(inventory_payload, inventory_markdown, tmp_path / "sbom")
+    written_inventory = json.loads(
+        (tmp_path / "sbom" / "inventory.json").read_text()
+    )
+    assert written_inventory["summary"]["repo_count"] == 1
+    assert (tmp_path / "sbom" / "inventory.md").read_text().startswith(
+        "# Organization SBOM inventory"
+    )
 
 
 def test_self_test_passes(capsys):
@@ -163,11 +212,13 @@ def test_self_test_passes(capsys):
 
 def test_arg_parser_defaults():
     """CLI parser exposes org/output-dir/repo/self-test with sane defaults."""
-    parser = agg.build_arg_parser()
-    args = parser.parse_args([])
-    assert args.org == "ContextualWisdomLab"
-    assert args.output_dir == "docs/sbom"
-    assert args.repos is None
-    args = parser.parse_args(["--repo", "a/b", "--repo", "c/d", "--self-test"])
-    assert args.repos == ["a/b", "c/d"]
-    assert args.self_test is True
+    argument_parser = agg.build_arg_parser()
+    cli_args = argument_parser.parse_args([])
+    assert cli_args.org == "ContextualWisdomLab"
+    assert cli_args.output_dir == "docs/sbom"
+    assert cli_args.repos is None
+    cli_args = argument_parser.parse_args(
+        ["--repo", "a/b", "--repo", "c/d", "--self-test"]
+    )
+    assert cli_args.repos == ["a/b", "c/d"]
+    assert cli_args.self_test is True
