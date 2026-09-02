@@ -3316,3 +3316,34 @@ jobs at that same moment were not counted here), the hypothesis in this entry is
 cause is one of the other two candidates above (workflow-level contention or genuine demand growth),
 which would need its own dedicated, better-instrumented investigation before any further fix is
 attempted.
+
+**Update, same tick: the "genuine demand growth" candidate above is now the confirmed dominant
+factor, distinguished from the earlier zombie-run hypothesis with real depth-vs-age evidence.** A
+peer session (relaying a third-agent report the user forwarded) found `.github`'s queued run age
+growing with queue depth rather than staying uniformly fresh; independently re-verified directly
+(`2026-09-02T13:49-13:51Z`):
+
+- `status=queued` `total_count`: 1997-2000 (suspiciously round -- may be an API reporting cap, not
+  necessarily the true depth; not confirmed either way).
+- Depth 1-100 (`page=1`, `per_page=100`): `created_at` range `13:42:15Z`-`13:50:45Z` -- fresh, healthy
+  churn, consistent with earlier checks.
+- Depth 401-500 (`page=5`): `12:08:59Z`-`12:35:05Z` -- already ~1.3-1.7 hours old.
+- Depth 901-1000 (`page=10`, the deepest page the REST pagination this session used can reach):
+  `09:42:10Z`-`10:13:55Z` -- ~3.6-4.1 hours old.
+- `gh api "repos/ContextualWisdomLab/.github/actions/runs?created=%3E2026-09-02T12:50:00Z&per_page=1" --jq '.total_count'`:
+  **1091** runs created in `.github` alone in the preceding ~1 hour, against only 6 `in_progress` at
+  the same instant.
+
+Age growing near-linearly with depth (unlike the flat, uniformly-fresh age profile found in every
+earlier check this session) means the queue's *front* looks healthy while its *tail* is genuinely not
+draining within a reasonable time -- consistent with raw demand volume now exceeding available
+throughput, not primarily stuck/zombie runs (already cleared) or a workflow-level cancellation bug
+(investigated and ruled out for the scheduler's fallback concurrency group elsewhere in this doc).
+1091 new runs in one hour, from one repository, is large enough that this session's own multi-hour
+run of PRs (each triggering the full required-check set) very plausibly makes up a meaningful share of
+it -- especially compounded by two peer Claude sessions doing the same concurrently this same tick.
+**Action taken, not just documented**: messaged both peer sessions proposing all three deliberately
+throttle new PR/push activity for a period to let the existing queue drain, rather than continuing to
+add to a backlog that is now demonstrably not keeping pace -- both acknowledged; outcome to be
+recorded once observed. This is the single most concrete, immediately actionable step available right
+now, independent of whatever the org's actual GitHub plan concurrency limit turns out to be.
