@@ -97,6 +97,25 @@
     {"repository": "semantic-data-portal", "issue": 91, "type": "bug"},
     {"repository": "learning-content-studio", "issue": 3, "type": "feature"},
     {"repository": "learning-record-store", "issue": 3, "type": "feature"},
-    {"repository": "bandscope", "issue": 985, "type": "feature"}
+    {"repository": "bandscope", "issue": 985, "type": "feature"},
+    {"repository": "fast-mlsirm", "issue": 1691, "type": "bug"},
+    {"repository": ".github", "issue": 1613, "type": "bug"},
+    {"repository": ".github", "issue": 1637, "type": "bug"},
+    {"repository": "contextual-orchestrator", "issue": 998, "type": "bug"},
+    {"repository": "contextual-orchestrator", "issue": 1001, "type": "bug"},
+    {"repository": "LineageWeave", "issue": 906, "type": "bug"},
+    {"repository": "fast-mlsirm", "issue": 1720, "type": "feature"},
+    {"repository": "fast-mlsirm", "issue": 1713, "type": "feature"},
+    {"repository": "governance-risk-compliance", "issue": 61, "type": "feature"},
+    {"repository": "governance-risk-compliance", "issue": 63, "type": "feature"},
+    {"repository": "EgressWeave", "issue": 82, "type": "feature"},
+    {"repository": ".github", "issue": 1234, "type": "bug"},
+    {"repository": ".github", "issue": 1565, "type": "feature"},
+    {"repository": "life-os", "issue": 129, "type": "feature"},
+    {"repository": "life-os", "issue": 130, "type": "feature"},
+    {"repository": "quarantine-sandbox-runtime", "issue": 7, "type": "bug"},
+    {"repository": "quarantine-sandbox-runtime", "issue": 4, "type": "bug"},
+    {"repository": "TEPP", "issue": 174, "type": "feature"},
+    {"repository": "TEPP", "issue": 175, "type": "feature"}
   ]
 }
