@@ -93,11 +93,11 @@ on:
     # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
     # repositories only receive scheduler runs on PR events, review/security
     # workflow completion, and protected-branch pushes; a PR whose approval or
-    # required checks land AFTER its last event has no later trigger and sits
-    # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat. Runs hourly so an approval or
-    # required check that lands after a PR's last event is auto-updated/merged
-    # within about an hour without adding quarter-hourly runner pressure.
+    # required checks land AFTER its last event has no event-driven re-wake at
+    # all. The sweep closes that gap on a fixed heartbeat. Runs hourly so an
+    # approval or required check that lands after a PR's last event is
+    # auto-updated/merged within about an hour without adding quarter-hourly
+    # runner pressure.
     - cron: "0 * * * *"
   repository_dispatch:
     types: [merge-scheduler]
@@ -177,15 +177,20 @@ jobs:
           latest_review="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$PR_HEAD_SHA" '
             (add // [])
             | [.[]
-                | select((.user.login // "" | ascii_downcase) as $user | $user == "opencode-agent" or $user == "opencode-agent[bot]")
+                | select((.user.login // "" | ascii_downcase) as $user | $user == "opencode-agent" or $user == "opencode-agent[bot]" or $user == "github-actions[bot]")
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
-                | select((.body // "" | ascii_downcase | contains("deterministic current-head evidence")) | not)
-                | select((.body // "" | ascii_downcase | contains("deterministic fallback approval")) | not)
-                | select((.body // "" | ascii_downcase | contains("model-unavailable evidence fallback")) | not)
-                | select((.body // "" | ascii_downcase | contains("did not emit a usable current-head control block")) | not)
-                | select((.body // "" | ascii_downcase | contains("scope: `unsupported`")) | not)
-                | select((.body // "" | ascii_downcase | contains("model-pool outcome: `unknown`")) | not)]
+                | select(
+                    .state == "CHANGES_REQUESTED"
+                    or (
+                        .state == "APPROVED"
+                        and ((.body // "" | ascii_downcase | contains("deterministic current-head evidence")) | not)
+                        and ((.body // "" | ascii_downcase | contains("deterministic fallback approval")) | not)
+                        and ((.body // "" | ascii_downcase | contains("model-unavailable evidence fallback")) | not)
+                        and ((.body // "" | ascii_downcase | contains("did not emit a usable current-head control block")) | not)
+                        and ((.body // "" | ascii_downcase | contains("scope: `unsupported`")) | not)
+                        and ((.body // "" | ascii_downcase | contains("model-pool outcome: `unknown`")) | not)
+                    )
+                  )]
             | sort_by(.submitted_at // "", .id // 0)
             | (last // {})
             | [(.state // ""), (.submitted_at // "")]
@@ -200,7 +205,10 @@ jobs:
             echo "::error::Formal exact-head review lacks submission provenance; failing closed."
             exit 1
           fi
-          new_evidence="$(jq -nr --arg review "$review_submitted_at" --arg started "$REQUIRED_RUN_STARTED_AT" 'try (($review | fromdateiso8601) > ($started | fromdateiso8601)) catch false')"
+          # GitHub review/run timestamps are second-granularity. Equality can mean the review
+          # arrived later within the same second, so accept equality for exact-head evidence;
+          # older seconds remain ineligible and all PR/head/state checks above still fail closed.
+          new_evidence="$(jq -nr --arg review "$review_submitted_at" --arg started "$REQUIRED_RUN_STARTED_AT" 'try (($review | fromdateiso8601) >= ($started | fromdateiso8601)) catch false')"
           if [ "$new_evidence" != "true" ]; then
             echo "Formal review predates this run attempt; the failure is not attributable to missing newer review evidence."
             exit 0

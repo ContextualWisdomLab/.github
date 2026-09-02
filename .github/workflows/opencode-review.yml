@@ -9,14 +9,14 @@ on:
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
-    # `converted_to_draft` is included so a PR going draft mid-poll fires a
-    # fresh run of this same workflow: the head-scoped concurrency group below
-    # (`cancel-in-progress: true`) cancels any in-flight non-draft
-    # "Fail closed without a current-head OpenCode verdict" poll for that
-    # exact same head. Every non-closed admission path revalidates the live
-    # PR/head/state before dispatching, exempting, or polling so out-of-order
-    # draft/ready/closed events cannot publish stale evidence or wait on an
-    # impossible verdict.
+    # `converted_to_draft` is included so a PR going draft after a ready event
+    # gets a fresh same-head execution. The head-scoped concurrency group below
+    # (`cancel-in-progress: true`) retires any superseded same-head admission run.
+    # Every non-closed path revalidates the live PR/head/state before dispatch,
+    # exemption, or one-shot verdict admission, so out-of-order draft/ready/closed
+    # events cannot publish stale evidence. Required verdict continuation is
+    # event-driven by the authenticated exact-run wake path; this entrypoint does
+    # not hold a runner in a polling loop.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
@@ -28,7 +28,7 @@ concurrency:
   # current head's still-valid run before its own live-head check could ever
   # reject it (Devin Review on `#1568`). Same-head events (draft<->ready
   # transitions, a synchronize retry) still share one group, so
-  # `converted_to_draft` still cancels an active same-head verdict poll.
+  # `converted_to_draft` cancels a superseded same-head admission run.
   group: >-
     opencode-review-bootstrap-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
@@ -428,7 +428,7 @@ jobs:
           verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [.[]
-                | select((.user.login // "" | ascii_downcase) as $user | $user == "opencode-agent" or $user == "opencode-agent[bot]")
+                | select((.user.login // "" | ascii_downcase) as $user | $user == "opencode-agent" or $user == "opencode-agent[bot]" or $user == "github-actions[bot]")
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
                 | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")]
             | (last // {}) as $review
@@ -444,21 +444,19 @@ jobs:
               then "APPROVED" else empty end
           ')"
           if [ -z "$verdict" ]; then
-            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict. The dispatch path wakes this exact failed run when the verdict arrives."
+            echo "::error::No APPROVED or CHANGES_REQUESTED from an authorized OpenCode formal-review publisher on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict. The dispatch path wakes this exact failed run when the verdict arrives."
             exit 1
           fi
           echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
     # Exact-head concurrency protects a newer authoritative run from delayed
-    # old-head events, while the poll above now revalidates live PR identity on
-    # every wait iteration so an already-running obsolete poll can self-retire
-    # without consuming a second runner. This sibling job remains a defense in
-    # depth for queued/requested old-head runs and for legacy runs created from
-    # older workflow revisions that lack the in-loop self-retirement check.
-    # Every cancellation candidate and every cancellation itself is re-verified
-    # against the live PR head immediately beforehand, so a cleanup run that is
-    # itself delayed/stale cannot cancel a still-authoritative run.
+    # old-head events. One-shot verdict admission releases its runner immediately;
+    # this sibling job remains defense in depth for queued/requested old-head runs
+    # and legacy runs created from older workflow revisions. Every cancellation
+    # candidate and every cancellation itself is re-verified against the live PR
+    # head immediately beforehand, so a delayed/stale cleanup run cannot cancel a
+    # still-authoritative run.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
     runs-on: ubuntu-24.04
     permissions:
