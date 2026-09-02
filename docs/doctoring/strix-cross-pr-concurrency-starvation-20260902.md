@@ -227,12 +227,20 @@ guessed at under time pressure.
    primitives if a small K turns out to be safe; an external lease/semaphore
    is the more robust (but heavier) alternative if true FIFO fairness is
    required.
-3. Independent of (1)/(2): fix `dispatch_strix_evidence()`'s busy-check to
-   also treat a same-repository run already occupying the concurrency
-   group's *pending* slot as busy (not just a run that is actively
-   in-progress), so the safety-net path stops contributing to its own
-   cross-PR collisions even before the harder primary-trigger question is
-   resolved.
+3. **Correction (Devin Review): this item previously asked to expand the
+   busy-check to cover `queued` runs — already covered, so that change
+   would not fix anything.** `active_workflow_runs()`'s default `statuses`
+   is already `("queued", "in_progress")` (`pr_review_merge_scheduler.py:2708`)
+   and `dispatch_strix_evidence()`'s `busy_refs` check uses that default —
+   confirmed above. The actual, still-open gap in the safety-net path is
+   the check-then-act race between independent scheduler invocations (see
+   "The claimed safety net does not reliably close the gap either" above),
+   which a wider status filter cannot touch. Closing it needs either a real
+   mutual-exclusion primitive around the busy-check-then-dispatch sequence
+   (e.g. re-verify busy immediately before the POST, inside as tight a
+   window as possible, or a genuine lock rather than a read-then-act check)
+   or folding this path into whatever bounded-and-fair mechanism (2)
+   produces, so it is not a separate, independently racy check at all.
 4. Consider whether repository_dispatch-triggered re-evidence dispatches
    should be prioritized by how long a PR has been waiting (oldest-starved
    first) rather than effectively randomly by dispatch order, once (2) or
