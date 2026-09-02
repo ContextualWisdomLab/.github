@@ -304,7 +304,7 @@ esac
 
 
 def _run_noema_validate_head(tmp_path, *, live_state: str, live_head_sha: str, expected_head_sha: str):
-    """Execute noema-review.yml's ``Validate current pull request head`` step."""
+    """Execute noema-review.yml's live admission step."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None
@@ -312,7 +312,7 @@ def _run_noema_validate_head(tmp_path, *, live_state: str, live_head_sha: str, e
     workflow_text = (REPO_ROOT / ".github/workflows/noema-review.yml").read_text(
         encoding="utf-8"
     )
-    script = _extract_run_block(workflow_text, "Validate current pull request head")
+    script = _extract_run_block(workflow_text, "Validate live Noema target before any setup")
 
     fake_bin = tmp_path / f"bin-{live_state}-{live_head_sha}-{expected_head_sha}"
     fake_bin.mkdir()
@@ -326,7 +326,7 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
-    pull = {"state": live_state, "head": {"sha": live_head_sha}}
+    pull = {"state": live_state, "draft": False, "head": {"sha": live_head_sha}}
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -334,6 +334,8 @@ printf '%s\\n' "$FAKE_PULL_JSON"
         "TARGET_REPOSITORY": "ContextualWisdomLab/newsdom-api",
         "PR_NUMBER": "1",
         "EXPECTED_HEAD_SHA": expected_head_sha,
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/newsdom-api",
+        "GITHUB_OUTPUT": str(tmp_path / "noema-live-output"),
     }
     return subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
@@ -369,16 +371,16 @@ def test_noema_validate_head_distinguishes_closed_from_stale(tmp_path):
     )
     assert closed_current.returncode == 0, closed_current.stderr
     assert "::error::" not in closed_current.stdout
-    assert "nothing left to review" in closed_current.stdout
+    assert "skipping all setup" in closed_current.stdout
 
     genuinely_stale = _run_noema_validate_head(
         tmp_path, live_state="open", live_head_sha=other_head, expected_head_sha=head
     )
     assert genuinely_stale.returncode == 1
-    assert "review target is stale" in genuinely_stale.stdout
+    assert "trigger is stale" in genuinely_stale.stdout
 
     closed_and_stale = _run_noema_validate_head(
         tmp_path, live_state="closed", live_head_sha=other_head, expected_head_sha=head
     )
     assert closed_and_stale.returncode == 1
-    assert "review target is stale" in closed_and_stale.stdout
+    assert "trigger is stale" in closed_and_stale.stdout

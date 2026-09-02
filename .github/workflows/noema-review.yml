@@ -215,6 +215,12 @@ jobs:
             echo "::error::Noema trigger did not provide a canonical lowercase exact head SHA."
             exit 1
           fi
+          if [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "proceed=true" >>"$GITHUB_OUTPUT"
+            echo "::notice::Cross-repository Noema live lookup deferred until the selected repository-scoped reviewer credential is available."
+            exit 0
+          fi
+
           if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
             echo "::error::Could not retrieve the live pull request before Noema setup."
             exit 1
@@ -508,7 +514,7 @@ jobs:
         if: env.PR_NUMBER != '' && steps.live_pr.outputs.proceed == 'true'
         id: live_pr_refresh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
         run: |
           set -euo pipefail
           if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
