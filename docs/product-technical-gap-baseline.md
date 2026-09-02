@@ -2931,6 +2931,24 @@ going to apply it -- "the trigger paths are scoped safely" (which was true, and 
 checking) is not the same question as "did this already do its job" (which was not checked here, and
 was false).
 
+**Follow-up sweep for other hidden model-timeouts (2026-09-02, same tick):** given the standing loop's
+item 39 ("Repair 900초 제한이 왜 또 나오는지") flagged the *same class* of complaint recurring, this
+session grepped the whole `.github` repo for both `timeout-minutes:` (the YAML job-level key already
+audited above) and bare shell `timeout <seconds>` invocations, which an earlier grep-only-for-
+`timeout-minutes:` pass would miss. Found three in `opencode-review-dispatch.yml`'s `run_and_capture()`
+helper (`timeout --kill-after=20 900 setpriv ...`) -- traced every call site (all under "Prepare
+bounded OpenCode review evidence") and confirmed they wrap only the *target repository's own*
+deterministic build/test/coverage tooling (`pytest`, `npm test`, `cargo test`, R `testthat`,
+docstring-coverage checks) gathered as review evidence, never the model call itself -- the actual
+`opencode run` invocation (~line 5998) runs with no timeout wrapper at all, and the one nearby
+`timeout ... opencode export` (120s) fires only *after* `opencode run` has already returned, bounding
+transcript export/formatting of an already-completed session, not reasoning time. This 900s bound is
+legitimate risk management (an arbitrary reviewed repo's own hung test suite must not hang the shared
+runner indefinitely) and is not a model-timeout policy violation; left unchanged. No other
+`timeout <seconds>` shell wrapper or `timeout-minutes:` key was found anywhere in the repo bounding a
+step whose body is itself a synchronous model call, beyond the two already fixed in `.github#1727`
+above.
+
 **A second, independent gap found and fixed while executing the "standardize workflows, consolidate
 into `.github`" request**: `docs/org-required-workflow-rollout.md` claimed org ruleset `18156473`
 ("CWL Central required workflows") included `codeql-pr.yml`, `scorecard-pr.yml`, and
