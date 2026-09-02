@@ -89,15 +89,28 @@ all five, and auto-optimize routing by cost.
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
    `noema-review.yml` retains `orchestrator/free`. `strix.yml` provisions the
-   same sidecar and uses the loopback chat-completions/API-compatible URL with
-   `orchestrator/auto`: the 2026-08-29 exact-head DiskSage scan proved that four
-   discovered free routes all shared the OpenRouter outage domain, which the
-   gateway correctly collapsed to one provider attempt. Strix therefore uses
-   the provider-diverse pool supplied by all five configured credentials.
-   Provider diversity and cost-evidence classification remain delegated to the
-   gateway rather than embedding a second routing policy in GitHub Actions.
-   Strix has no external fallback and private targets pass visibility through
-   to the gateway's ZDR requirement. Noema reviewer identity remains
+   same sidecar and uses the loopback chat-completions/API-compatible URL.
+   **Current state, corrected here to match actual code** (this paragraph
+   previously described Strix's original 2026-08-27/08-29 `orchestrator/auto`
+   design without being updated for the 2026-08-30/2026-09-02 amendments
+   below, which switched it): `strix.yml` hard-pins `STRIX_MODEL` and
+   `CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` (verified directly
+   against `.github/workflows/strix.yml` lines 570-595/728-738 — any override
+   attempt fails closed with `"Strix model overrides are limited to
+   contextual-orchestrator/orchestrator/free"`), the same pool as OpenCode and
+   Noema. Historical context, preserved for the record: the original
+   2026-08-27/08-29 design used `orchestrator/auto` because the 2026-08-29
+   exact-head DiskSage scan found four discovered free routes sharing the
+   OpenRouter outage domain, which the gateway correctly collapsed to one
+   provider attempt — Strix was given the provider-diverse pool from all five
+   configured credentials as a result. The 2026-08-30/2026-09-02 amendments
+   below record the switch to `orchestrator/free` and its accepted
+   single-outage-domain trade-off; see those amendments, not this paragraph,
+   for the current rationale. Provider diversity and cost-evidence
+   classification remain delegated to the gateway rather than embedding a
+   second routing policy in GitHub Actions. Strix has no external fallback
+   and private targets pass visibility through to the gateway's ZDR
+   requirement. Noema reviewer identity remains
    `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never `github.token`;
    Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
@@ -124,13 +137,18 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery under the zero-cost pool. Strix uses the separately governed auto
-  pool without treating absent price metadata as either free or paid-route
-  evidence.
-- Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
-  remains distinct from the zero-cost OpenCode/Noema pool, while private-target
-  ZDR admission remains fail-closed. Unknown-cost routes remain auditable but
-  ineligible; free and fully price-attested routes are the only review routes.
+  discovery under the zero-cost pool. **Corrected here to match current
+  code** (this bullet, like the "Wiring" paragraph above, was not updated
+  when the 2026-08-30/2026-09-02 amendments switched Strix): Strix now uses
+  the same zero-cost `orchestrator/free` pool as OpenCode and Noema, not the
+  separately governed `orchestrator/auto` pool this bullet originally
+  described; see the amendment history below for why and when that changed.
+- Unknown-cost routes remain auditable but ineligible for any of the three
+  central consumers; free and fully price-attested routes are the only
+  review routes, and (per the amendments below) only the free tier is
+  actually admitted for Strix/OpenCode/Noema today — `orchestrator/auto`
+  remains available in the gateway for a future consumer, not for these
+  three.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
