@@ -94,7 +94,11 @@ jobs:
       - name: Verify executable live-state and transport contracts
         run: |
           set -euo pipefail
-          PYTHONPATH=. "$RUNNER_TEMP/strix-venv/bin/python" -m pytest \
+          # The Strix lock intentionally mirrors the production --no-deps install and
+          # therefore does not carry pytest. Use the review lock's pinned pytest while
+          # importing Strix/PyYAML from the exact Python 3.13 Strix environment.
+          strix_site_packages="$("$RUNNER_TEMP/strix-venv/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+          PYTHONPATH="$strix_site_packages:." "$RUNNER_TEMP/review-venv/bin/python" -m pytest \
             tests/test_strix_repository_dispatch_live_state.py \
             -q
           PYTHONPATH=. "$RUNNER_TEMP/review-venv/bin/python" -m pytest \
