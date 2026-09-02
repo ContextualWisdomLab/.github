@@ -73,16 +73,32 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: "*/30 * * * *"
-    # Every-15-minutes org-wide sweep cadence for the org-queue-sweep job below. Target
+    # scan-pr-queue's own repository-local heartbeat. org-queue-sweep below
+    # explicitly excludes ContextualWisdomLab/.github from its target list
+    # (a PR in THIS repository, including one editing the governance
+    # workflows themselves, is never covered by the org-wide sweep), so this
+    # is the only periodic fallback for this repository's own PR queue. It
+    # also plugs a real event-coverage gap shared by every repository:
+    # required checks such as Security Scan and SAST Semgrep have no
+    # workflow_run listener anywhere in this file, so a PR where either is
+    # the last required check to go green has no event-driven re-wake at
+    # all. Offset by 30 minutes from org-queue-sweep's "0 * * * *" tick so
+    # the two heartbeats do not collide. Lengthened from */30 to hourly for
+    # the same Actions-capacity reason, and by the same lever, as the
+    # org-queue-sweep hourly cadence below (see
+    # docs/doctoring/actions-queue-saturation-hourly-sweep.md, #1630) — do
+    # NOT remove it outright; that would leave this repository's own queue
+    # with zero fallback heartbeat.
+    - cron: "30 * * * *"
+    # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
     # repositories only receive scheduler runs on PR events, review/security
     # workflow completion, and protected-branch pushes; a PR whose approval or
     # required checks land AFTER its last event has no later trigger and sits
     # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat. Runs every 15 minutes so an approval or
+    # that gap on a fixed heartbeat. Runs hourly so an approval or
     # required check that lands after a PR's last event is auto-updated/merged
-    # within ~15 minutes instead of sitting idle for up to an hour.
-    - cron: "*/15 * * * *"
+    # within about an hour without adding quarter-hourly runner pressure.
+    - cron: "0 * * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -111,12 +127,6 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
@@ -136,13 +146,20 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        github.event.schedule != '*/15 * * * *'
+        github.event.schedule != '0 * * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
         github.event.client_payload.org_sweep != true
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
+    # 360-minute platform default. This is a single-repository queue scan
+    # (paginated GraphQL reads plus at most one review dispatch and one
+    # branch update per run) -- much lighter than org-queue-sweep's full
+    # organization walk below, so it gets a shorter bound than that job's
+    # timeout-minutes: 60.
+    timeout-minutes: 30
     permissions:
       actions: write
       checks: read
@@ -157,7 +174,7 @@ jobs:
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
@@ -587,12 +604,12 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The complete organization walk exceeded the legacy 30-minute boundary in
-    # production. Keep one running and one latest pending */15 sweep through the
+    # production. Keep one running and one latest pending hourly sweep through the
     # schedule-specific concurrency key above, while allowing the current walk
     # enough time to finish instead of cancelling before later repositories.
     timeout-minutes: 60
@@ -636,7 +653,7 @@ jobs:
       # ticks" guarantee a rotation is meant to provide. Wall-clock time alone
       # is also insufficient, since this single-flight/non-cancelling job can
       # run up to 60 minutes and a delayed real execution can let more than
-      # one 900s window elapse, occasionally repeating a modulo offset
+      # one hourly window elapse, occasionally repeating a modulo offset
       # (ContextualWisdomLab/.github#1223 review finding).
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
@@ -850,10 +867,10 @@ jobs:
           # source: a persistent `ORG_SWEEP_ROTATION_COUNTER` repository
           # variable on this (.github) repository, incremented by exactly
           # one at the start of every actual org-queue-sweep execution. A
-          # wall-clock tick (one per 900s) is *not* sufficient on its own:
+          # wall-clock tick (one per hour) is *not* sufficient on its own:
           # this job is single-flight/non-cancelling with up to a 60-minute
           # timeout, so a delayed or backlogged execution can let more than
-          # one 900s window elapse between two real sweep runs, and if that
+          # one hourly window elapse between two real sweep runs, and if that
           # gap happens to be an exact multiple of the repository count the
           # modulo offset repeats -- reintroducing the exact starvation
           # #1220 fixed (CodeRabbit review finding on #1223). A persistent
@@ -917,7 +934,7 @@ jobs:
                 ORG_SWEEP_ROTATION_INDEX="$counter_next"
               else
                 echo "::warning::read ${counter_variable_name}=${counter_current} but could not PATCH it; falling back to a wall-clock rotation tick for this run only"
-                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
               fi
             elif gh api "repos/${GITHUB_REPOSITORY}/actions/variables" \
                    -X POST -f "name=${counter_variable_name}" -f "value=1" >/dev/null 2>&1; then
@@ -930,7 +947,7 @@ jobs:
               ORG_SWEEP_ROTATION_INDEX=1
             else
               echo "::warning::could not read/write ${counter_variable_name}; falling back to a wall-clock rotation tick for this run only"
-              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 900 ))
+              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
             fi
           fi
           if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then
@@ -1086,9 +1103,10 @@ jobs:
               # That is routine cross-workflow contention, not a defect in this
               # repository, and it self-heals on GitHub's own reset schedule;
               # treating it as a hard failure previously turned one exhausted
-              # bucket into a permanently red */15 * * * * cron for as long as
-              # the contention lasted. Because the installation bucket is shared
-              # by every remaining repository, the current rotation stops after
+              # bucket into a permanently red cron run on essentially every
+              # scheduled tick for as long as the contention lasted. Because
+              # the installation bucket is shared by every remaining
+              # repository, the current rotation stops after
               # recording the first exhausted request instead of repeating the
               # same bounded retries and queue-hygiene calls for every target.
               # Deferred work is picked up on a later rotation after reset.
@@ -1110,37 +1128,40 @@ jobs:
               fi
             fi
 
-            # Queue hygiene, part 1: cancel every queued/in-progress PR run whose
-            # head SHA no longer matches its open PR's Current HEAD, plus default-
-            # branch push/schedule runs superseded by a newer default HEAD. PR
-            # concurrency normally does this on synchronize/close events, but it
-            # cannot repair runs left behind by an outage or a manual dispatch.
-            # Compare live refs on every sweep instead of waiting for an age
-            # threshold: previous-head checks are never useful merge evidence.
+            # Queue hygiene, part 1: classify queued/in-progress runs against a
+            # bounded PR/default-branch snapshot. The snapshot is intentionally
+            # cheap and may race with a subsequent head move; every destructive
+            # cancellation is therefore revalidated against live run/PR/ref state
+            # immediately before the mutation by the production helper below.
             queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
+            open_pr_heads_json="{}"
+            if open_pr_payload_json="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
                 "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
                 --paginate \
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\(.head.repo.full_name):\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
-                  '
+                | jq -sc '[.[] | .[]]'
             )"; then
+              if ! jq -e '
+                all(.[];
+                  (.head.repo.full_name | type) == "string" and (.head.repo.full_name | length) > 0 and
+                  (.head.ref | type) == "string" and (.head.ref | length) > 0 and
+                  (.head.sha | type) == "string" and (.head.sha | test("^[0-9a-fA-F]{40}$"))
+                )
+              ' <<<"$open_pr_payload_json" >/dev/null; then
+                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has malformed head repository/ref/SHA metadata. No run will be cancelled from incomplete evidence."
+                queue_hygiene_ready=false
+              else
+                open_pr_heads_json="$(
+                  jq -c '
+                    reduce .[] as $pr ({};
+                      . + {(($pr.head.repo.full_name + ":" + $pr.head.ref)): $pr.head.sha}
+                    )
+                  ' <<<"$open_pr_payload_json"
+                )"
+              fi
+            else
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
               queue_hygiene_ready=false
             fi
             if ! current_default_sha="$(
@@ -1150,6 +1171,10 @@ jobs:
                 --jq '.sha // empty'
             )"; then
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD could not be read safely. No run will be cancelled from incomplete evidence."
+              current_default_sha=""
+              queue_hygiene_ready=false
+            elif ! [[ "$current_default_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD is malformed. No run will be cancelled from incomplete evidence."
               current_default_sha=""
               queue_hygiene_ready=false
             fi
@@ -1210,13 +1235,17 @@ jobs:
             fi
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then
-              echo "Cancelling ${superseded_count} queued/in-progress run(s) that do not match an open PR or default-branch Current HEAD:"
-              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
+              echo "Revalidating ${superseded_count} queued/in-progress run(s) classified as not matching an open PR or default-branch Current HEAD:"
+              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) classified_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
-                  fi
+                  scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    "superseded"
                 done < <(jq -r '.[].id' <<<"$superseded_runs_json")
               fi
             fi
@@ -1225,6 +1254,7 @@ jobs:
             # runs that are not tied to a currently open PR head. This catches
             # orphaned manual/workflow-chain runs without cancelling a valid
             # current-head PR check merely because runner capacity was scarce.
+            # The helper re-checks late PR association/live refs before mutation.
             stale_runs_json="[]"
             if [ "$queue_hygiene_ready" = "true" ]; then
               stale_cutoff="$(date -u -d "${ORG_SWEEP_STALE_QUEUE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
@@ -1247,13 +1277,17 @@ jobs:
             fi
             stale_count="$(jq 'length' <<<"$stale_runs_json")"
             if [ "$stale_count" -gt 0 ]; then
-              echo "Cancelling ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
+              echo "Revalidating ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
               jq -r '.[] | "  run \(.id) [\(.name)] on \(.head_branch) queued since \(.created_at)"' <<<"$stale_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
-                  fi
+                  scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    "aged-orphan"
                 done < <(jq -r '.[].id' <<<"$stale_runs_json")
               fi
             fi
