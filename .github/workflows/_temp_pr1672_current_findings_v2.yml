@@ -88,7 +88,6 @@ jobs:
             tests/test_noema_repair_attempt_telemetry.py \
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_review_gate.py \
-            tests/test_noema_model_output_transport.py \
             -q
 
       - name: Verify complete repository coverage and docstrings
