@@ -14,6 +14,7 @@ on:
       - requirements-opencode-review-ci-hashes.txt
       - .github/workflows/noema-token-lifetime-quality-ci.yml
 
+# Deterministic quality CI: a synchronize supersedes older work for this PR.
 concurrency:
   group: noema-token-lifetime-quality-${{ github.event.pull_request.base.repo.full_name }}-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
