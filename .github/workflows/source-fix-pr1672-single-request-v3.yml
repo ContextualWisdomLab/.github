@@ -1,5 +1,5 @@
 name: Source Fix PR 1672 Single Request V3
-# Exact-head retrigger: preserve this one-shot only until the validated owner repair commits.
+# Exact-head retrigger 2026-09-02B: preserve this one-shot only until the validated owner repair commits.
 
 on:
   push:
