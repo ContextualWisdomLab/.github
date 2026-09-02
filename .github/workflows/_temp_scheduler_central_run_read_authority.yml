@@ -1,4 +1,5 @@
 name: Temporary Scheduler Central Run Read Authority
+# Restaged after protected-main advancement; this one-shot file self-retires on the verified successor.
 
 on:
   push:
