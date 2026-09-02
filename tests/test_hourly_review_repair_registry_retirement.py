@@ -34,6 +34,19 @@ def _text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
+def _job_block(text: str, job_name: str) -> str:
+    """Return only one top-level job block, excluding comments and sibling jobs."""
+    anchor = f"  {job_name}:\n"
+    assert text.count(anchor) == 1
+    remainder = text.split(anchor, 1)[1]
+    lines: list[str] = []
+    for line in remainder.splitlines():
+        if line.startswith("  ") and not line.startswith("    ") and line.strip():
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
     """Privileged registry mutation cannot run from an arbitrary branch or cadence."""
     text = _text()
@@ -48,6 +61,16 @@ def test_retirement_is_protected_main_push_only_and_not_scheduled() -> None:
     assert "contents: read" in text
     assert "contents: write" not in text
     assert "id-token: write" not in text
+
+
+def test_retirement_uses_capacity_available_short_lived_runner() -> None:
+    """The retirement job itself must use the capacity-available short-lived runner."""
+    job = _job_block(_text(), "retire-legacy-identities")
+    runner_directives = [
+        line.strip() for line in job.splitlines() if line.startswith("    runs-on:")
+    ]
+
+    assert runner_directives == ["runs-on: ubuntu-slim"]
 
 
 def test_retirement_names_every_legacy_identity_exactly_once() -> None:
@@ -69,11 +92,25 @@ def test_replacement_is_proven_active_before_any_disable_call() -> None:
     assert replacement_guard in text
     assert disable_endpoint in text
     assert text.index(replacement_guard) < text.index(disable_endpoint)
+    assert 'require_single_workflow_id "$REPLACEMENT_PATH"' in text
     assert "Expected exactly one workflow registry identity" in text
 
 
-def test_every_disabled_identity_is_read_back_and_verified() -> None:
-    """A successful mutation is not evidence until the registry state is re-read."""
+def test_absent_legacy_identity_is_already_retired_but_duplicates_fail() -> None:
+    """A zero-match legacy path is terminally absent while ambiguous matches fail closed."""
+    text = _text()
+    legacy = text.split("retire_legacy_if_present() {", 1)[1].split("\n          }", 1)[0]
+
+    assert 'if [[ "$count" == "0" ]]' in legacy
+    assert "already absent from registry" in legacy
+    assert "return 0" in legacy
+    assert 'if [[ "$count" != "1" ]]' in legacy
+    assert "Expected zero or one workflow registry identity for legacy path" in legacy
+    assert 'disable_and_verify_present "$path"' in legacy
+
+
+def test_every_visible_disabled_identity_is_read_back_and_verified() -> None:
+    """A successful mutation is not evidence until the visible registry state is re-read."""
     text = _text()
 
     assert (
@@ -81,10 +118,18 @@ def test_every_disabled_identity_is_read_back_and_verified() -> None:
         in text
     )
     assert 'if [[ "$state" != "disabled_manually" ]]' in text
-    assert 'disable_and_verify "$SELF_PATH"' in text
-    assert text.rindex('disable_and_verify "$SELF_PATH"') > text.rindex(
+    assert 'disable_and_verify_present "$SELF_PATH"' in text
+    assert text.rindex('disable_and_verify_present "$SELF_PATH"') > text.rindex(
         'for path in "${legacy_paths[@]}"'
     )
+
+
+def test_self_identity_still_requires_exactly_one_visible_registry_entry() -> None:
+    """The migration cannot call itself complete unless its own identity is unambiguous."""
+    text = _text()
+
+    assert 'workflow_id="$(require_single_workflow_id "$path")"' in text
+    assert 'disable_and_verify_present "$SELF_PATH"' in text
 
 
 def test_retirement_does_not_expose_reviewer_or_provider_credentials() -> None:
