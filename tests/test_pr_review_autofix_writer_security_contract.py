@@ -31,14 +31,14 @@ def _step_header(workflow: str, step_name: str) -> str:
     return step[:run_start]
 
 
-def test_writer_uses_the_gateway_free_pool_with_high_reasoning() -> None:
-    """Pin the write-capable pool and its deliberate high-reasoning budget."""
+def test_writer_uses_the_gateway_free_pool_without_leaf_compute_policy() -> None:
+    """Pin the gateway pool while forbidding leaf-owned test-time-compute policy."""
     workflow = _workflow_text()
 
     assert f'"model": "{_TARGET_MODEL}"' in workflow
     assert '"orchestrator/free": {' in workflow
     assert workflow.count(f"MODEL: {_TARGET_MODEL}") == 2
-    assert '"reasoningEffort": "high"' in workflow
+    assert '"reasoningEffort":' not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
 
@@ -96,21 +96,26 @@ def test_read_only_steps_do_not_prefer_mutation_credentials() -> None:
         assert "OPENCODE_APPROVE_TOKEN" not in header
 
 
-def test_autofix_job_has_a_bounded_runtime() -> None:
-    """The autofix job must not fall back to GitHub's 360-minute platform default.
-
-    Without a job-level timeout-minutes, a stuck OpenCode CLI invocation (a
-    rate-limited provider, a hung agent loop) could occupy a shared runner for
-    up to six hours. The job runs a single `opencode run` call against one
-    fixed model with a bounded 12-step agent budget -- not the multi-provider
-    fallback pool that justifies opencode-review-dispatch.yml's much longer
-    review job -- so it needs a much shorter bound than that job's default.
-    """
+def test_autofix_model_job_delegates_termination_and_compute_to_orchestrator() -> None:
+    """Leaf OpenCode config must not invent model-time or test-time-compute authority."""
     workflow = _workflow_text()
     job = workflow.split("  autofix:\n", maxsplit=1)[1]
     job_header = job.split("    steps:\n", maxsplit=1)[0]
 
-    match = re.search(r"^    timeout-minutes: (\d+)$", job_header, flags=re.MULTILINE)
-    assert match is not None, "autofix must declare a job-level timeout-minutes"
-    autofix_timeout = int(match.group(1))
-    assert 5 <= autofix_timeout <= 60
+    assert "timeout-minutes:" not in job_header
+    assert '"model": "contextual-orchestrator/orchestrator/free"' in workflow
+    assert '"reasoningEffort":' not in workflow
+    assert '"steps": 12' not in workflow
+    assert '"tool_call": true' not in workflow
+    assert '"reasoning": true' not in workflow
+    assert '"limit": {' not in workflow
+    assert "no repository-owned wall-clock timeout" in job_header
+    assert "cancel-in-progress: false" in workflow
+
+
+def test_autofix_review_context_is_not_sampled_by_a_fixed_line_quota() -> None:
+    """Exact review evidence must reach the model without a repository-authored line cutoff."""
+    workflow = _workflow_text()
+
+    assert "sed -n '1,260p'" not in workflow
+    assert '$(cat "$RUNNER_TEMP/pr-review-autofix-context.md")' in workflow

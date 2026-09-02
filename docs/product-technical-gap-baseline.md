@@ -2613,3 +2613,13 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+
+### OpenCode autofix orchestration authority — PR #1714
+
+- **Root cause:** the leaf workflow proposed `timeout-minutes: 25` and also carried repository-authored `reasoningEffort: high`, a 12-step agent budget, asserted tool/reasoning capabilities, fixed context/output limits, and a 260-line review-context cutoff. None of those leaf allocations had executable research/model evidence establishing them as decision authority.
+- **Owner boundary:** `.github` requests exactly `contextual-orchestrator/orchestrator/free` through the gateway token. contextual-orchestrator owns provider discovery, verified capability admission, routing, and research-backed test-time compute; the leaf does not invent provider/model capability or compute limits.
+- **Evidence contract:** the complete review context produced by the governed collector is passed to the model. If contextual-orchestrator cannot admit/serve the request under its verified capability/privacy/free-pool contracts, the path fails closed rather than silently sampling evidence or selecting a paid/provider fallback.
+- **Termination contract:** provider completion, explicit cancellation, and exact live-head/state guards end model work. Scheduler stale-head dedupe/cancellation handles queue waste without terminating the sole current-head model run by elapsed time.
+- **Regression:** `test_autofix_model_job_delegates_termination_and_compute_to_orchestrator` and `test_autofix_review_context_is_not_sampled_by_a_fixed_line_quota` forbid reintroduction of those leaf heuristics while preserving the exact `orchestrator/free` contract.
+- **Status:** Proposed until the one-shot source repair self-removes and fresh exact-head Checks are GREEN.
