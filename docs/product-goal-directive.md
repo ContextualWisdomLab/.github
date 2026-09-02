@@ -82,6 +82,29 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 - **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline.
 - **LineageWeave** — https://github.com/ContextualWisdomLab/LineageWeave — 명시적 선후행 링크 없는 짧은 timestamped record에서 git-branch식 lineage DAG를 재구성해 평면 자료를 탐색 가능한 branching thread로 바꾼다. 수리 연산은 소관이 아니므로 다른 라이브러리로 이관한다.
 
+## 10. Provider pool pinning (added 2026-09-02)
+
+> orchestrator/free 로 고정.
+
+**Reading**: taken together with `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
+2026-08-30 amendment (Strix moved from `orchestrator/auto` to the zero-cost `orchestrator/free`
+pool by explicit owner decision, accepting the residual single-outage-domain risk immediately
+rather than wait for a diversity threshold) and `AGENTS.md`'s confirmation that OpenCode, Noema,
+and Strix all already route through `orchestrator/free`, this line **reaffirms that pin** — it is
+not a request to add a fourth pool or diversify providers. Read alongside the 2026-09-02
+"중앙 리뷰 게이트(`orchestrator/free`) 용량 병목" entry in
+[`docs/product-technical-gap-baseline.md`](product-technical-gap-baseline.md) (recorded the same
+day, before this section was added): that entry documents concrete, directly-observed capacity
+symptoms of this exact pin (`noema-review` queuing 6+ hours and hitting a token-TTL race,
+`strix` cancelled 3x on one PR head, `opencode-review` timing out its full 5.5h poll budget on a
+one-file docs PR) under concurrent multi-PR load. This section confirms the owner's decision to
+keep the pin as-is despite that evidence — the mitigation direction is operational (queue/backlog
+management, the `LLM_TIMEOUT=0` fix in `ContextualWisdomLab/.github#1658`, not retrying into an
+already-overloaded pool) rather than moving off `orchestrator/free`. Do not read either document as
+authorizing a pool change; if the capacity bottleneck needs a structural fix beyond what the gap
+baseline's "아직 미결" (still-open) items describe, raise it as a proposal for a new ADR amendment,
+not a unilateral pool switch.
+
 ## How to point a `/goal` session at this directive
 
 Because `/goal` truncates at 4000 characters, do not paste the sections above into it. Instead use a
