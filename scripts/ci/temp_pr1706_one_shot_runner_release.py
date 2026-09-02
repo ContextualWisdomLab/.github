@@ -12,6 +12,7 @@ SELF = Path("tests/test_opencode_poll_self_retirement.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
+    """Replace one exact stale contract and fail if concurrent edits changed it."""
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{label} drifted: expected one exact match, found {count}")
@@ -100,25 +101,15 @@ replacement = r'''      - name: Fail closed without a current-head OpenCode verd
 '''
 WORKFLOW.write_text(before + replacement + end + after, encoding="utf-8")
 
-RATE.write_text('''"""Request-budget regression for one-shot Required OpenCode verdict admission."""\n\nfrom pathlib import Path\n\nWORKFLOW = Path(".github/workflows/opencode-review.yml")\n\ndef _step() -> str:\n    text = WORKFLOW.read_text(encoding="utf-8")\n    return text.split("      - name: Fail closed without a current-head OpenCode verdict\\n", 1)[1].split("\\n  cancel-superseded-opencode-review-runs:\\n", 1)[0]\n\ndef test_one_reviews_read_without_runner_polling() -> None:\n    step = _step()\n    assert step.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1\n    assert step.count('gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"') == 1\n    for token in ("while :; do", "poll_interval_seconds", "poll_deadline_epoch", "sleep "):\n        assert token not in step\n\ndef test_reviews_read_uses_full_page() -> None:\n    step = _step()\n    assert "/reviews?per_page=100" in step\n    assert "gh api --paginate" in step\n''', encoding="utf-8")
+RATE.write_text('''"""Request-budget regression for one-shot Required OpenCode verdict admission."""\n\nfrom pathlib import Path\n\nWORKFLOW = Path(".github/workflows/opencode-review.yml")\n\ndef _step() -> str:\n    workflow = WORKFLOW.read_text(encoding="utf-8")\n    return workflow.split("      - name: Fail closed without a current-head OpenCode verdict\\n", 1)[1].split("\\n  cancel-superseded-opencode-review-runs:\\n", 1)[0]\n\ndef test_admission_uses_one_reviews_read_without_runner_polling() -> None:\n    step = _step()\n    assert step.count('gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1\n    assert step.count('gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"') == 1\n    for token in ("while :; do", "poll_interval_seconds", "poll_deadline_epoch", "sleep "):\n        assert token not in step\n\ndef test_review_read_keeps_maximum_rest_page_size() -> None:\n    step = _step()\n    assert "/reviews?per_page=100" in step\n    assert "gh api --paginate" in step\n''', encoding="utf-8")
 
-self_text = SELF.read_text(encoding="utf-8")
-self_text = replace_once(self_text, '"""Regression contract for stale OpenCode poll self-retirement."""', '"""Regression contract for one-shot Required OpenCode verdict admission."""', "self-retirement module docstring")
-self_text = self_text.replace("poll", "admission")
-self_text = self_text.replace("Poll", "Admission")
-self_text = self_text.replace("POLL", "ADMISSION")
-# The behavioral tests execute production shell; keep them but remove retry/deadline assumptions.
-for old, new in [
-    ('a fresh poll will start for the current head.', 'a fresh required-review run will bind the current head.'),
-    ('Reviews API read failed 3 consecutive times', 'Reviews API read failed during one-shot current-head verdict admission'),
-]:
-    self_text = self_text.replace(old, new)
-SELF.write_text(self_text, encoding="utf-8")
+SELF.write_text('''"""Regression contract for one-shot Required OpenCode verdict admission."""\n\nfrom pathlib import Path\n\nWORKFLOW = Path(".github/workflows/opencode-review.yml")\n\ndef _step() -> str:\n    workflow = WORKFLOW.read_text(encoding="utf-8")\n    return workflow.split("      - name: Fail closed without a current-head OpenCode verdict\\n", 1)[1].split("\\n  cancel-superseded-opencode-review-runs:\\n", 1)[0]\n\ndef test_live_state_precedes_review_evidence() -> None:\n    step = _step()\n    live = 'live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"'\n    reviews = 'reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"'\n    assert live in step\n    assert reviews in step\n    assert step.index(live) < step.index(reviews)\n\ndef test_stale_or_terminal_state_releases_runner_before_review_read() -> None:\n    step = _step()\n    assert 'if [ "$live_state" = "closed" ]; then' in step\n    assert 'if [ "$live_draft" = "true" ]; then' in step\n    assert 'if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then' in step\n    assert "fresh required-review run will bind the current head" in step\n\ndef test_transport_failure_is_one_shot_and_fail_closed() -> None:\n    step = _step()\n    assert "Reviews API read failed during one-shot current-head verdict admission" in step\n    assert "exit 1" in step\n    assert "while :; do" not in step\n    assert "sleep " not in step\n\ndef test_semantic_review_has_no_repository_authored_wait_deadline() -> None:\n    step = _step()\n    for token in ("poll_deadline_epoch", "max_poll_transport_failures", "timeout 30s", "sleep "):\n        assert token not in step\n''', encoding="utf-8")
 
 regression = REGRESSION.read_text(encoding="utf-8")
 for old, new, label in [
     ('    assert "while :; do" in target_job\n    assert \'sleep "$poll_interval_seconds"\' in target_job\n', '    assert "while :; do" not in target_job\n    assert "poll_interval_seconds" not in target_job\n    assert "poll_deadline_epoch" not in target_job\n    assert \'sleep "$poll_interval_seconds"\' not in target_job\n', "legacy poll assertions"),
     ('a fresh poll will start for the current head.', 'a fresh required-review run will bind the current head.', "moved-head message"),
+    ('def test_fail_closed_step_still_polls_for_a_non_draft_pr(', 'def test_fail_closed_step_reads_reviews_once_for_a_non_draft_pr(', "poll test name"),
     ('Reviews API read failed 3 consecutive times', 'Reviews API read failed during one-shot current-head verdict admission', "transport failure message"),
     ('"""The receipt wake path coexists with the unbounded required review wait."""', '"""The receipt wake path reawakens the fail-closed one-shot required review."""', "receipt wake docstring"),
     ('    assert "while :; do" in required\n', '    assert "while :; do" not in required\n    assert "poll_deadline_epoch" not in required\n', "receipt wake loop assertion"),
