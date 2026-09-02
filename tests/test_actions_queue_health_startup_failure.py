@@ -42,8 +42,8 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
     }
     requested_paths: list[str] = []
     terminal_path = (
-        f"repos/{repository_name}/actions/runs?status=startup_failure"
-        "&created=%3E%3D2026-08-26T10%3A30%3A00Z&per_page=50"
+        f"repos/{repository_name}/actions/runs?status=completed"
+        "&head_sha=exact-head&per_page=50"
     )
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
@@ -106,40 +106,37 @@ def test_collect_snapshot_preserves_current_head_startup_failure_without_jobs() 
     assert row["recommended_action"] == "inspect_actions_control_plane_without_leaf_bypass"
 
 
-def test_collect_snapshot_ignores_unbounded_historical_startup_failures() -> None:
-    """Old startup-failure history must not permanently disable current collection."""
+def test_collect_snapshot_retains_old_failure_for_unchanged_current_head() -> None:
+    """Current-head startup failures must not disappear merely because they are old."""
     repository_name = "owner/repo"
     pull_request = {
         "number": 8,
         "state": "open",
         "base": {"ref": "main", "repo": {"full_name": repository_name}},
-        "head": {"sha": "current-head"},
+        "head": {"sha": "unchanged-head"},
         "updated_at": "2026-09-02T10:29:00Z",
     }
-    current_startup_failure = {
+    old_current_failure = {
         "id": 801,
         "name": "CodeQL PR",
         "workflow_id": 9001,
         "event": "pull_request",
         "status": "completed",
         "conclusion": "startup_failure",
-        "head_sha": "current-head",
-        "created_at": "2026-09-02T10:29:00Z",
-        "updated_at": "2026-09-02T10:29:00Z",
+        "head_sha": "unchanged-head",
+        "created_at": "2026-08-01T10:00:00Z",
+        "updated_at": "2026-08-01T10:00:00Z",
         "run_attempt": 1,
-        "pull_requests": [{"number": 8, "head": {"sha": "current-head"}}],
+        "pull_requests": [{"number": 8, "head": {"sha": "unchanged-head"}}],
     }
     terminal_path = (
-        f"repos/{repository_name}/actions/runs?status=startup_failure"
-        "&created=%3E%3D2026-08-26T10%3A30%3A00Z&per_page=50"
-    )
-    unbounded_terminal_path = (
-        f"repos/{repository_name}/actions/runs?status=startup_failure&per_page=50"
+        f"repos/{repository_name}/actions/runs?status=completed"
+        "&head_sha=unchanged-head&per_page=50"
     )
     requested_paths: list[str] = []
 
     def runner(args: list[str], **_: object) -> CompletedProcess[str]:
-        """Expose a permanently oversized historical result only to unbounded readers."""
+        """Return an old but still current-head terminal failure by exact SHA."""
         path = args[-1]
         requested_paths.append(path)
         if path == f"repos/{repository_name}":
@@ -147,24 +144,7 @@ def test_collect_snapshot_ignores_unbounded_historical_startup_failures() -> Non
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
             payload = [pull_request]
         elif path == terminal_path:
-            payload = {"total_count": 1, "workflow_runs": [current_startup_failure]}
-        elif path == unbounded_terminal_path:
-            historical_runs = [
-                {
-                    "id": 10_000 + historical_index,
-                    "name": "CodeQL PR",
-                    "event": "pull_request",
-                    "status": "completed",
-                    "conclusion": "startup_failure",
-                    "head_sha": f"historical-{historical_index}",
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-01T00:00:00Z",
-                    "run_attempt": 1,
-                    "pull_requests": [],
-                }
-                for historical_index in range(50)
-            ]
-            payload = {"total_count": 51, "workflow_runs": historical_runs}
+            payload = {"total_count": 1, "workflow_runs": [old_current_failure]}
         elif path == f"repos/{repository_name}/actions/runs/801/jobs?per_page=100":
             payload = {"total_count": 0, "jobs": []}
         elif path.startswith(f"repos/{repository_name}/actions/runs?status="):
@@ -182,4 +162,4 @@ def test_collect_snapshot_ignores_unbounded_historical_startup_failures() -> Non
     assert snapshot["collection_errors"] == []
     assert [run["id"] for run in snapshot["repositories"][0]["runs"]] == [801]
     assert terminal_path in requested_paths
-    assert unbounded_terminal_path not in requested_paths
+    assert not any("&created=" in path for path in requested_paths)
