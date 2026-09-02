@@ -105,7 +105,7 @@ def main() -> int:
     marker = "def test_pr1669_opencode_open_draft_old_head_remains_cancellable"
     if marker in tests:
         raise RuntimeError("PR1669 draft-review regressions already exist on input head")
-    TESTS.write_text(tests.rstrip() + REGRESSIONS + "\n", encoding="utf-8")
+    TESTS.write_text((tests.rstrip() + REGRESSIONS).rstrip() + "\n", encoding="utf-8")
 
     _prove_red("test_pr1669_opencode_open_draft_old_head_remains_cancellable")
     _prove_red("test_pr1669_strix_open_draft_old_head_remains_cancellable")
