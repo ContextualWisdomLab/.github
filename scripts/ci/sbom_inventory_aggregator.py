@@ -124,7 +124,7 @@ def parse_spdx_sbom(spdx_document: dict[str, Any]) -> list[SbomComponent]:
                 license_expression=_spdx_license(spdx_package),
             )
         )
-    return _dedupe(sbom_components)
+    return _dedupe_components(sbom_components)
 
 
 def _spdx_described_ids(spdx_document: dict[str, Any]) -> set[str]:
@@ -180,7 +180,7 @@ def parse_cyclonedx_sbom(cyclonedx_document: dict[str, Any]) -> list[SbomCompone
                 license_expression=_cyclonedx_license(cyclonedx_component),
             )
         )
-    return _dedupe(sbom_components)
+    return _dedupe_components(sbom_components)
 
 
 def parse_sbom(sbom_document: dict[str, Any]) -> list[SbomComponent]:
@@ -192,7 +192,7 @@ def parse_sbom(sbom_document: dict[str, Any]) -> list[SbomComponent]:
     return []
 
 
-def _dedupe(sbom_components: Iterable[SbomComponent]) -> list[SbomComponent]:
+def _dedupe_components(sbom_components: Iterable[SbomComponent]) -> list[SbomComponent]:
     """Return components sorted and deduplicated by semantic component identity."""
     unique_components = {
         (
@@ -364,7 +364,7 @@ def write_inventory(
     (output_directory / "inventory.md").write_text(inventory_markdown, encoding="utf-8")
 
 
-def _run(command_args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
+def _run_command(command_args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
     """Run a command and return stdout, raising on failure."""
     completed_process = subprocess.run(
         list(command_args), capture_output=True, text=True, check=True
@@ -374,7 +374,7 @@ def _run(command_args: Sequence[str]) -> str:  # pragma: no cover - thin subproc
 
 def list_org_repos(organization_name: str) -> list[str]:  # pragma: no cover - network
     """List non-archived repositories for an organization via gh."""
-    repository_listing_json = _run(
+    repository_listing_json = _run_command(
         [
             "gh",
             "repo",
@@ -396,7 +396,7 @@ def list_org_repos(organization_name: str) -> list[str]:  # pragma: no cover - n
 def fetch_repo_sbom(repository_name: str) -> RepositorySbomInventory:  # pragma: no cover - network
     """Fetch and parse one repository's dependency-graph SBOM via gh."""
     try:
-        sbom_response_json = _run(
+        sbom_response_json = _run_command(
             ["gh", "api", f"/repos/{repository_name}/dependency-graph/sbom"]
         )
     except subprocess.CalledProcessError as fetch_exception:
