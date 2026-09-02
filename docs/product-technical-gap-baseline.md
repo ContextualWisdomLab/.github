@@ -3077,7 +3077,7 @@ the real problem is that #1010 was closed/rejected (for the RCA basis above, unr
 UI fix) and therefore that fix never shipped in any merged code -- not that the fix never existed. Item
 25's later resolution (`contextual-orchestrator#1026`, merged, documented further below in this doc) is
 an independently-implemented recurrence of the same pattern for `model_groups`, not a copy-forward of
-#1010's own (never-merged) code. **Worth telling the user directly**: the standing backlog item 25 text
+`#1010`'s own (never-merged) code. **Worth telling the user directly**: the standing backlog item 25 text
 cites a real fix that was subsequently orphaned by its PR's closure, not a nonexistent one -- a subtler
 distinction than "wrong precedent," worth correcting in any future re-paste. The other peer
 (`trusting-wilbur-...`), mid-flight on its own `.github` workflow-consolidation PR #1683, was alerted to

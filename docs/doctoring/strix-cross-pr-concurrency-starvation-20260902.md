@@ -6,7 +6,7 @@ Item 1 of the standing `/loop` operating prompt asked for a concurrency review
 across every central workflow, prompted by the observation that the org-wide
 PR queue keeps growing rather than shrinking despite many PRs sitting
 `MERGEABLE`. A `<ci-monitor-event>` for `ContextualWisdomLab/.github` PR
-#1667 reported `strix` as a failing check; investigating it live surfaced
+`#1667` reported `strix` as a failing check; investigating it live surfaced
 this finding, which turned out to be much larger in scope than that one PR.
 
 ## What was found
@@ -42,7 +42,7 @@ runs).
 
 ## This is not an oversight — it fixes a real, documented incident, which makes the correct fix harder than "just add the PR number"
 
-`git log -G` on the concurrency block found commit `548a975` (PR #1297,
+`git log -G` on the concurrency block found commit `548a975` (`ContextualWisdomLab/.github#1297`,
 *"fix(strix): serialize scans and resolve live NVIDIA NIM models"*). Its
 message states the root cause directly: *"the per-PR concurrency group let
 sibling PRs in one repository scan concurrently; each run retried the shared
@@ -71,24 +71,38 @@ identical signature:
 
 | Repo | Open PRs | Sample | Result |
 |---|---|---|---|
-| `contextual-orchestrator` | 30 | #1030 / #1029 / #1028 | pending (in-flight) / **cancelled** / **cancelled** |
-| `naruon` | 30 | #1544 / #1543 / #1542 | **cancelled** / **cancelled** / **cancelled** |
-| `keyverse` | 24 | #133 / #132 / #130 | queued (in-flight) / **cancelled** / **cancelled** |
+| `ContextualWisdomLab/contextual-orchestrator` | 30 | `#1030` / `#1029` / `#1028` | pending (in-flight) / **cancelled** / **cancelled** |
+| `ContextualWisdomLab/naruon` | 30 | `#1544` / `#1543` / `#1542` | **cancelled** / **cancelled** / **cancelled** |
+| `ContextualWisdomLab/keyverse` | 24 | `#133` / `#132` / `#130` | queued (in-flight) / **cancelled** / **cancelled** |
 
-Dispatch-history evidence backs the mechanism directly: `contextual-orchestrator`
-PRs #968/#964/#958 were all dispatched within the same minute
-(2026-09-01 05:08) — #968 and #964 cancelled, #958 failed. `naruon`#1485 was
-dispatched twice and cancelled both times.
+Dispatch-history evidence backs the mechanism directly:
+`ContextualWisdomLab/contextual-orchestrator#968`/`#964`/`#958` were all
+dispatched within the same minute (2026-09-01 05:08) — `#968` and `#964`
+cancelled, `#958` failed. `ContextualWisdomLab/naruon#1485` was dispatched
+twice and cancelled both times.
 
-**Worst-case concrete proof:** `ContextualWisdomLab/.github` PR #1492 has had
+**Corroborating base rate**, found in a prior, independent audit
+(`docs/doctoring/contextual-orchestrator-gateway-enforcement-audit-20260902.md`):
+of 280 recent non-`push` `strix.yml` runs sampled, **265 (95%) were
+`cancelled`**, with the remaining 15 `success` runs all attributable to the
+PR-`closed` skip path (the `strix` job doesn't run on close at all), not to
+a genuine completed scan. That audit read the 95% figure as
+`cancel-superseded-pr-runs` working as intended (same-PR head supersession)
+— true for however many of those 265 are same-PR cancellations, but this
+record's finding shows the *cross-PR* collision mechanism above is also
+folded into that same 95%, and the two are not distinguishable from the
+aggregate count alone.
+
+**Worst-case concrete proof:** `ContextualWisdomLab/.github` PR `#1492` has had
 **7 of 7** `repository_dispatch` Strix re-attempts cancelled over 37+ hours
 (2026-08-31T10:18Z → 2026-09-01T23:59Z), with **zero** successful or failed
 (i.e. actually-completed) Strix evidence ever produced for it, and its
 current head's check-runs list has no `strix` entry at all (a cancelled
 attempt posts no status, since the status-posting step requires
 `!cancelled()` at `strix.yml:949,1028`). Other PRs in the same repo do
-eventually break through — #1438: 34 attempts (22 cancelled / 8 failure / 4
-success); #1176: 25 attempts (21 cancelled / 1 failure / 3 success) — so the
+eventually break through — `ContextualWisdomLab/.github#1438`: 34 attempts
+(22 cancelled / 8 failure / 4 success); `ContextualWisdomLab/.github#1176`:
+25 attempts (21 cancelled / 1 failure / 3 success) — so the
 failure mode is *probabilistic starvation*, not a universal deadlock, but for
 an unlucky PR it can be indefinite.
 
@@ -114,12 +128,22 @@ merged code never loses evidence."* Verified against
   collide with *each other* in this "safety net" path, one level removed
   from the original collision. `dispatch_strix_evidence()` does have its own
   `busy_refs` check (`:3363-3382`) intended to avoid firing a second dispatch
-  while one is already running for the target repo — but it is a
-  check-then-act read (`active_workflow_runs()`), not an atomic lock, and
-  (per the observed #1492 evidence) does not appear to account for a run
-  already occupying the concurrency group's *pending* (not yet "active")
-  slot — which is exactly the slot a colliding sibling PR's dispatch would
-  evict.
+  while one is already running for the target repo, and it does query for
+  both `queued` and `in_progress` runs (`active_workflow_runs()`'s default
+  `statuses`, `pr_review_merge_scheduler.py:2708`) — so it should, in
+  principle, see a sibling PR's dispatch already sitting in the concurrency
+  group's pending slot. **Correction, caught by peer review
+  (`cool-jackson-3a6130-78`) before this record was finalized:** the gap is
+  not a missing status filter as an earlier draft of this record claimed —
+  it is that the check is check-then-act, not an atomic lock: two scheduler
+  invocations (a per-PR event-triggered run, the 30-minute `scan-pr-queue`,
+  and the hourly `org-queue-sweep` can all independently decide to dispatch
+  for *different* PRs in the same repository within a narrow window) can
+  each read "not busy" before either dispatch has registered with the GitHub
+  API, then both fire — and only one survives the shared concurrency group.
+  `#1492`'s repeated 100%-cancelled history over 37+ hours is consistent
+  with `.github`'s own high concurrent-PR volume making this race land
+  against it repeatedly, not with a single deterministic logic bug.
 - `scan-pr-queue`/`org-queue-sweep`'s `review_dispatch_limit` /
   `ORG_SWEEP_REVIEW_DISPATCH_LIMIT` (both default `1`) only bound how many
   *new* dispatches the scheduler fires per sweep — they do not pace or
@@ -130,8 +154,8 @@ merged code never loses evidence."* Verified against
 
 Net: the documented guarantee ("merged code never loses evidence") is not
 currently reliable — it is *usually* true (most PRs eventually get through,
-per the #1438/#1176 evidence) but is not guaranteed, and #1492 is a live
-counterexample.
+per the `#1438`/`#1176` evidence) but is not guaranteed, and `#1492` is a
+live counterexample.
 
 ## Why this was not fixed in the same tick that found it
 
@@ -145,7 +169,7 @@ without more evidence or design work:
 
 1. **Just widen the group to per-PR** (mirror `opencode-review.yml`) — would
    very plausibly reproduce the exact `litellm.RateLimitError` storm
-   documented in PR #1297, at a larger blast radius than that incident had
+   documented in `ContextualWisdomLab/.github#1297`, at a larger blast radius than that incident had
    (Strix is required org-wide now). Rejected without real evidence it's
    safe.
 2. **Bucket the group into K parallel lanes** (hash PR number mod K) to
@@ -175,7 +199,8 @@ guessed at under time pressure.
   now with org-wide blast radius.
 - Do not treat the "forced re-dispatch at merge time" comment in
   `strix.yml` as a reliable guarantee — it is currently racy for PRs unlucky
-  enough to keep colliding with siblings in the same repository (see #1492).
+  enough to keep colliding with siblings in the same repository (see
+  `#1492`).
 - Do not conclude backlog item 13 ("Strix/OpenCode/Noema concurrency
   cancel-on-push") is fully resolved on the strength of the *same-PR*
   cancel-on-push behavior alone (which genuinely is correct and already

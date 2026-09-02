@@ -278,12 +278,36 @@ def test_contract_workflow_tracks_its_own_test_tooling_lock() -> None:
     The job runs bare ``pytest -q``, which collects every test under
     ``tests/`` (not just the contract-scoped ones), so a change that drops a
     transitive dependency from this lock silently breaks collection unless
-    the workflow reruns on that change too.
+    the workflow reruns on that change too. Scoped to the ``on:`` trigger
+    block specifically (not a whole-file substring count) so a step or
+    comment that also mentions these filenames elsewhere in the job -- as
+    the lock-freshness verification step below does -- cannot silently
+    satisfy this assertion without the paths actually being present in both
+    trigger lists.
+    """
+    text = _read(_CONTRACT_WORKFLOW)
+    trigger_block = text.split("\npermissions:", 1)[0]
+
+    assert trigger_block.count("requirements-opencode-review-ci.txt") == 2
+    assert trigger_block.count("requirements-opencode-review-ci-hashes.txt") == 2
+
+
+def test_contract_workflow_verifies_its_pinned_requirements_are_locked() -> None:
+    """A bumped exact pin without a regenerated lock must fail closed.
+
+    Devin Review (`ContextualWisdomLab/.github#1661`) caught that this job
+    installed only the existing hash lock with no check that it actually
+    reflects `requirements-opencode-review-ci.txt`'s own pins -- a version
+    bump committed without re-running the lock's own compile script would
+    silently test against the stale, unreflected old version.
     """
     text = _read(_CONTRACT_WORKFLOW)
 
-    assert text.count("requirements-opencode-review-ci.txt") == 2
-    assert text.count("requirements-opencode-review-ci-hashes.txt") == 3
+    assert (
+        "Verify exact-pinned test-tooling requirements are reflected in the hash lock"
+        in text
+    )
+    assert 'grep -qF -- "${line} " requirements-opencode-review-ci-hashes.txt' in text
 
 
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:

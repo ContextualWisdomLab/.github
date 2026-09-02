@@ -29,7 +29,7 @@ is extremely high-churn: of 280 recent non-`push` `strix.yml` runs sampled,
 scan — `cancel-superseded-pr-runs`'s intended, documented behavior) and the
 remaining 15 `success` runs were all PR-`closed` events, where `strix.yml`'s
 own `if: github.event_name != 'pull_request_target' || github.event.action
-!= 'closed'` deliberately skips the `strix` job (confirmed against PR #1348:
+!= 'closed'` deliberately skips the `strix` job (confirmed against `ContextualWisdomLab/.github#1348`:
 head SHA `79d4461f…` matches the run's target SHA, PR `state: closed`,
 `merged: true` — this is by design, not a bug: a closed PR needs no fresh
 scan, and merge-time evidence is forced separately via `repository_dispatch`
@@ -41,7 +41,7 @@ land inside the narrow "success and not skipped" window in this environment.
 ## Item 1 — is the gateway invocation real?
 
 **Yes, confirmed with a real run.** `strix.yml` run `33478956735`
-(PR #1558, job `99764086704`, `contextual_orchestrator_review_sidecar.sh`
+(`ContextualWisdomLab/.github#1558`, job `99764086704`, `contextual_orchestrator_review_sidecar.sh`
 executing as the `strix` job's sidecar step) shows, in order, from the raw
 job log (timestamps UTC, 2026-09-01):
 
@@ -67,7 +67,7 @@ and validates the actual response body (`has_text` check in the inline
 Python at the end of `contextual_orchestrator_review_sidecar.sh`) before
 declaring the preflight confirmed. `provider_discovery_failed
 provider=bytez code=http_status_500` in the same log is the pre-existing
-Bytez discovery flakiness that PR #1651 (merged same day, see the "Item 3"
+Bytez discovery flakiness that `ContextualWisdomLab/.github#1651` (merged same day, see the "Item 3"
 note below) targets — logged as a non-fatal warning, not silently absorbed
 into a false "all providers healthy" claim.
 
@@ -188,7 +188,7 @@ inferred):
    bypasses *every* required status check, including the two that are
    configured** (`opencode-review`, `noema-review`).
 
-Cross-checked against live evidence: PR #1658 (`fix(strix): remove the 300s
+Cross-checked against live evidence: `ContextualWisdomLab/.github#1658` (`fix(strix): remove the 300s
 LLM_TIMEOUT cap`, merged `2026-09-02T00:57:07Z`, `merged_by: seonghobae` —
 an account with `admin: true` on this repo per `gh api
 repos/ContextualWisdomLab/.github --jq .permissions`) merged at a head SHA
@@ -259,9 +259,9 @@ confirmed again on 2026-09-02 in response to an independent Devin Review
 catch on this same PR) and four concrete owner-decidable options, so the gap
 has a next step rather than remaining a passive audit note.
 
-## Item 3 — PR #1651 (Bytez discovery sidecar fix)
+## Item 3 — `ContextualWisdomLab/.github#1651` (Bytez discovery sidecar fix)
 
-By the time this audit reached PR #1651
+By the time this audit reached `ContextualWisdomLab/.github#1651`
 (`fix(sidecar): discover Bytez free models and suppress expected 413`,
 branch `fix/bytez-discovery-sidecar-413`), it had already merged —
 `merged_at: 2026-09-02T01:08:37Z`, `merged: true`, merge commit
@@ -270,19 +270,19 @@ queried it (the `mergeable_state: "blocked"` the task described had already
 been resolved by another concurrent actor in this org). No action was
 needed or taken on this item; it is noted here only because the sidecar log
 excerpt above (`provider_discovery_failed provider=bytez
-code=http_status_500`, from an *earlier* run predating PR #1651's fix) is
+code=http_status_500`, from an *earlier* run predating `ContextualWisdomLab/.github#1651`'s fix) is
 direct evidence of the exact failure class that PR targeted.
 
 ## Audit trail
 
 - `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` — 2026-09-02
   amendment this record supports.
-- Strix run `33478956735` (job `99764086704`), PR #1558 — the gateway
+- Strix run `33478956735` (job `99764086704`), `ContextualWisdomLab/.github#1558` — the gateway
   invocation evidence quoted above.
 - `gh api repos/ContextualWisdomLab/.github/branches/main/protection` — the
   `required_status_checks`/`enforce_admins` configuration quoted above
   (live at audit time).
-- PR #1658, head `3196edde85ed7f4a909c3a627af75b47593c7f5e` — the merged-
+- `ContextualWisdomLab/.github#1658`, head `3196edde85ed7f4a909c3a627af75b47593c7f5e` — the merged-
   despite-cancelled-checks example.
-- PR #1348 — the closed-PR skip-pattern control example.
-- PR #1651, merge commit `9481922748e2c51f36c86400e60d99533189e4be`.
+- `ContextualWisdomLab/.github#1348` — the closed-PR skip-pattern control example.
+- `ContextualWisdomLab/.github#1651`, merge commit `9481922748e2c51f36c86400e60d99533189e4be`.
