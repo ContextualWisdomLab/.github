@@ -186,15 +186,29 @@ def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
-def test_draft_exemption_fails_closed_when_live_head_moved(
+def test_draft_exemption_applies_even_when_live_head_has_moved(
     tmp_path: Path,
     script: str,
 ) -> None:
-    """The event cannot exempt a different live head even when it is still draft."""
+    """A still-draft PR exempts before the head-match check ever runs.
+
+    #1697 reordered the live-state checks so closed/draft admission is
+    evaluated before the head-SHA-match check (a draft PR whose live head
+    moved between the event snapshot and this step's own live re-fetch must
+    not fail closed with red-X noise -- see
+    ``ContextualWisdomLab/contextual-orchestrator`` PR #1000). The
+    head-moved branch is therefore unreachable while still draft: this
+    exercise now exempts via the draft check, not the head-match check.
+    Equivalent direct coverage of the production step lives in
+    ``test_opencode_required_verdict_regression.py``'s
+    ``test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved``
+    and ``test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved``.
+    """
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
-    assert result.returncode == 1
-    assert "head moved while validating live" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "still a draft on the live exact head" in result.stdout
+    assert "head moved" not in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
