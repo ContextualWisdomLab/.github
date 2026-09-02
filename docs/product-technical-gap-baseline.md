@@ -2613,3 +2613,132 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## 2026-09-02 Refreshed owner directive (2026-09-02 revision): core/consumer taxonomy conformance audit for `.github`, `noema`, `contextual-orchestrator`
+
+**Problem.** The organization owner issued a refreshed standing operating directive on 2026-09-02 that
+materially expands the earlier one, adding (among other changes) two rules with immediate architectural
+weight for this repo and its two most tightly coupled siblings:
+
+1. A **no-consumer-workaround rule**: when a consumer needs functionality that is missing or immature in a
+   dependency it does not own, the consumer must not duplicate, bypass, or exclude that functionality
+   locally. Instead, the *owner* repository must get a RED test, contract, feature, docs, and a release
+   developed and merged (integrated-CI GREEN), and only then does the consumer bump to the new versioned
+   release. Exclusion is only acceptable when justified by an ADR showing the boundary itself is wrong or
+   there is no genuine shared demand.
+2. An explicit **core-owner / domain-consumer taxonomy** naming, among ~30 repositories, exactly three that
+   this session currently has GitHub access to: `.github` ("workflow·review/security/release owner이며
+   ruleset·얇은 workflow_call로만 쓴다" — the workflow / PR-review / security-scan / release owner for the
+   whole org, operating via ruleset + thin `workflow_call` only) and `contextual-orchestrator`/`noema`
+   together ("모델 orchestration과 GitHub OIDC 단기 권한·exact-head evidence를 분담한다" — dividing between
+   them the responsibilities of model orchestration and of GitHub OIDC short-lived-permission issuance plus
+   exact-head evidence).
+
+Before treating this as new work to implement, the directive itself (item 3) requires verifying architecture
+claims against exact-head, current data, and repository content rather than accepting or restating them
+unchecked — so before opening any doc or code change, this entry records a direct conformance check of
+that taxonomy against each named repo's own currently-published README/AGENTS.md/CLAUDE.md/ARCHITECTURE.md,
+rather than assuming the directive's one-line characterization is already accurate or that the repos already
+say what it claims.
+
+**Method.** Ran a two-phase Workflow (not a solo read): phase one spawned one agent per repo
+(`.github`, `noema`, `contextual-orchestrator`) to fetch that repo's own top-level docs via the GitHub MCP
+`get_file_contents` tool and report direct quotes, a CONFORMS/PARTIAL/SILENT/CONTRADICTS verdict against the
+taxonomy claim, and any doc-cited evidence of embedded duplicated logic or of the no-consumer-workaround rule
+being violated. Phase two spawned an independent adversarial verifier per repo that re-fetched the same files
+from scratch and checked every quote and inference in the phase-one audit against the live source, correcting
+or dropping anything unsupported. 6 agents, 30 tool calls, 472,644 tokens total. Full per-agent transcripts:
+`/root/.claude/projects/-home-user/27bd4b5f-2ae8-5150-9501-a09e42fd8db9/subagents/workflows/wf_769ee2df-919/journal.jsonl`
+(session-local; not part of this repository, referenced here for traceability of this specific run).
+
+**Finding 1 — the taxonomy's `noema`/`contextual-orchestrator` half is stated as a *joint* responsibility
+in the directive's own phrasing but is, in the repos' own docs, cleanly *divided*, and that division is
+already fully and consistently documented.** The audit's literal test claim ("noema shares, together with
+contextual-orchestrator, responsibility for LLM/model orchestration AND for GitHub OIDC
+short-lived-permission issuance plus exact-head evidence") was verdicted **CONTRADICTS** for `noema` and
+**PARTIAL** for `contextual-orchestrator` — but the adversarially-verified evidence shows why: `noema`'s own
+README states in its capability table that it verifies GitHub Actions OIDC and mints repository-scoped
+GitHub App installation tokens, and explicitly states "Noema does **not** own model discovery or provider
+routing. Those capabilities belong to `ContextualWisdomLab/contextual-orchestrator`." `contextual-orchestrator`'s
+own docs (README/AGENTS.md/CLAUDE.md) consistently describe it as the org's LLM gateway/cost-router,
+consumed by Noema (among others) as of a 2026-08-18 policy change, and contain no mention of OIDC, GitHub
+App installation tokens, short-lived permissions, or exact-head evidence anywhere (the one "OIDC" hit in
+`contextual-orchestrator`'s README is an unrelated, optional Keyverse-issued bearer-token verification hook
+for its own admin API, confirmed by the verifier to have no connection to GitHub Actions OIDC or Noema's
+role). Read the directive's Korean `분담한다` ("divides up / allocates between them") as *dividing* the two
+named responsibilities one-each between the two repos -- model orchestration to `contextual-orchestrator`,
+GitHub-OIDC/exact-head evidence to `noema` -- rather than as *both repos jointly owning both*, and every
+one of these findings becomes a **CONFORMS**, already true today, requiring no doc or code change in either
+repo. This entry treats that as the correct reading going forward for this repo's own use of the directive,
+and records the alternate ("joint") reading and why it was rejected, so a future reader does not have to
+re-derive this from the raw Korean phrasing.
+
+**Finding 2 — `.github`'s own docs conform on the two components that matter operationally, and are
+silent or imprecise on two components that do not currently block anything.** Verdict: **PARTIAL**.
+Confirmed CONFORMS, verbatim, in README.md/CLAUDE.md: `.github` is "the central required-workflow source"
+whose workflows are "the canonical ... implementation of PR review, security scanning, and merge automation
+for every sibling repo," and siblings are explicitly told "Do not copy Strix, OpenCode, Noema, or scheduler
+workflow files into a sibling... Repository-local copies are drift sources, not repo-specific contracts."
+Two components of the one-line taxonomy claim do not hold as literally stated, and are recorded here rather
+than silently corrected in the directive's favor:
+- **"release owner"** is **SILENT** in all four fetched files -- none of README.md, AGENTS.md, CLAUDE.md, or
+  ARCHITECTURE.md describe `.github` as owning versioning, publishing, or tagging of sibling products in any
+  sense broader than "merge automation" (merging already-approved PRs) plus the narrower, optional
+  `deploy-pages.yml` reusable workflow. This is flagged as an **open question for the repository owner**,
+  not resolved here: does the directive intend a genuinely new "release owner" subsystem (a real, currently
+  nonexistent capability -- e.g. a central versioning/release-orchestration service for sibling products),
+  or is "release" shorthand for the already-existing merge-automation role? Implementing a guess at this
+  without owner confirmation risks building an unrequested subsystem or missing a real one; per this
+  directive's own item 3 ("결론만 적거나 암묵적 전제를 생략하지 말고"), the honest state is recorded as an
+  open question rather than silently assumed either way.
+- **"operates ONLY via a ruleset plus thin `workflow_call`"** is a simplification, not an inaccuracy to fix.
+  The documented architecture is three-tier: the org ruleset (`CWL Central required workflows`, id
+  `18156473`) is the *primary* mechanism, running the central workflows directly in each sibling's own
+  context; an *optional* reusable `workflow_call` (e.g. `deploy-pages.yml`) is a secondary path; and a
+  *thin caller* (passing PR number, base/head ref/SHA, and inherited secrets, forbidden from pasting the
+  scheduler or review implementation) is documented specifically as the **fallback** "if a repository cannot
+  inherit the ruleset." The spirit of the claim (no heavy duplicated review/security logic in any sibling)
+  is fully and verbatim upheld; the literal "ruleset + thin workflow_call, and only those two" phrasing
+  undercounts the ruleset as the primary mechanism. No action item follows from this -- it is a precision
+  note for future readers of the directive's one-line taxonomy, not a defect in `.github`'s own
+  documentation.
+
+**Finding 3 — no evidence of a no-consumer-workaround violation was found in any of the three repos' own
+docs**, with one adjacent, already-tracked exception explicitly ruled out of scope by the adversarial
+verifier: `.github`'s AGENTS.md and ARCHITECTURE.md do describe `.github` as routing review traffic through
+a "vendored" `contextual-orchestrator` gateway sidecar, and AGENTS.md separately records that the
+`orchestrator/free`-vs-`orchestrator/auto` pool-routing switch specifically (not the original decision to
+vendor the gateway itself) "was made by an autonomous agent session, not per any owner decision" and remains
+open per `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s 2026-08-31 correction. The verifier
+confirmed this quote is accurate but that the phase-one audit had over-broadened its scope (conflating the
+pool-switch authorization question with the separate, older decision to vendor the gateway at all), and
+recommended treating it as off-topic for *this* taxonomy claim -- it concerns an already-tracked LLM-gateway
+governance question, not org-to-sibling review/security-workflow duplication. No new action follows from it
+here; `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` remains the correct place to track that
+separate, already-open question.
+
+**Risk of this audit itself.** Low. This is a read-only documentation-conformance check; nothing in the
+audited repos' code, workflows, or configuration was touched. The main risk is over- or under-trusting a
+one-shot LLM audit's verdicts -- mitigated here by the adversarial second pass, which independently
+re-fetched every file and corrected two concrete overclaims (a mis-scoped "not per any owner decision"
+attribution in the `.github` audit, and a false "no OIDC mention anywhere" claim in the
+`contextual-orchestrator` audit that the verifier caught and narrowed to the accurate, unrelated
+Keyverse-hook mention).
+
+**Expected effect.** No code, workflow, or existing-documentation change follows from this entry -- the
+audit's conclusion is that current documentation in all three repos is already substantially accurate under
+the correct ("divided," not "joint") reading of the directive's taxonomy line, with exactly one open
+question (`.github`'s "release owner" scope) recorded for the repository owner rather than guessed at.
+
+**Follow-up.** (1) Get an explicit answer from the repository owner on whether "release owner" in the
+refreshed directive names a new subsystem to be built, or is synonymous with the already-existing
+merge-automation role, before any PR attempts to implement a "release owner" capability for `.github`. (2)
+The refreshed directive names roughly 27 further repositories across four additional core-owner clusters
+(architecture/ontology: `enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`,
+`semantic-data-portal`; identity: `keyverse`; edge/egress/isolation: `EgressWeave`, `OriginWeave`,
+`pingora-gateway`, `quarantine-sandbox-runtime`; batch/embedding: `pg-llm-batch`, `EmbedRelay`;
+measurement: `fast-mlsirm`, `TEPP`; retrieval/threading: `RankWeave`, `ThreadWeave`; editing/diagramming:
+`inkspan`, `DiagramWeave`; ETL: `mhtml-etl-gateway`; security/gateway: `appguardrail`, `wardnet`; and seven
+named domain-product/composition consumers) that this session does not currently have GitHub access to and
+therefore cannot audit the same way without first being granted that access -- a same-shaped conformance
+audit for those repositories is left as explicit future work, not silently skipped.
