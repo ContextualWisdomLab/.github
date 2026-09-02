@@ -1,11 +1,67 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-26 10:35 KST**
+작성 기준일: **2026-09-02 (execution checkpoint appended)**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
-현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
+현재 보호된 `main`: `86ef3e71305daebce2d825c667f7f0619e1f55a5`
+이전 스냅샷의 열린 PR 수: **107** (아래 표는 2026-08-26 관측값이며, 아래 checkpoint가 최신 실행 상태다)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+## 2026-09-02 실행 checkpoint
+
+이 섹션은 기존 SHA-bound inventory를 보존하면서, 이번 실행에서 다시 수집한
+exact head·merge 결과·Checks 관측·미완료 경계를 기록한다. 이 섹션의 상태도
+merge authorization이 아니며, 병합 직전에는 각 PR의 live API를 다시 확인한다.
+
+### 이번 실행에서 보호 브랜치에 도착한 변경
+
+| 소유 저장소 | PR / 결과 commit | 확인된 효과 |
+|---|---|---|
+| `.github` | [#1672](https://github.com/ContextualWisdomLab/.github/pull/1672) `a28fc2f4e185df7847e2f2f5f6ec561d1e84805d` | Noema caller의 고정 900초 repair deadline과 중복 repair model call 제거; CO가 structured-output repair/failover를 소유하고 caller는 한 번 요청 |
+| `.github` | [#1683](https://github.com/ContextualWisdomLab/.github/pull/1683) `c2bb59e7e58779aa6b9b41dcf4433632ba70e81e` | exact-head coverage quality gate 추가; 실제 중복인 두 quality caller만 thin caller로 전환 |
+| `.github` | [#1736](https://github.com/ContextualWisdomLab/.github/pull/1736) `bbe65f08b1ae663c467be343e8fd5a98881eb686` | provider credential을 중앙 sidecar에 격리하고 `orchestrator/free`를 제공하는 immutable composite action 추가 |
+| `.github` | [#1739](https://github.com/ContextualWisdomLab/.github/pull/1739) `7bf98d013c0c08e17fb3c88f4c37a0bba6eeea10` | scheduler allowlist에서 누락된 `ContextualWisdomLab/governance-risk-compliance`를 좁은 bootstrap bridge로 보정 |
+| `.github` | [#1740](https://github.com/ContextualWisdomLab/.github/pull/1740) `73b250f568d8892ead48bff85de06a4e3eb34e93` | central sidecar의 구 pin을 CO `464da4715b495b5eaaa593eba3796e2d976ee0c9`로 갱신 |
+| `.github` | [#1738](https://github.com/ContextualWisdomLab/.github/pull/1738) `86ef3e71305daebce2d825c667f7f0619e1f55a5` | 과거 Noema 900초 오류와 현재 sandbox shell `timeout 900`을 분리 기록하고 telemetry 계약을 명시 |
+| `contextual-orchestrator` | [#1026](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1026) `212ff437dc297613289dba2e6064ade9942e07d8` | admin model_groups save/delete 뒤 `/admin/state` 재조회, audit/model-group stale-state 회귀 테스트 추가 |
+| `html4tree` | [#601](https://github.com/ContextualWisdomLab/html4tree/pull/601) `ce55268a7bd9494d67cdb419ac5b7fb7bf96a7b0` | PR synchronize 실행에 top-level concurrency와 stale run cancellation 추가 |
+
+### 현재 열린 successor/repair PR의 exact head와 Checks
+
+| 저장소 / PR | exact head | 현재 관측 | 판단 |
+|---|---|---|---|
+| [appguardrail#1092](https://github.com/ContextualWisdomLab/appguardrail/pull/1092) | `4486fe27ac3e81f32c447bcaa08bf423febda2a9` | CodeQL은 `startup_failure`(job 0개), 나머지 required Checks는 queued | central sidecar 소비 전환은 대기 중; merge-ready 아님 |
+| [contextual-orchestrator#1008](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1008) | `a03405553e1fe33e77b2838506f32d8a904e2647` | base `main@8839081659df587b19642be17b9114f9dee8b666`; CodeQL startup failure, 나머지 queued | OpenCode Go의 mixed-protocol catalog에서 chat subset만 fail-closed로 허용; Responses/Messages adapter는 후속 |
+| [naruon#1543](https://github.com/ContextualWisdomLab/naruon/pull/1543) | `3d29ce2a1b6b47cc22d90958100f7a9954b4cbad` | synchronize 전용 group 분리 후 cancellation; checks queued, CodeQL startup failure | COMMENTED review conversation과 Checks를 재검증해야 함 |
+| [wardnet#159](https://github.com/ContextualWisdomLab/wardnet/pull/159) | `89176e2cc57088e4d772de9b1686ab89a3e69aeb` | required `rust` check queued; runner/toolchain pin 선행 PR #153/#77과 결합 필요 | delta 보존 후 prerequisite 착지 뒤 restack |
+| [keyverse#132](https://github.com/ContextualWisdomLab/keyverse/pull/132) | `cfb2fe23d0b6487f2815f21c1dbfcefd23ccfb6e` | 큰 수동-vendored CO 변경, checks queued, CodeQL startup failure | central action 소비로 재구성 필요 |
+| [EgressWeave#235](https://github.com/ContextualWisdomLab/EgressWeave/pull/235) | `210b5c1a0e21461c3530589b714022f48876e056` | 큰 수동-vendored CO 변경, checks queued, CodeQL startup failure | central action 소비로 재구성 필요 |
+
+### 정합성·timeout·telemetry RCA
+
+- newsdom-api job `99864028341`은 gateway route discovery 중 HTTP 413
+  `request_too_large`, Bytez 500, NVIDIA timeout/429/404가 겹친 뒤 malformed
+  Noema JSON으로 종료했다.
+- html4tree job `100033086428`의 과거 `NoemaRepairDeadlineExceeded`는
+  repository caller가 두 번째 repair 요청을 900초에서 끊던 결함이다. #1672로
+  이 caller deadline은 제거됐다.
+- 현재 central OpenCode dispatch의 `timeout --kill-after=20 900`은 모델 호출
+  timeout이 아니라 sandboxed test command containment다. 따라서 900초를 3시간
+  model budget으로 오해하면 안 된다. 긴 substantive review를 허용하려면
+  provider completion과 별도로 shell-test/job budget을 명시한 후 다시 검증해야 한다.
+- Noema는 이제 phase(`connecting|reading|decoding|validating`), duration,
+  caller attempt count, scrubbed serving-model identifier, HTTP/error class를
+  기록한다. raw model response는 로그에 남기지 않는다.
+
+### 미완료 경계
+
+1. QSR default branch는 현재 executable runtime가 아니라 README 수준이므로 Noema/OpenCode의 격리 코드 실행은 아직 배포되지 않았다.
+2. General MCP/A2A gateway, SearXNG meta-search, Camoufox session isolation, EgressWeave/Wardnet governed outbound path는 설계·부분 구현 수준이며 보호된 main에서 Noema/Strix에 대한 end-to-end 계약이 아니다.
+3. CO의 full OpenAI SDK parity, chat↔responses conversion, provider API-version negotiation, Files/S3, batch-only endpoint policy, OpenCode Go Responses/Anthropic Messages 지원은 모두 보호된 main의 완료 조건이 아니다.
+4. Keyverse as KV + product ABAC/RBAC + login credential store, Naruon REST login/signup, OpenAI json_schema, SCIM/OIDC/SAML flexible hierarchy and multi-membership는 현재 cross-repository executable evidence가 없다.
+5. 103 workflow 감사에서 확인한 P0 direct-provider caller(`keyverse`, `EgressWeave`, `appguardrail`)와 repository별 concurrency 누락은 남아 있다. #1736은 canonical boundary를 제공하지만 모든 caller가 thin reusable caller로 바뀐 것은 아니다.
+6. GitHub App token parser에는 고정 최대 길이 검사가 발견되지 않았고 organization loop는 non-empty string을 검증하지만, legacy workflow의 `.token // empty` 추출을 typed shared contract로 통일하고 약 520자 `ghs_` fixture를 추가하는 후속 조치가 필요하다.
+7. 새 repository의 CodeQL 자동 PR은 org ruleset/installation 권한의 live proof가 없어 완료로 판정하지 않는다.
 
 ## 1. 근거와 범위
 
