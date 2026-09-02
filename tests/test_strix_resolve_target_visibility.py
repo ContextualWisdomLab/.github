@@ -481,7 +481,7 @@ def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
             "repos/ContextualWisdomLab/aFIPC",
             "--include",
             "--jq",
-            ".private",
+            visibility.REPOSITORY_VISIBILITY_JQ,
         ]
         assert kwargs["shell"] is False
         return subprocess.CompletedProcess(argv, 0, stdout="false\n", stderr="")
@@ -583,7 +583,7 @@ def test_run_gh_visibility_executes_cli_boundary_with_include_and_jq(
         "repos/ContextualWisdomLab/aFIPC",
         "--include",
         "--jq",
-        ".private",
+        visibility.REPOSITORY_VISIBILITY_JQ,
     ]
 
 
@@ -657,7 +657,7 @@ def test_cli_main_module_uses_environment(
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         """Return a public visibility result for the module-entrypoint test."""
-        assert argv[-1] == ".private"
+        assert argv[-1] == visibility.REPOSITORY_VISIBILITY_JQ
         return subprocess.CompletedProcess(argv, 0, stdout="true\n", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
