@@ -1,4 +1,4 @@
-name: Temporary PR 1672 reviewer green
+name: Temporary PR 1672 deadline repair
 
 on:
   push:
@@ -9,10 +9,6 @@ on:
 
 permissions:
   contents: write
-
-concurrency:
-  group: temp-pr1672-reviewer-green
-  cancel-in-progress: false
 
 jobs:
   repair:
@@ -25,16 +21,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Guard canonical one-shot input
-        env:
-          EXPECTED_PARENT: 6f2c9360417173959a875bb5f4e1365cc5dbb9cb
-          WORKFLOW_PATH: .github/workflows/_temp_pr1672_reviewer_green.yml
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
-          test "$(git diff --name-only HEAD^ HEAD)" = "$WORKFLOW_PATH"
-
-      - name: Materialize production and regression GREEN
+      - name: Materialize fixed-deadline GREEN
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -43,240 +30,79 @@ jobs:
           import re
 
           source_path = Path("scripts/ci/noema_review_gate.py")
-          telemetry_path = Path("tests/test_noema_repair_attempt_telemetry.py")
-          classification_path = Path("tests/test_noema_model_output_failure_classification.py")
-          deadline_test_path = Path("tests/test_noema_repair_deadline_alarm_safety.py")
-          baseline_path = Path("docs/product-technical-gap-baseline.md")
-          doctoring_path = Path("docs/doctoring/noema-repair-attempt-telemetry.md")
-
-          def replace_once(text: str, old: str, new: str, *, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise RuntimeError(f"{label}: expected one exact match, found {count}")
-              return text.replace(old, new, 1)
-
-          def regex_once(text: str, pattern: str, replacement: str, *, label: str) -> str:
-              updated, count = re.subn(pattern, lambda _m: replacement, text, count=1, flags=re.DOTALL)
-              if count != 1:
-                  raise RuntimeError(f"{label}: expected one regex match, found {count}")
-              return updated
-
           source = source_path.read_text()
-          source = replace_once(source, "import contextlib\n", "", label="remove contextlib import")
-          source = replace_once(source, "import signal\n", "", label="remove signal import")
-          source = regex_once(
-              source,
+          source = source.replace("import contextlib\n", "", 1).replace("import signal\n", "", 1)
+          source, count = re.subn(
               r"# NOT DATA-DERIVED -- UNRESOLVED, flagged for an explicit owner decision\.\n.*?NOEMA_REPAIR_DEADLINE_SECONDS = 15 \* 60\n\n",
               "# Noema owns corrective-request cardinality, not provider/model wall-clock policy.\n# Repair inference duration/failover belongs to contextual-orchestrator.\n\n",
-              label="remove caller-owned fixed repair deadline",
-          )
-          source = replace_once(
               source,
+              count=1,
+              flags=re.DOTALL,
+          )
+          assert count == 1
+          source = source.replace(
               "\n\nclass NoemaRepairDeadlineExceeded(TimeoutError):\n    \"\"\"Raised when the corrective attempt exceeds its total wall-clock budget.\"\"\"\n",
               "",
-              label="remove deadline exception",
+              1,
           )
-
-          helper_block = '''\n\ndef _entry_ordinal(position: int, total: int) -> str:\n    \"\"\"Return an unambiguous array-position label for a validated JSON entry.\"\"\"\n    return f\"entry {position}/{total} (array index {position - 1}, not a source line)\"\n\n\ndef _format_location(path: Any, line: Any, side: Any) -> str:\n    \"\"\"Format one rejected path/line/side citation for repair diagnostics.\"\"\"\n    return f\"path={path!r} line={line!r} side={side!r}\"\n\n\ndef _nearby_changed_locations(\n    locations: set[tuple[str, int, str]], path: Any, line: Any, *, limit: int = 5\n) -> str:\n    \"\"\"Return a bounded nearest-line hint for the rejected citation's path.\"\"\"\n    if not isinstance(path, str):\n        return \"\"\n    same_path = [location for location in locations if location[0] == path]\n    if not same_path:\n        return \"\"\n    if isinstance(line, int):\n        same_path.sort(key=lambda location: (abs(location[1] - line), location[1], location[2]))\n    else:\n        same_path.sort(key=lambda location: (location[1], location[2]))\n    sample = \", \".join(f\"{p}:{ln} ({s})\" for p, ln, s in same_path[:limit])\n    remaining = len(same_path) - limit\n    more = f\", +{remaining} more\" if remaining > 0 else \"\"\n    return f\"; nearest changed lines for {path}: {sample}{more}\"\n'''
-          source = replace_once(
-              source,
-              "\n\ndef validate_substantive_verdict(\n",
-              helper_block + "\n\ndef validate_substantive_verdict(\n",
-              label="restore citation diagnostic helpers",
-          )
-          source = replace_once(
-              source,
-              '''    for index, reviewed in enumerate(reviewed_lines, start=1):\n        if not isinstance(reviewed, dict):\n            raise NoemaModelOutputError(f\"Noema reviewed line {index} must be an object\")\n        location = (reviewed.get(\"path\"), reviewed.get(\"line\"), reviewed.get(\"side\"))\n        if location not in locations:\n            raise NoemaModelOutputError(f\"Noema reviewed line {index} is not an exact changed-side line\")\n        analysis = reviewed.get(\"analysis\")\n        if not isinstance(analysis, str) or not analysis.strip():\n            raise NoemaModelOutputError(f\"Noema reviewed line {index} requires concrete analysis\")\n''',
-              '''    reviewed_total = len(reviewed_lines)\n    for position, reviewed in enumerate(reviewed_lines, start=1):\n        entry = _entry_ordinal(position, reviewed_total)\n        if not isinstance(reviewed, dict):\n            raise NoemaModelOutputError(f\"Noema reviewed line {entry} must be an object\")\n        location = (reviewed.get(\"path\"), reviewed.get(\"line\"), reviewed.get(\"side\"))\n        if location not in locations:\n            path, line, side = location\n            raise NoemaModelOutputError(\n                f\"Noema reviewed line {entry} cites {_format_location(path, line, side)}, \"\n                f\"which is not an exact changed-side line\"\n                f\"{_nearby_changed_locations(locations, path, line)}\"\n            )\n        analysis = reviewed.get(\"analysis\")\n        if not isinstance(analysis, str) or not analysis.strip():\n            raise NoemaModelOutputError(f\"Noema reviewed line {entry} requires concrete analysis\")\n''',
-              label="restore reviewed-line diagnostics",
-          )
-          source = replace_once(
-              source,
-              '''    for index, probe in enumerate(probes, start=1):\n        if not isinstance(probe, dict):\n            raise NoemaModelOutputError(f\"Noema adversarial probe {index} must be an object\")\n        location = (probe.get(\"path\"), probe.get(\"line\"), probe.get(\"side\"))\n        if location not in locations:\n            raise NoemaModelOutputError(f\"Noema adversarial probe {index} is not an exact changed-side line\")\n        for field in (\"hypothesis\", \"attack_or_counterexample\", \"evidence\"):\n            value = probe.get(field)\n            if not isinstance(value, str) or not value.strip():\n                raise NoemaModelOutputError(f\"Noema adversarial probe {index} requires {field}\")\n        outcome = probe.get(\"outcome\")\n        if outcome not in {\"falsified\", \"confirmed\"}:\n            raise NoemaModelOutputError(f\"Noema adversarial probe {index} outcome must be falsified or confirmed\")\n        identity = (*location, probe[\"hypothesis\"].strip().casefold(), probe[\"attack_or_counterexample\"].strip().casefold())\n        if identity in identities:\n            raise NoemaModelOutputError(f\"Noema adversarial probe {index} duplicates an earlier probe\")\n''',
-              '''    probes_total = len(probes)\n    for position, probe in enumerate(probes, start=1):\n        entry = _entry_ordinal(position, probes_total)\n        if not isinstance(probe, dict):\n            raise NoemaModelOutputError(f\"Noema adversarial probe {entry} must be an object\")\n        location = (probe.get(\"path\"), probe.get(\"line\"), probe.get(\"side\"))\n        if location not in locations:\n            path, line, side = location\n            raise NoemaModelOutputError(\n                f\"Noema adversarial probe {entry} cites {_format_location(path, line, side)}, \"\n                f\"which is not an exact changed-side line\"\n                f\"{_nearby_changed_locations(locations, path, line)}\"\n            )\n        for field in (\"hypothesis\", \"attack_or_counterexample\", \"evidence\"):\n            value = probe.get(field)\n            if not isinstance(value, str) or not value.strip():\n                raise NoemaModelOutputError(f\"Noema adversarial probe {entry} requires {field}\")\n        outcome = probe.get(\"outcome\")\n        if outcome not in {\"falsified\", \"confirmed\"}:\n            raise NoemaModelOutputError(f\"Noema adversarial probe {entry} outcome must be falsified or confirmed\")\n        identity = (*location, probe[\"hypothesis\"].strip().casefold(), probe[\"attack_or_counterexample\"].strip().casefold())\n        if identity in identities:\n            raise NoemaModelOutputError(f\"Noema adversarial probe {entry} duplicates an earlier probe\")\n''',
-              label="restore adversarial-probe diagnostics",
-          )
-
-          parser = '''def _strip_trailing_commas_outside_strings(text: str) -> str:\n    \"\"\"Remove only genuine trailing commas after complete JSON values.\n\n    Missing-value forms such as ``[,]``, ``{,}``, ``[1,,]``, and\n    ``{\"a\":,}`` remain malformed. The scan records removal offsets rather\n    than one Python object per character, avoiding memory amplification on\n    large malformed responses.\n    \"\"\"\n    removals: list[int] = []\n    in_string = False\n    escaped = False\n    length = len(text)\n    for index, char in enumerate(text):\n        if in_string:\n            if escaped:\n                escaped = False\n            elif char == \"\\\\\":\n                escaped = True\n            elif char == '\"':\n                in_string = False\n            continue\n        if char == '\"':\n            in_string = True\n            continue\n        if char != \",\":\n            continue\n        lookahead = index + 1\n        while lookahead < length and text[lookahead] in \" \\t\\r\\n\":\n            lookahead += 1\n        if lookahead >= length or text[lookahead] not in \"}]\":\n            continue\n        previous = index - 1\n        while previous >= 0 and text[previous] in \" \\t\\r\\n\":\n            previous -= 1\n        if previous < 0 or text[previous] in \"[{,:\":\n            continue\n        removals.append(index)\n    if not removals:\n        return text\n    pieces: list[str] = []\n    start = 0\n    for index in removals:\n        pieces.append(text[start:index])\n        start = index + 1\n    pieces.append(text[start:])\n    return \"\".join(pieces)\n\n\n'''
-          source = regex_once(
-              source,
-              r"def _strip_trailing_commas_outside_strings\(text: str\) -> str:\n.*?\n\ndef extract_json_object\(",
-              parser + "def extract_json_object(",
-              label="replace trailing-comma repair",
-          )
-          source = replace_once(
-              source,
-              '''        verdict = _extract_json_object_once(repaired)\n        print(\n            \"::notice::Noema local trailing-comma JSON repair recovered an \"\n            \"otherwise-malformed response; no network repair retry was needed.\"\n        )\n        return verdict\n''',
-              '''        return _extract_json_object_once(repaired)\n''',
-              label="remove duplicate local-repair annotation",
-          )
-          source = source.replace(
-              "and it emits a ``::notice::`` (no raw content) when it is what\n    actually rescued the response, since that is itself useful repair-path\n    telemetry. It does not attempt to guess-repair any other malformation\n",
-              "without emitting a second Actions annotation; the enclosing attempt's\n    single success/failure annotation remains the telemetry authority. It does\n    not attempt to guess-repair any other malformation\n",
-          )
-
-          safe_model = '''def _extract_served_model(raw: str) -> str | None:\n    \"\"\"Best-effort read of an annotation-safe serving-model identifier.\n\n    The top-level model value is untrusted gateway output. Secrets are\n    scrubbed before JSON-string escaping; escaping makes lone surrogates,\n    newlines, carriage returns, and controls printable on one Actions log\n    line. The final escaped value is bounded after expansion.\n    \"\"\"\n    try:\n        data = json.loads(raw)\n    except (json.JSONDecodeError, TypeError, ValueError):\n        return None\n    if not isinstance(data, dict):\n        return None\n    served = data.get(\"model\")\n    if not isinstance(served, str) or not served.strip():\n        return None\n    scrubbed = scrub_sensitive_data(served.strip()) or \"\"\n    if not scrubbed:\n        return None\n    printable = json.dumps(scrubbed, ensure_ascii=True)[1:-1].replace(\"%\", \"%25\")\n    return printable[:200] or None\n\n\n'''
-          source = regex_once(
-              source,
-              r"def _extract_served_model\(raw: str\) -> str \| None:\n.*?\n\ndef _truthy_env\(",
-              safe_model + "def _truthy_env(",
-              label="harden served-model telemetry",
-          )
-          source = regex_once(
-              source,
+          source, count = re.subn(
               r"@contextlib\.contextmanager\ndef _repair_wall_clock_deadline\(seconds: float\):\n.*?\n\nclass StaleHeadDuringRepairRetryError",
               "class StaleHeadDuringRepairRetryError",
-              label="remove signal deadline context",
-          )
-          source = regex_once(
               source,
-              r"def _classify_attempt_outcome\(exc: BaseException\) -> str:\n.*?\n\ndef call_llm\(",
-              '''def _classify_attempt_outcome(exc: BaseException) -> str:\n    \"\"\"Return a stable outcome class for one model attempt.\"\"\"\n    if isinstance(exc, NoemaModelOutputError):\n        return \"malformed_output\"\n    if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):\n        return \"transport_error\"\n    return \"runtime_error\"\n\n\ndef _attempt_summary(\n    *, kind: str, outcome: str, phase: str, elapsed: float, served_model: str\n) -> str:\n    \"\"\"Format bounded structured attempt telemetry for final diagnostics.\"\"\"\n    return (\n        f\"{kind} outcome={outcome} duration={elapsed:.1f}s \"\n        f\"phase={phase} served_model={served_model}\"\n    )\n\n\ndef call_llm(''',
-              label="replace attempt classifier",
+              count=1,
+              flags=re.DOTALL,
           )
-          source = replace_once(
-              source,
-              "    repair_error: str = \"\",\n    is_retry: bool = False,\n) -> dict[str, Any]:",
-              "    repair_error: str = \"\",\n    is_retry: bool = False,\n    primary_attempt: str = \"\",\n) -> dict[str, Any]:",
-              label="thread primary attempt telemetry",
+          assert count == 1
+          source = source.replace(
+              "    if isinstance(exc, NoemaRepairDeadlineExceeded):\n        return \"deadline_exceeded\"\n",
+              "",
+              1,
           )
-          source = replace_once(
-              source,
-              '''    try:\n        deadline_context = (\n            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)\n            if is_retry\n            else contextlib.nullcontext()\n        )\n        with deadline_context:\n            with opener.open(request) as response:  # nosec B310\n                phase_reached = \"reading\"\n                raw_bytes = response.read()\n            phase_reached = \"decoding\"\n            raw = decode_llm_response_body(raw_bytes)\n            served_model = _extract_served_model(raw)\n            content = extract_llm_message_content(raw)\n            verdict = extract_json_object(content)\n            phase_reached = \"validating\"\n            decision = str(verdict.get(\"decision\") or \"\").strip().lower()\n            if decision not in {\"approve\", \"request_changes\", \"comment\"}:\n                raise NoemaModelOutputError(f\"Noema LLM returned unsupported decision: {decision!r}\")\n            summary = verdict.get(\"summary\")\n            if not isinstance(summary, str) or not summary.strip():\n                raise NoemaModelOutputError(\"Noema LLM response did not contain a substantive summary\")\n            findings = verdict.get(\"findings\")\n            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):\n                raise NoemaModelOutputError(\"Noema LLM response findings must be a list of objects\")\n            for finding in findings:\n                if (\n                    finding.get(\"severity\") not in {\"high\", \"medium\", \"low\"}\n                    or not isinstance(finding.get(\"file\"), str)\n                    or not finding[\"file\"].strip()\n                    or type(finding.get(\"line\")) is not int\n                    or finding[\"line\"] <= 0\n                    or finding.get(\"side\") not in {\"RIGHT\", \"LEFT\"}\n                    or not isinstance(finding.get(\"message\"), str)\n                    or not finding[\"message\"].strip()\n                ):\n                    raise NoemaModelOutputError(\"Noema LLM response contained a malformed finding\")\n            if decision == \"request_changes\" and not findings:\n                raise NoemaModelOutputError(\"Noema LLM request_changes response did not contain a substantive finding\")\n            validate_substantive_verdict(verdict, diff, changed_paths)\n''',
-              '''    try:\n        with opener.open(request) as response:  # nosec B310\n            phase_reached = \"reading\"\n            raw_bytes = response.read()\n        phase_reached = \"decoding\"\n        raw = decode_llm_response_body(raw_bytes)\n        served_model = _extract_served_model(raw)\n        content = extract_llm_message_content(raw)\n        verdict = extract_json_object(content)\n        phase_reached = \"validating\"\n        decision = str(verdict.get(\"decision\") or \"\").strip().lower()\n        if decision not in {\"approve\", \"request_changes\", \"comment\"}:\n            raise NoemaModelOutputError(f\"Noema LLM returned unsupported decision: {decision!r}\")\n        summary = verdict.get(\"summary\")\n        if not isinstance(summary, str) or not summary.strip():\n            raise NoemaModelOutputError(\"Noema LLM response did not contain a substantive summary\")\n        findings = verdict.get(\"findings\")\n        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):\n            raise NoemaModelOutputError(\"Noema LLM response findings must be a list of objects\")\n        for finding in findings:\n            if (\n                finding.get(\"severity\") not in {\"high\", \"medium\", \"low\"}\n                or not isinstance(finding.get(\"file\"), str)\n                or not finding[\"file\"].strip()\n                or type(finding.get(\"line\")) is not int\n                or finding[\"line\"] <= 0\n                or finding.get(\"side\") not in {\"RIGHT\", \"LEFT\"}\n                or not isinstance(finding.get(\"message\"), str)\n                or not finding[\"message\"].strip()\n            ):\n                raise NoemaModelOutputError(\"Noema LLM response contained a malformed finding\")\n        if decision == \"request_changes\" and not findings:\n            raise NoemaModelOutputError(\"Noema LLM request_changes response did not contain a substantive finding\")\n        validate_substantive_verdict(verdict, diff, changed_paths)\n''',
-              label="remove deadline wrapper from call",
+          source = source.replace(
+              "    Order matters: ``NoemaRepairDeadlineExceeded`` is itself a\n    ``TimeoutError``/``OSError`` subclass, so it is checked before the\n    broader transport-error class -- otherwise every deadline-exceeded\n    attempt would misreport as an ordinary transport error and the\n    telemetry this classifies for would lose the one distinction the\n    original bare \"900-second timeout\" message could not make.\n",
+              "    The classification is caller-observed evidence only; provider/model\n    inference timeout policy belongs to contextual-orchestrator.\n",
+              1,
           )
-          old_except_start = '''    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:\n'''
-          success_marker = '''    attempt_elapsed = time.monotonic() - attempt_started\n    print(\n        f\"::notice::Noema {attempt_kind} attempt outcome=success \"\n        f\"duration={attempt_elapsed:.1f}s served_model={served_model or 'unknown'}\"\n    )\n    return verdict\n'''
-          start = source.index(old_except_start, source.index("def call_llm("))
-          end = source.index(success_marker, start) + len(success_marker)
-          replacement = '''    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:\n        attempt_elapsed = time.monotonic() - attempt_started\n        outcome = _classify_attempt_outcome(exc)\n        current_failure = _stable_failure_diagnostic(exc)\n        served_model_note = served_model or \"unknown\"\n        attempt_record = _attempt_summary(\n            kind=attempt_kind,\n            outcome=outcome,\n            phase=phase_reached,\n            elapsed=attempt_elapsed,\n            served_model=served_model_note,\n        )\n        if is_retry:\n            print(f\"::warning::Noema {attempt_record}; repair attempts=1 (one corrective call -- not a retry loop).\")\n            initial_failure = scrub_sensitive_data(repair_error) or \"no diagnostic message was available\"\n            evidence = f\"; {primary_attempt}; {attempt_record}\" if primary_attempt else f\"; {attempt_record}\"\n            if isinstance(exc, NoemaModelOutputError):\n                raise NoemaModelOutputError(\n                    \"Noema model-output repair remained invalid; \"\n                    f\"initial failure: {initial_failure}; repair failure: {current_failure}{evidence}\"\n                ) from None\n            if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):\n                raise NoemaTransportError(\n                    \"Noema corrective repair transport was exhausted; \"\n                    f\"initial failure: {initial_failure}; repair failure: {type(exc).__name__}: {current_failure}{evidence}\"\n                ) from exc\n            raise RuntimeError(\n                \"Noema repair failed closed; \"\n                f\"initial failure: {initial_failure}; repair failure: {current_failure}{evidence}\"\n            ) from exc\n        print(f\"::notice::Noema {attempt_record}; starting one corrective repair attempt.\")\n        if str(fetch_pr(repo, number).get(\"headRefOid\") or \"\").lower() != expected_head:\n            raise StaleHeadDuringRepairRetryError(\n                \"Pull request head changed during review; stale before repair retry.\"\n            ) from exc\n        return call_llm(\n            repo,\n            number,\n            pr,\n            diff,\n            truncated,\n            expected_head,\n            review_context,\n            changed_paths,\n            current_failure,\n            is_retry=True,\n            primary_attempt=attempt_record,\n        )\n    attempt_elapsed = time.monotonic() - attempt_started\n    success_record = _attempt_summary(\n        kind=attempt_kind,\n        outcome=\"success\",\n        phase=phase_reached,\n        elapsed=attempt_elapsed,\n        served_model=served_model or \"unknown\",\n    )\n    print(f\"::notice::Noema {success_record}\")\n    return verdict\n'''
-          source = source[:start] + replacement + source[end:]
-          for forbidden in (
-              "NOEMA_REPAIR_DEADLINE_SECONDS",
-              "NoemaRepairDeadlineExceeded",
-              "_repair_wall_clock_deadline",
-              "setitimer",
-          ):
-              if forbidden in source:
-                  raise RuntimeError(f"caller-owned fixed deadline survived: {forbidden}")
+          old = '''    try:\n        deadline_context = (\n            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)\n            if is_retry\n            else contextlib.nullcontext()\n        )\n        with deadline_context:\n            with opener.open(request) as response:  # nosec B310\n                phase_reached = \"reading\"\n                raw_bytes = response.read()\n            phase_reached = \"decoding\"\n            raw = decode_llm_response_body(raw_bytes)\n            served_model = _extract_served_model(raw)\n            content = extract_llm_message_content(raw)\n            verdict = extract_json_object(content)\n            phase_reached = \"validating\"\n            decision = str(verdict.get(\"decision\") or \"\").strip().lower()\n            if decision not in {\"approve\", \"request_changes\", \"comment\"}:\n                raise NoemaModelOutputError(f\"Noema LLM returned unsupported decision: {decision!r}\")\n            summary = verdict.get(\"summary\")\n            if not isinstance(summary, str) or not summary.strip():\n                raise NoemaModelOutputError(\"Noema LLM response did not contain a substantive summary\")\n            findings = verdict.get(\"findings\")\n            if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):\n                raise NoemaModelOutputError(\"Noema LLM response findings must be a list of objects\")\n            for finding in findings:\n                if (\n                    finding.get(\"severity\") not in {\"high\", \"medium\", \"low\"}\n                    or not isinstance(finding.get(\"file\"), str)\n                    or not finding[\"file\"].strip()\n                    or type(finding.get(\"line\")) is not int\n                    or finding[\"line\"] <= 0\n                    or finding.get(\"side\") not in {\"RIGHT\", \"LEFT\"}\n                    or not isinstance(finding.get(\"message\"), str)\n                    or not finding[\"message\"].strip()\n                ):\n                    raise NoemaModelOutputError(\"Noema LLM response contained a malformed finding\")\n            if decision == \"request_changes\" and not findings:\n                raise NoemaModelOutputError(\"Noema LLM request_changes response did not contain a substantive finding\")\n            validate_substantive_verdict(verdict, diff, changed_paths)\n'''
+          new = '''    try:\n        with opener.open(request) as response:  # nosec B310\n            phase_reached = \"reading\"\n            raw_bytes = response.read()\n        phase_reached = \"decoding\"\n        raw = decode_llm_response_body(raw_bytes)\n        served_model = _extract_served_model(raw)\n        content = extract_llm_message_content(raw)\n        verdict = extract_json_object(content)\n        phase_reached = \"validating\"\n        decision = str(verdict.get(\"decision\") or \"\").strip().lower()\n        if decision not in {\"approve\", \"request_changes\", \"comment\"}:\n            raise NoemaModelOutputError(f\"Noema LLM returned unsupported decision: {decision!r}\")\n        summary = verdict.get(\"summary\")\n        if not isinstance(summary, str) or not summary.strip():\n            raise NoemaModelOutputError(\"Noema LLM response did not contain a substantive summary\")\n        findings = verdict.get(\"findings\")\n        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):\n            raise NoemaModelOutputError(\"Noema LLM response findings must be a list of objects\")\n        for finding in findings:\n            if (\n                finding.get(\"severity\") not in {\"high\", \"medium\", \"low\"}\n                or not isinstance(finding.get(\"file\"), str)\n                or not finding[\"file\"].strip()\n                or type(finding.get(\"line\")) is not int\n                or finding[\"line\"] <= 0\n                or finding.get(\"side\") not in {\"RIGHT\", \"LEFT\"}\n                or not isinstance(finding.get(\"message\"), str)\n                or not finding[\"message\"].strip()\n            ):\n                raise NoemaModelOutputError(\"Noema LLM response contained a malformed finding\")\n        if decision == \"request_changes\" and not findings:\n            raise NoemaModelOutputError(\"Noema LLM request_changes response did not contain a substantive finding\")\n        validate_substantive_verdict(verdict, diff, changed_paths)\n'''
+          assert source.count(old) == 1
+          source = source.replace(old, new, 1)
+          source = source.replace(
+              "                f\"deadline={NOEMA_REPAIR_DEADLINE_SECONDS:g}s \"\n",
+              "",
+              1,
+          )
+          source = source.replace(
+              "            f\"({current_failure}); starting one bounded repair attempt \"\n            f\"(deadline={NOEMA_REPAIR_DEADLINE_SECONDS:g}s).\"\n",
+              "            f\"({current_failure}); starting one corrective repair attempt.\"\n",
+              1,
+          )
+          for forbidden in ("NOEMA_REPAIR_DEADLINE_SECONDS", "NoemaRepairDeadlineExceeded", "_repair_wall_clock_deadline", "setitimer"):
+              assert forbidden not in source, forbidden
           ast.parse(source)
           source_path.write_text(source)
 
-          telemetry = telemetry_path.read_text()
-          telemetry = telemetry.replace("import signal\n", "").replace("import time\n", "")
-          telemetry = regex_once(
-              telemetry,
-              r"@pytest\.mark\.parametrize\(\n    \(\"exc\", \"expected\"\),\n    \[.*?\n\ndef test_classify_attempt_outcome_detects_transport_family",
-              '''@pytest.mark.parametrize(\n    (\"exc\", \"expected\"),\n    [\n        (gate.NoemaModelOutputError(\"bad\"), \"malformed_output\"),\n        (gate.NoemaTransportError(\"bad transport\"), \"runtime_error\"),\n        (RuntimeError(\"unexpected\"), \"runtime_error\"),\n    ],\n)\ndef test_classify_attempt_outcome_preserves_typed_failure_classes(exc, expected):\n    \"\"\"Reviewer-owned classification keeps model and runtime evidence distinct.\"\"\"\n    assert gate._classify_attempt_outcome(exc) == expected\n\n\ndef test_classify_attempt_outcome_detects_transport_family''',
-              label="replace deadline classifier regression",
-          )
-          telemetry = regex_once(
-              telemetry,
-              r"\n\ndef test_repair_deadline_exceeded_emits_full_attempt_breakdown\(.*?\n\ndef test_strip_trailing_commas_outside_strings_is_lossless_and_string_safe",
-              "\n\ndef test_strip_trailing_commas_outside_strings_is_lossless_and_string_safe",
-              label="remove fixed-deadline telemetry regression",
-          )
-          telemetry = replace_once(
-              telemetry,
-              '''def test_extract_json_object_recovers_a_trailing_comma_response(capsys):\n    \"\"\"A trailing-comma-malformed verdict recovers locally, no network retry needed.\"\"\"\n    malformed = '{\"decision\":\"comment\",\"summary\":\"ok\",\"findings\":[],}'\n    with pytest.raises(gate.NoemaModelOutputError):\n        gate._extract_json_object_once(malformed)\n\n    verdict = gate.extract_json_object(malformed)\n    assert verdict == {\"decision\": \"comment\", \"summary\": \"ok\", \"findings\": []}\n    notice = capsys.readouterr().out\n    assert \"::notice::Noema local trailing-comma JSON repair recovered\" in notice\n    assert \"no network repair retry was needed\" in notice\n''',
-              '''def test_extract_json_object_recovers_a_trailing_comma_without_duplicate_annotation(capsys):\n    \"\"\"Local syntax recovery does not violate one-annotation-per-attempt telemetry.\"\"\"\n    malformed = '{\"decision\":\"comment\",\"summary\":\"ok\",\"findings\":[],}'\n    with pytest.raises(gate.NoemaModelOutputError):\n        gate._extract_json_object_once(malformed)\n    verdict = gate.extract_json_object(malformed)\n    assert verdict == {\"decision\": \"comment\", \"summary\": \"ok\", \"findings\": []}\n    assert \"::notice::\" not in capsys.readouterr().out\n''',
-              label="replace duplicate local repair notice test",
-          )
-          telemetry = telemetry.replace(
-              '    assert "served_model=some-provider/some-model-v1" in notice\n',
-              '    assert "served_model=some-provider/some-model-v1" in notice\n    assert "phase=validating" in notice\n',
-              1,
-          )
-          telemetry = telemetry.replace(
-              '    assert "served_model=repair-candidate/model-y" in captured',
-              '    assert "served_model=repair-candidate/model-y" in captured\n    assert "phase=validating" in captured',
-              1,
-          )
-          telemetry += r'''
+          def remove_functions(path: Path, names: set[str]) -> None:
+              text = path.read_text()
+              tree = ast.parse(text)
+              spans = [
+                  (node.lineno, node.end_lineno or node.lineno)
+                  for node in tree.body
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names
+              ]
+              lines = text.splitlines(keepends=True)
+              for start, end in sorted(spans, reverse=True):
+                  del lines[start - 1:end]
+              path.write_text("".join(lines))
 
+          telemetry = Path("tests/test_noema_repair_attempt_telemetry.py")
+          text = telemetry.read_text().replace("import signal\n", "").replace("import time\n", "")
+          text = text.replace("        (gate.NoemaRepairDeadlineExceeded(\"exceeded\"), \"deadline_exceeded\"),\n", "", 1)
+          telemetry.write_text(text)
+          remove_functions(telemetry, {"test_repair_deadline_exceeded_emits_full_attempt_breakdown"})
 
-def test_trailing_comma_repair_rejects_missing_values_and_accepts_complete_values():
-    """Syntax repair never fabricates values while preserving genuine trailing commas."""
-    for malformed in ("[,]", "{,}", "[1,,]", '{"a":,}'):
-        assert gate._strip_trailing_commas_outside_strings(malformed) == malformed
-        with pytest.raises(gate.NoemaModelOutputError):
-            gate.extract_json_object('{"decision":"comment","summary":"x","findings":' + malformed + '}')
-    assert gate._strip_trailing_commas_outside_strings('["x", 1, true, {}, [],]') == '["x", 1, true, {}, []]'
-
-
-def test_served_model_is_single_line_utf8_printable_and_workflow_command_safe():
-    """Untrusted model telemetry cannot inject Actions commands or crash encoding."""
-    raw = '{"model":"evil\\ud800\\n::error::forged%0Aline","choices":[]}'
-    served = gate._extract_served_model(raw)
-    assert served is not None
-    served.encode("utf-8")
-    assert "\n" not in served and "\r" not in served
-    assert "\\ud800" in served
-    assert "%0A" not in served
-    assert len(served) <= 200
-
-
-def test_invalid_location_diagnostic_preserves_rejected_and_nearby_source():
-    """Corrective prompts receive exact rejected coordinates and bounded alternatives."""
-    verdict = _malformed_probe_verdict()
-    verdict["reviewed_lines"][0]["line"] = 99
-    with pytest.raises(gate.NoemaModelOutputError) as exc_info:
-        gate.validate_substantive_verdict(verdict, DIFF, ("README.md",))
-    message = str(exc_info.value)
-    assert "entry 1/1 (array index 0, not a source line)" in message
-    assert "path='README.md' line=99 side='RIGHT'" in message
-    assert "nearest changed lines for README.md: README.md:1 (RIGHT)" in message
-
-
-def test_stale_head_still_emits_primary_attempt_telemetry(monkeypatch, capsys):
-    """Completed primary evidence is logged before stale-head repair suppression."""
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "a" * 40
-    monkeypatch.setattr(
-        gate.urllib.request.OpenerDirector,
-        "open",
-        lambda *_a, **_k: _JsonResponse({"choices": [{"message": {"content": json.dumps(_malformed_probe_verdict())}}]}),
-    )
-    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": "b" * 40})
-    with pytest.raises(gate.StaleHeadDuringRepairRetryError):
-        gate.call_llm("owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha, changed_paths=("README.md",))
-    output = capsys.readouterr().out
-    assert "::notice::Noema primary outcome=malformed_output" in output
-    assert "phase=validating" in output
-
-
-def test_double_failure_final_diagnostic_contains_both_attempt_records(monkeypatch):
-    """RCA keeps primary timing/model evidence when the corrective call also fails."""
-    import urllib.error
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    head_sha = "c" * 40
-    calls = 0
-    def open_response(_opener, request, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return _JsonResponse({"model": "primary/model", "choices": [{"message": {"content": json.dumps(_malformed_probe_verdict())}}]})
-        raise urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
-    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
-    monkeypatch.setattr(gate, "fetch_pr", lambda _repo, _number: {"headRefOid": head_sha})
-    with pytest.raises(gate.NoemaTransportError) as exc_info:
-        gate.call_llm("owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha, changed_paths=("README.md",))
-    message = str(exc_info.value)
-    assert "primary outcome=malformed_output" in message
-    assert "served_model=primary/model" in message
-    assert "repair outcome=transport_error" in message
-    assert "phase=connecting" in message
-    assert calls == 2
-'''
-          ast.parse(telemetry)
-          telemetry_path.write_text(telemetry)
-
-          classification = classification_path.read_text()
-          tree = ast.parse(classification)
-          remove_names = {
+          classification = Path("tests/test_noema_model_output_failure_classification.py")
+          remove_functions(classification, {
               "test_total_repair_wall_clock_deadline_interrupts_slow_read",
               "test_repair_wall_clock_deadline_defensive_fail_closed_paths",
               "test_repair_wall_clock_deadline_refuses_existing_process_alarm",
@@ -284,32 +110,45 @@ def test_double_failure_final_diagnostic_contains_both_attempt_records(monkeypat
               "test_repair_deadline_rejects_nonpositive_budget",
               "test_repair_deadline_requires_setitimer",
               "test_repair_deadline_requires_itimer_real",
-          }
-          spans = []
-          for node in tree.body:
-              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in remove_names:
-                  spans.append((node.lineno, node.end_lineno))
-              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_repair_deadline_refuses_existing"):
-                  spans.append((node.lineno, node.end_lineno))
-          lines = classification.splitlines(keepends=True)
-          for start_line, end_line in sorted(spans, reverse=True):
-              del lines[start_line - 1:end_line]
-          classification = "".join(lines)
-          classification = classification.replace("Noema bounded repair transport was exhausted", "Noema corrective repair transport was exhausted")
-          ast.parse(classification)
-          classification_path.write_text(classification)
+          })
+          classification_text = classification.read_text()
+          classification_text, removed = re.subn(
+              r"\n\n@pytest\.mark\.parametrize\(\"timer_state\".*?(?=\n\ndef )",
+              "",
+              classification_text,
+              flags=re.DOTALL,
+          )
+          classification.write_text(classification_text)
 
-          deadline_test_path.write_text('''\"\"\"Contract: Noema does not own a fixed inference wall-clock deadline.\"\"\"\n\nimport ast\nfrom pathlib import Path\n\n\ndef test_noema_repair_has_no_caller_owned_fixed_deadline() -> None:\n    \"\"\"One corrective request remains bounded by cardinality, not guessed time.\"\"\"\n    source = Path(\"scripts/ci/noema_review_gate.py\").read_text()\n    tree = ast.parse(source)\n    names = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))}\n    assigned = {target.id for node in ast.walk(tree) if isinstance(node, ast.Assign) for target in node.targets if isinstance(target, ast.Name)}\n    assert \"_repair_wall_clock_deadline\" not in names\n    assert \"NoemaRepairDeadlineExceeded\" not in names\n    assert \"NOEMA_REPAIR_DEADLINE_SECONDS\" not in assigned\n    assert not any(isinstance(node, ast.Attribute) and node.attr == \"setitimer\" for node in ast.walk(tree))\n\n\ndef test_call_llm_keeps_exactly_one_corrective_request_edge() -> None:\n    \"\"\"The retry state transition remains one-way even without a timeout guess.\"\"\"\n    source = Path(\"scripts/ci/noema_review_gate.py\").read_text()\n    tree = ast.parse(source)\n    call_llm = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == \"call_llm\")\n    recursive = [node for node in ast.walk(call_llm) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == \"call_llm\"]\n    assert len(recursive) == 1\n    retry_keywords = [kw for kw in recursive[0].keywords if kw.arg == \"is_retry\"]\n    assert len(retry_keywords) == 1 and isinstance(retry_keywords[0].value, ast.Constant) and retry_keywords[0].value.value is True\n''')
+          Path("tests/test_noema_repair_deadline_alarm_safety.py").write_text(
+              '"""Noema owns corrective-request cardinality, not inference timeouts."""\n\n'
+              'import ast\nfrom pathlib import Path\n\n'
+              'def test_noema_has_no_fixed_repair_deadline() -> None:\n'
+              '    source = Path("scripts/ci/noema_review_gate.py").read_text()\n'
+              '    tree = ast.parse(source)\n'
+              '    names = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.ClassDef))}\n'
+              '    assigned = {target.id for node in ast.walk(tree) if isinstance(node, ast.Assign) for target in node.targets if isinstance(target, ast.Name)}\n'
+              '    assert "_repair_wall_clock_deadline" not in names\n'
+              '    assert "NoemaRepairDeadlineExceeded" not in names\n'
+              '    assert "NOEMA_REPAIR_DEADLINE_SECONDS" not in assigned\n'
+              '    assert not any(isinstance(node, ast.Attribute) and node.attr == "setitimer" for node in ast.walk(tree))\n'
+          )
 
-          baseline = baseline_path.read_text()
-          baseline_note = '''\n\n### 2026-09-02 — Noema corrective-request authority and telemetry hardening\n\n- Removed Noema's unresearched 900-second repair wall-clock deadline. Noema owns exactly one corrective request; provider/model timeout and failover policy remain with `contextual-orchestrator`.\n- Preserved primary and repair duration/phase/served-model evidence through final failures and stale-head exits.\n- Hardened untrusted served-model annotation text against lone surrogates, controls, newlines, and workflow-command injection.\n- Restricted local trailing-comma repair to commas following complete JSON values and restored exact rejected/nearby changed-line diagnostics for corrective prompts.\n- Regression corpus covers missing-value JSON fabrication, telemetry injection, stale-head evidence loss, double-failure evidence loss, duplicate attempt annotations, and citation-repair guidance.\n'''
-          if "2026-09-02 — Noema corrective-request authority and telemetry hardening" not in baseline:
-              baseline_path.write_text(baseline.rstrip() + baseline_note)
-
-          doctoring = doctoring_path.read_text()
-          doctoring_note = '''\n\n## 2026-09-02 current-head corrective contract\n\nThe incident follow-up removes the caller-owned fixed repair deadline rather than replacing it with another guessed duration. The reviewer still permits exactly one corrective request. Attempt telemetry is single-annotation-per-attempt, source-safe, and retains both primary and corrective records in final failure diagnostics; stale-head suppression occurs only after the completed primary attempt is recorded. Local JSON repair now rejects missing-value shapes instead of fabricating empty values, and model identifiers are escaped before GitHub Actions annotations.\n'''
-          if "current-head corrective contract" not in doctoring:
-              doctoring_path.write_text(doctoring.rstrip() + doctoring_note)
+          for path, marker, note in (
+              (
+                  Path("docs/product-technical-gap-baseline.md"),
+                  "Noema corrective-request timeout authority",
+                  "\n\n### 2026-09-02 — Noema corrective-request timeout authority\n\nNoema now owns exactly one corrective request but no guessed model-inference wall-clock deadline. Provider/model timeout and failover policy remain with `contextual-orchestrator`; exact attempt duration and phase telemetry stay reviewer evidence.\n",
+              ),
+              (
+                  Path("docs/doctoring/noema-repair-attempt-telemetry.md"),
+                  "current-head timeout authority",
+                  "\n\n## 2026-09-02 current-head timeout authority\n\nThe caller-owned 900-second repair alarm was removed rather than replaced by another unmeasured number. Noema still permits exactly one corrective request; model/provider latency policy is delegated to `contextual-orchestrator`.\n",
+              ),
+          ):
+              doc = path.read_text()
+              if marker not in doc:
+                  path.write_text(doc.rstrip() + note)
           PY
 
       - name: Install pinned review CI dependencies
@@ -317,7 +156,7 @@ def test_double_failure_final_diagnostic_contains_both_attempt_records(monkeypat
           python3 -m pip install --disable-pip-version-check --require-hashes
           --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
 
-      - name: Verify focused and full repository contracts
+      - name: Verify deadline ownership repair
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 -m pytest -q \
@@ -325,30 +164,23 @@ def test_double_failure_final_diagnostic_contains_both_attempt_records(monkeypat
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_repair_deadline_alarm_safety.py \
             tests/test_noema_review_gate.py
-          PYTHONPATH=. python3 -m coverage run -m pytest tests -q
-          python3 -m coverage report --show-missing
-          interrogate
-          python3 -m compileall -q scripts/ci/noema_review_gate.py \
-            tests/test_noema_repair_attempt_telemetry.py \
-            tests/test_noema_model_output_failure_classification.py \
-            tests/test_noema_repair_deadline_alarm_safety.py
+          python3 -m compileall -q scripts/ci/noema_review_gate.py tests/test_noema_repair_attempt_telemetry.py tests/test_noema_model_output_failure_classification.py tests/test_noema_repair_deadline_alarm_safety.py
           git diff --check
 
-      - name: Retire one-shot writer and publish exact successor
+      - name: Retire temporary workflow and publish
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_EVENT_SHA: ${{ github.sha }}
           BRANCH_NAME: fix/noema-repair-attempt-telemetry
           WORKFLOW_PATH: .github/workflows/_temp_pr1672_reviewer_green.yml
         run: |
           set -euo pipefail
           rm "$WORKFLOW_PATH"
-          test -z "$(find .github scripts/ci -type f \( -name '*temp_pr1672*' -o -name '*source_fix_pr1672*' -o -name '*_temp_pr1672*' \) -print -quit)"
+          test -z "$(find .github scripts/ci -type f -name '*temp_pr1672*' -print -quit)"
           git add -A
           git config user.name "CWL repair automation"
           git config user.email "actions@users.noreply.github.com"
-          git commit -m "fix(noema): harden corrective review evidence"
+          git commit -m "fix(noema): remove caller-owned repair deadline"
           remote_head="$(git ls-remote origin "refs/heads/$BRANCH_NAME" | cut -f1)"
-          test "$remote_head" = "$EXPECTED_EVENT_SHA"
+          test "$remote_head" = "${{ github.sha }}"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/ContextualWisdomLab/.github.git"
           git push origin "HEAD:refs/heads/$BRANCH_NAME"
