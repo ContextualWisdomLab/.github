@@ -210,7 +210,7 @@ onboarding exception before relying on autonomous PR queue draining.
 | Public target repos with repo-local Strix/OpenCode/scheduler copies | `.github` only; this is the central source repository | Retire thick local copies outside `.github`; repository-owned product, release, and security workflows remain separate. |
 | Public target repos with partial or no local governance workflow footprint | all public non-fork targets outside `.github` | They are still centrally governed by ruleset `18156473`; local absence is not a required-workflow gap. |
 | Private target repos missing central required workflow onboarding | `xtrmLLMBatchPython` | Treat missing central Strix/OpenCode/scheduler checks as an organization ruleset onboarding gap. Do not bypass review or weaken repository approval rules to drain the queue. |
-| Public forks | `argos`, `html4tree`, `nonnest2`, `seedream_evasepic`, `vooster`, `vooster-v2-mvp` | Fork status is not a categorical exclusion; onboarding is an explicit repository decision, and PR mutation remains capability-gated per head. |
+| Public forks | `argos`, `html4tree`, `nonnest2`, `seedream_evasepic`, `vooster` | Fork status is not a categorical exclusion; onboarding is an explicit repository decision, and PR mutation remains capability-gated per head. `vooster-v2-mvp` no longer exists in the org (removed) and was dropped from this list; see `docs/CWL-MASTER-CONTEXT.md`. |
 
 | Repo | Flow | Default | Auto | Central required workflows | Repo rules/protection | Repo required checks | Stale dismissal | Open PRs | Local workflow footprint | Recent merged actor |
 |---|---:|---:|---:|---|---|---|---:|---:|---|---|
