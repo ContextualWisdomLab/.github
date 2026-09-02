@@ -2,7 +2,7 @@
 
 ## Incident
 
-`ContextualWisdomLab/naruon` PR #1528's Strix run
+`ContextualWisdomLab/naruon#1528`'s Strix run
 (`https://github.com/ContextualWisdomLab/naruon/actions/runs/33581213829`,
 job `strix`, `head_sha cf472cf77fb93325858f485a22e967449d7c387a`) was cancelled
 at 2026-09-02T01:56:44Z while it was the PR's sole, still-current head -- no
@@ -11,8 +11,9 @@ cancellation and again during this investigation. The run's own
 `cancel-superseded-pr-runs` job (defined in `.github/workflows/strix.yml`)
 reported `skipped` in the same run, so the naruon-local cleanup job did not
 issue the cancellation; sibling `Required OpenCode Review` and `Required Noema
-Review` runs for the identical head were left `queued`, untouched. PR #1528 was
-created at `2026-09-02T01:54:42Z`, four seconds before the Strix run.
+Review` runs for the identical head were left `queued`, untouched.
+`ContextualWisdomLab/naruon#1528` was created at `2026-09-02T01:54:42Z`, four
+seconds before the Strix run.
 
 ## Root cause
 
@@ -47,7 +48,7 @@ already fixed for the *sibling* cancellation path in the same workflow --
 the bash "Queue hygiene" block that revalidates every candidate through
 `scripts/ci/revalidate_queue_cancellation.sh` immediately before cancelling.
 That fix never touched `stale_pr_run_ids()` / `active_review_run_refs()`,
-which run earlier in the same `inspect_pr()` pass and have no revalidation
+which run earlier in the same `inspect_pr()` pass and had no revalidation
 step at all: a documented failure mode was repaired in one of two parallel
 cancellation mechanisms and left live in the other.
 
@@ -69,53 +70,61 @@ repository the scheduler touches, both from the per-PR `scan-pr-queue` job
 `org-queue-sweep` job (`.github/workflows/pr-review-merge-scheduler.yml`,
 `if: github.event.schedule == '0 * * * *'`), which iterates every
 non-archived, non-disabled repository in the organization. Any repository
-whose PR list ever yields a falsy `headRefOid` for an open PR -- most
-plausible on a PR inspected within moments of creation -- is exposed for
-Strix, OpenCode, and Noema evidence alike.
+whose PR list ever yields a missing, malformed, or stale `headRefOid` for an
+open PR is exposed for Strix, OpenCode, and Noema evidence alike.
 
 ## Repair
 
-`stale_pr_run_ids()` and `active_review_run_refs()` now check
-`pr.get("headRefOid")` for truthiness before using it, and fail safe (return
-`[]` / `([], [])` respectively) with an `::warning::` log line instead of
-silently treating a missing head as "matches nothing, so everything is
-stale". This mirrors the fail-closed discipline
-`revalidate_queue_cancellation.sh` already applies to its own cancellation
-path: an unresolvable expected head is a reason to cancel *nothing* for that
-PR, not a reason to cancel *everything* associated with it.
+The repair has two boundaries. First, `stale_pr_run_ids()` and
+`active_review_run_refs()` validate `headRefOid` with `validate_git_sha()` and
+fail safe (return `[]` / `([], [])`) when the snapshot head is missing or
+malformed. Second, the destructive cancellation functions no longer trust that
+earlier classification snapshot: each candidate is re-read from the Actions
+API, the live PR is re-read immediately before cancellation, both run and PR
+heads are validated, and cancellation occurs only when the candidate still
+proves older than the fresh ready/open PR head. A live draft/closed PR, a
+malformed identity, a run that no longer belongs to the PR, or any revalidation
+failure preserves the run. Direct PR runs and centralized
+`repository_dispatch` review runs are both covered, and multi-candidate cleanup
+retains bounded parallelism.
+
+This makes an unresolvable or raced head a reason to cancel *nothing* unless
+fresh evidence independently proves the candidate stale; it is never a reason
+to cancel everything associated with the earlier snapshot.
 
 ## Evidence
 
+The original incident regressions
 `tests/test_pr_review_merge_scheduler.py::test_stale_pr_run_ids_preserves_current_head_run_when_head_ref_oid_missing`,
 `::test_cancel_stale_pr_runs_issues_no_cancel_call_when_head_ref_oid_missing`,
 and `::test_active_review_run_refs_preserves_current_head_run_when_head_ref_oid_missing`
-reproduce the incident directly: a Strix run whose `head_sha` matches the
-PR's real, unchanged head (`cf472cf77fb93325858f485a22e967449d7c387a`, PR
-number `1528`, repository `ContextualWisdomLab/naruon`), paired with a PR
-snapshot carrying `headRefOid: None`. All three tests fail against the
-pre-fix code (`stale_pr_run_ids` returns the current-head run id as "stale";
-`cancel_stale_pr_runs` issues a live `force-cancel` call against it;
-`active_review_run_refs` classifies it as stale rather than current) and pass
-after the guard is added. `coverage run -m pytest tests` (2603 passed, 1
-skipped) and `coverage report` (100% on `scripts/ci`) plus `interrogate`
-(100% docstring coverage) both hold after the change.
+reproduce the false-cancellation class directly using the incident head
+`cf472cf77fb93325858f485a22e967449d7c387a`, PR number `1528`, and repository
+`ContextualWisdomLab/naruon`.
+
+The successor regressions additionally cover a truthy malformed snapshot head,
+a push after initial classification but before direct-run cancellation,
+draft/closed/malformed fresh PR authority, a centralized
+`repository_dispatch` review run whose target head is encoded in its trusted
+display title, and an active run that ceases to be attributable to the target
+PR. The destructive boundary is therefore tested independently of the earlier
+classifier. Complete repository coverage and docstring gates must remain 100%
+before publication.
 
 ### Positive case: a genuinely superseded head is still cancelled correctly
 
 `ContextualWisdomLab/naruon` run `25650417985` ("Strix Security Scan" run
-`#86`, PR #140, `head_sha 5371bf3ee97d596ea27cf9d43ea90f0c82ee7b2e`) was
-cancelled with the annotation "Canceling since a higher priority waiting
-request for strix-Strix Security Scan-140 exists" -- GitHub's native
-concurrency mechanism retiring an old-head scan in favor of a newer push to
-the same PR, under naruon's PR-scoped concurrency group from before the
-current repo-wide, `cancel-in-progress: false` design documented in
-`.github/workflows/strix.yml`. This confirms genuine supersession cancellation
-has worked in this codebase's history. For the current architecture, the
-already-passing `test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr`
-and `test_stale_opencode_run_ids_filters_current_head_and_missing_ids` cases
-are the deterministic proof that a run whose `head_sha` genuinely differs from
-a *valid* `headRefOid` is still correctly classified as stale and cancelled by
-the (now-guarded) matching logic -- only a falsy expected head is refused.
+`#86`, `ContextualWisdomLab/naruon#140`,
+`head_sha 5371bf3ee97d596ea27cf9d43ea90f0c82ee7b2e`) was cancelled with the
+annotation "Canceling since a higher priority waiting request for
+strix-Strix Security Scan-140 exists" -- GitHub's native concurrency mechanism
+retiring an old-head scan in favor of a newer push to the same PR, under
+naruon's PR-scoped concurrency group from before the current repo-wide,
+`cancel-in-progress: false` design documented in `.github/workflows/strix.yml`.
+This confirms genuine supersession cancellation has worked in this codebase's
+history. The scheduler's deterministic tests separately prove that a run whose
+validated target head genuinely differs from a freshly validated live PR head
+remains cancellable.
 
 Hosted exact-head CI, security, coverage, and review evidence remain
 authoritative before merge; this doctoring note does not substitute for those
