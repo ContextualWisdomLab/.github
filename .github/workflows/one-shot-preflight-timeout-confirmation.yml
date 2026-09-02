@@ -27,15 +27,43 @@ jobs:
       - name: Prefer Git Bash over the WSL bash.exe launcher stub
         shell: pwsh
         run: |
-          # windows-latest resolves an unqualified "bash" on PATH to the WSL
-          # launcher stub at C:\Windows\System32\bash.exe ahead of Git Bash,
-          # and that stub fails closed with a UTF-16 "no installed
-          # distributions" error because these runners carry no WSL distro.
-          # The repaired launcher's own pytest suite shells out to bare
-          # "bash" (tests/test_contextual_orchestrator_review_sidecar_contract.py,
+          # Prepending Git's bin directory to PATH is NOT sufficient on its
+          # own: Win32 CreateProcess resolves an unqualified executable name
+          # (e.g. the bare "bash" every affected test invokes) by searching,
+          # in order, the calling application's own directory, the current
+          # directory, THEN the Windows system directory
+          # (C:\Windows\System32), and only after that the PATH environment
+          # variable -- see CreateProcessW's documented search sequence. The
+          # WSL launcher stub windows-latest preinstalls at
+          # C:\Windows\System32\bash.exe therefore always wins over any PATH
+          # entry, and it fails closed with a UTF-16 "Windows Subsystem for
+          # Linux has no installed distributions" message because these
+          # hosted runners carry no WSL distro. That is exactly what broke
+          # every bash-invoking pytest case in run 33605637974 / job
+          # 100169014077, and reproduced identically in this branch's next
+          # push (run 33607270329 / job 100174015506) with only the PATH
+          # prepend in place: tests/test_contextual_orchestrator_review_sidecar_contract.py,
           # tests/test_contextual_orchestrator_review_runtime_preflight.py,
-          # tests/test_strix_contextual_orchestrator_contract.py), so prepend
-          # Git for Windows' bin directory to PATH for the rest of this job.
+          # and tests/test_strix_contextual_orchestrator_contract.py all
+          # shell out to a bare "bash".
+          #
+          # This VM is disposable and this job has no use for WSL, so remove
+          # the stub outright; keep the PATH prepend too so Git Bash is also
+          # the first match once nothing shadows it in System32.
+          $stub = "C:\Windows\System32\bash.exe"
+          if (Test-Path -LiteralPath $stub) {
+            try {
+              Remove-Item -LiteralPath $stub -Force -ErrorAction Stop
+            } catch {
+              Write-Host "Direct removal of $stub failed ($_); retrying after taking ownership"
+              takeown /F $stub /A | Out-Null
+              icacls $stub /grant "*S-1-5-32-544:F" | Out-Null
+              Remove-Item -LiteralPath $stub -Force -ErrorAction Stop
+            }
+          }
+          if (Test-Path -LiteralPath $stub) {
+            throw "Failed to remove the WSL bash.exe launcher stub at $stub"
+          }
           echo "C:\Program Files\Git\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Python
