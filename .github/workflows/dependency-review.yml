@@ -1,0 +1,139 @@
+# Reusable Dependency Review (workflow_call), consolidating the four
+# near-identical dependency-review.yml files argos, mightyETL, newsdom-api,
+# and scopeweave each carried independently. See
+# docs/adr/0024-dependency-review-reusable-workflow-consolidation.md and
+# docs/doctoring/dependency-review-reusable-workflow-consolidation.md for the
+# per-repo field audit behind these inputs.
+#
+# The `on: pull_request` trigger (and any branch restriction) stays in each
+# calling repo's own thin workflow file -- a workflow_call target cannot also
+# be the thing GitHub triggers directly on pull_request.
+#
+# Dependency Review requires GitHub Dependency Graph (and, on private repos
+# without GitHub Advanced Security, it is unavailable regardless of a repo's
+# own settings). scopeweave's original workflow already detected this
+# dynamically via the dependency-graph compare API instead of assuming from
+# public/private repository status (mightyETL's original approach, which is
+# wrong for a private repo that does have GHAS). This reusable workflow
+# adopts the dynamic detection as the common, more-correct behavior for
+# every caller, so no per-repo public/private input is needed.
+#
+# Example caller (.github/workflows/dependency-review.yml in a product repo):
+#
+#   name: Dependency Review
+#   on:
+#     pull_request:
+#   concurrency:
+#     group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+#     cancel-in-progress: true
+#   jobs:
+#     dependency-review:
+#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
+#       with:
+#         fail_on_severity: high
+#         allow_ghsas: "GHSA-69w3-r845-3855"
+
+name: Reusable Dependency Review
+
+on:
+  workflow_call:
+    inputs:
+      fail_on_severity:
+        description: "Value forwarded to dependency-review-action's fail-on-severity input."
+        required: false
+        type: string
+        default: "moderate"
+      allow_ghsas:
+        description: >-
+          Comma-or-newline-separated GHSA IDs forwarded to
+          dependency-review-action's allow-ghsas input. Empty (the default)
+          allows none.
+        required: false
+        type: string
+        default: ""
+      continue_on_error:
+        description: >-
+          Whether the dependency-review step itself is allowed to fail
+          without failing the job (argos's original behavior, which relies
+          on a separate blocking OSV-Scanner gate instead of this one).
+          Default false makes the dependency-review step itself blocking.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    env:
+      # Opts every JS action this job runs (checkout, dependency-review-action)
+      # into the Node 24 actions runtime ahead of GitHub's default cutover,
+      # matching newsdom-api's original workflow -- applied uniformly here
+      # since it is a forward-compatibility setting, not a per-repo policy.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check dependency graph availability
+        id: dependency_graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "Dependency review only runs as a hard gate for pull_request events."
+            exit 0
+          fi
+
+          api_url="${GITHUB_API_URL:-https://api.github.com}"
+          response_file="$(mktemp)"
+          status="$(
+            curl -fsS -o "$response_file" -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" \
+              || true
+          )"
+
+          if [ "$status" = "200" ]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
+            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is unavailable)."
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Dependency graph availability check failed with HTTP ${status}. This is not a 'graph unavailable' response (403/404) -- treating it as a genuine failure instead of silently skipping the security gate."
+          cat "$response_file"
+          exit 1
+
+      - name: Dependency review
+        if: steps.dependency_graph.outputs.available == 'true'
+        continue-on-error: ${{ inputs.continue_on_error }}
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: ${{ inputs.fail_on_severity }}
+          allow-ghsas: ${{ inputs.allow_ghsas }}
+          comment-summary-in-pr: on-failure
+
+      - name: Dependency graph unavailable note
+        if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
+        run: |
+          echo "Dependency Review requires GitHub Dependency Graph to be enabled for this repository (and, on private repositories, GitHub Advanced Security)."
+          echo "Other required dependency-vulnerability gates (OSV-Scanner, Scorecard) remain the blocking coverage until Dependency Graph is available here."
