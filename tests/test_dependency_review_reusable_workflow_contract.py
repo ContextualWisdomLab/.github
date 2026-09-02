@@ -83,6 +83,18 @@ def test_uniform_fields_are_hardcoded_not_parameterized() -> None:
     assert "persist-credentials: false" in workflow
 
 
+def test_example_caller_preserves_required_permission_envelope() -> None:
+    """Thin callers must explicitly pass the reusable job's read permission ceiling."""
+    workflow = _workflow_text()
+    assert (
+        "#   permissions:\n"
+        "#     contents: read\n"
+        "#     pull-requests: read\n"
+        "#   concurrency:"
+        in workflow
+    )
+
+
 def test_forces_node24_runtime_for_js_actions() -> None:
     """newsdom-api's Node24 opt-in applies uniformly, not only to that one caller."""
     workflow = _workflow_text()
