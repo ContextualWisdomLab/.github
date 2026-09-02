@@ -64,13 +64,17 @@ via `gh api repos/ContextualWisdomLab/.github/branches/main/protection`) —
 so for `.github`'s *own* PRs, a cancelled Strix run is cosmetic, not
 merge-blocking. But the org ruleset `18156473`
 (`conditions.repository_name: {include: ["~ALL"], exclude: ["noema",
-".github", "IRT-bibliography-set"]}` — **source: live
-`gh api orgs/ContextualWisdomLab/rulesets/18156473` response**, re-verified
-2026-09-02; this exact `exclude` list is not written anywhere in
-`docs/org-required-workflow-rollout.md`, which only records the `include:
-["~ALL"]` half — noted here per peer review (`trusting-wilbur-195f90-93`)
-after they couldn't corroborate the `exclude` list from that doc and lack
-org-admin scope to query the API directly themselves) makes `strix.yml` a
+".github", "IRT-bibliography-set"]}` — **source, corrected (Devin Review):
+confirmed live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`,
+re-verified 2026-09-02, and also independently on record in
+`docs/org-required-workflow-rollout.md:252` — "On 2026-07-23 06:35 KST...
+The all-repository scope excludes only `.github`, `noema`, and private
+`IRT-bibliography-set`." A prior version of this note claimed that ledger
+had no record of the exclude list at all; that was wrong — both a peer
+review pass and my own earlier search missed this specific prose sentence,
+apparently because both searches were pattern-matching for a structured
+list literal rather than reading the dated log entries as prose.) makes
+`strix.yml` a
 required workflow in every other org repository, and this same job is what
 runs for them (dispatched centrally). Spot-checking three busy sibling repos
 confirmed the identical signature:
