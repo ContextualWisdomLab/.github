@@ -16,15 +16,13 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   repair:
     if: github.repository == 'ContextualWisdomLab/.github' && github.ref_name == 'fix/scheduler-stale-headrefoid-cancellation'
     runs-on: ubuntu-slim
     timeout-minutes: 60
-    env:
-      WORKFLOW_PUSH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact writer head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -86,6 +84,7 @@ jobs:
       - name: Publish one fast-forward canonical successor
         env:
           EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
           test -n "${WORKFLOW_PUSH_TOKEN:-}"
