@@ -10,6 +10,7 @@ on:
       - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
       - scripts/ci/temp_pr1669_live_head_revalidation_v6.py
       - scripts/ci/temp_pr1669_live_head_revalidation_v7.py
+      - tests/test_pr1669_cancel_stale_opencode_runs.py
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
@@ -79,7 +80,10 @@ jobs:
       - name: Verify focused cancellation contracts
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py -q
+          PYTHONPATH=. python -m pytest \
+            tests/test_pr_review_merge_scheduler.py \
+            tests/test_pr1669_cancel_stale_opencode_runs.py \
+            -q
 
       - name: Verify complete repository coverage and docstrings
         run: |
@@ -96,7 +100,7 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/fix/scheduler-stale-headrefoid-cancellation'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
