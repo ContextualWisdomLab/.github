@@ -3,9 +3,9 @@
 **Recorded:** 2026-09-02  
 **Owner:** `ContextualWisdomLab/.github`
 
-This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **85 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 36 reviewed targets below.
+This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **92 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 43 reviewed targets below.
 
-The explicit label assignments cover 85 active evidence-backed targets across the baseline and this supplement.
+The explicit label assignments cover 92 active evidence-backed targets across the baseline and this supplement.
 
 - `ContextualWisdomLab/ThreadWeave#37`
 - `ContextualWisdomLab/fast-mlsirm#1716`
@@ -43,5 +43,12 @@ The explicit label assignments cover 85 active evidence-backed targets across th
 - `ContextualWisdomLab/aFIPC#309`
 - `ContextualWisdomLab/aFIPC#308`
 - `ContextualWisdomLab/g7#2`
+- `ContextualWisdomLab/codec-carver#513`
+- `ContextualWisdomLab/codec-carver#514`
+- `ContextualWisdomLab/noema#531`
+- `ContextualWisdomLab/semantic-data-portal#91`
+- `ContextualWisdomLab/learning-content-studio#3`
+- `ContextualWisdomLab/learning-record-store#3`
+- `ContextualWisdomLab/bandscope#985`
 
-Each target records the evidence-backed primary semantic type established from current PR scope and live repository labels: documentation for public-surface writers, bug for security/correctness remediations, and feature for performance/product improvements. Recording semantic type does not make Draft work Ready, unblock blocked work, transfer merge authority, or override repository-local priority/status/security/component labels. The reconciliation contract continues to preserve labels outside the centrally managed semantic set.
+Each target records the evidence-backed primary semantic type established from current PR/issue scope and live repository labels: documentation for public-surface writers, bug for security/correctness/commercial-policy defects, and feature for buyer-facing product capabilities. Recording semantic type does not make Draft work Ready, unblock blocked work, transfer merge authority, or override repository-local priority/status/security/component labels. The reconciliation contract continues to preserve labels outside the centrally managed semantic set.
