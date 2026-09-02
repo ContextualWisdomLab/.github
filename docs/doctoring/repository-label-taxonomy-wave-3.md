@@ -3,9 +3,9 @@
 **Recorded:** 2026-09-02  
 **Owner:** `ContextualWisdomLab/.github`
 
-This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **144 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 95 reviewed targets below.
+This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **142 active evidence-backed label targets**; the reconciled operating baseline enumerates 47 active targets, and this wave adds the 95 reviewed targets below.
 
-The explicit label assignments cover 144 active evidence-backed targets across the baseline and this supplement.
+The explicit label assignments cover 142 active evidence-backed targets across the baseline and this supplement.
 
 - `ContextualWisdomLab/ThreadWeave#37`
 - `ContextualWisdomLab/fast-mlsirm#1716`
@@ -42,7 +42,7 @@ The explicit label assignments cover 144 active evidence-backed targets across t
 - `ContextualWisdomLab/aFIPC#310`
 - `ContextualWisdomLab/aFIPC#309`
 - `ContextualWisdomLab/aFIPC#308`
-- `ContextualWisdomLab/g7#2`
+- `ContextualWisdomLab/g7#3`
 - `ContextualWisdomLab/codec-carver#513`
 - `ContextualWisdomLab/codec-carver#516`
 - `ContextualWisdomLab/noema#531`
