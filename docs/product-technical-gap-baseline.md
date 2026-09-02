@@ -2902,6 +2902,35 @@ regression artifacts from this same autonomous process (`source-fix-pr1714-no-mo
 already-merged feature branches, not `main`) were found on `main` after merging and removed in this
 commit.
 
+**Correction (2026-09-02, later the same day): the "harmless debris" characterization above was
+wrong about *why* those two files existed, and removing them was a mistake worth recording.** They
+were not leftover debris from an already-applied fix -- they were this org's autonomous self-repair
+loop *in the middle of fixing a real, still-live bug* in `.github#1714` and `.github#1715` (see
+immediately above: `timeout-minutes: 25` on `autofix`, `timeout-minutes: 210` on `noema-review`), and
+that fix had not yet landed on `main` when the files were deleted as "already served its purpose."
+Devin's automated review on `ContextualWisdomLab/.github#1661` caught this: `autofix`'s and
+`noema-review`'s jobs are not the "step polls for an async verdict a *different* process prepares"
+pattern `opencode-review.yml`'s `poll_deadline_epoch` (#1707) is -- their job body **is** a synchronous
+model call (`opencode run` in `autofix`; `two_phase.py`'s `call_llm` in `noema-review`), so the
+job-level timeouts #1714/#1715 added directly cap the model's own reasoning/tool-use time once
+elapsed, which `docs/product-goal-directive.md` #8 explicitly prohibits ("Model timeout은
+application·Agent·Gateway 공통 상한 없이 기본 null이다"). This is very likely the direct cause of the
+repeated "900초 제한이 왜 또 나오는지" complaint (item 39 in the standing loop backlog) -- a fixed
+job-level cap terminating in-progress model reasoning, exactly what the policy says must not happen.
+Fixed by hand (not another self-modifying generator script, per this org's own convention) in
+`.github#1727`: removed `timeout-minutes: 25` from `autofix` and `timeout-minutes: 210` from
+`noema-review` entirely, with no replacement bound (matching the policy's stated default), inverted
+the two contract tests that had asserted a bound was present into tests asserting one is absent, and
+re-verified `opencode-review.yml`/`pr-review-merge-scheduler.yml`/`strix.yml`'s existing job-level
+timeouts against the same question (does the bounded step run the model synchronously, or wait on a
+separate async actor / do pure bookkeeping?) -- all three remained confirmed sound; only the two
+noted here needed reverting. Full evidence: `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`.
+**Lesson for this session's own working discipline:** when reconciling debris left by the org's
+autonomous repair loop, verify whether its fix actually landed before deleting the files that were
+going to apply it -- "the trigger paths are scoped safely" (which was true, and is a real thing worth
+checking) is not the same question as "did this already do its job" (which was not checked here, and
+was false).
+
 **A second, independent gap found and fixed while executing the "standardize workflows, consolidate
 into `.github`" request**: `docs/org-required-workflow-rollout.md` claimed org ruleset `18156473`
 ("CWL Central required workflows") included `codeql-pr.yml`, `scorecard-pr.yml`, and
