@@ -6,6 +6,7 @@ on:
       - fix/opencode-poll-wall-clock-bound
     paths:
       - .github/workflows/_temp_pr1706_reconcile_formal_verdict.yml
+      - scripts/ci/source_fix_pr1706_formal_verdict.py
 
 permissions:
   contents: write
@@ -20,7 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact writer head
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
       - name: Verify live writer head
@@ -34,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=. python3 scripts/ci/source_fix_pr1706_formal_verdict.py
-          PYTHONPATH=. python3 tests/test_opencode_required_verdict_reconciliation_contract.py
+          PYTHONPATH=. python3 -m pytest tests/test_opencode_required_verdict_reconciliation_contract.py
           git diff --check
       - name: Publish exact repaired tree and retire temporary machinery
         shell: bash
