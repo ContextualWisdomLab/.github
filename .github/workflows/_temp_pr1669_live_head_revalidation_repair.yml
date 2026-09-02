@@ -1,4 +1,4 @@
-# One-shot owner branch repair; self-deletes after verified publication.
+# One-shot owner-branch repair; self-deletes after verified publication.
 name: Temporary PR1669 live-head cancellation repair
 
 on:
@@ -8,7 +8,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
       - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-      - tests/test_pr1669_parallel_stale_cancellation.py
+      - scripts/ci/temp_pr1669_live_head_revalidation_v6.py
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
@@ -55,24 +55,27 @@ jobs:
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
           test -f scripts/ci/temp_pr1669_live_head_revalidation_v5.py
+          test -f scripts/ci/temp_pr1669_live_head_revalidation_v6.py
           test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
 
-      - name: Apply test-first guarded source repair
+      - name: Apply exact-RED guarded source repair
         run: |
           set -euo pipefail
-          python scripts/ci/temp_pr1669_live_head_revalidation_v5.py
+          python scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e tests/test_pr1669_parallel_stale_cancellation.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
 
       - name: Verify focused cancellation contracts
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py tests/test_pr1669_parallel_stale_cancellation.py -q
+          PYTHONPATH=. python -m pytest tests/test_pr_review_merge_scheduler.py -q
 
       - name: Verify complete repository coverage and docstrings
         run: |
@@ -110,12 +113,14 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
-          python3 scripts/ci/temp_pr1669_live_head_revalidation_v5.py
+          python3 scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
-          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e tests/test_pr1669_parallel_stale_cancellation.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
 
