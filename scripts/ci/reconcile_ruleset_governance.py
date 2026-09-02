@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reconcile reviewed GitHub ruleset governance with fail-closed verification.
 
-The reconciler manages only the two rulesets declared in a reviewed manifest. It
+The reconciler manages only the two rulesets pinned by the reviewed manifest. It
 preserves live conditions and non-governance rules while canonicalizing the
 reviewed pull-request controls. GitHub does not provide conditional PUT/PATCH
 semantics for this endpoint, so the second live read is a drift detector rather
@@ -10,10 +10,11 @@ the exact protected-main revision, serialized owner-plane execution, and the
 immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
 overwritten, the reconciler restores the newest displaced administrator state
 before failing; recovery re-checks immutable history and protected-main identity
-before every recovery write. Ambiguous mutation timeouts are resolved from live
+before every recovery write. Ambiguous mutation results are settled from live
 state plus immutable history instead of being treated as ordinary request
-failures. The canonical audit is executed against projected and live state so
-this narrow reconciler never reports broader policy drift as converged.
+failures or retried blindly. The canonical audit is executed against projected
+and live state so this narrow reconciler never reports broader policy drift as
+converged.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,11 +36,39 @@ ORGANIZATION = "ContextualWisdomLab"
 CONTROL_REPOSITORY = "ContextualWisdomLab/.github"
 DESIRED_MERGE_METHODS = ["merge", "squash"]
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+API_REQUEST_TIMEOUT_SECONDS = 30
 COLLISION_RECOVERY_LIMIT = 8
+AMBIGUOUS_WRITE_SETTLEMENT_POLLS = 3
+AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS = API_REQUEST_TIMEOUT_SECONDS
+AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS = (
+    AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS
+    / (AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1)
+)
+
+# Conservative blocking-operation budget for one target. The count includes the
+# normal guarded mutation path, start/mid/end ambiguous-result observations, the
+# full bounded collision-recovery chain, post-confirmation checks, and the final
+# workflow verify-only pass. Each blocking API/auditor operation is bounded by
+# API_REQUEST_TIMEOUT_SECONDS; settlement sleep spans one additional client
+# timeout horizon. The workflow contract test derives its minimum job timeout
+# from this function rather than maintaining a second independent estimate.
+BASE_MUTATION_BLOCKING_OPERATIONS_PER_TARGET = 7
+AMBIGUOUS_SETTLEMENT_BLOCKING_OPERATIONS_PER_TARGET = 12
+RECOVERY_BLOCKING_OPERATIONS_PER_ATTEMPT = 7
+POST_CONFIRM_BLOCKING_OPERATIONS_PER_TARGET = 2
+FINAL_VERIFY_BLOCKING_OPERATIONS_PER_TARGET = 2
 
 
 class RulesetGovernanceError(RuntimeError):
     """Raised when desired-state validation or live reconciliation is unsafe."""
+
+
+class AmbiguousRulesetWriteError(RulesetGovernanceError):
+    """Raised when a PUT transport result cannot prove server-side rejection."""
+
+
+class RulesetMutationNotVisibleError(RulesetGovernanceError):
+    """Raised while an ambiguous PUT has not yet appeared in immutable history."""
 
 
 @dataclass(frozen=True)
@@ -87,6 +117,43 @@ class RulesetTarget:
         return "Organization" if self.scope == "organization" else "Repository"
 
 
+EXPECTED_MANIFEST_TARGETS = frozenset(
+    {
+        (
+            "repository",
+            ORGANIZATION,
+            ".github",
+            17921150,
+            "Lock default branch",
+        ),
+        (
+            "organization",
+            ORGANIZATION,
+            None,
+            18156473,
+            "CWL Central required workflows",
+        ),
+    }
+)
+
+
+def worst_case_apply_seconds(*, target_count: int) -> int:
+    """Return the conservative critical-section budget for reviewed targets."""
+
+    blocking_operations = (
+        BASE_MUTATION_BLOCKING_OPERATIONS_PER_TARGET
+        + AMBIGUOUS_SETTLEMENT_BLOCKING_OPERATIONS_PER_TARGET
+        + COLLISION_RECOVERY_LIMIT * RECOVERY_BLOCKING_OPERATIONS_PER_ATTEMPT
+        + POST_CONFIRM_BLOCKING_OPERATIONS_PER_TARGET
+        + FINAL_VERIFY_BLOCKING_OPERATIONS_PER_TARGET
+    )
+    per_target_seconds = (
+        blocking_operations * API_REQUEST_TIMEOUT_SECONDS
+        + AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS
+    )
+    return target_count * per_target_seconds
+
+
 def _plain_dict(value: Any, *, field: str) -> dict[str, Any]:
     """Return a plain dictionary or reject behavior-bearing mapping objects."""
 
@@ -104,7 +171,7 @@ def _plain_list(value: Any, *, field: str) -> list[Any]:
 
 
 def load_manifest(path: Path) -> tuple[RulesetTarget, ...]:
-    """Load and strictly validate the reviewed ruleset target manifest."""
+    """Load and strictly validate the two reviewed privileged ruleset targets."""
 
     root = _plain_dict(json.loads(path.read_text(encoding="utf-8")), field="manifest")
     if set(root) != {"schema_version", "organization", "targets"}:
@@ -145,6 +212,20 @@ def load_manifest(path: Path) -> tuple[RulesetTarget, ...]:
 
     if {target.scope for target in targets} != {"organization", "repository"}:
         raise RulesetGovernanceError("manifest must contain one target per supported scope")
+    actual_targets = frozenset(
+        (
+            target.scope,
+            target.owner,
+            target.repository,
+            target.ruleset_id,
+            target.name,
+        )
+        for target in targets
+    )
+    if actual_targets != EXPECTED_MANIFEST_TARGETS:
+        raise RulesetGovernanceError(
+            "manifest must contain the exact reviewed governance targets"
+        )
     return tuple(targets)
 
 
@@ -180,7 +261,7 @@ def _run_gh_json(
             input=None if body is None else json.dumps(body, separators=(",", ":")),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=API_REQUEST_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
         if method == "PUT":
@@ -189,8 +270,21 @@ def _run_gh_json(
             f"GitHub API request timed out for {endpoint}"
         ) from exc
     if completed.returncode != 0:
+        if method == "PUT":
+            raise AmbiguousRulesetWriteError(
+                f"GitHub PUT outcome is ambiguous for {endpoint}"
+            )
         raise RulesetGovernanceError(f"GitHub API request failed for {endpoint}")
-    return json.loads(completed.stdout)
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        if method == "PUT":
+            raise AmbiguousRulesetWriteError(
+                f"GitHub PUT response is ambiguous for {endpoint}"
+            ) from exc
+        raise RulesetGovernanceError(
+            f"GitHub API returned invalid JSON for {endpoint}"
+        ) from exc
 
 
 def _gh_api(
@@ -330,7 +424,7 @@ def _canonical_governance_errors(
         input=json.dumps(live, separators=(",", ":")),
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=API_REQUEST_TIMEOUT_SECONDS,
     )
     return [] if completed.returncode == 0 else [completed.stderr.strip()]
 
@@ -404,7 +498,7 @@ def _recover_displaced_history_state(
     becomes the next recovery target. A newer live state observed before a
     recovery write is never overwritten. Privileged recovery revalidates the
     reviewed protected-main SHA immediately before every PUT. Ambiguous recovery
-    timeouts inspect immutable history before retrying or advancing the recovery
+    results inspect immutable history before retrying or advancing the recovery
     chain. The loop is bounded and fails closed.
     """
 
@@ -422,24 +516,24 @@ def _recover_displaced_history_state(
 
         try:
             _gh_api("PUT", target.endpoint, body=displaced_payload)
-        except subprocess.TimeoutExpired:
+        except (AmbiguousRulesetWriteError, subprocess.TimeoutExpired):
             history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
             if not history:
                 raise RulesetGovernanceError(
-                    "ambiguous ruleset recovery PUT timeout exposed no history"
+                    "ambiguous ruleset recovery PUT exposed no history"
                 )
             recovery_version = _history_version_id(history[0])
             if recovery_version == current_version:
                 continue
             if len(history) < 2:
                 raise RulesetGovernanceError(
-                    "ambiguous ruleset recovery PUT timeout exposed no predecessor"
+                    "ambiguous ruleset recovery PUT exposed no predecessor"
                 )
             recovery_predecessor = _history_version_id(history[1])
             recovery_state = _history_version_state(target, recovery_version)
             if _editable_projection(recovery_state) != displaced_payload:
                 raise RulesetGovernanceError(
-                    "ambiguous ruleset recovery PUT timeout left a newer state; refusing overwrite"
+                    "ambiguous ruleset recovery PUT left a newer state; refusing overwrite"
                 )
         else:
             history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
@@ -494,7 +588,7 @@ def _verify_ruleset_history_transition(
     newest_id = _history_version_id(history[0])
     predecessor_id = _history_version_id(history[1])
     if newest_id == baseline_version:
-        raise RulesetGovernanceError("ruleset mutation is not visible in history")
+        raise RulesetMutationNotVisibleError("ruleset mutation is not visible in history")
 
     newest_state = _history_version_state(target, newest_id)
     if _editable_projection(newest_state) != desired:
@@ -521,34 +615,55 @@ def _confirm_ambiguous_put(
     desired: dict[str, Any],
     expected_main_sha: str | None,
 ) -> dict[str, Any]:
-    """Resolve a timed-out PUT from immutable history and exact live convergence.
+    """Settle an ambiguous PUT from immutable history and exact live convergence.
 
-    A transport timeout is ambiguous because GitHub may have committed the
-    mutation. The protected-main and history guards therefore decide whether the
-    write was absent, committed exactly, or displaced an intervening version.
-    No mutation retry occurs here.
+    A timeout, connection loss, nonzero transport result, or malformed successful
+    response can occur after GitHub accepted the update. Three observations span
+    one additional full client timeout horizon: start, midpoint, and end. A
+    baseline-only first observation is therefore never represented as rejection.
+    Acceptance must become visible in immutable history and live state; collision
+    recovery follows the same predecessor contract. If no decisive transition is
+    visible by the end of the bounded window, the run fails as unresolved and
+    never retries the desired mutation blindly.
     """
 
     if expected_main_sha is None:
         raise RulesetGovernanceError(
-            "ambiguous ruleset PUT timeout requires protected-main history guard"
+            "ambiguous ruleset PUT requires protected-main history guard"
         )
-    _assert_current_main(expected_main_sha)
-    _verify_ruleset_history_transition(
-        target,
-        baseline_version,
-        desired,
-        expected_main_sha=expected_main_sha,
+
+    for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
+        _assert_current_main(expected_main_sha)
+        try:
+            _verify_ruleset_history_transition(
+                target,
+                baseline_version,
+                desired,
+                expected_main_sha=expected_main_sha,
+            )
+        except RulesetMutationNotVisibleError:
+            live = _gh_api("GET", target.endpoint)
+            _assert_target_provenance(live, target)
+            if poll_index == AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
+                raise RulesetGovernanceError(
+                    "ambiguous ruleset PUT outcome remains unresolved after settlement window"
+                )
+            time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+            continue
+
+        after = _gh_api("GET", target.endpoint)
+        _assert_identity(after, target)
+        if _editable_projection(after) != desired:
+            raise RulesetGovernanceError(
+                f"{target.scope} ambiguous ruleset mutation did not converge"
+            )
+        _assert_canonical_governance(after, target)
+        _assert_current_main(expected_main_sha)
+        return after
+
+    raise RulesetGovernanceError(
+        "ambiguous ruleset PUT outcome remains unresolved after settlement window"
     )
-    after = _gh_api("GET", target.endpoint)
-    _assert_identity(after, target)
-    if _editable_projection(after) != desired:
-        raise RulesetGovernanceError(
-            f"{target.scope} timed-out ruleset mutation did not converge"
-        )
-    _assert_canonical_governance(after, target)
-    _assert_current_main(expected_main_sha)
-    return after
 
 
 def _reconcile_target(
@@ -587,10 +702,10 @@ def _reconcile_target(
     history_verified = False
     try:
         _gh_api("PUT", target.endpoint, body=desired)
-    except subprocess.TimeoutExpired:
+    except (AmbiguousRulesetWriteError, subprocess.TimeoutExpired):
         if baseline_version is None:
             raise RulesetGovernanceError(
-                "ambiguous ruleset PUT timeout requires protected-main history guard"
+                "ambiguous ruleset PUT requires protected-main history guard"
             )
         after = _confirm_ambiguous_put(
             target,
