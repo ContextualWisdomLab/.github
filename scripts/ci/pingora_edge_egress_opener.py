@@ -21,6 +21,15 @@ This module does not itself change ``pingora_edge_policy.py``'s live default
 behavior: it is an additive, independently tested unit landed ahead of that
 cutover, per this organization's "prove the pattern before the rip-and-
 replace" migration convention for security-relevant changes.
+
+Cutover requirement (not yet done — tracked here so it isn't lost): this
+module raises :class:`EgressAdapterError`, while ``pingora_edge_policy.py``'s
+call sites currently catch only its own ``PolicyError``. Wiring
+``github_open_json`` in as the live ``OpenJson`` implementation must either
+translate ``EgressAdapterError`` to ``PolicyError`` at the call boundary or
+widen the caller's exception handling to cover both, so a client-construction
+or request failure still produces the same controlled, fail-closed exit
+behavior ``pingora_edge_policy.py`` guarantees today.
 """
 
 from __future__ import annotations
