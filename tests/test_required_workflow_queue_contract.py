@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -977,6 +978,26 @@ def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
     )[1].splitlines()[0]
 
 
+def test_scan_pr_queue_has_a_bounded_runtime() -> None:
+    """scan-pr-queue must not fall back to GitHub's 360-minute platform default.
+
+    Without a job-level timeout-minutes, a stuck run (rate-limited GitHub API,
+    a hung gh invocation) can occupy a shared runner for up to six hours,
+    contributing to org-wide Actions capacity saturation. The bound must be
+    shorter than org-queue-sweep's timeout-minutes: 60, since scan-pr-queue
+    only scans this one repository's queue while org-queue-sweep walks every
+    target repository in the organization.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+
+    match = re.search(r"^    timeout-minutes: (\d+)$", scan_job, flags=re.MULTILINE)
+    assert match is not None, "scan-pr-queue must declare a job-level timeout-minutes"
+    scan_timeout = int(match.group(1))
+    assert 1 <= scan_timeout <= 45
+    assert scan_timeout < 60
+
+
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 
@@ -988,8 +1009,8 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     visible reason when it cannot mutate sibling repositories. The sweep runs
     hourly so an approval that lands after a PR's last event is
     auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate 30-minute scan, and the job has
-    enough runtime headroom to finish a complete organization walk.
+    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
+    job has enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
