@@ -5,7 +5,7 @@ on:
     branches: [fix/noema-closed-not-stale]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: temp-pr1674-strix-live-state-repair
@@ -20,7 +20,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Revalidate remote writer head
         env:
@@ -79,8 +79,10 @@ jobs:
       - name: Publish only onto unchanged writer head and self-retire
         env:
           EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
           git fetch origin fix/noema-closed-not-stale
           live_head="$(git rev-parse origin/fix/noema-closed-not-stale)"
           if [ "$live_head" != "$EXPECTED_HEAD" ]; then
@@ -98,4 +100,5 @@ jobs:
             tests/test_noema_private_target_live_admission.py
           git diff --cached --check
           git commit -m "fix(review): revalidate live dispatch targets before admission"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:fix/noema-closed-not-stale
