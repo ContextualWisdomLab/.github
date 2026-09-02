@@ -3253,3 +3253,20 @@ from the run's own name instead), and the PR it belonged to had *already been cl
 `cancel-closed-pr-runs`-style cleanup jobs that rely on the `pull_requests` API field to identify which
 PR a run belongs to can silently miss runs from this specific trigger type. Worth checking whether any
 central cancel-on-close job has this same blind spot.
+
+**The "적체" (piling up) complaint's root answer: a concurrency ceiling, confirmed by three repeated
+measurements, not something a fourth workflow fix will move.** Checked `status=queued` counts across
+`.github`/`bandscope`/`contextual-orchestrator` at three separate points this session: `.github`
+1849 -> 1928 -> 1975 -> 2003; `bandscope` 1601 -> 1523 -> 1496 -> 1567; `contextual-orchestrator`
+395 -> 419 -> 466. All three are net *increasing* despite the real fixes landing today (unbounded
+opencode-review.yml/noema-review.yml polling removed, 16 confirmed zombie runs cleared org-wide).
+Cross-checked with `in_progress` counts sampled across 8 repositories earlier: only ~15 jobs running
+concurrently org-wide against thousands queued -- a hard throughput ceiling, most likely GitHub's
+Team-plan concurrent-job limit, that normal PR/CI volume (this tick visibly compounded by three
+Claude sessions simultaneously opening and pushing PRs) exceeds. GitHub's billing API is deprecated
+(`GET orgs/{org}/settings/billing/*` -> `410 Gone`, `https://gh.io/billing-api-updates-org`), so the
+exact number cannot be confirmed programmatically -- **told the user directly this tick** that this
+needs a human check of `https://github.com/organizations/ContextualWisdomLab/settings/actions` (or
+the Billing page) rather than another round of workflow-level engineering, since the actual levers
+from here are a plan upgrade, self-hosted runner capacity, or deliberately throttling how many PRs
+get pushed to simultaneously across concurrent agent sessions -- not more YAML.
