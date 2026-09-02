@@ -1,6 +1,7 @@
 {
   "repositories": [
     "ContextualWisdomLab/.github",
+    "ContextualWisdomLab/ConceptWeave",
     "ContextualWisdomLab/TEPP",
     "ContextualWisdomLab/contextual-orchestrator",
     "ContextualWisdomLab/naruon"
