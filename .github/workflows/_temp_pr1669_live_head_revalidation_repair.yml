@@ -9,6 +9,7 @@ on:
       - .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
       - scripts/ci/temp_pr1669_live_head_revalidation_v5.py
       - scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+      - scripts/ci/temp_pr1669_live_head_revalidation_v7.py
 
 concurrency:
   group: temp-pr1669-live-head-${{ github.repository }}-${{ github.ref_name }}
@@ -56,18 +57,21 @@ jobs:
           test "$remote_head" = "$EXPECTED_HEAD"
           test -f scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test -f scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test -f scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           test -f .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
 
       - name: Apply exact-RED guarded source repair
         run: |
           set -euo pipefail
           python scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          python scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           test ! -e tests/test_pr1669_parallel_stale_cancellation.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
@@ -114,12 +118,14 @@ jobs:
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
           python3 scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          python3 scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_repair.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v2.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v3.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v4.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v5.py
           test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v6.py
+          test ! -e scripts/ci/temp_pr1669_live_head_revalidation_v7.py
           test ! -e tests/test_pr1669_parallel_stale_cancellation.py
           test ! -e .github/workflows/_temp_pr1669_live_head_revalidation_repair.yml
           git diff --check
