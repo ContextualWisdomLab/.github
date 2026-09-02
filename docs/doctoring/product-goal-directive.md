@@ -99,7 +99,7 @@ fixed:
   reconciliation notes (§5 naming, §8 CI pool routing) and the surrounding
   scaffolding (title, "why this file exists," `/goal` pointer) were kept and
   updated, not the directive text itself.
-- **PR:** ContextualWisdomLab/.github#1691 (product-goal-directive branch;
+- **PR:** ContextualWisdomLab/.github#1698 (product-goal-directive branch;
   see the PR for the exact diff).
 
 ### What changed in substance (not exhaustive — read the new §1-9 directly)
@@ -187,4 +187,4 @@ fixed:
   both OpenCode Review and Strix.
 - `docs/CWL-MASTER-CONTEXT.md` §7 — the DB-naming grandfather clause the §5
   note still cites.
-- ContextualWisdomLab/.github#1691 — the PR carrying this revision.
+- ContextualWisdomLab/.github#1698 — the PR carrying this revision.
