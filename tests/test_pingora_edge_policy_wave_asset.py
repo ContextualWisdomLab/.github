@@ -47,6 +47,13 @@ def pcm_wave_bytes() -> bytes:
     return b"RIFF" + len(riff_payload).to_bytes(4, "little") + riff_payload
 
 
+def riff_wave_bytes(*wave_chunks: bytes) -> bytes:
+    """Build one RIFF/WAVE envelope around caller-supplied chunks."""
+
+    riff_payload = b"WAVE" + b"".join(wave_chunks)
+    return b"RIFF" + len(riff_payload).to_bytes(4, "little") + riff_payload
+
+
 def test_evaluate_pull_request_accepts_verified_wave_audio_asset() -> None:
     """A genuine patchless RIFF/WAVE resource is inert edge-policy evidence."""
 
@@ -74,3 +81,28 @@ def test_evaluate_pull_request_accepts_verified_wave_audio_asset() -> None:
     )
 
     assert policy_violations == ()
+
+
+def test_wave_verifier_requires_complete_format_and_audio_chunks() -> None:
+    """A RIFF/WAVE wrapper alone cannot bypass UTF-8 runtime inspection."""
+
+    valid_wave = pcm_wave_bytes()
+    header_only_wave = riff_wave_bytes()
+    audio_only_chunk = b"data" + (2).to_bytes(4, "little") + b"\xff\x00"
+    format_only_chunk = valid_wave[12:36]
+
+    assert policy_module._is_complete_wave_audio(valid_wave)
+    assert not policy_module._is_complete_wave_audio(header_only_wave)
+    assert not policy_module._is_complete_wave_audio(riff_wave_bytes(audio_only_chunk))
+    assert not policy_module._is_complete_wave_audio(riff_wave_bytes(format_only_chunk))
+
+
+def test_wave_verifier_rejects_truncated_appended_and_misaligned_chunks() -> None:
+    """Container-size and chunk-boundary drift fail closed before exemption."""
+
+    valid_wave = pcm_wave_bytes()
+    assert not policy_module._is_complete_wave_audio(valid_wave[:-1])
+    assert not policy_module._is_complete_wave_audio(valid_wave + b"runtime")
+
+    malformed_chunk = b"fmt " + (17).to_bytes(4, "little") + b"\x00" * 16
+    assert not policy_module._is_complete_wave_audio(riff_wave_bytes(malformed_chunk))
