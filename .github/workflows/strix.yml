@@ -184,6 +184,8 @@ jobs:
           format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
         }}
       cancel-in-progress: false
+    outputs:
+      should_scan: ${{ steps.dispatch_validation.outputs.should_scan }}
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
     # legitimately require well over two hours to scan -- this org's own
     # standing operating directive accepts that central OpenCode/Strix/Noema
@@ -1050,7 +1052,7 @@ jobs:
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
+    if: ${{ always() && !cancelled() && needs.strix.outputs.should_scan == 'true' && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
     runs-on: ubuntu-24.04
     permissions:
       id-token: write
