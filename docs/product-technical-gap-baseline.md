@@ -3158,3 +3158,14 @@ mitigation (`docs/CWL-MASTER-CONTEXT.md` / this repo's own prior guidance: back 
 GraphQL, fall back to the browser tool for read-only checks). Worth noting for future multi-session
 coordination: three sessions running `gh api` concurrently against the same identity exhausts the
 shared secondary limit meaningfully faster than one session alone.
+
+**naruon's dependency-review.yml consolidation landed** (`.github#1732` merged, harden-runner +
+`comment_summary_in_pr` input live on `main` at `5f8e5b2a79e709c4ab1a4179a605d34c458b13a1`;
+`naruon#1539` opened, and `naruon`'s `develop` branch protection required-status-check name updated
+from `dependency-review` to the actual published `dependency-review / dependency-review` -- the same
+collision class `newsdom-api` hit, caught proactively this time by checking before opening the caller
+PR rather than after). The four already-open/merged callers were re-pinned to the same new SHA so they
+also gain `harden-runner` with no `with:` change (their un-set `comment_summary_in_pr` still resolves
+to the unchanged `"on-failure"` default): `argos#559` (merged, retroactive follow-up), `mightyETL#330`,
+`newsdom-api#784`, `scopeweave#654` (all three still open, pin updated on their existing branches
+before their first merge rather than needing a second migration PR later).
