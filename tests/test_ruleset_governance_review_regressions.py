@@ -270,7 +270,7 @@ def test_history_transition_rejects_incomplete_or_inconsistent_evidence(monkeypa
     monkeypatch.setattr(module, "_history_version_state", lambda *_args, **_kwargs: _live())
     with pytest.raises(
         module.RulesetMutationStillSettlingError,
-        match="latest ruleset history changed before the reviewed mutation became visible",
+        match="latest ruleset history does not match reviewed mutation; history changed before the reviewed mutation became visible",
     ):
         module._verify_ruleset_history_transition(_target(), 7, desired)
 
@@ -422,7 +422,7 @@ def test_history_collision_with_bad_predecessor_metadata_fails_before_restore(mo
 
 
 def test_history_collision_aborts_if_main_advances_before_recovery(monkeypatch) -> None:
-    """Before rollback starts, a protected-main advance still vetoes privileged recovery."""
+    """Before rollback writes, a protected-main advance still vetoes privileged recovery."""
 
     desired_state = _converged()
     desired = _desired()
@@ -444,11 +444,16 @@ def test_history_collision_aborts_if_main_advances_before_recovery(monkeypatch) 
             module.RulesetGovernanceError("protected main advanced")
         ),
     )
-    monkeypatch.setattr(
-        module,
-        "_gh_api",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no recovery write expected")),
-    )
+
+    api_calls: list[str] = []
+
+    def fake_api(method, endpoint, *, body=None):
+        api_calls.append(method)
+        if method == "GET" and endpoint == _target().endpoint:
+            return desired_state
+        raise AssertionError("no recovery write expected")
+
+    monkeypatch.setattr(module, "_gh_api", fake_api)
     with pytest.raises(module.RulesetGovernanceError, match="protected main advanced"):
         module._verify_ruleset_history_transition(
             _target(),
@@ -456,6 +461,7 @@ def test_history_collision_aborts_if_main_advances_before_recovery(monkeypatch) 
             desired,
             expected_main_sha="a" * 40,
         )
+    assert api_calls == ["GET"]
 
 
 def test_history_collision_after_our_write_ignores_stale_main_guard_during_recovery(monkeypatch) -> None:
