@@ -60,26 +60,27 @@ also could not surface, because nothing timed the primary attempt either.
    content, matching the existing no-raw-content discipline `extract_json_object`
    and `decode_llm_response_body` already established.
 2. **Structured output request.** Both the primary and the repair call now
-   declare `NOEMA_VERDICT_RESPONSE_FORMAT`, an OpenAI Chat Completions
-   `response_format: {"type": "json_schema", "json_schema": {"strict": true, ...}}`
-   envelope matching `validate_substantive_verdict`'s exact verdict shape.
-   contextual-orchestrator's `orchestrator/free` sidecar is a proven
-   OpenAI-compatible endpoint (ADR-0003), so this is the caller correctly
-   declaring what it wants in that endpoint's own contract -- not a
-   reimplementation of gateway-owned retry/candidate-exclusion policy. This
-   should reduce how often the repair path is even entered, for any
-   candidate whose backend genuinely honors structured outputs. Whether
-   contextual-orchestrator's gateway correctly *translates* this
-   OpenAI-shaped request for a routed backend that does not natively speak
-   it (e.g. a raw Claude model needing forced tool-calling instead) is that
-   gateway's own translation responsibility, not this caller's; building
-   per-provider format detection here would recreate the layering violation
-   the repo owner already rejected in PR #1602 (see below). This is a new,
-   currently unobserved failure surface worth watching through the
-   `served_model` telemetry this same change adds: if a specific candidate
-   starts erroring on `response_format` instead of merely returning
-   malformed JSON, that will now be visible per-attempt instead of
-   collapsing into the same opaque failure class.
+   declare `_noema_verdict_response_format(required_probes)`, an OpenAI Chat
+   Completions `response_format: {"type": "json_schema", "json_schema": {"strict": true, ...}}`
+   envelope matching `validate_substantive_verdict`'s exact verdict shape,
+   including its adversarial-probe-count floor (see item 4). contextual-
+   orchestrator's `orchestrator/free` sidecar is a proven OpenAI-compatible
+   endpoint (ADR-0003), so this is the caller correctly declaring what it
+   wants in that endpoint's own contract -- not a reimplementation of
+   gateway-owned retry/candidate-exclusion policy. This should reduce how
+   often the repair path is even entered, for any candidate whose backend
+   genuinely honors structured outputs. Whether contextual-orchestrator's
+   gateway correctly *translates* this OpenAI-shaped request for a routed
+   backend that does not natively speak it (e.g. a raw Claude model needing
+   forced tool-calling instead) is that gateway's own translation
+   responsibility, not this caller's; building per-provider format
+   detection here would recreate the layering violation the repo owner
+   already rejected in PR #1602 (see below). This is a new, currently
+   unobserved failure surface worth watching through the `served_model`
+   telemetry this same change adds: if a specific candidate starts erroring
+   on `response_format` instead of merely returning malformed JSON, that
+   will now be visible per-attempt instead of collapsing into the same
+   opaque failure class.
 3. **Local, lossless JSON repair.** `extract_json_object` now makes one
    additional local attempt through `_strip_trailing_commas_outside_strings`
    before failing closed -- removing a comma that appears immediately before
@@ -95,9 +96,63 @@ also could not surface, because nothing timed the primary attempt either.
    char 1529 of 1890, mid-string -- not a trailing comma); that class stays
    correctly fail-closed, now with the added phase/duration telemetry from
    item 1.
-4. **The 900-second bound itself is left unauthorized/arbitrary, not
+4. **The declared schema's probe-count floor matches
+   `validate_substantive_verdict` exactly, via one shared computation.** See
+   "Second gap: the schema was looser than Noema's own check" below.
+5. **The 900-second bound itself is left unauthorized/arbitrary, not
    defended as intentional.** See "Owner correction on the 900-second bound"
    below.
+
+## Second gap: the schema was looser than Noema's own check
+
+A second, independently-reported incident during this same change:
+`ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480` (PR
+#1) failed with:
+
+```
+##[error]Noema adversarial validation requires at least 2 concrete probe(s)
+##[error]Process completed with exit code 1.
+```
+
+Unlike the `html4tree` case, the model's response here **was** syntactically
+valid JSON -- it satisfied the (then still static, minItems-less)
+`response_format` schema, then failed outright at
+`validate_substantive_verdict`'s own content check: executable/test/workflow
+changes require 2 distinct adversarial probes (`changed_file_is_material`),
+other diffs require 1, and this verdict had only 1 on a material change. The
+job died with a bare `exit 1` and no earlier, cheaper structural signal.
+
+`contextual-orchestrator`'s ADR-0035
+(`docs/planning/adrs/0035-structured-provider-orchestration.md`, not this
+repo's own `docs/adr/`) confirms provider acceptance of `response_format` is
+not proof the returned content actually conforms: the gateway parses the
+final content and validates it locally against the exact declared JSON
+Schema dialect, and "one invalid synthesis receives one same-provider
+repair call with the original schema... A second violation fails closed as
+`invalid_structured_output`." **Correction to an earlier relayed claim:**
+ADR-0035 does **not** describe a cross-provider failover on repeated
+violation -- it explicitly says the opposite ("There is no cross-provider
+replay"); a repeated violation fails closed. The provider-health circuit
+ledger it also updates affects routing for *later, independent* requests,
+not this one. That distinction does not change the fix here, since the
+actionable mechanism (one structural floor, one governed same-provider
+repair, before Noema's own Python check ever runs) was accurately described.
+
+**Fix:** `_required_probe_count(diff, changed_paths)` is now the single
+source of truth for the probe-count floor, extracted from
+`validate_substantive_verdict`'s own inline computation (previously
+duplicated nowhere -- now literally the same function call from both
+`validate_substantive_verdict` and `call_llm`'s `response_format` builder).
+`_noema_verdict_json_schema` takes `required_probes` and sets
+`adversarial_validation.probes.minItems` accordingly, so the JSON Schema
+sent to the gateway on every request carries the exact same floor Noema's
+own Python-side check will apply moments later. The two cannot silently
+diverge again: there is only one computation, called from two places.
+Noema's own `validate_substantive_verdict` check remains in place as a
+redundant defense-in-depth backstop -- it does not trust the gateway to
+have actually enforced the schema (a non-`orchestrator/free` misconfiguration,
+a candidate that ignores `response_format` entirely, or a gateway defect
+would all still need to be caught locally).
 
 ## Layering: what was deliberately *not* implemented here
 
@@ -183,16 +238,28 @@ carry `repair attempts=1`, a `repair duration=`, and `phase=reading`;
 `extract_json_object` recovers a trailing-comma malformation locally (with
 its own notice) while still failing closed on the unrelated malformation
 class the actual `html4tree` incident hit; and a successful repair attempt
-still logs a success line with its served model. The full existing
-`tests/test_noema_model_output_failure_classification.py` and
-`tests/test_noema_review_gate.py` suites continue to pass unmodified against
-the enriched messages (they assert with `in`, not exact equality).
+still logs a success line with its served model. Also new:
+`test_response_format_probe_floor_matches_required_probe_count_for_material_changes`
+reproduces the `ConceptWeave` shape and asserts the outgoing schema's
+`minItems` equals `_required_probe_count`'s output for a material (`.py`)
+changed path (`2`); `test_required_probe_count_is_the_shared_source_for_the_python_check_too`
+proves `validate_substantive_verdict` accepts the exact same one-probe
+verdict `_required_probe_count` says is sufficient for a non-material
+change and rejects it once the same verdict is pointed at a material one.
+The full existing `tests/test_noema_model_output_failure_classification.py`
+and `tests/test_noema_review_gate.py` suites continue to pass unmodified
+against the enriched messages (they assert with `in`, not exact equality).
 
 ## References
 
 `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` (2026-08-31
 amendment on fixed wall-clock timeouts; 2026-08-31 amendment on independent
 Noema review).
+
+`ContextualWisdomLab/contextual-orchestrator`'s
+`docs/planning/adrs/0035-structured-provider-orchestration.md` (gateway-side
+JSON Schema validation of returned structured-output content, one governed
+same-provider repair call, fail-closed on repeated violation).
 
 `docs/doctoring/noema-model-output-repair-boundary.md` (PR #1617's original
 malformed-verdict repair boundary decision).

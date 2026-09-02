@@ -15,10 +15,21 @@ Semantic Versioning where the repository publishes a release.
   `orchestrator/free` candidate served the response, emitting a
   `::notice::`/`::warning::` per attempt and folding the same breakdown into
   the raised exception message -- never logging raw model content. Both
-  calls now declare `NOEMA_VERDICT_RESPONSE_FORMAT`, an OpenAI Chat
-  Completions `response_format: json_schema` envelope matching the verdict
-  schema, so a compliant candidate is asked for structured output directly.
-  `extract_json_object` makes one additional lossless local repair attempt
+  calls now declare an OpenAI Chat Completions `response_format: json_schema`
+  envelope (`_noema_verdict_response_format`) matching the verdict schema,
+  so a compliant candidate is asked for structured output directly. Its
+  `adversarial_validation.probes.minItems` is built per request from a new
+  shared `_required_probe_count(diff, changed_paths)` -- the exact same
+  computation `validate_substantive_verdict` uses -- so the two can never
+  drift apart: this closes a second, independently-discovered gap where
+  `ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480`
+  hit a schema-valid verdict with too few probes and failed outright with
+  no earlier, cheaper structural catch. Per ADR-0035
+  (`contextual-orchestrator`), the gateway validates returned content
+  against the declared schema and performs one governed same-provider
+  repair call on a violation before this now reaches Noema's own
+  Python-side check at all. `extract_json_object` makes one additional
+  lossless local repair attempt
   (stripping a trailing comma before a closing `}`/`]` outside any string)
   before falling back to the network repair path. None of this reimplements
   the gateway-owned JSON-validation/candidate-exclusion/retry policy PR

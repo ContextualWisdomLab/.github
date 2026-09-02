@@ -126,15 +126,103 @@ def test_response_format_is_the_openai_structured_output_envelope_on_every_call(
 
     assert verdict == _comment_verdict()
     assert len(requests) == 2
+    expected_format = gate._noema_verdict_response_format(1)  # README.md is not material
     for request in requests:
         payload = json.loads(request.data)
-        assert payload["response_format"] == gate.NOEMA_VERDICT_RESPONSE_FORMAT
-    schema = gate.NOEMA_VERDICT_RESPONSE_FORMAT["json_schema"]
+        assert payload["response_format"] == expected_format
+    schema = expected_format["json_schema"]
     assert schema["strict"] is True
-    assert gate.NOEMA_VERDICT_RESPONSE_FORMAT["type"] == "json_schema"
+    assert expected_format["type"] == "json_schema"
     assert set(schema["schema"]["required"]) == {
         "decision", "summary", "reviewed_lines", "adversarial_validation", "findings",
     }
+    probes_schema = schema["schema"]["properties"]["adversarial_validation"]["properties"]["probes"]
+    assert probes_schema["minItems"] == 1
+
+
+def test_response_format_probe_floor_matches_required_probe_count_for_material_changes(monkeypatch):
+    """The declared ``minItems`` must track ``_required_probe_count`` exactly.
+
+    Reproduces the shape of `ContextualWisdomLab/ConceptWeave` run
+    `33527145686`, job `99920767480`: a `.py` (material/source-like) changed
+    path requires 2 probes. If the declared schema only asked for 1 (or
+    omitted the floor entirely, as before this test), the gateway's own
+    schema validation (ADR-0035) could never structurally catch a
+    single-probe verdict on a material change before it reaches
+    ``validate_substantive_verdict`` and fails the whole review outright.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    head_sha = "f" * 40
+    material_diff = """diff --git a/scripts/ci/example.py b/scripts/ci/example.py
+index 1111111..2222222 100644
+--- a/scripts/ci/example.py
++++ b/scripts/ci/example.py
+@@ -1 +1 @@
+-old
++new
+"""
+    requests: list[object] = []
+
+    def open_response(_opener, request, **_kwargs):
+        requests.append(request)
+        return _JsonResponse(
+            {"choices": [{"message": {"content": json.dumps(_comment_verdict())}}]}
+        )
+
+    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)
+
+    gate.call_llm(
+        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, material_diff, False, head_sha,
+        changed_paths=("scripts/ci/example.py",),
+    )
+
+    assert len(requests) == 1
+    payload = json.loads(requests[0].data)
+    probes_schema = payload["response_format"]["json_schema"]["schema"]["properties"][
+        "adversarial_validation"
+    ]["properties"]["probes"]
+    expected = gate._required_probe_count(material_diff, ("scripts/ci/example.py",))
+    assert expected == 2
+    assert probes_schema["minItems"] == expected
+
+
+def test_required_probe_count_is_the_shared_source_for_the_python_check_too():
+    """``validate_substantive_verdict`` must reject one probe below the same floor.
+
+    Proves the schema-side ``minItems`` and the Python-side backstop are
+    reading the exact same computation, not two independently-maintained
+    numbers that could drift.
+    """
+    diff = DIFF  # README.md-only: not material, floor is 1
+    assert gate._required_probe_count(diff, ("README.md",)) == 1
+    verdict = _malformed_probe_verdict()  # already has exactly 1 probe
+    verdict["adversarial_validation"]["probes"][0]["outcome"] = "falsified"
+    gate.validate_substantive_verdict(verdict, diff, ("README.md",))  # does not raise
+
+    # Same one-probe shape, but pointed at a material (.py) changed line --
+    # this is the exact ConceptWeave shape: schema-valid JSON, correct
+    # location, just one probe short of the 2 a source-file change requires.
+    material_diff = """diff --git a/scripts/ci/example.py b/scripts/ci/example.py
+index 1111111..2222222 100644
+--- a/scripts/ci/example.py
++++ b/scripts/ci/example.py
+@@ -1 +1 @@
+-old
++new
+"""
+    assert gate._required_probe_count(material_diff, ("scripts/ci/example.py",)) == 2
+    material_verdict = _malformed_probe_verdict()
+    for location in (
+        material_verdict["reviewed_lines"][0],
+        material_verdict["adversarial_validation"]["probes"][0],
+    ):
+        location["path"] = "scripts/ci/example.py"
+    material_verdict["adversarial_validation"]["probes"][0]["outcome"] = "falsified"
+    with pytest.raises(gate.NoemaModelOutputError, match="requires at least 2 concrete probe"):
+        gate.validate_substantive_verdict(
+            material_verdict, material_diff, ("scripts/ci/example.py",)
+        )
 
 
 def test_served_model_telemetry_reads_envelope_model_field_when_present(monkeypatch, capsys):

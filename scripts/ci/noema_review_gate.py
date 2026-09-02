@@ -102,6 +102,19 @@ NOEMA_REPAIR_DEADLINE_SECONDS = 15 * 60
 # ``required`` (a conditionally-absent field is expressed as a nullable
 # type, e.g. ``["array", "null"]``, never an omitted key) and every object
 # to set ``additionalProperties: false``.
+#
+# ``adversarial_validation.probes`` carries a ``minItems`` floor built fresh
+# per request from ``_required_probe_count`` rather than a fixed number: per
+# ADR-0035 (`contextual-orchestrator`), the gateway parses the returned
+# content and validates it against this exact declared schema -- provider
+# acceptance of ``response_format`` is not proof of conformance -- and makes
+# one governed same-provider repair call on a violation before this ever
+# reaches Noema's own ``validate_substantive_verdict`` second pass. Without
+# this floor, an insufficient-probe verdict (schema-valid JSON, just too few
+# probes) reaches that second pass and fails the whole review outright with
+# no earlier, cheaper structural catch -- exactly what happened in
+# `ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480`
+# ("Noema adversarial validation requires at least 2 concrete probe(s)").
 _NOEMA_REVIEWED_LINE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -147,46 +160,64 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     },
     "required": ["severity", "file", "line", "side", "message"],
 }
-NOEMA_VERDICT_RESPONSE_FORMAT: dict[str, Any] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "noema_review_verdict",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "decision": {
-                    "type": "string",
-                    "enum": ["approve", "request_changes", "comment"],
-                },
-                "summary": {"type": "string"},
-                "reviewed_lines": {
-                    "type": ["array", "null"],
-                    "items": _NOEMA_REVIEWED_LINE_SCHEMA,
-                },
-                "adversarial_validation": {
-                    "type": ["object", "null"],
-                    "additionalProperties": False,
-                    "properties": {
-                        "status": {"type": "string", "enum": ["passed", "failed"]},
-                        "residual_risk": {"type": "string"},
-                        "probes": {"type": "array", "items": _NOEMA_PROBE_SCHEMA},
-                    },
-                    "required": ["status", "residual_risk", "probes"],
-                },
-                "findings": {"type": "array", "items": _NOEMA_FINDING_SCHEMA},
+def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
+    """Build the verdict JSON Schema with this request's exact probe floor.
+
+    ``required_probes`` must come from ``_required_probe_count(diff,
+    changed_paths)`` -- the same call ``validate_substantive_verdict`` uses
+    -- so the gateway-enforced structural floor and the Python-side backstop
+    can never silently diverge. The static per-field schemas above are safe
+    to share by reference here since nothing in this module mutates them.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["approve", "request_changes", "comment"],
             },
-            "required": [
-                "decision",
-                "summary",
-                "reviewed_lines",
-                "adversarial_validation",
-                "findings",
-            ],
+            "summary": {"type": "string"},
+            "reviewed_lines": {
+                "type": ["array", "null"],
+                "items": _NOEMA_REVIEWED_LINE_SCHEMA,
+            },
+            "adversarial_validation": {
+                "type": ["object", "null"],
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["passed", "failed"]},
+                    "residual_risk": {"type": "string"},
+                    "probes": {
+                        "type": "array",
+                        "minItems": required_probes,
+                        "items": _NOEMA_PROBE_SCHEMA,
+                    },
+                },
+                "required": ["status", "residual_risk", "probes"],
+            },
+            "findings": {"type": "array", "items": _NOEMA_FINDING_SCHEMA},
         },
-    },
-}
+        "required": [
+            "decision",
+            "summary",
+            "reviewed_lines",
+            "adversarial_validation",
+            "findings",
+        ],
+    }
+
+
+def _noema_verdict_response_format(required_probes: int) -> dict[str, Any]:
+    """Build the OpenAI ``response_format`` envelope for this request's probe floor."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "noema_review_verdict",
+            "strict": True,
+            "schema": _noema_verdict_json_schema(required_probes),
+        },
+    }
 
 
 class NoemaModelOutputError(RuntimeError):
@@ -541,6 +572,30 @@ def parse_diff_path(raw: str, prefix: str) -> str:
     return value.removeprefix(prefix)
 
 
+def _required_probe_count(diff: str, changed_paths: Sequence[str] = ()) -> int:
+    """Return the minimum adversarial-probe count a formal verdict must carry.
+
+    Single source of truth for two independent enforcement points: this
+    module's own ``validate_substantive_verdict`` (the Python-side, always-
+    correct backstop) and ``call_llm``'s per-request ``response_format``
+    JSON Schema (``adversarial_validation.probes.minItems``), so the two can
+    never silently drift apart. `ContextualWisdomLab/ConceptWeave` run
+    `33527145686`, job `99920767480` hit exactly the gap this closes: a
+    schema-valid verdict with only one probe on a source-file change failed
+    Noema's own check outright, with no earlier, cheaper structural catch.
+    Per ADR-0035 (`contextual-orchestrator`), a JSON-Schema-declared
+    constraint like ``minItems`` is validated by the gateway against the
+    actual returned content -- not merely trusted because the provider
+    accepted the request -- and one governed same-provider repair call is
+    made on a violation before this Python-side check would ever run.
+    Executable/test/workflow changes require two distinct probes; other
+    diffs require one (``changed_file_is_material``).
+    """
+    locations = changed_diff_locations(diff)
+    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
+    return 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
+
+
 def validate_substantive_verdict(
     verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
 ) -> None:
@@ -576,8 +631,7 @@ def validate_substantive_verdict(
     if not isinstance(residual_risk, str) or not residual_risk.strip():
         raise NoemaModelOutputError("Noema adversarial validation requires residual_risk")
     probes = validation.get("probes")
-    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
-    required_probes = 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
+    required_probes = _required_probe_count(diff, changed_paths)
     if not isinstance(probes, list) or len(probes) < required_probes:
         raise NoemaModelOutputError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
 
@@ -1439,10 +1493,14 @@ def call_llm(
     an empty-message failure retry unboundedly instead of failing closed
     after one attempt.
 
-    The outgoing payload declares ``NOEMA_VERDICT_RESPONSE_FORMAT`` (an
-    OpenAI Chat Completions structured-output envelope) on both the primary
-    and the repair call, so a compliant candidate model is asked to emit the
-    verdict shape directly instead of only being told so in the prompt text.
+    The outgoing payload declares ``_noema_verdict_response_format`` (an
+    OpenAI Chat Completions structured-output envelope, with
+    ``adversarial_validation.probes.minItems`` set from
+    ``_required_probe_count(diff, changed_paths)``) on both the primary and
+    the repair call, so a compliant candidate model is asked to emit the
+    verdict shape -- including the exact probe-count floor
+    ``validate_substantive_verdict`` will also check -- directly, instead of
+    only being told so in the prompt text.
     Every attempt (primary or repair, success or failure) emits exactly one
     ``::notice::``/``::warning::`` GitHub Actions annotation carrying its
     duration, the furthest phase reached (connecting/reading/decoding/
@@ -1532,7 +1590,9 @@ def call_llm(
     payload = {
         "model": model,
         "temperature": 0,
-        "response_format": NOEMA_VERDICT_RESPONSE_FORMAT,
+        "response_format": _noema_verdict_response_format(
+            _required_probe_count(diff, changed_paths)
+        ),
         "messages": [
             {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
             prompt,
