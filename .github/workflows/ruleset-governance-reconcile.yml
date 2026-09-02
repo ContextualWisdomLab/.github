@@ -136,7 +136,9 @@ jobs:
       vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 130
+    # Use the full documented GitHub-hosted job execution limit so this workflow
+    # cannot impose an earlier timeout on the 128-minute mutation/recovery bound.
+    timeout-minutes: 360
     environment: ruleset-governance-maintenance
     steps:
       - name: Harden runner
