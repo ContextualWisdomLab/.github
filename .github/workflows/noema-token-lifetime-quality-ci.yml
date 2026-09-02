@@ -1,0 +1,53 @@
+name: Noema Reviewer Token Lifetime CI
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/noema-review.yml
+      - .github/actions/noema-review/two_phase.py
+      - tests/test_noema_reviewer_token_lifetime.py
+      - tests/test_noema_two_phase_handoff.py
+      - tests/test_noema_refreshed_app_identity.py
+      - tests/test_noema_token_lifetime_stale_run_contract.py
+      - docs/doctoring/noema-review-token-lifetime.md
+      - docs/product-technical-gap-baseline.md
+      - CHANGELOG.md
+      - requirements-opencode-review-ci-hashes.txt
+      - .github/workflows/noema-token-lifetime-quality-ci.yml
+
+# Deterministic quality CI: a synchronize supersedes older work for this PR.
+concurrency:
+  group: noema-token-lifetime-quality-${{ github.event.pull_request.base.repo.full_name }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  noema-reviewer-token-lifetime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned review CI dependencies
+        run: >-
+          python3 -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Verify token-lifetime handoff contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_noema_reviewer_token_lifetime.py \
+            tests/test_noema_two_phase_handoff.py \
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
+          python3 -m compileall -q \
+            .github/actions/noema-review/two_phase.py \
+            tests/test_noema_reviewer_token_lifetime.py \
+            tests/test_noema_two_phase_handoff.py \
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
+          git diff --check

@@ -683,25 +683,82 @@ def test_split_repo_and_graphql(monkeypatch):
 
 
 def test_existing_noema_review_matches_actor_and_head():
-    noema_marker = "<!-- noema-review-gate head_sha=head -->"
+    head = "a" * 40
+    noema_marker = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     assert noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="human", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="human", body=noema_marker)]}),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="noema", body="review without gate marker")]}),
+        make_pr(
+            headRefOid=head,
+            reviews={"nodes": [review(commit=head, login="noema", body="review without gate marker")]},
+        ),
         "noema",
     )
     assert not noema.existing_noema_review(
-        make_pr(reviews={"nodes": [review(login="", body=noema_marker)]}),
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="", body=noema_marker)]}),
         "",
     )
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review("DISMISSED", login="noema")]}), "noema")
     assert not noema.existing_noema_review(make_pr(reviews={"nodes": [review(commit="old", login="noema")]}), "noema")
+
+
+def test_existing_noema_review_rejects_well_formed_body_bound_to_a_different_head():
+    """A well-formed footer/marker pair naming a stale SHA must not match.
+
+    The review's own commit oid can match the current head even when its
+    authored body text still carries the previous head's SHA bindings (a
+    corrupted or hand-edited review) — this is distinct from the missing/
+    malformed case and exercises the SHA-equality check on its own.
+    """
+    head = "a" * 40
+    stale = "b" * 40
+    stale_bound_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{stale}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={stale} decision=approve -->",
+        ]
+    )
+    assert not noema.existing_noema_review(
+        make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body=stale_bound_body)]}),
+        "noema",
+    )
+
+
+def test_existing_noema_review_rejects_legacy_body_without_footer_marker():
+    """A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a rerun.
+
+    noema_review_handoff.py's noema_review_state() can never recognize such a
+    review as a valid current-head verdict (its trusted-span helpers return
+    empty without the footer marker), so treating it as "already reviewed"
+    here would stall an unchanged PR forever: the gate skips republishing,
+    and the handoff never accepts what was already posted.
+    """
+    legacy_marker = "<!-- noema-review-gate head_sha=head -->"
+    assert not noema.existing_noema_review(
+        make_pr(reviews={"nodes": [review(login="noema", body=legacy_marker)]}),
+        "noema",
+    )
 
 
 def test_require_expected_head_rejects_invalid_closed_and_stale_targets():
@@ -2011,9 +2068,26 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
 
+    valid_review_body = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
     cases = [
         (make_pr(headRefOid=head, isDraft=True), "noema"),
-        (make_pr(headRefOid=head, reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]}), "noema"),
+        (
+            make_pr(
+                headRefOid=head,
+                reviews={"nodes": [review(commit=head, login="noema", body=valid_review_body)]},
+            ),
+            "noema",
+        ),
     ]
     for pr, actor in cases:
         calls.clear()
@@ -2021,6 +2095,43 @@ def test_inspect_and_review_skip_paths(monkeypatch):
         monkeypatch.setattr(noema, "current_actor", lambda actor=actor: actor)
         assert noema.inspect_and_review("owner/repo", 7, head) == 0
         assert calls == []
+
+    # A review predating NOEMA_REVIEW_FOOTER_MARKER must not suppress a
+    # rerun: noema_review_handoff.py's noema_review_state() can never accept
+    # it as a valid current-head verdict, so the gate must republish rather
+    # than silently stall the PR on an unchanged head.
+    legacy_pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [review(commit=head, login="noema", body="<!-- noema-review-gate head_sha=head -->")]},
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=legacy_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls
+
+    # A review with both markers present but a missing/malformed body-side or
+    # closing-marker SHA binding (Devin Review, PR #1500) must also not
+    # suppress a rerun: noema_review_handoff.py's noema_review_state() can
+    # never recognize such a review as a valid current-head verdict either,
+    # so treating it as "already reviewed" here would stall the PR forever.
+    malformed_pr = make_pr(
+        headRefOid=head,
+        reviews={
+            "nodes": [
+                review(
+                    commit=head,
+                    login="noema",
+                    body=noema.NOEMA_REVIEW_FOOTER_MARKER + "<!-- noema-review-gate head_sha=head -->",
+                )
+            ]
+        },
+    )
+    calls.clear()
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number, pr=malformed_pr: pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls
 
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "")
@@ -2507,13 +2618,16 @@ def test_substantive_verdict_fail_closed_boundaries():
     assert noema.validate_substantive_verdict({"decision": "comment"}, diff) is None
     invalid_cases = [
         (lambda value: value.pop("reviewed_lines"), "at least one reviewed"),
-        (lambda value: value.update(reviewed_lines=[None]), "reviewed line 1 must be an object"),
+        (lambda value: value.update(reviewed_lines=[None]), r"reviewed line entry 1/1 \(array index 0.*must be an object"),
         (lambda value: value["reviewed_lines"][0].update(analysis=""), "requires concrete analysis"),
         (lambda value: value.pop("adversarial_validation"), "requires adversarial_validation"),
         (lambda value: value["adversarial_validation"].update(status="failed"), "status=passed"),
         (lambda value: value["adversarial_validation"].update(residual_risk=""), "requires residual_risk"),
         (lambda value: value["adversarial_validation"].update(probes=[]), "at least 2 concrete probe"),
-        (lambda value: value["adversarial_validation"].update(probes=[None, None]), "probe 1 must be an object"),
+        (
+            lambda value: value["adversarial_validation"].update(probes=[None, None]),
+            r"adversarial probe entry 1/2 \(array index 0.*must be an object",
+        ),
         (lambda value: value["adversarial_validation"]["probes"][0].update(line=2), "not an exact changed-side line"),
         (lambda value: value["adversarial_validation"]["probes"][0].update(hypothesis=""), "requires hypothesis"),
         (lambda value: value["adversarial_validation"]["probes"][0].update(attack_or_counterexample=""), "requires attack_or_counterexample"),
@@ -2526,6 +2640,128 @@ def test_substantive_verdict_fail_closed_boundaries():
         mutate(candidate)
         with pytest.raises(RuntimeError, match=message):
             noema.validate_substantive_verdict(candidate, diff)
+
+
+def test_entry_ordinal_names_an_array_position_not_a_line_number():
+    """Regression for naruon#1503: the label must read as an array position."""
+    assert noema._entry_ordinal(1, 3) == "entry 1/3 (array index 0, not a source line)"
+    assert noema._entry_ordinal(3, 3) == "entry 3/3 (array index 2, not a source line)"
+
+
+def test_format_location_reprs_every_raw_field():
+    assert noema._format_location("a.py", 3, "RIGHT") == "path='a.py' line=3 side='RIGHT'"
+    # None/non-string/non-int values stay visibly distinguishable via repr().
+    assert noema._format_location(None, "3", 7) == "path=None line='3' side=7"
+
+
+def test_nearby_changed_locations_covers_every_branch():
+    locations = {
+        ("a.py", 1, "RIGHT"),
+        ("a.py", 5, "RIGHT"),
+        ("a.py", 10, "LEFT"),
+        ("b.py", 2, "RIGHT"),
+    }
+    # Non-string path: nothing to compare against.
+    assert noema._nearby_changed_locations(locations, None, 5) == ""
+    # No changed location shares this path.
+    assert noema._nearby_changed_locations(locations, "missing.py", 5) == ""
+    # Int line: sorted nearest-first by distance from the rejected line.
+    hint = noema._nearby_changed_locations(locations, "a.py", 4)
+    assert hint == "; nearest changed lines for a.py: a.py:5 (RIGHT), a.py:1 (RIGHT), a.py:10 (LEFT)"
+    # Non-int line: falls back to ascending (line, side) order instead of distance.
+    hint_non_int = noema._nearby_changed_locations(locations, "a.py", "not-a-line")
+    assert hint_non_int == "; nearest changed lines for a.py: a.py:1 (RIGHT), a.py:5 (RIGHT), a.py:10 (LEFT)"
+    # More same-path locations than the display limit: truncated with a "+N more" tail.
+    many = {("c.py", line, "RIGHT") for line in range(1, 8)}
+    hint_many = noema._nearby_changed_locations(many, "c.py", 1, limit=5)
+    assert hint_many.endswith(", +2 more")
+    assert hint_many.count("(RIGHT)") == 5
+
+
+def test_validate_substantive_verdict_reports_rejected_location_and_nearby_hint():
+    """The raised message must carry the actual rejected citation, not just a position."""
+    diff = """diff --git a/tool.py b/tool.py
+--- a/tool.py
++++ b/tool.py
+@@ -1,3 +1,3 @@
+ keep = 1
+-old = True
++new = True
+ tail = 2
+"""
+    verdict = {
+        "decision": "approve",
+        "summary": "The replacement keeps the invariant.",
+        "findings": [],
+        "reviewed_lines": [
+            {"path": "tool.py", "line": 99, "side": "RIGHT", "analysis": "Wrong line cited."}
+        ],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "Callers were not executed.",
+            "probes": [],
+        },
+    }
+    with pytest.raises(noema.NoemaModelOutputError) as exc_info:
+        noema.validate_substantive_verdict(verdict, diff)
+    message = str(exc_info.value)
+    assert "reviewed line entry 1/1 (array index 0, not a source line)" in message
+    assert "path='tool.py' line=99 side='RIGHT'" in message
+    assert "is not an exact changed-side line" in message
+    assert "nearest changed lines for tool.py: tool.py:2 (LEFT), tool.py:2 (RIGHT)" in message
+
+    # A citation whose path was never touched by the diff gets no nearby hint.
+    verdict["reviewed_lines"][0]["path"] = "unrelated.py"
+    with pytest.raises(noema.NoemaModelOutputError) as exc_info_unrelated:
+        noema.validate_substantive_verdict(verdict, diff)
+    unrelated_message = str(exc_info_unrelated.value)
+    assert "path='unrelated.py'" in unrelated_message
+    assert "nearest changed lines" not in unrelated_message
+
+
+def test_validate_substantive_verdict_probe_rejection_reports_location_and_hint():
+    diff = """diff --git a/tool.py b/tool.py
+--- /dev/null
++++ b/tool.py
+@@ -0,0 +1 @@
++new = True
+"""
+    verdict = {
+        "decision": "approve",
+        "summary": "The replacement keeps the invariant.",
+        "findings": [],
+        "reviewed_lines": [{"path": "tool.py", "line": 1, "side": "RIGHT", "analysis": "Checked."}],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "Callers were not executed.",
+            "probes": [
+                {
+                    "path": "tool.py",
+                    "line": 2,
+                    "side": "RIGHT",
+                    "hypothesis": "Off by one.",
+                    "attack_or_counterexample": "Cite the wrong line.",
+                    "evidence": "n/a",
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "tool.py",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "hypothesis": "A distinct second hypothesis.",
+                    "attack_or_counterexample": "Read the correct line.",
+                    "evidence": "The literal is True.",
+                    "outcome": "falsified",
+                },
+            ],
+        },
+    }
+    with pytest.raises(noema.NoemaModelOutputError) as exc_info:
+        noema.validate_substantive_verdict(verdict, diff)
+    message = str(exc_info.value)
+    assert "adversarial probe entry 1/2 (array index 0, not a source line)" in message
+    assert "path='tool.py' line=2 side='RIGHT'" in message
+    assert "nearest changed lines for tool.py: tool.py:1 (RIGHT)" in message
 
 
 def test_changed_diff_locations_handles_new_files_and_no_newline_marker():
