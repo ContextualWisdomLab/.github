@@ -1,5 +1,5 @@
 name: Temporary PR1641 Noema observed-corpus repair
-# execution nonce: review-followup-v5-structural-roles
+# execution nonce: review-followup-v6-unsaturated-runner
 
 on:
   push:
@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event.head_commit.message == 'ci(temp): execute repaired PR1641 writer'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 45
     steps:
       - name: Checkout exact writer head without persisted credential
