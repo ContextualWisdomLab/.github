@@ -43,12 +43,6 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   detect-python:
     name: Detect Python
     if: github.event.action != 'closed'

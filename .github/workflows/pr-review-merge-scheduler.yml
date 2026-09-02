@@ -111,12 +111,6 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-24.04
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
@@ -1087,37 +1081,40 @@ jobs:
               fi
             fi
 
-            # Queue hygiene, part 1: cancel every queued/in-progress PR run whose
-            # head SHA no longer matches its open PR's Current HEAD, plus default-
-            # branch push/schedule runs superseded by a newer default HEAD. PR
-            # concurrency normally does this on synchronize/close events, but it
-            # cannot repair runs left behind by an outage or a manual dispatch.
-            # Compare live refs on every sweep instead of waiting for an age
-            # threshold: previous-head checks are never useful merge evidence.
+            # Queue hygiene, part 1: classify queued/in-progress runs against a
+            # bounded PR/default-branch snapshot. The snapshot is intentionally
+            # cheap and may race with a subsequent head move; every destructive
+            # cancellation is therefore revalidated against live run/PR/ref state
+            # immediately before the mutation by the production helper below.
             queue_hygiene_ready=true
-            if ! open_pr_heads_json="$(
+            open_pr_heads_json="{}"
+            if open_pr_payload_json="$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
                 "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
                 --paginate \
-                | jq -sc '
-                    add
-                    | map(
-                        select(
-                          .head.repo.full_name != null and
-                          .head.ref != null and
-                          .head.sha != null
-                        )
-                        | {
-                            key: "\(.head.repo.full_name):\(.head.ref)",
-                            value: .head.sha
-                          }
-                      )
-                    | from_entries
-                  '
+                | jq -sc '[.[] | .[]]'
             )"; then
+              if ! jq -e '
+                all(.[];
+                  (.head.repo.full_name | type) == "string" and (.head.repo.full_name | length) > 0 and
+                  (.head.ref | type) == "string" and (.head.ref | length) > 0 and
+                  (.head.sha | type) == "string" and (.head.sha | test("^[0-9a-fA-F]{40}$"))
+                )
+              ' <<<"$open_pr_payload_json" >/dev/null; then
+                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has malformed head repository/ref/SHA metadata. No run will be cancelled from incomplete evidence."
+                queue_hygiene_ready=false
+              else
+                open_pr_heads_json="$(
+                  jq -c '
+                    reduce .[] as $pr ({};
+                      . + {(($pr.head.repo.full_name + ":" + $pr.head.ref)): $pr.head.sha}
+                    )
+                  ' <<<"$open_pr_payload_json"
+                )"
+              fi
+            else
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              open_pr_heads_json="{}"
               queue_hygiene_ready=false
             fi
             if ! current_default_sha="$(
@@ -1127,6 +1124,10 @@ jobs:
                 --jq '.sha // empty'
             )"; then
               echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD could not be read safely. No run will be cancelled from incomplete evidence."
+              current_default_sha=""
+              queue_hygiene_ready=false
+            elif ! [[ "$current_default_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD is malformed. No run will be cancelled from incomplete evidence."
               current_default_sha=""
               queue_hygiene_ready=false
             fi
@@ -1187,13 +1188,17 @@ jobs:
             fi
             superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
             if [ "$superseded_count" -gt 0 ]; then
-              echo "Cancelling ${superseded_count} queued/in-progress run(s) that do not match an open PR or default-branch Current HEAD:"
-              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) current_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
+              echo "Revalidating ${superseded_count} queued/in-progress run(s) classified as not matching an open PR or default-branch Current HEAD:"
+              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) classified_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel superseded run ${run_id} in ${repo_full_name}; it may have finished already."
-                  fi
+                  scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    "superseded"
                 done < <(jq -r '.[].id' <<<"$superseded_runs_json")
               fi
             fi
@@ -1202,6 +1207,7 @@ jobs:
             # runs that are not tied to a currently open PR head. This catches
             # orphaned manual/workflow-chain runs without cancelling a valid
             # current-head PR check merely because runner capacity was scarce.
+            # The helper re-checks late PR association/live refs before mutation.
             stale_runs_json="[]"
             if [ "$queue_hygiene_ready" = "true" ]; then
               stale_cutoff="$(date -u -d "${ORG_SWEEP_STALE_QUEUE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
@@ -1224,13 +1230,17 @@ jobs:
             fi
             stale_count="$(jq 'length' <<<"$stale_runs_json")"
             if [ "$stale_count" -gt 0 ]; then
-              echo "Cancelling ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
+              echo "Revalidating ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
               jq -r '.[] | "  run \(.id) [\(.name)] on \(.head_branch) queued since \(.created_at)"' <<<"$stale_runs_json"
               if [ "$DRY_RUN" != "true" ]; then
                 while IFS= read -r run_id; do
-                  if ! gh api -X POST "/repos/${repo_full_name}/actions/runs/${run_id}/cancel" >/dev/null; then
-                    echo "Could not cancel run ${run_id} in ${repo_full_name}; it may have started or finished already."
-                  fi
+                  scripts/ci/revalidate_queue_cancellation.sh \
+                    "$repo_full_name" \
+                    "$run_id" \
+                    "$default_branch" \
+                    "$current_default_sha" \
+                    "$open_pr_heads_json" \
+                    "aged-orphan"
                 done < <(jq -r '.[].id' <<<"$stale_runs_json")
               fi
             fi
