@@ -2811,8 +2811,8 @@ source's `bootstrap_required` to `True`/unset, in the same spirit as the #1651 d
 unverified by this session: an actual live network round-trip against OpenRouter's real API with a real
 key — every check above is static/KV-level, not an end-to-end network probe.
 
-**Finding B — apparent gap ruled out, with a documented production incident as the reason, not an
-oversight.** Live-queried `https://openrouter.ai/api/v1/models?output_modalities=all` today (569
+**Finding B — SUPERSEDED, see the correction immediately below the "Conclusion" of this section. Do not
+treat the "no gap" verdict below as current.** Live-queried `https://openrouter.ai/api/v1/models?output_modalities=all` today (569
 models): 75 currently report `pricing.prompt`/`pricing.completion` both exactly `"0"` while declaring a
 non-text input modality (e.g. `minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`) — several of these (e.g.
 `recraft/recraft-v4-styles-pro`) also carry a real nonzero `pricing.image_token`, confirming
@@ -2836,7 +2836,47 @@ is the intended, incident-tested behavior, not a false negative needing a Bytez-
 carve-out.
 
 **Conclusion.** Items 8/9's original "already fully wired in" verdict stands for the pipeline this org
-actually runs (Finding A), with one optional non-urgent hardening test recommended. No change needed for
-the multimodal-exclusion question (Finding B) — re-open only with evidence that a *text-only* free
-OpenRouter/Bytez model is being wrongly excluded, which would be a genuine regression of `#933`'s own
-tested contract, not this document's prior conclusion.
+actually runs (Finding A), with one optional non-urgent hardening test recommended. Finding B above is
+**superseded** — see the correction immediately below.
+
+**Correction (2026-09-02, same day, repository owner pushback).** The repository owner rejected Finding
+B's "no gap" verdict directly, citing this org's own standing directive: "a [provider] group is an
+alias; selection/fallback happens by *verified characteristics* — modality, context, reasoning,
+**tool[-calling]**, structured output, streaming, price, latency, availability, accuracy" — and pointed
+out the parallel to a GPT-4.1-shaped model: any model whose *declared modality shape* (text+image input,
+text output) matches the `#933` incident model is excluded by the current rule regardless of whether it
+actually, verifiably supports tool-calling — which the directive's own characteristic-based principle
+forbids conflating.
+
+Re-verified live the same day: of the 75 free+non-text-input OpenRouter models found in Finding B, **8
+explicitly declare `"tools"` in their own `supported_parameters`** — `dots-studio/dots-3-note-preview:free`,
+`thinkingmachines/inkling:free`, `thinkingmachines/inkling-small:free`, `minimax/minimax-m3:free`,
+`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, `google/gemma-4-26b-a4b-it:free`,
+`google/gemma-4-31b-it:free`, `openrouter/free` — genuine, general-purpose, tool-calling-capable chat
+models (output text-only) that merely also accept multimodal input, exactly GPT-4.1/Claude/Gemini-shaped.
+The other 67 (`minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`, `recraft/recraft-v4-styles-pro`, etc.) do
+*not* declare `"tools"` support — some have an entirely empty `supported_parameters` list — and are
+genuinely non-chat media-generation-only models. This is a clean separator empirically: `#933`'s blanket
+modality rule was a correct, necessary stopgap for NVIDIA NIM specifically (whose own `/v1/models` never
+publishes any tool-call capability signal at all, per that commit's own root-cause note), but applying
+the same blanket rule to OpenRouter — which *does* publish a direct, reliable `supported_parameters`
+signal — throws away exactly the "verified characteristic" evidence the directive requires using, and
+today wrongly withholds 8 genuinely free, general-purpose, tool-capable chat models from
+`orchestrator/free`.
+
+**Status: fix in progress**, same day, same session, as a root-cause (not symptom) change: extend the
+existing tool-call-evidence infrastructure (`model_discovery.py`'s `_parallel_tool_call_evidence`/
+`discovery_tool_call_tags`/`DISCOVERY_TOOL_CALL_*_TAG` machinery) with a basic "declares tool-calling
+support" signal from `supported_parameters`, and narrow `chat_capability.requires_non_text_input`'s
+consumers (`orchestrator._is_general_free_agent`/`_agent_requires_non_text_input`,
+`model_discovery.general_free_serving_candidates`) so a model/agent carrying *verified* tool-call
+evidence is not excluded from the general free pool purely for its input modality. Providers with no
+such signal (NVIDIA NIM, and any OpenRouter row where `supported_parameters` is absent, malformed, or
+lacks `"tools"`) keep today's exact fail-closed exclusion — this is additive/narrowing only, never a
+weakening of the existing incident-driven safety net. TDD (RED before fix, GREEN after) required per this
+repo's own contract; see the follow-up entry once merged for exact file/test evidence and PR number.
+
+Re-open only with evidence that a *text-only* free OpenRouter/Bytez model is being wrongly excluded (that
+would be a genuine regression of `#933`'s own tested contract) or that the tool-call signal itself proves
+unreliable in practice (mirroring how Models.dev's `tool_call` field was already proven unreliable for
+NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRouter's own declared field).
