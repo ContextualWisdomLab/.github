@@ -3,9 +3,9 @@
 **Recorded:** 2026-09-02  
 **Owner:** `ContextualWisdomLab/.github`
 
-This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **143 active evidence-backed label targets**; the reconciled operating baseline enumerates 47 active targets, and this wave adds the 96 reviewed targets below.
+This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **157 active evidence-backed label targets**; the reconciled operating baseline enumerates 47 active targets, and this wave adds the 110 reviewed targets below.
 
-The explicit label assignments cover 143 active evidence-backed targets across the baseline and this supplement.
+The explicit label assignments cover 157 active evidence-backed targets across the baseline and this supplement.
 
 - `ContextualWisdomLab/ThreadWeave#37`
 - `ContextualWisdomLab/fast-mlsirm#1716`
@@ -103,5 +103,19 @@ The explicit label assignments cover 143 active evidence-backed targets across t
 - `ContextualWisdomLab/pg-llm-batch#323`
 - `ContextualWisdomLab/scopeweave#653`
 - `ContextualWisdomLab/naruon#1349`
+- `ContextualWisdomLab/appguardrail#999`
+- `ContextualWisdomLab/naruon#1322`
+- `ContextualWisdomLab/RankWeave#41`
+- `ContextualWisdomLab/pg-erd-cloud#737`
+- `ContextualWisdomLab/kaefa#75`
+- `ContextualWisdomLab/semantic-data-portal#64`
+- `ContextualWisdomLab/newsdom-api#672`
+- `ContextualWisdomLab/clearfolio#485`
+- `ContextualWisdomLab/pg-erd-cloud#942`
+- `ContextualWisdomLab/aFIPC#208`
+- `ContextualWisdomLab/aFIPC#210`
+- `ContextualWisdomLab/feelanet-adfs#17`
+- `ContextualWisdomLab/inkspan#154`
+- `ContextualWisdomLab/newsdom-api#577`
 
 Each target records the evidence-backed primary semantic type established from current PR/issue scope and live repository labels: documentation for public-surface writers, bug for security/correctness/commercial-policy defects, and feature for buyer-facing product capabilities. Recording semantic type does not make Draft work Ready, unblock blocked work, transfer merge authority, or override repository-local priority/status/security/component labels. The reconciliation contract continues to preserve labels outside the centrally managed semantic set.
