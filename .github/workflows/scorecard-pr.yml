@@ -26,6 +26,15 @@ permissions:
   contents: read
 
 jobs:
+  # Compatibility sentinel for the established queue contract. The closed event
+  # still exists solely so workflow-level concurrency can retire older runs; this
+  # job is statically skipped and therefore never enters runner admission.
+  cancel-closed-pr-runs:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+
   analysis:
     name: Scorecard
     if: github.event.action != 'closed'
