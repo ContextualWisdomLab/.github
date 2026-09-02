@@ -423,7 +423,25 @@ jobs:
           review_poll_failures=0
           max_poll_transport_failures=3
           poll_interval_seconds=60
+          # Wall-clock backstop, distinct from max_poll_transport_failures above:
+          # that counter only bounds *consecutive transport failures*, so a
+          # review dispatch that never produces a verdict -- while every
+          # individual `gh api` call keeps succeeding -- previously polled
+          # forever, holding a live runner for up to GitHub's 360-minute
+          # platform default job timeout. 10800s (3h) is chosen to stay
+          # comfortably above this org's own documented "accommodate over 2
+          # hours per model" allowance (docs/product-goal-directive.md §8)
+          # while still releasing the runner well before the platform
+          # default. This bounds how long the CI job waits for a verdict; it
+          # does not cap the model's own reasoning/streaming time, which
+          # remains governed entirely upstream by the dispatched review run
+          # itself.
+          poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))
           while :; do
+            if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then
+              echo "::error::No current-head OpenCode verdict after 180 minutes of polling; failing closed and releasing the runner."
+              exit 1
+            fi
             if ! live_poll_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
               live_poll_failures=$((live_poll_failures + 1))
               if [ "$live_poll_failures" -ge "$max_poll_transport_failures" ]; then
@@ -448,7 +466,7 @@ jobs:
             fi
             if [ "${live_poll_head,,}" != "${HEAD_SHA,,}" ]; then
               echo "::notice::Pull request head moved while waiting for a current-head OpenCode verdict; retiring superseded Required OpenCode Review poll."
-              exit 1
+              exit 0
             fi
             if [ "$live_poll_state" = "closed" ]; then
               echo "PR closed while waiting for the current-head OpenCode verdict; the poll is no longer required."
