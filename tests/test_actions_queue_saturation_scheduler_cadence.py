@@ -31,3 +31,23 @@ def test_repository_scheduler_keeps_event_driven_wakes() -> None:
     assert "pull_request_review:" in workflow
     assert "workflow_run:" in workflow
     assert "repository_dispatch:" in workflow
+
+
+def test_scan_pr_queue_heartbeat_is_hourly_and_offset_not_removed() -> None:
+    """scan-pr-queue's own repository-local heartbeat must not be dropped.
+
+    org-queue-sweep excludes ContextualWisdomLab/.github from its target
+    list by name, so scan-pr-queue's own cron is the sole periodic fallback
+    for this repository's PR queue (and for any required check, such as
+    Security Scan or SAST Semgrep, with no workflow_run listener anywhere in
+    this file). It must be lengthened to hourly for the same capacity reason
+    as org-queue-sweep, not deleted, and offset from org-queue-sweep's
+    "0 * * * *" tick so the two heartbeats do not collide.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert '- cron: "30 * * * *"' in workflow
+    assert '*/30 * * * *' not in workflow
+    schedule_block = workflow.split("  schedule:", 1)[1].split(
+        "  repository_dispatch:", 1
+    )[0]
+    assert schedule_block.count('- cron:') == 2

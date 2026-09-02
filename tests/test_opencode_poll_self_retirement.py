@@ -35,8 +35,16 @@ def _run_poll_loop(
     reviews: list[dict[str, object]] | None = None,
     fail_live_pr_attempts: int = 0,
     fail_review_attempts: int = 0,
+    date_epochs: list[int] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Execute the production poll body against a deterministic fake ``gh``."""
+    """Execute the production poll body against a deterministic fake ``gh``.
+
+    ``date_epochs``, when given, stubs ``date`` to return each listed epoch
+    in turn (clamped to the last entry once exhausted) instead of the real
+    clock -- letting a test fast-forward past the real
+    ``poll_deadline_epoch`` wall-clock deadline after a chosen number of
+    genuinely-executed loop iterations, without ever sleeping for real time.
+    """
     call_log = tmp_path / "gh-calls.log"
     live_fail_counter = tmp_path / "live-pr-failures"
     review_fail_counter = tmp_path / "review-failures"
@@ -84,6 +92,35 @@ fi
     )
     fake_timeout.chmod(0o755)
 
+    env_overrides: dict[str, str] = {}
+    if date_epochs is not None:
+        date_epochs_file = tmp_path / "date-epochs"
+        date_epochs_file.write_text(
+            "\n".join(str(epoch) for epoch in date_epochs) + "\n", encoding="utf-8"
+        )
+        date_counter = tmp_path / "date-calls"
+        fake_date = tmp_path / "date"
+        fake_date.write_text(
+            """#!/bin/sh
+set -eu
+count=0
+if [ -e "$FAKE_DATE_COUNTER" ]; then
+  count="$(cat "$FAKE_DATE_COUNTER")"
+fi
+count=$((count + 1))
+printf '%s\\n' "$count" > "$FAKE_DATE_COUNTER"
+line="$(sed -n "${count}p" "$FAKE_DATE_EPOCHS")"
+if [ -z "$line" ]; then
+  line="$(tail -n1 "$FAKE_DATE_EPOCHS")"
+fi
+printf '%s\\n' "$line"
+""",
+            encoding="utf-8",
+        )
+        fake_date.chmod(0o755)
+        env_overrides["FAKE_DATE_EPOCHS"] = str(date_epochs_file)
+        env_overrides["FAKE_DATE_COUNTER"] = str(date_counter)
+
     script = "\n".join(
         (
             "set -euo pipefail",
@@ -92,6 +129,7 @@ fi
             'review_poll_failures=0',
             'max_poll_transport_failures=3',
             'poll_interval_seconds=60',
+            'poll_deadline_epoch=$(( $(date +%s) + 10800 ))',
             "while :; do",
             _poll_loop(),
             "done",
@@ -111,6 +149,7 @@ fi
             "GH_REVIEW_FAIL_COUNTER": str(review_fail_counter),
             "GH_LIVE_PR": json.dumps(live_pr),
             "GH_REVIEWS": json.dumps(reviews or []),
+            **env_overrides,
         }
     )
     result = subprocess.run(
@@ -324,3 +363,98 @@ def test_self_retirement_does_not_replace_semantic_review_with_a_short_timeout()
     assert "while :; do" in target_job
     assert "poll_interval_seconds=60" in target_job
     assert 'sleep "$poll_interval_seconds"' in target_job
+
+
+def test_poll_fails_closed_after_wall_clock_deadline_with_every_gh_call_succeeding(
+    tmp_path: Path,
+) -> None:
+    """The zombie scenario: no transport failure ever occurs, yet no verdict posts.
+
+    `max_poll_transport_failures` cannot catch this -- every `gh` call
+    below succeeds -- so only a genuinely distinct wall-clock deadline
+    (`poll_deadline_epoch`, computed once before the loop) can release the
+    runner. A fake `date` fast-forwards past the real production 10800s
+    (180-minute) bound only after two full, genuinely-executed fast
+    iterations (proving the check is a real per-iteration wall-clock
+    comparison, not a check that fires before any work happens), without
+    this test ever sleeping for real time.
+    """
+    head_sha = "5" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        reviews=[],  # opencode-agent never posts a review on this head
+        date_epochs=[1000, 1000, 1000, 999999999999],
+    )
+
+    assert result.returncode == 1
+    assert (
+        "::error::No current-head OpenCode verdict after 180 minutes of "
+        "polling; failing closed and releasing the runner." in result.stdout
+    )
+    # Distinct diagnostic from the transport-failure path: nothing here failed.
+    assert "consecutive times" not in result.stdout
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
+    ]
+
+
+def test_poll_wall_clock_deadline_does_not_interfere_with_a_fast_verdict(
+    tmp_path: Path,
+) -> None:
+    """A verdict arriving on the first poll is unaffected by the new bound."""
+    head_sha = "6" * 40
+    result, calls = _run_poll_loop(
+        tmp_path,
+        head_sha=head_sha,
+        live_pr={"head": {"sha": head_sha}, "draft": False, "state": "open"},
+        reviews=[
+            {
+                "user": {"login": "opencode-agent[bot]"},
+                "commit_id": head_sha,
+                "state": "APPROVED",
+                "body": "Source-backed current-head semantic review.",
+            }
+        ],
+        date_epochs=[1000, 1000],  # baseline call, then one in-bounds iteration check
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        "api repos/ContextualWisdomLab/example/pulls/42",
+        "api --paginate repos/ContextualWisdomLab/example/pulls/42/reviews?per_page=100",
+    ]
+    assert "No current-head OpenCode verdict after" not in result.stdout
+
+
+def test_wall_clock_deadline_is_distinct_from_and_additional_to_transport_counter() -> None:
+    """The new bound sits alongside, not in place of, the transport-failure counter.
+
+    Pins the production shape so a future edit cannot quietly collapse the
+    two into one, or drop the wall-clock bound back to unbounded: both
+    `max_poll_transport_failures` (existing) and `poll_deadline_epoch`
+    (computed once before the loop) must be present, and the wall-clock
+    check must live inside the `while :; do` loop body -- not as a
+    job-level `timeout-minutes:`, which would kill the runner mid-request
+    instead of failing closed with a clear diagnostic.
+    """
+    target_job = WORKFLOW.read_text(encoding="utf-8").split(
+        "  opencode-review-target:\n", 1
+    )[1].split("\n  cancel-superseded-opencode-review-runs:\n", 1)[0]
+    assert "max_poll_transport_failures=3" in target_job
+    assert "poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))" in target_job
+    loop = _poll_loop()
+    assert 'if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then' in loop
+    assert (
+        "::error::No current-head OpenCode verdict after 180 minutes of "
+        "polling; failing closed and releasing the runner." in loop
+    )
+    # The deadline check must precede this iteration's gh calls so an
+    # already-expired deadline never spends another API request.
+    assert loop.index('-ge "$poll_deadline_epoch"') < loop.index(
+        'live_poll_pr="$(timeout 30s gh api'
+    )
