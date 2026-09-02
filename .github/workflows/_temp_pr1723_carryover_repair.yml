@@ -1,0 +1,130 @@
+name: Temporary PR1723 Carryover Repair
+
+on:
+  push:
+    branches:
+      - cleanup/retire-merged-source-fix-1714-1715-20260902
+    paths:
+      - .github/workflows/_temp_pr1723_carryover_repair.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temp-pr1723-carryover-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae'
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate exact remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin cleanup/retire-merged-source-fix-1714-1715-20260902
+          remote_head="$(git rev-parse origin/cleanup/retire-merged-source-fix-1714-1715-20260902)"
+          test "$remote_head" = "$GITHUB_SHA"
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install exact test toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove stale durable contracts before repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'timeout-minutes: 25' .github/workflows/pr-review-autofix.yml
+          grep -Fq '"reasoningEffort": "high"' .github/workflows/pr-review-autofix.yml
+          grep -Fq '"steps": 12' .github/workflows/pr-review-autofix.yml
+          grep -Fq "sed -n '1,260p'" .github/workflows/pr-review-autofix.yml
+          grep -Fq 'timeout-minutes: 210' .github/workflows/noema-review.yml
+
+      - name: Apply complete PR1714 and PR1715 valid deltas
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          PYTHONPATH=. python scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          git diff --check
+
+      - name: Verify focused regression contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_pr_review_autofix_writer_security_contract.py \
+            tests/test_pr_review_fix_scheduler.py \
+            tests/test_required_workflow_queue_contract.py \
+            tests/test_noema_orchestrator_workflow_contract.py
+
+      - name: Retire bounded repair machinery before repository-wide proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/ci/source_fix_pr1714_no_model_job_timeout.py
+          rm scripts/ci/source_fix_pr1715_no_model_job_timeout.py
+          rm .github/workflows/_temp_pr1723_carryover_repair.yml
+          test ! -e .github/workflows/source-fix-pr1714-no-model-job-timeout.yml
+          test ! -e .github/workflows/source-fix-pr1715-no-model-job-timeout.yml
+          git diff --check
+
+      - name: Verify repository 100 percent coverage and documentation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m coverage run -m pytest tests -q
+          python -m coverage report --show-missing
+          python -m interrogate -c pyproject.toml scripts/ci
+          python -m compileall -q scripts tests
+          git diff --check
+
+      - name: Verify successor scope and unchanged remote head
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed='^(.github/workflows/pr-review-autofix.yml|.github/workflows/noema-review.yml|tests/test_pr_review_autofix_writer_security_contract.py|tests/test_noema_orchestrator_workflow_contract.py|CHANGELOG.md|docs/product-technical-gap-baseline.md|scripts/ci/source_fix_pr1714_no_model_job_timeout.py|scripts/ci/source_fix_pr1715_no_model_job_timeout.py|.github/workflows/_temp_pr1723_carryover_repair.yml)$'
+          bad="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
+          test -z "$bad"
+          git fetch origin cleanup/retire-merged-source-fix-1714-1715-20260902
+          remote_head="$(git rev-parse origin/cleanup/retire-merged-source-fix-1714-1715-20260902)"
+          test "$remote_head" = "$GITHUB_SHA"
+
+      - name: Publish verified non-force successor
+        env:
+          PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-}}"
+          if [ -z "$workflow_push_token" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
+          git fetch origin cleanup/retire-merged-source-fix-1714-1715-20260902
+          remote_head="$(git rev-parse origin/cleanup/retire-merged-source-fix-1714-1715-20260902)"
+          test "$remote_head" = "$GITHUB_SHA"
+          git config user.name "ContextualWisdomLab automation"
+          git config user.email "automation@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(ci): carry forward PR1714 and PR1715 model authority"
+          git remote set-url origin "https://x-access-token:${workflow_push_token}@github.com/ContextualWisdomLab/.github.git"
+          git push origin HEAD:cleanup/retire-merged-source-fix-1714-1715-20260902
