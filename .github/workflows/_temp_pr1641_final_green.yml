@@ -332,6 +332,21 @@ jobs:
           text = text.replace(old_prompt, new_prompt, 1)
           source.write_text(text, encoding="utf-8")
 
+          broad = Path("tests/test_noema_review_gate.py")
+          broad_text = broad.read_text(encoding="utf-8")
+          old_assertions = (
+              '    assert diff.endswith("+[overlong changed line content omitted]")\n'
+              '    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)'
+          )
+          new_assertions = (
+              '    assert diff.endswith("[overlong changed line content omitted]")\n'
+              '    assert ("a.py", 1, "RIGHT") not in noema.changed_diff_locations(diff)'
+          )
+          if broad_text.count(old_assertions) != 2:
+              raise SystemExit(f"legacy truncation assertion count={broad_text.count(old_assertions)}")
+          broad_text = broad_text.replace(old_assertions, new_assertions)
+          broad.write_text(broad_text, encoding="utf-8")
+
           additions = {
               "docs/product-technical-gap-baseline.md": textwrap.dedent('''
               ## 2026-09-02 — Noema source-evidence parser convergence
