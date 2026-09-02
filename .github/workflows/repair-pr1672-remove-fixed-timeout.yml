@@ -50,7 +50,6 @@ jobs:
           gate_path = Path("scripts/ci/noema_review_gate.py")
           gate = gate_path.read_text(encoding="utf-8")
 
-          # Remove the unsupported elapsed-time allocation and signal machinery.
           gate = gate.replace("import signal\n", "", 1)
           gate, count = re.subn(
               r"# NOT DATA-DERIVED -- UNRESOLVED, flagged for an explicit owner decision\.\n.*?NOEMA_REPAIR_DEADLINE_SECONDS = 15 \* 60\n\n",
@@ -81,8 +80,8 @@ jobs:
               raise SystemExit("repair deadline helper shape drifted")
 
           gate, count = re.subn(
-              r"def _classify_attempt_outcome\(exc: BaseException\) -> str:\n    \"\"\"Return a short, stable outcome class name for attempt telemetry\.\n.*?\n    if isinstance\(exc, NoemaRepairDeadlineExceeded\):\n        return \"deadline_exceeded\"\n",
-              'def _classify_attempt_outcome(exc: BaseException) -> str:\n    """Return a short, stable outcome class name for attempt telemetry."""\n',
+              r"def _classify_attempt_outcome\(exc: BaseException\) -> str:\n.*?(?=\ndef call_llm)",
+              '''def _classify_attempt_outcome(exc: BaseException) -> str:\n    """Return a stable evidence class without inventing a recovery decision."""\n    if isinstance(exc, NoemaModelOutputError):\n        return "malformed_output"\n    if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):\n        return "transport_error"\n    return "runtime_error"\n\n''',
               gate,
               count=1,
               flags=re.S,
@@ -96,47 +95,61 @@ jobs:
               raise SystemExit("call_llm retry signature shape drifted")
           gate = gate.replace(signature, replacement, 1)
 
-          # Remove the retry-specific explanatory paragraphs without changing the public contract.
+          function_start = gate.index("def call_llm(")
+          doc_start = gate.index('    """', function_start)
+          doc_end = gate.index('    """', doc_start + 7) + len('    """')
+          gate = (
+              gate[:doc_start]
+              + '''    """Request one structured verdict through the contextual-orchestrator gateway.\n\n    The leaf declares the response schema only. Timeout, sampling, provider\n    selection, and failover policy remain contextual-orchestrator concerns.\n    Malformed or transport evidence fails closed without a caller-owned second\n    inference. The caller revalidates the exact PR head before publication.\n    """'''
+              + gate[doc_end:]
+          )
+
+          if gate.count('        "temperature": 0,\n') != 1:
+              raise SystemExit("temperature override shape drifted")
+          gate = gate.replace('        "temperature": 0,\n', "", 1)
+
           gate, count = re.subn(
-              r"    ``expected_head`` is the same normalized \(lowercase\) SHA\n.*?    The outgoing payload declares",
-              "    ``expected_head`` is retained for caller compatibility; stale-head checks happen before and after this single gateway request.\n\n    The outgoing payload declares",
+              r"                \*\(\n                    \[\n                        \"Your prior verdict was rejected by the trusted validator: \"\n                        f\"\{repair_error or 'no diagnostic message was available'\}\",\n                        \"Return one corrected JSON verdict using only exact changed-side locations from the supplied diff\.\",\n                    \]\n                    if is_retry\n                    else \[\]\n                \),\n",
+              "",
               gate,
               count=1,
               flags=re.S,
           )
           if count != 1:
-              raise SystemExit("call_llm retry docstring shape drifted")
-          gate = gate.replace(" on both the primary and\n    the repair call", " on the gateway call", 1)
-          gate = gate.replace("Every attempt (primary or repair, success or failure)", "The gateway request, on success or failure", 1)
-
-          # Noema declares response structure; it does not pick a sampling temperature.
-          if gate.count('        "temperature": 0,\n') != 1:
-              raise SystemExit("temperature override shape drifted")
-          gate = gate.replace('        "temperature": 0,\n', "", 1)
-
-          # A rejected answer is evidence, not authority for another model call.
-          retry_prompt = re.compile(
-              r"                \*\(\n                    \[\n                        \"Your prior verdict was rejected by the trusted validator: \"\n                        f\"\{repair_error or 'no diagnostic message was available'\}\",\n                        \"Return one corrected JSON verdict using only exact changed-side locations from the supplied diff\.\",\n                    \]\n                    if is_retry\n                    else \[\]\n                \),\n",
-              re.S,
-          )
-          gate, count = retry_prompt.subn("", gate, count=1)
-          if count != 1:
               raise SystemExit("retry prompt shape drifted")
 
-          gate = gate.replace('    attempt_kind = "repair" if is_retry else "primary"\n', '    attempt_kind = "primary"\n', 1)
+          if gate.count('    attempt_kind = "repair" if is_retry else "primary"\n') != 1:
+              raise SystemExit("attempt kind shape drifted")
+          gate = gate.replace(
+              '    attempt_kind = "repair" if is_retry else "primary"\n',
+              '    attempt_kind = "primary"\n',
+              1,
+          )
           deadline_block = '''        deadline_context = (\n            _repair_wall_clock_deadline(NOEMA_REPAIR_DEADLINE_SECONDS)\n            if is_retry\n            else contextlib.nullcontext()\n        )\n        with deadline_context:\n'''
           if gate.count(deadline_block) != 1:
               raise SystemExit("deadline call-site shape drifted")
           gate = gate.replace(deadline_block, "        with contextlib.nullcontext():\n", 1)
 
-          exception_pattern = re.compile(
-              r"    except \(RuntimeError, urllib\.error\.URLError, http\.client\.HTTPException, OSError\) as exc:\n.*?    return verdict\n",
-              re.S,
+          gate, count = re.subn(
+              r"    except \(RuntimeError, urllib\.error\.URLError, http\.client\.HTTPException, OSError\) as exc:\n.*?(?=\n\ndef format_findings)",
+              '''    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:\n        attempt_elapsed = time.monotonic() - attempt_started\n        outcome = _classify_attempt_outcome(exc)\n        failure = _stable_failure_diagnostic(exc)\n        served_model_note = served_model or "unknown"\n        print(\n            f"::warning::Noema primary attempt outcome={outcome} "\n            f"phase={phase_reached} duration={attempt_elapsed:.1f}s "\n            f"served_model={served_model_note}; failing closed without caller retry."\n        )\n        timing_suffix = (\n            f"; duration={attempt_elapsed:.1f}s, phase={phase_reached}, "\n            f"served_model={served_model_note}"\n        )\n        if isinstance(exc, NoemaModelOutputError):\n            raise NoemaModelOutputError(\n                f"Noema model output failed validation: {failure}{timing_suffix}"\n            ) from None\n        if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):\n            raise NoemaTransportError(\n                f"Noema model transport failed: {type(exc).__name__}: {failure}{timing_suffix}"\n            ) from exc\n        raise RuntimeError(f"Noema review failed closed: {failure}{timing_suffix}") from exc\n    attempt_elapsed = time.monotonic() - attempt_started\n    print(\n        f"::notice::Noema {attempt_kind} attempt outcome=success "\n        f"duration={attempt_elapsed:.1f}s served_model={served_model or 'unknown'}"\n    )\n    return verdict\n''',
+              gate,
+              count=1,
+              flags=re.S,
           )
-          exception_replacement = '''    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:\n        attempt_elapsed = time.monotonic() - attempt_started\n        outcome = _classify_attempt_outcome(exc)\n        failure = _stable_failure_diagnostic(exc)\n        served_model_note = served_model or "unknown"\n        print(\n            f"::warning::Noema primary attempt outcome={outcome} "\n            f"phase={phase_reached} duration={attempt_elapsed:.1f}s "\n            f"served_model={served_model_note}; failing closed without caller retry."\n        )\n        timing_suffix = (\n            f"; duration={attempt_elapsed:.1f}s, phase={phase_reached}, "\n            f"served_model={served_model_note}"\n        )\n        if isinstance(exc, NoemaModelOutputError):\n            raise NoemaModelOutputError(\n                f"Noema model output failed validation: {failure}{timing_suffix}"\n            ) from None\n        if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):\n            raise NoemaTransportError(\n                f"Noema model transport failed: {type(exc).__name__}: {failure}{timing_suffix}"\n            ) from exc\n        raise RuntimeError(f"Noema review failed closed: {failure}{timing_suffix}") from exc\n    attempt_elapsed = time.monotonic() - attempt_started\n    print(\n        f"::notice::Noema {attempt_kind} attempt outcome=success "\n        f"duration={attempt_elapsed:.1f}s served_model={served_model or 'unknown'}"\n    )\n    return verdict\n'''
-          gate, count = exception_pattern.subn(exception_replacement, gate, count=1)
           if count != 1:
               raise SystemExit("call_llm exception/retry block shape drifted")
+
+          inspect_retry_catch = '''    try:\n        verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)\n    except StaleHeadDuringRepairRetryError:\n        print("Pull request head changed during review; Noema review skipped before repair retry.")\n        return 0\n'''
+          inspect_direct = '''    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)\n'''
+          if gate.count(inspect_retry_catch) != 1:
+              raise SystemExit("inspect_and_review retry catch shape drifted")
+          gate = gate.replace(inspect_retry_catch, inspect_direct, 1)
+          gate = gate.replace(
+              'class NoemaTransportError(RuntimeError):\n    """Raised when the bounded review transport cannot produce usable evidence."""',
+              'class NoemaTransportError(RuntimeError):\n    """Raised when the gateway transport cannot produce usable evidence."""',
+              1,
+          )
 
           forbidden = (
               "NOEMA_REPAIR_DEADLINE_SECONDS",
@@ -146,18 +159,39 @@ jobs:
               "is_retry",
               "repair_error",
               '"temperature"',
+              "return call_llm(",
           )
           found = [item for item in forbidden if item in gate]
           if found:
-              raise SystemExit(f"caller model-policy remnants remain: {found}")
+              raise SystemExit(f"caller model-policy remnants remain in gate: {found}")
           gate_path.write_text(gate, encoding="utf-8")
 
+          two_phase_path = Path(".github/actions/noema-review/two_phase.py")
+          two_phase = two_phase_path.read_text(encoding="utf-8")
+          two_phase_retry = '''    try:\n        verdict = gate.call_llm(\n            repo,\n            number,\n            pull_request,\n            diff,\n            truncated,\n            expected,\n            review_context,\n            changed_paths,\n        )\n    except gate.StaleHeadDuringRepairRetryError:\n        print("Pull request head changed during model repair retry; verdict was not sealed.")\n        return 0\n'''
+          two_phase_direct = '''    verdict = gate.call_llm(\n        repo,\n        number,\n        pull_request,\n        diff,\n        truncated,\n        expected,\n        review_context,\n        changed_paths,\n    )\n'''
+          if two_phase.count(two_phase_retry) != 1:
+              raise SystemExit("two-phase retry catch shape drifted")
+          two_phase = two_phase.replace(two_phase_retry, two_phase_direct, 1)
+          if "StaleHeadDuringRepairRetryError" in two_phase:
+              raise SystemExit("two-phase retry remnant remains")
+          two_phase_path.write_text(two_phase, encoding="utf-8")
+
           def remove_test_functions(text: str, names_or_fragments: tuple[str, ...]) -> str:
-              pattern = re.compile(r"\n(?:@pytest[^\n]*\n|@pytest\.mark\.parametrize\(.*?\)\n)?def (test_[A-Za-z0-9_]+)\([^\n]*\).*?(?=\n(?:@pytest|def test_)|\Z)", re.S)
+              pattern = re.compile(
+                  r"\n(?:@pytest[^\n]*\n|@pytest\.mark\.parametrize\(.*?\)\n)?def (test_[A-Za-z0-9_]+)\([^\n]*\).*?(?=\n(?:@pytest|def test_)|\Z)",
+                  re.S,
+              )
               def repl(match: re.Match[str]) -> str:
                   name = match.group(1)
                   return "" if any(fragment in name for fragment in names_or_fragments) else match.group(0)
               return pattern.sub(repl, text)
+
+          def remove_tests_containing(text: str, needle: str) -> str:
+              pattern = re.compile(
+                  r"(?ms)^((?:@pytest[^\n]*\n|@pytest\.mark\.parametrize\(.*?\)\n)*)def (test_[A-Za-z0-9_]+)\([^\n]*\).*?(?=^(?:@pytest|def test_|class )|\Z)"
+              )
+              return pattern.sub(lambda match: "" if needle in match.group(0) else match.group(0), text)
 
           failure_path = Path("tests/test_noema_model_output_failure_classification.py")
           failure = failure_path.read_text(encoding="utf-8")
@@ -174,27 +208,34 @@ jobs:
               r"def test_response_format_is_the_openai_structured_output_envelope_on_every_call\(monkeypatch\):\n.*?(?=\ndef test_response_format_probe_floor_matches_required_probe_count_for_material_changes)",
               re.S,
           )
-          new_first_test = '''def test_response_format_is_declared_on_the_single_gateway_call(monkeypatch):\n    """Noema makes one gateway call and declares the structured-output contract."""\n    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")\n    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")\n    head_sha = "a" * 40\n    requests: list[object] = []\n\n    def open_response(_opener, request, **_kwargs):\n        requests.append(request)\n        return _JsonResponse(\n            {"choices": [{"message": {"content": json.dumps(_comment_verdict())}}]}\n        )\n\n    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)\n    verdict = gate.call_llm(\n        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,\n        changed_paths=("README.md",),\n    )\n\n    assert verdict == _comment_verdict()\n    assert len(requests) == 1\n    payload = json.loads(requests[0].data)\n    assert payload["response_format"] == gate._noema_verdict_response_format(1)\n    assert "temperature" not in payload\n\n\n'''
+          new_first_test = '''def test_response_format_is_declared_on_the_single_gateway_call(monkeypatch):\n    """Noema makes one gateway call and declares the structured-output contract."""\n    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")\n    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")\n    head_sha = "a" * 40\n    requests: list[object] = []\n\n    def open_response(_opener, request, **_kwargs):\n        requests.append(request)\n        return _JsonResponse(\n            {"choices": [{"message": {"content": json.dumps(_comment_verdict())}}]}\n        )\n\n    monkeypatch.setattr(gate.urllib.request.OpenerDirector, "open", open_response)\n    verdict = gate.call_llm(\n        "owner/repo", 7, {"title": "test", "headRefOid": head_sha}, DIFF, False, head_sha,\n        changed_paths=("README.md",),\n    )\n    assert verdict == _comment_verdict()\n    assert len(requests) == 1\n    payload = json.loads(requests[0].data)\n    assert payload["response_format"] == gate._noema_verdict_response_format(1)\n    assert "temperature" not in payload\n\n\n'''
           telemetry, count = first_test.subn(new_first_test, telemetry, count=1)
           if count != 1:
               raise SystemExit("structured-output telemetry regression shape drifted")
           telemetry = remove_test_functions(telemetry, ("repair", "deadline"))
           telemetry_path.write_text(telemetry, encoding="utf-8")
 
-          # Trace the causal-owner change and authoritative transport basis.
+          review_gate_test_path = Path("tests/test_noema_review_gate.py")
+          review_gate_tests = review_gate_test_path.read_text(encoding="utf-8")
+          review_gate_tests = remove_tests_containing(
+              review_gate_tests, "StaleHeadDuringRepairRetryError"
+          )
+          if "StaleHeadDuringRepairRetryError" in review_gate_tests:
+              raise SystemExit("retry-specific review-gate regression remains")
+          review_gate_test_path.write_text(review_gate_tests, encoding="utf-8")
+
           doctoring_path = Path("docs/doctoring/noema-repair-attempt-telemetry.md")
           doctoring = doctoring_path.read_text(encoding="utf-8")
-          section = '''\n## 2026-09-02 no-heuristics causal-owner correction\n\nNoema now performs one `ContextualWisdomLab/contextual-orchestrator` gateway request, declares only the structured-output contract, and fails closed on malformed/transport evidence. The repository-authored 900-second elapsed deadline, fixed corrective-call cardinality, and `temperature=0` sampling override were not identified by a statistical model, experiment, provider contract, or authoritative standard, so they no longer authorize model execution. Provider timeout/failover/sampling behavior belongs to contextual-orchestrator; malformed output remains auditable evidence rather than a trigger for a leaf-owned second inference.\n\n### Reference\n\nFielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110). Internet Engineering Task Force. https://doi.org/10.17487/RFC9110\n'''
+          section = '''\n## 2026-09-02 no-heuristics causal-owner correction\n\nNoema now performs one `ContextualWisdomLab/contextual-orchestrator` gateway request, declares only the structured-output contract, and fails closed on malformed/transport evidence. The repository-authored 900-second elapsed deadline, fixed corrective-call cardinality, and `temperature=0` sampling override were not identified by a statistical model, experiment, provider contract, or authoritative standard, so they no longer authorize model execution. Provider timeout/failover/sampling behavior belongs to contextual-orchestrator; malformed output remains auditable evidence rather than a trigger for a leaf-owned second inference. Exact-head freshness remains checked before model work and again before publication; removal of the retry-specific stale-head exception does not weaken that publication gate.\n\n### Reference\n\nFielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC 9110). Internet Engineering Task Force. https://doi.org/10.17487/RFC9110\n'''
           if "## 2026-09-02 no-heuristics causal-owner correction" not in doctoring:
               doctoring_path.write_text(doctoring.rstrip() + "\n" + section + "\n", encoding="utf-8")
 
           baseline_path = Path("docs/product-technical-gap-baseline.md")
-          if baseline_path.exists():
-              baseline = baseline_path.read_text(encoding="utf-8")
-              marker = "NOEMA-CALLER-MODEL-POLICY-2026-09-02"
-              if marker not in baseline:
-                  baseline += '''\n\n### NOEMA-CALLER-MODEL-POLICY-2026-09-02\n- Owner: `ContextualWisdomLab/.github` / PR #1672.\n- Gap/RCA: Noema leaf code assigned a 900-second model deadline, one corrective network call, and `temperature=0` without a model/standard/experiment establishing those allocations.\n- Repair: one `orchestrator/free` gateway request, structured-output contract only, fail closed on malformed/transport evidence; contextual-orchestrator remains the timeout/failover/sampling owner.\n- Verification: executable RED-before-GREEN source contract plus focused/full `.github` tests; exact-head hosted checks remain authoritative after publication.\n'''
-                  baseline_path.write_text(baseline, encoding="utf-8")
+          baseline = baseline_path.read_text(encoding="utf-8")
+          marker = "NOEMA-CALLER-MODEL-POLICY-2026-09-02"
+          if marker not in baseline:
+              baseline += '''\n\n### NOEMA-CALLER-MODEL-POLICY-2026-09-02\n- Owner: `ContextualWisdomLab/.github` / PR #1672.\n- Gap/RCA: Noema leaf code assigned a 900-second model deadline, one corrective network call, and `temperature=0` without a model/standard/experiment establishing those allocations.\n- Repair: one `orchestrator/free` gateway request, structured-output contract only, fail closed on malformed/transport evidence; contextual-orchestrator remains the timeout/failover/sampling owner. Exact-head freshness remains enforced by the existing pre-model and pre-publication checks rather than a retry-specific exception.\n- Verification: executable RED-before-GREEN source contract plus focused/full `.github` tests; exact-head hosted checks remain authoritative after publication.\n'''
+              baseline_path.write_text(baseline, encoding="utf-8")
 
           changelog_path = Path("CHANGELOG.md")
           changelog = changelog_path.read_text(encoding="utf-8")
@@ -214,7 +255,7 @@ jobs:
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_review_gate.py
           PYTHONPATH=. python3 -m pytest tests -q
-          python3 -m compileall -q scripts tests
+          python3 -m compileall -q scripts tests .github/actions/noema-review
           git diff --check
 
       - name: Publish exact repair and self-retire
@@ -232,9 +273,11 @@ jobs:
           git config user.name "ContextualWisdomLab automation"
           git config user.email "automation@users.noreply.github.com"
           git add scripts/ci/noema_review_gate.py \
+            .github/actions/noema-review/two_phase.py \
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_repair_attempt_telemetry.py \
             tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py \
+            tests/test_noema_review_gate.py \
             CHANGELOG.md docs/doctoring/noema-repair-attempt-telemetry.md \
             docs/product-technical-gap-baseline.md
           git diff --cached --check
