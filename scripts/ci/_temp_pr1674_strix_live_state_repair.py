@@ -120,5 +120,36 @@ new_publish = "        if: ${{ always() && !cancelled() && steps.dispatch_valida
 if text.count(old_publish) != 1:
     raise SystemExit("manual-status publication step shape drifted")
 text = text.replace(old_publish, new_publish, 1)
-
 workflow_path.write_text(text, encoding="utf-8")
+
+# Reconcile Noema's closed/current-head regression with the new early live
+# admission step rather than a removed predecessor step.
+test_path = Path("tests/test_opencode_workflow_shell_syntax.py")
+test_text = test_path.read_text(encoding="utf-8")
+replacements = {
+    "Execute noema-review.yml's ``Validate current pull request head`` step.":
+        "Execute noema-review.yml's live admission step.",
+    'script = _extract_run_block(workflow_text, "Validate current pull request head")':
+        'script = _extract_run_block(workflow_text, "Validate live Noema target before any setup")',
+    'pull = {"state": live_state, "head": {"sha": live_head_sha}}':
+        'pull = {"state": live_state, "draft": False, "head": {"sha": live_head_sha}}',
+    '        "EXPECTED_HEAD_SHA": expected_head_sha,\n':
+        '        "EXPECTED_HEAD_SHA": expected_head_sha,\n        "GITHUB_REPOSITORY": "ContextualWisdomLab/newsdom-api",\n        "GITHUB_OUTPUT": str(tmp_path / "noema-live-output"),\n',
+    '    assert "nothing left to review" in closed_current.stdout':
+        '    assert "skipping all setup" in closed_current.stdout',
+    '    assert "review target is stale" in genuinely_stale.stdout':
+        '    assert "trigger is stale" in genuinely_stale.stdout',
+    '    assert "review target is stale" in closed_and_stale.stdout':
+        '    assert "trigger is stale" in closed_and_stale.stdout',
+}
+for old, new in replacements.items():
+    if test_text.count(old) != 1:
+        raise SystemExit(f"obsolete Noema regression anchor drifted: {old}")
+    test_text = test_text.replace(old, new, 1)
+test_path.write_text(test_text, encoding="utf-8")
+
+# A central repository_dispatch may target a private sibling. The central
+# workflow token cannot be assumed to read that sibling, so defer the live API
+# lookup until the selected repository-scoped reviewer credential is minted.
+noema_path = Path(".github/workflows/noema-review.yml")
+noema = noema_path.read_text(encoding="utf-8")n
