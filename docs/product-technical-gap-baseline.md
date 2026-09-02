@@ -2746,3 +2746,71 @@ read during this window as authoritative; re-read it fresh before acting on it a
 **Status**: repair code complete and pushed (four cited gaps closed with executable evidence); PR
 disposition superseded live by the repository's own single-writer-boundary ruling and an actively
 co-managing owner loop; this session stopped intervening and is not the authority on final state.
+
+## 2026-09-02 contextual-orchestrator#1020: the research-/standard-backed timeout allocator the #1010 closure asked for
+
+**Task.** The `contextual-orchestrator#1010` repair-not-close recheck above (2026-09-02, same date)
+recorded the owner's explicit reuse condition on that closed PR: "If a research-/standard-backed
+timeout allocator with executable provenance is later implemented, the UI/persistence work can be
+selectively reused behind that owner rather than reviving the 1/14400 rule." This entry records that
+this condition has now been designed against, with citations, and posted as a real PR -- not left as
+an unactioned chat answer.
+
+**What was produced.** Three parallel research tracks (nonparametric/EVT quantile-estimation theory;
+2024-2026 LLM-serving SLO/timeout literature, including reasoning-model latency bimodality; and a
+fresh telemetry-feasibility audit of `contextual-orchestrator`'s actual codebase) were synthesized,
+their most load-bearing claims independently re-verified (not propagated on trust) -- among others:
+Harrell & Davis (1982) and Ialongo (2019a/b) confirmed as real, matching papers via direct search;
+Oladri, Jawahar, and Mohamed's (2026) `arXiv:2607.21433` reasoning-model bimodality finding (62.0%
+converge at 90.3% accuracy vs. 38.0% exhaust the token budget at 6.6%) confirmed to exist and match;
+Azure OpenAI's `TTLT = TTFT + (TBT x tokens)` production formula confirmed live on
+`learn.microsoft.com`; and, independently, the telemetry-feasibility track's claims were re-confirmed
+by direct read of `contextual-orchestrator`'s own source rather than trusted secondhand --
+`ModelGroupRouter.observe_success` (`model_group.py:179-243`) really does collapse every call into
+one in-process EWMA scalar with zero raw-sample retention, `llm_usage_records`
+(`cost_ledger.py:767-780`) really has no latency column, and `admin.py:963` really renders a
+hardcoded `"2.50s"` bound to nothing.
+
+**The design.** `docs/planning/adrs/0125-evidence-based-per-model-timeout-allocator.md` on
+`contextual-orchestrator#1020` (`Status: Proposed`, no code changes). It states plainly that no
+latency-percentile telemetry exists in this repo today and treats building it (Phase 0: a new table
+fed from `time.perf_counter()` values the codebase already computes, just never retains) as a real,
+separate prerequisite -- not something the ADR pretends is already available. Phase 1 gates any
+percentile estimate on a literature-derived sample-size floor and uses the Harrell-Davis / trimmed-
+Harrell-Davis estimator rather than a naive percentile. Phase 2 uses the TTFT/TPOT decomposition
+diagnostically only (never as the timeout formula itself, since Wang et al., 2024/2025, show that
+exact metric shape is gameable server-side) and degrades gracefully for reasoning-profiled models by
+always surfacing their empirical non-convergence rate alongside a suggestion rather than inventing an
+unfounded bimodality cutoff. Phase 3's fallback ladder ends in `null` ("no suggestion") when even a
+coarser aggregate lacks enough samples -- matching this org's own standing no-fixed-wall-clock-timeout
+policy (this repository's `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`, 2026-08-31
+amendment; `contextual-orchestrator#971`, which moves `ModelClient.timeout`'s own library default
+toward no fixed bound) instead of inventing a conservative constant as a last resort -- the same
+fail-open shape task and org policy both already point at, not a contradiction between them. No
+platform-wide `MIN`/`MAX` ceiling is reintroduced: none of the three research tracks establish one,
+and `#971` has since made "no bound" the library default anyway. The admin surface stays read-only /
+optional, writing through `#1010`'s exact existing `set_model_timeout`/audit path only when an
+operator opts in to a suggestion -- the precise selective reuse the closing comment invited. The four
+enforcement-correctness findings the owner cited when closing `#1010` (local-queue override bypass,
+passthrough/tool bypass, persistence-race mutation, audit staleness) are explicitly out of scope for
+this design-only ADR and remain unresolved; whichever future PR re-wires enforcement must fix them
+independently.
+
+**Honesty about open questions.** The ADR's own "Open questions" section records, rather than hides,
+what the literature does not settle: no citable minimum EVT/POT exceedance count; no general numeric
+reasoning-model non-convergence threshold beyond one paper's single-model, single-benchmark finding;
+no production system (vLLM, TensorRT-LLM, SGLang, AWS Bedrock, Azure OpenAI, OpenAI, NVIDIA Dynamo)
+documents deriving a timeout *value* from observed latency percentiles -- this design fills a genuine
+gap in the field rather than adapting an established one, and should be reviewed with that in mind;
+the Harrell-Davis-vs-t-digest storage choice has no head-to-head production evidence at this
+repository's traffic volume; and the Phase-3 "borrow from a coarser aggregate" fallback is this
+design's own reasoned inference from the cited small-sample-coverage literature, not itself an
+independently citable rule for this exact case.
+
+**Owner**: `ContextualWisdomLab/contextual-orchestrator`, `contextual-orchestrator#1020`
+(https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1020); depends on and does not
+yet resolve `contextual-orchestrator#1010`'s four enforcement-correctness findings; governs alongside
+`contextual-orchestrator#971`.
+**Status**: design-only ADR posted as an open PR (`Status: Proposed`), `tests/test_planning_adr_identifiers.py`
+verified passing locally; no telemetry, estimator, or admin-surface code has been implemented yet --
+Phase 0 (latency retention) is the next real prerequisite before Phases 1-3 can run on real traffic.
