@@ -82,9 +82,17 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 - **wardnet** — https://github.com/ContextualWisdomLab/wardnet — ContextualWisdomLab Rust-first gateway·SOC control-plane baseline.
 - **LineageWeave** — https://github.com/ContextualWisdomLab/LineageWeave — 명시적 선후행 링크 없는 짧은 timestamped record에서 git-branch식 lineage DAG를 재구성해 평면 자료를 탐색 가능한 branching thread로 바꾼다. 수리 연산은 소관이 아니므로 다른 라이브러리로 이관한다.
 
-## 10. Provider pool pinning (added 2026-09-02)
+## 10. Provider pool pinning (added 2026-09-02; refined same day)
 
-> orchestrator/free 로 고정.
+> Contextual-Orchestrator의 모델은 GitHub Actions Workflow 이용에 관해 orchestrator/free 로 고정.
+
+(Original wording, same session: "orchestrator/free 로 고정." The refinement scopes the pin explicitly
+to `contextual-orchestrator`'s GitHub Actions Workflow usage — i.e. the CI-triggered `OpenCode`/`Noema`/`Strix`
+review consumers this file and `AGENTS.md` already describe — rather than every conceivable
+`contextual-orchestrator` consumer. It does not narrow or loosen anything already pinned; it only makes
+explicit which surface the pin governs. A future non-CI consumer (an admin web UI, an interactive
+agent session, etc.) is not automatically covered by this line and would need its own explicit
+decision if and when it exists.)
 
 **Reading**: taken together with `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
 2026-08-30 amendment (Strix moved from `orchestrator/auto` to the zero-cost `orchestrator/free`
