@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import functools
 import hashlib
 import http.client
 import ipaddress
@@ -921,6 +922,102 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """An ``HTTPConnection`` that connects to a pre-validated IP address.
+
+    Closes the validate-then-connect TOCTOU/DNS-rebinding gap
+    (CWE-350/CWE-918): ``reject_private_llm_url`` resolves and validates
+    the hostname once, and this class connects directly to that exact
+    result instead of letting the socket layer re-resolve the hostname
+    independently at connect time, where a changed DNS answer could
+    bypass the earlier validation entirely.
+    """
+
+    def __init__(self, host: str, *args: Any, pinned_ip: str, **kwargs: Any) -> None:
+        """Record ``pinned_ip`` alongside the usual connection arguments."""
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        """Connect to the pinned IP instead of re-resolving ``self.host``."""
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """The TLS variant of ``_PinnedHTTPConnection``.
+
+    Still verifies the server certificate against the original hostname
+    via SNI (``server_hostname=self.host``), so pinning the connection
+    does not weaken certificate validation -- only which IP address the
+    TCP connection itself is made to.
+    """
+
+    def __init__(self, host: str, *args: Any, pinned_ip: str, **kwargs: Any) -> None:
+        """Record ``pinned_ip`` alongside the usual connection arguments."""
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        """Connect to the pinned IP, then perform TLS for ``self.host``."""
+        sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    """A ``urllib`` handler that opens plain-HTTP connections to a pinned IP."""
+
+    def __init__(self, pinned_ip: str) -> None:
+        """Record the IP every request through this handler pins to."""
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        """Open the request through a DNS-pinned ``HTTPConnection``."""
+        return self.do_open(
+            functools.partial(_PinnedHTTPConnection, pinned_ip=self._pinned_ip), req
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """A ``urllib`` handler that opens HTTPS connections to a pinned IP."""
+
+    def __init__(self, pinned_ip: str) -> None:
+        """Record the IP every request through this handler pins to."""
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open the request through a DNS-pinned ``HTTPSConnection``."""
+        return self.do_open(
+            functools.partial(
+                _PinnedHTTPSConnection, pinned_ip=self._pinned_ip, context=self._context
+            ),
+            req,
+        )
+
+
+def _pinned_connection_handlers(
+    api_url: str, pinned_ip: str | None
+) -> list[urllib.request.BaseHandler]:
+    """Return the DNS-pinning handler for ``api_url``, or none if unneeded.
+
+    ``pinned_ip`` is ``None`` when ``reject_private_llm_url`` found nothing
+    to pin (the orchestrator-sidecar loopback fast path, or an
+    unresolvable/unparseable hostname) -- in either case the ordinary
+    ``urllib`` handlers already installed by ``build_opener`` are used
+    unchanged, exactly matching this function's pre-pinning behavior.
+    """
+    if pinned_ip is None:
+        return []
+    if urllib.parse.urlparse(api_url).scheme.lower() == "https":
+        return [_PinnedHTTPSHandler(pinned_ip)]
+    return [_PinnedHTTPHandler(pinned_ip)]
+
+
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
     """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
 
@@ -1366,8 +1463,21 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
     return (scheme, hostname, port) == (sidecar_scheme, sidecar_host, sidecar_port)
 
 
-def reject_private_llm_url(api_url: str) -> None:
-    """Reject non-sidecar localhost, private, and non-http(s) LLM targets."""
+def reject_private_llm_url(api_url: str) -> str | None:
+    """Reject non-sidecar localhost, private, and non-http(s) LLM targets.
+
+    Returns the single resolved IP address the caller should pin the actual
+    connection to, closing the validate-then-connect TOCTOU/DNS-rebinding
+    gap (CWE-350/CWE-918) between this check and the request issued later
+    -- a DNS answer that changes between this lookup and the connection
+    would otherwise bypass validation entirely. Returns ``None`` when there
+    is nothing to pin, which matches this function's existing (unchanged)
+    behavior of allowing the URL through in each such case: the
+    orchestrator-sidecar loopback fast path never performs a DNS lookup at
+    all (a fixed loopback literal is inherently safe to connect to
+    directly), and an unresolvable hostname or a `getaddrinfo` result with
+    no parseable IP address leaves nothing valid to pin.
+    """
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
             "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
@@ -1383,13 +1493,14 @@ def reject_private_llm_url(api_url: str) -> None:
     if not hostname:
         raise ValueError("URL must have a valid hostname")
     if is_allowed_orchestrator_sidecar_url(api_url):
-        return
+        return None
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
     except socket.gaierror:
-        return
+        return None
+    pinned_ip: str | None = None
     for result in addrinfo:
         ip_str = result[4][0]
         try:
@@ -1398,6 +1509,9 @@ def reject_private_llm_url(api_url: str) -> None:
             continue
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
             raise ValueError("URL cannot target internal IP addresses")
+        if pinned_ip is None:
+            pinned_ip = ip_str
+    return pinned_ip
 
 
 def call_llm(
@@ -1425,7 +1539,7 @@ def call_llm(
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
-    reject_private_llm_url(api_url)
+    pinned_ip = reject_private_llm_url(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1474,7 +1588,9 @@ def call_llm(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(
+        *_pinned_connection_handlers(api_url, pinned_ip), NoRedirectHandler()
+    )
     attempt_started = time.monotonic()
     active_phase = "connecting"
     served_model: str | None = None

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
+import urllib.request
 
 import pytest
 
@@ -180,3 +183,139 @@ def test_reject_private_llm_url_scheme_hostname_and_public_dns(monkeypatch):
 
     monkeypatch.setattr(noema.socket, "getaddrinfo", garbage)
     noema.reject_private_llm_url("https://odd.example.test/v1/chat")
+
+
+def test_reject_private_llm_url_returns_pinned_ip_for_public_dns(monkeypatch):
+    """A validated public hostname returns the first resolved IP to pin."""
+    monkeypatch.delenv("NOEMA_LLM_VIA_ORCHESTRATOR", raising=False)
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
+
+    def multi(host, port):
+        return [
+            (0, 0, 0, "", ("8.8.8.8", 0)),
+            (0, 0, 0, "", ("8.8.4.4", 0)),
+        ]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", multi)
+    assert (
+        noema.reject_private_llm_url("https://llm.example.test/v1/chat")
+        == "8.8.8.8"
+    )
+
+    def garbage(host, port):
+        return [(0, 0, 0, "", ("not-an-ip", 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", garbage)
+    assert noema.reject_private_llm_url("https://odd.example.test/v1/chat") is None
+
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
+    assert (
+        noema.reject_private_llm_url("http://127.0.0.1:18080/v1/chat/completions")
+        is None
+    )
+
+
+def test_pinned_connection_handlers_selects_by_scheme():
+    """The handler list is empty with no pinned IP, else scheme-selected."""
+    assert noema._pinned_connection_handlers("https://x.test/", None) == []
+    handlers = noema._pinned_connection_handlers("https://x.test/", "203.0.113.9")
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], noema._PinnedHTTPSHandler)
+    handlers = noema._pinned_connection_handlers("http://x.test/", "203.0.113.9")
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], noema._PinnedHTTPHandler)
+
+
+class _EchoHandler(http.server.BaseHTTPRequestHandler):
+    """A tiny local HTTP server that echoes the request Host header."""
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
+        """Reply 200 with the received Host header as the body."""
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+        body = self.headers.get("Host", "").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        """Silence the default per-request stderr logging."""
+
+
+def test_pinned_http_connection_connects_to_pinned_ip_not_hostname():
+    """The request reaches a real server via the pinned IP, bypassing DNS.
+
+    The request URL names a hostname that cannot resolve (``.invalid`` is
+    reserved by RFC 2606 to never resolve); the request only succeeds
+    because ``_PinnedHTTPHandler`` connects directly to the pinned loopback
+    IP instead of asking the socket layer to resolve that hostname.
+    """
+    server = http.server.HTTPServer(("127.0.0.1", 0), _EchoHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        opener = urllib.request.build_opener(
+            noema._PinnedHTTPHandler(pinned_ip="127.0.0.1")
+        )
+        request = urllib.request.Request(
+            f"http://noema-dns-pin-test.invalid:{port}/echo",
+            data=b"{}",
+            method="POST",
+        )
+        with opener.open(request) as response:  # nosec B310
+            body = response.read().decode("utf-8")
+        assert body == f"noema-dns-pin-test.invalid:{port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_pinned_https_handler_opens_through_a_pinned_https_connection(monkeypatch):
+    """https_open() wires do_open() to a pinned-IP HTTPSConnection factory."""
+    captured = {}
+
+    def fake_do_open(self, http_class, req):
+        captured["http_class"] = http_class
+        captured["req"] = req
+        return "opened"
+
+    monkeypatch.setattr(
+        urllib.request.AbstractHTTPHandler, "do_open", fake_do_open
+    )
+    handler = noema._PinnedHTTPSHandler(pinned_ip="8.8.8.8")
+    fake_req = object()
+    assert handler.https_open(fake_req) == "opened"
+    assert captured["req"] is fake_req
+    conn = captured["http_class"]("llm.example.test")
+    assert isinstance(conn, noema._PinnedHTTPSConnection)
+    assert conn._pinned_ip == "8.8.8.8"
+    assert conn._context is handler._context
+
+
+def test_pinned_https_connection_verifies_original_hostname_via_sni(monkeypatch):
+    """The TLS handshake pins the IP but keeps SNI/cert checks on the hostname."""
+    calls = {}
+
+    class FakeSocket:
+        pass
+
+    class FakeContext:
+        def wrap_socket(self, sock, server_hostname):
+            calls["sock"] = sock
+            calls["server_hostname"] = server_hostname
+            return "wrapped"
+
+    fake_sock = FakeSocket()
+    monkeypatch.setattr(
+        noema.socket, "create_connection", lambda *a, **k: fake_sock
+    )
+    conn = noema._PinnedHTTPSConnection(
+        "llm.example.test", pinned_ip="203.0.113.9", context=FakeContext()
+    )
+    conn.port = 443
+    conn.connect()
+    assert calls["sock"] is fake_sock
+    assert calls["server_hostname"] == "llm.example.test"
+    assert conn.sock == "wrapped"
