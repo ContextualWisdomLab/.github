@@ -539,7 +539,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "noema-review.yml",
         "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
+        "python-security.yml",
+        "sast-semgrep.yml",
+        "sbom-generation.yml",
         "scorecard-pr.yml",
+        "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
     )
@@ -579,12 +583,27 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+        elif filename in {
+            "close-empty-pr.yml",
+            "codeql-pr.yml",
+            "osv-scanner-pr.yml",
+            "pr-review-merge-scheduler.yml",
+            "python-security.yml",
+            "sast-semgrep.yml",
+            "sbom-generation.yml",
+            "scorecard-pr.yml",
+            "secret-scan.yml",
+            "security-scan.yml",
+        }:
+            assert "cancel-closed-pr-runs:" not in workflow
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
+            assert "github.event.pull_request.number" in concurrency_contract
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
+            assert "cancel-in-progress:" in concurrency_contract
         else:
-            assert "cancel-closed-pr-runs:" in workflow
-            assert (
-                "PR closed; this run only cancels older runs through workflow concurrency."
-                in workflow
-            )
+            raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
