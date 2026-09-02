@@ -13,6 +13,9 @@ ORG_LOOP_CALLER = (
 )
 
 
+SELF_TEST_PATH = "tests/test_exact_head_coverage_quality_gate_contract.py"
+
+
 def _text(path: Path) -> str:
     assert path.is_file(), f"missing workflow file: {path}"
     return path.read_text(encoding="utf-8")
@@ -118,3 +121,18 @@ def test_javascript_and_organization_loop_callers_wire_distinct_subsystem_inputs
         in org_caller
     )
     assert "timeout_minutes: 10" in org_caller
+
+
+def test_js_caller_trigger_covers_this_contract_test_file() -> None:
+    """An edit to only this file must still trigger the job that runs it.
+
+    The JS caller's pytest_target is the whole `tests` directory, so it
+    actually exercises this file when it runs -- unlike the org-loop caller,
+    whose pytest_target is a narrower glob that never matches this filename.
+    Without this file in the JS caller's path trigger, a change scoped only
+    to this test could merge without the gate that runs it ever firing.
+    """
+    js_caller = _text(JS_CALLER)
+    trigger = js_caller.split("\npermissions:\n", 1)[0]
+
+    assert f"'{SELF_TEST_PATH}'" in trigger
