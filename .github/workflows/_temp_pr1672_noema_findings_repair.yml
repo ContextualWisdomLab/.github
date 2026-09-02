@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/_temp_pr1672_noema_findings_repair.yml
       - scripts/ci/temp_pr1672_noema_findings_repair.py
+      - scripts/ci/temp_pr1672_followup_repair.py
 
 concurrency:
   group: temp-pr1672-noema-findings-${{ github.repository }}-${{ github.ref_name }}
@@ -49,7 +50,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # RED: Python's replacement-string semantics reject source-like backslashes.
           try:
               re.subn(r"x", r"\d", "x", count=1, flags=re.DOTALL)
           except re.error:
@@ -57,7 +57,6 @@ jobs:
           else:
               raise SystemExit("RED replacement regression unexpectedly passed")
 
-          # RED from run 33593258285: the old concatenation leaves a blank line at EOF.
           old_generated = "base\n\n".rstrip() + "\n\nextra\n" + "\n"
           if not old_generated.endswith("\n\n"):
               raise SystemExit("RED EOF regression unexpectedly passed")
@@ -77,7 +76,6 @@ jobs:
           text = text.replace(old_eof, new_eof, 1)
           path.write_text(text, encoding="utf-8")
 
-          # GREEN: callable replacement preserves source and generated tests end in one LF.
           updated, count = re.subn(r"x", lambda _match: r"\d", "x", count=1, flags=re.DOTALL)
           if count != 1 or updated != r"\d":
               raise SystemExit("callable replacement did not preserve generated source")
@@ -96,12 +94,17 @@ jobs:
           test -n "$remote_head"
           test "$remote_head" = "$EXPECTED_HEAD"
           python scripts/ci/temp_pr1672_noema_findings_repair.py
+          python scripts/ci/temp_pr1672_followup_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e scripts/ci/temp_pr1672_followup_repair.py
           test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           test ! -e tests/test_noema_repair_deadline_alarm_safety.py
           ! grep -q 'NOEMA_REPAIR_DEADLINE_SECONDS' scripts/ci/noema_review_gate.py
           ! grep -q 'NoemaRepairDeadlineExceeded' scripts/ci/noema_review_gate.py
           ! grep -q '_repair_wall_clock_deadline' scripts/ci/noema_review_gate.py
+          grep -q 'def _entry_ordinal' scripts/ci/noema_review_gate.py
+          grep -q 'nearest changed lines for' scripts/ci/noema_review_gate.py
+          grep -q 'char.isprintable()' scripts/ci/noema_review_gate.py
           git diff --check
 
       - name: Verify focused Noema contracts
@@ -112,7 +115,16 @@ jobs:
             tests/test_noema_model_output_failure_classification.py \
             tests/test_noema_review_gate.py \
             tests/test_noema_model_output_transport.py \
-            -q
+            -q --junitxml=/tmp/pr1672-focused.xml
+
+      - name: Preserve focused failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pr1672-focused-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/pr1672-focused.xml
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Verify complete repository coverage and docstrings
         run: |
@@ -129,7 +141,7 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/fix/noema-repair-attempt-telemetry'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
@@ -167,7 +179,9 @@ jobs:
           path.write_text(text.replace(old_eof, new_eof, 1), encoding="utf-8")
           PY
           python3 scripts/ci/temp_pr1672_noema_findings_repair.py
+          python3 scripts/ci/temp_pr1672_followup_repair.py
           test ! -e scripts/ci/temp_pr1672_noema_findings_repair.py
+          test ! -e scripts/ci/temp_pr1672_followup_repair.py
           test ! -e .github/workflows/_temp_pr1672_noema_findings_repair.yml
           test ! -e tests/test_noema_repair_deadline_alarm_safety.py
           git diff --check
