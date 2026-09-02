@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "8cd99f139915131ba0239bce12a5d6a5fd85394e"
+ORCH_PIN_SHA = "045d17da5e2aea56a97e241ee158ab1628d78660"
 
 
 def _read(path: Path) -> str:
@@ -392,6 +392,12 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "accepted_size = 64 * 1024 + 1" in text
     assert "REVIEW_MAX_BODY_BYTES + 1" in text
     assert "assert response.status == 413" in text
+    assert "expected_rejection_log = io.StringIO()" in text
+    assert "with contextlib.redirect_stderr(expected_rejection_log):" in text
+    assert '"request_failed status=413 code=request_too_large"' in text
+    assert "in expected_rejection_log.getvalue()" in text
+    assert "return self._mock_raw(agent, endpoint, payload)" in text
+    assert "return super().proxy_send(agent, endpoint, payload)" not in text
     assert "_request_body_size" not in text
     assert "class CaptureClient(ModelClient):" in text
     assert '"description": description' in text
