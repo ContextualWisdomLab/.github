@@ -186,15 +186,37 @@ def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
-def test_draft_exemption_fails_closed_when_live_head_moved(
+def test_draft_exemption_survives_when_live_head_moved(
     tmp_path: Path,
     script: str,
 ) -> None:
-    """The event cannot exempt a different live head even when it is still draft."""
+    """A stale draft-conversion event still exempts a draft PR whose live head moved.
+
+    PR #1697 (`fix(opencode): retire stale draft/head dispatches without
+    false failure`) deliberately reordered both step bodies to check
+    closed/draft *before* head-SHA-match, following a real production
+    incident: contextual-orchestrator PR #1000 stayed draft the whole time,
+    but a push landed between the event snapshot and this step's live
+    re-fetch, and the old head-match-first ordering failed hard with
+    `::error::...head moved while validating live review state.` and exit 1
+    even though no review was ever being requested against a stable target
+    (https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33548447878/job/100066104033).
+    Draft/closed is a no-op exit either way -- no receipt-gate fetch, no
+    OIDC exchange, no dispatch, no polling -- so there is no genuine
+    correctness reason to distinguish a moved head from an unmoved one here;
+    this test's harness combines that moved head with the *event-level*
+    stale-draft-conversion metadata this file exercises throughout (unlike
+    `test_opencode_required_verdict_regression.py`'s own coverage of the
+    same #1697 fix, which does not vary event action/draft metadata), so it
+    is kept -- updated, not deleted -- for that distinct angle. This test
+    previously asserted the old, superseded ``head moved`` exit-1 behavior
+    this fix retired; do not reinstate that expectation.
+    """
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
-    assert result.returncode == 1
-    assert "head moved while validating live" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "still a draft on the live exact head" in result.stdout
+    assert "head moved" not in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
