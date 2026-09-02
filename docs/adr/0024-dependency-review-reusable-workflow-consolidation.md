@@ -19,10 +19,11 @@ A field-by-field audit of all four files (2026-09-02) found:
 
 | Field | argos | mightyETL | newsdom-api | scopeweave |
 | --- | --- | --- | --- | --- |
-| `fail-on-severity` | `moderate` | `high` | unset (action default `low`) | unset (action default `low`) |
+| `fail-on-severity` | `moderate` | `high` | unset (action default `low`) | `moderate` |
 | `allow-ghsas` | none | none | `GHSA-69w3-r845-3855` | none |
+| `comment-summary-in-pr` | unset | unset | unset | `on-failure` |
 | step-level `continue-on-error` | `true` | unset (blocking) | unset (blocking) | unset (blocking) |
-| Dependency Graph availability handling | none (always runs, no fallback) | static `github.event.repository.private` branch to a separate no-op job | none | dynamic API preflight (`dependency-graph/compare` HTTP status), gates the action step, emits a warning note otherwise |
+| Dependency Graph availability handling | none (always runs, no fallback) | static `github.event.repository.private` branch to a separate no-op job | none | dynamic API preflight (`dependency-graph/compare` HTTP status): 200 → run the gate, 403/404 → warn and skip, any other status → hard-fail the job |
 | trigger scope | `pull_request: branches: [main, developmental]` | `pull_request` (all branches) | `pull_request` (all branches) | `pull_request` + `workflow_dispatch` |
 | concurrency group | none | `${{ github.workflow }}-${{ github.event.pull_request.number \|\| github.ref }}` | none | `dependency-review-${{ github.event.pull_request.number \|\| github.ref }}` |
 | `actions/checkout` pin | unpinned `@v4` | n/a (action doesn't need checkout) | SHA `3d3c42e5...` | SHA `9c091bb2...` (v7.0.0) |
@@ -48,8 +49,22 @@ Two findings changed the design from a naive copy-paste consolidation:
    mightyETL's, and drops the separate no-op fallback job in favor of one job
    with a conditional step (the same job either runs the gate or emits the
    unavailability note, never both, with no risk of the fallback job being
-   forgotten when Dependency Graph later becomes available).
-3. **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is a forward-compatibility setting,
+   forgotten when Dependency Graph later becomes available). scopeweave's
+   preflight also distinguishes a confirmed-unavailable response (403/404 —
+   warn and skip) from any other unexpected HTTP status (500, an auth
+   failure, a transient GitHub API problem — hard-fail the job instead of
+   silently skipping the security gate); the reusable workflow preserves
+   that exact distinction rather than the simpler "any non-200 means
+   unavailable" behavior an initial draft of this workflow used, since
+   collapsing a real failure into "unavailable" would silently drop
+   coverage instead of surfacing the problem.
+3. **`comment-summary-in-pr: on-failure` is a uniformly-beneficial UX
+   improvement, not a policy choice.** Only scopeweave's original set it
+   (posts the dependency-review findings as a PR comment when the gate
+   fails). It changes nothing about pass/fail semantics, only where a
+   failure's detail is surfaced, so it is hardcoded uniformly rather than
+   made an input — the other three repositories gain it for free.
+4. **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is a forward-compatibility setting,
    not a policy choice.** newsdom-api was the only original to set it,
    opting its job into GitHub's Node 24 actions runtime ahead of the default
    cutover for the JS actions it runs (`actions/checkout`,

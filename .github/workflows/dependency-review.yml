@@ -91,9 +91,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "Dependency review only runs as a hard gate for pull_request events."
+            exit 0
+          fi
+
           api_url="${GITHUB_API_URL:-https://api.github.com}"
+          response_file="$(mktemp)"
           status="$(
-            curl -fsS -o /dev/null -w '%{http_code}' \
+            curl -fsS -o "$response_file" -w '%{http_code}' \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -103,10 +110,18 @@ jobs:
 
           if [ "$status" = "200" ]; then
             echo "available=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is likely unavailable)."
-            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
+            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is unavailable)."
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Dependency graph availability check failed with HTTP ${status}. This is not a 'graph unavailable' response (403/404) -- treating it as a genuine failure instead of silently skipping the security gate."
+          cat "$response_file"
+          exit 1
 
       - name: Dependency review
         if: steps.dependency_graph.outputs.available == 'true'
@@ -115,9 +130,10 @@ jobs:
         with:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           allow-ghsas: ${{ inputs.allow_ghsas }}
+          comment-summary-in-pr: on-failure
 
       - name: Dependency graph unavailable note
-        if: steps.dependency_graph.outputs.available != 'true'
+        if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
         run: |
           echo "Dependency Review requires GitHub Dependency Graph to be enabled for this repository (and, on private repositories, GitHub Advanced Security)."
           echo "Other required dependency-vulnerability gates (OSV-Scanner, Scorecard) remain the blocking coverage until Dependency Graph is available here."

@@ -94,3 +94,26 @@ def test_availability_check_uses_the_dependency_graph_compare_api() -> None:
     workflow = _workflow_text()
     assert "dependency-graph/compare" in workflow
     assert "github.event.repository.private" not in workflow
+
+
+def test_availability_check_distinguishes_unavailable_from_genuine_failure() -> None:
+    """403/404 means 'unavailable, skip gracefully'; any other status must hard-fail
+    the job instead of silently treating a real error the same as unavailability."""
+    workflow = _workflow_text()
+    assert 'if [ "$status" = "403" ] || [ "$status" = "404" ]' in workflow
+    assert "available=false" in workflow
+    assert "::error::Dependency graph availability check failed with HTTP" in workflow
+    assert "exit 1" in workflow
+
+
+def test_availability_check_only_runs_the_gate_for_pull_request_events() -> None:
+    """A non-pull_request trigger (e.g. workflow_dispatch) must skip the gate, not error,
+    since base/head SHAs only exist on a pull_request event."""
+    workflow = _workflow_text()
+    assert '"${{ github.event_name }}" != "pull_request"' in workflow
+
+
+def test_dependency_review_posts_a_pr_comment_on_failure() -> None:
+    """scopeweave's PR-comment-on-failure UX applies uniformly, not only to that one caller."""
+    workflow = _workflow_text()
+    assert "comment-summary-in-pr: on-failure" in workflow

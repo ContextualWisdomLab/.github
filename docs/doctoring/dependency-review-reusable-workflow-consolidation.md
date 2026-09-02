@@ -17,10 +17,11 @@ found real, repo-specific policy differences, not accidental copy drift:
 
 | Field | argos | mightyETL | newsdom-api | scopeweave |
 | --- | --- | --- | --- | --- |
-| `fail-on-severity` | `moderate` | `high` | unset → action default `low` | unset → action default `low` |
+| `fail-on-severity` | `moderate` | `high` | unset → action default `low` | `moderate` |
 | `allow-ghsas` | none | none | `GHSA-69w3-r845-3855` | none |
+| `comment-summary-in-pr` | unset | unset | unset | `on-failure` |
 | step `continue-on-error` | `true` | unset (blocking) | unset (blocking) | unset (blocking) |
-| availability handling | none | static `repository.private` branch to a separate no-op job | none | dynamic `dependency-graph/compare` HTTP-status preflight |
+| availability handling | none | static `repository.private` branch to a separate no-op job | none | dynamic `dependency-graph/compare` HTTP-status preflight: 200 → run, 403/404 → warn+skip, other → hard-fail |
 | trigger | `pull_request: branches: [main, developmental]` | `pull_request` | `pull_request` | `pull_request`, `workflow_dispatch` |
 | concurrency group | none | workflow+PR/ref group, cancel-in-progress | none | `dependency-review-`+PR/ref group, cancel-in-progress |
 | `actions/checkout` pin | unpinned `@v4` | not used | SHA `3d3c42e5aac5ba805825da76410c181273ba90b1` | SHA `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) |
@@ -136,21 +137,21 @@ concurrency:
 
 jobs:
   dependency-review:
-    if: github.event_name == 'pull_request'
     uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@main
     with:
-      fail_on_severity: low
+      fail_on_severity: moderate
 ```
 
-scopeweave's original also supported a `workflow_dispatch` trigger, but its
-own dependency-review job only ever ran the gate for `pull_request` events
-(the availability check itself early-exited with a "only runs for
-pull_request events" note otherwise) — the caller keeps `workflow_dispatch`
-in its trigger list for manual runs of other jobs in that repository's
-workflow file, if any, but gates this job to `pull_request` to preserve
-that exact original behavior; the reusable workflow's own preflight step
-still requires `github.event.pull_request.base.sha` / `.head.sha`, which
-only exist on a `pull_request` event.
+scopeweave's original supported a `workflow_dispatch` trigger, but its own
+job never gated on the event at the job level — it always ran, and its
+"Check dependency review support" step early-exited with `supported=false`
+for any non-`pull_request` event (the availability check itself needs
+`github.event.pull_request.base.sha` / `.head.sha`, which only exist on a
+`pull_request` event). The reusable workflow's preflight step carries this
+same event-name guard internally, so the caller does not need its own
+job-level `if:` to reproduce it — `workflow_dispatch` stays in the trigger
+list and the job still runs, harmlessly skipping the gate exactly as the
+original did.
 
 ## Verified before merge
 
