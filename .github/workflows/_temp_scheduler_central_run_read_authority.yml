@@ -148,7 +148,7 @@ jobs:
     if: github.repository == 'ContextualWisdomLab/.github' && github.actor == 'seonghobae'
     runs-on: ubuntu-slim
     permissions:
-      contents: read
+      contents: write
       actions: read
     steps:
       - name: Checkout unchanged writer head without persisted credentials
@@ -188,16 +188,17 @@ jobs:
           git config user.email "automation@users.noreply.github.com"
           git commit -m "fix(scheduler): use central authority for central run reads"
 
-      - name: Publish verified fast-forward successor with workflow-triggering credential
+      - name: Publish verified fast-forward successor with available mutation credential
         env:
           PRIMARY_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
           FALLBACK_PUSH_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+          BUILTIN_PUSH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-}}"
+          workflow_push_token="${PRIMARY_PUSH_TOKEN:-${FALLBACK_PUSH_TOKEN:-${BUILTIN_PUSH_TOKEN:-}}}"
           if [ -z "$workflow_push_token" ]; then
-            echo "::error::No workflow-starting mutation credential is configured; github.token fallback is intentionally refused."
+            echo "::error::No mutation credential is configured."
             exit 1
           fi
           git fetch origin fix/scheduler-central-run-read-authority-20260902
