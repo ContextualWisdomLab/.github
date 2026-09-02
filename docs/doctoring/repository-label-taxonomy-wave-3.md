@@ -3,9 +3,9 @@
 **Recorded:** 2026-09-02  
 **Owner:** `ContextualWisdomLab/.github`
 
-This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **111 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 62 reviewed targets below.
+This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **112 active evidence-backed label targets**; the earlier operating baseline enumerates the first 49, and this wave adds the 63 reviewed targets below.
 
-The explicit label assignments cover 111 active evidence-backed targets across the baseline and this supplement.
+The explicit label assignments cover 112 active evidence-backed targets across the baseline and this supplement.
 
 - `ContextualWisdomLab/ThreadWeave#37`
 - `ContextualWisdomLab/fast-mlsirm#1716`
@@ -69,5 +69,6 @@ The explicit label assignments cover 111 active evidence-backed targets across t
 - `ContextualWisdomLab/quarantine-sandbox-runtime#4`
 - `ContextualWisdomLab/TEPP#174`
 - `ContextualWisdomLab/TEPP#175`
+- `ContextualWisdomLab/nonnest2#84`
 
 Each target records the evidence-backed primary semantic type established from current PR/issue scope and live repository labels: documentation for public-surface writers, bug for security/correctness/commercial-policy defects, and feature for buyer-facing product capabilities. Recording semantic type does not make Draft work Ready, unblock blocked work, transfer merge authority, or override repository-local priority/status/security/component labels. The reconciliation contract continues to preserve labels outside the centrally managed semantic set.
