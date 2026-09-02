@@ -1,0 +1,89 @@
+name: Source fix PR1629 preflight retry
+
+on:
+  push:
+    branches:
+      - fix/no-heuristic-review-admission-current-main
+    paths:
+      - .github/source-fix-1629-preflight-retry.trigger
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-locked quality dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove no-retry regression is RED
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q tests/test_contextual_orchestrator_no_heuristic_preflight_retry.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Preflight retry regression was unexpectedly GREEN before repair."
+            exit 1
+          fi
+          echo "Preflight retry regression reproduced the hand-selected transport allocation."
+
+      - name: Apply exact guarded owner repair
+        run: python scripts/source_fix_1629_preflight_retry.py
+
+      - name: Verify focused launcher contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_contextual_orchestrator_no_heuristic_preflight_retry.py \
+            tests/test_contextual_orchestrator_review_transient_preflight.py \
+            tests/test_contextual_orchestrator_review_runtime_preflight.py
+          git diff --check
+
+      - name: Remove completed one-shot machinery
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/source-fix-1629-preflight-retry.yml \
+            .github/source-fix-1629-preflight-retry.trigger \
+            scripts/source_fix_1629_preflight_retry.py
+          git diff --check
+
+      - name: Commit verified owner repair
+        env:
+          EXPECTED_TRIGGER_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/no-heuristic-review-admission-current-main
+          remote_head="$(git rev-parse origin/fix/no-heuristic-review-admission-current-main)"
+          if [ "$remote_head" != "$EXPECTED_TRIGGER_HEAD" ]; then
+            echo "::error::Canonical branch moved; refusing to overwrite or guess a merge."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "::error::Source fix produced no publishable delta."
+            exit 1
+          fi
+          git commit -m "fix(ci): remove heuristic preflight transport retry"
+          git push origin HEAD:fix/no-heuristic-review-admission-current-main
