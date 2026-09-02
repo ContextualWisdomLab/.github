@@ -315,7 +315,7 @@ fixed:
   library one repo canonically owns because a responsibility repeats across
   products, with role/maturity verified from protected-branch evidence, and
   an open PR proposing core status is `Proposed`, not authoritative yet);
-  reorganized the same 21-repo list into five named categories (조직·계약 /
+  reorganized the same 23-repo list into five named categories (조직·계약 /
   의미·데이터 / AI·운영 / Identity·보안·runtime / 재사용 기능) instead of the
   second revision's flat bullet list; and added concrete interim-boundary
   mechanisms for the §2 build-the-core policy — while an owner is still
@@ -326,7 +326,7 @@ fixed:
 ### Verification performed this revision
 
 1. **Repo list unchanged, re-confirmed.** The third revision's §9 names the
-   same 21 core repos as the second revision (reorganized into categories,
+   same 23 core repos as the second revision (reorganized into categories,
    not expanded or reduced), plus the same second-revision consumer set is
    implied by §9's new opening definition even though the third revision's
    quoted text doesn't restate the seven-repo consumer list verbatim. No new
@@ -388,7 +388,11 @@ notes rather than the quoted blockquotes, and record the reasoning here.
    correct total is 23 §9 core repos + 7 §9 domain-consumer repos = 30 unique names, not 29. Fixed both
    this doctoring file's second-revision section (above) and `docs/product-goal-directive.md`'s own §9
    "Verification" note to say 23 and 30, and to state the four-ontology-repos-are-a-subset relationship
-   explicitly instead of implying a fifth additive group.
+   explicitly instead of implying a fifth additive group. **Follow-up (same day):** the first pass of this
+   fix missed that the third-revision section further below ("What changed in the directive text" and its
+   own "Verification performed this revision") repeated the same stale "21" figure twice, independently of
+   the second-revision section already fixed — Devin Review caught this residual inconsistency on the next
+   push. Fixed both remaining occurrences to say 23, matching the corrected count everywhere in this file.
 3. **Confirmed — sandbox ownership tension was left "open, not yet resolved" when it was directly
    resolvable.** The prior revision's §9 note flagged, but deliberately did not resolve, the tension
    between `docs/CWL-MASTER-CONTEXT.md` (`noema` owns "the lightweight quarantine sandbox") and this
