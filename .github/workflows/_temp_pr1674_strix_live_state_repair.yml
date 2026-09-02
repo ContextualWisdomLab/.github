@@ -23,7 +23,7 @@ jobs:
       github.repository == 'ContextualWisdomLab/.github' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/fix/noema-closed-not-stale'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 60
     steps:
       - name: Checkout exact writer head
