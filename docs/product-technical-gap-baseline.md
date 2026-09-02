@@ -1780,6 +1780,76 @@ email_records` 4곳이 `is_read`(ORM Python-side 기본값만 있고 DB 서버�
 **Status**: 닫힘. `ContextualWisdomLab/naruon#1502` 병합 대기 중이며, 이 문서
 자체는 병합 판단에는 재사용하지 않는다.
 
+## 2026-09-02 중앙 리뷰 게이트(`orchestrator/free`) 용량 병목 — 새 Gap
+
+**Context**: `ContextualWisdomLab/naruon#1502`(위 절)와
+`ContextualWisdomLab/.github#1538`을 2026-09-01 하루 동안 직접 지켜보며 발견한,
+`AGENTS.md`의 2026-08-30 owner 결정(`OpenCode`·`Noema`·`Strix` 모두
+`orchestrator/free`로 라우팅) 이후 처음으로 실측된 용량 한계다. 세 가지
+서로 다른 증상이 같은 근본 원인(동시에 push되는 많은 PR이 하나의 zero-cost
+free-tier LLM pool을 공유)을 가리킨다.
+
+1. **`naruon#1502`의 `noema-review`**: 최초 실행이 current head
+   `40ce573b`에서 시작까지 ~80분 대기 후 `Noema reviewed line 2 is not an
+   exact changed-side line`로 실패(free-tier 모델의 line-number 환각으로
+   추정). 재시도는 ~11:07 트리거 후 **6시간 넘게 큐에 머물다** 17:04에야
+   시작해 17:15부터 12개 free-tier 모델 중 6개가 timeout/404로 거부된 뒤
+   `noema_review_gate.py`가 실행되었지만, 이번엔 `noema-review-github-app`
+   설치 토큰이 (모델 preflight로 실행 시간이 길어져) 검증 verdict를 post하기
+   전에 만료되어 `gh: Bad credentials (HTTP 401)`로 실패했다(job
+   `99833722812`). 서로 다른 실패 모드 2건이 같은 PR에서 연속 관측된 것은
+   central 인프라 문제이지 PR 자체의 결함이 아니라는 강한 신호다.
+2. **`naruon#1502`의 `strix`**: 동일 head에서 3회 연속 실패 — 1·2회차는
+   큐에 머무는 중 취소(org 전체 `in_progress` 실행 수가 한동안 0으로 관측),
+   3회차는 실제로 22:15~22:49 34분간 실행된 뒤에도 취소됨(run
+   `33476187490`, `run_attempt: 3`). "큐가 비어있어서"만으로는 3회차를
+   설명할 수 없다 — 실행 중 취소는 다른 매커니즘(timeout, 리소스 한도, 또는
+   운영 sweep)을 시사한다.
+3. **`.github#1538`의 `opencode-review`**: `repository_dispatch`로 리뷰를
+   내보낸 뒤 `opencode-agent`의 current-head verdict를 30초 간격으로 최대
+   660회(=5.5시간) polling하도록 설계된 워크플로가, 이 PR의 한 줄짜리
+   docs-only 변경(`docs/product-technical-gap-baseline.md`)에 대해서도 **정확히
+   5.5시간을 다 채우고** verdict 없이 실패했다(job `99802685605`). 재시도도
+   6시간 넘게 큐에 머문 채였다(`.github` 저장소 자체의 PR).
+
+**추가로 확정한 근본 원인 1건(수정 완료)**: 위 조사 중
+`scripts/ci/test_strix_quick_gate.sh`가 `strix disables the model client
+inference timeout`을 요구하며 `.github/workflows/strix.yml`이
+`export LLM_TIMEOUT=0`을 포함해야 한다고 단언하는데, 실제 `main`
+(`fb02129`)은 `export LLM_TIMEOUT=300`(5분)으로 하드코딩되어 있어 이
+assertion이 **`main` 자체에서** 이미 실패 중이었다 — 같은 스텝의
+`STRIX_MEMORY_COMPRESSOR_TIMEOUT`/`STRIX_PROCESS_TIMEOUT_SECONDS`/`STRIX_TOTAL_TIMEOUT_SECONDS`
+세 변수는 이미 `0`인데 `LLM_TIMEOUT`만 빠져 있었다. `docs/product-goal-directive.md`
+§8("LLM Model에는 획일적 timeout 상한을 두지 않는다... 기본값은
+무제한")과 `strix.yml`의 concurrency 블록 자체 주석("Inference has no
+wall-clock deadline... may take more than two hours per model")에 정면으로
+반하는 상태였다. `ContextualWisdomLab/.github#1658`에서 한 줄 수정(`300`→`0`)
+완료, `ContextualWisdomLab/.github#1612`(Noema exact-changed-line-manifest
+수정 — 위 3개 증상 중 1번의 근본 수정)에 그 발견을 코멘트로 남겼다. 이
+`LLM_TIMEOUT=300` 자체는 이번에 관측한 5.5~6시간대의 대기/재시도 실패와는
+다른 변수(모델 client의 자체 inference timeout, 큐 대기시간이 아님)이므로
+용량 병목의 근본 수정은 아니지만, 같은 "no uniform timeout" 원칙 위반의
+독립된 사례로 함께 기록한다.
+
+**Gap 성격**: 이건 naruon 제품 기능 Gap이 아니라 **조직 전체 개발 속도에
+직접 영향을 주는 CI/개발-인프라 Gap**이다 — 리뷰 게이트가 병목이면 모든
+소비 저장소의 PR 병합 loop가 그만큼 느려진다. `ADR-0003`이 2026-08-30에
+이미 "residual single-outage-domain risk"를 owner가 명시적으로 수용한다고
+기록했는데, 오늘 관측한 것이 바로 그 리스크가 다중 동시 PR 부하 아래서
+실제로 발현한 사례다.
+
+**아직 미결**: (a) 이 문서가 스스로 기록한 `LLM_TIMEOUT=300`→`0` 수정은
+좁은 범위 root-cause 수정 1건일 뿐, `orchestrator/free` pool 자체의
+용량/동시성 한계를 해소하지 않는다 — provider diversity 확대나 pool 분리
+같은 더 큰 설계 변경은 이 문서 하나로 결정할 수 있는 범위 밖이며, 별도
+ADR·owner 판단이 필요하다. (b) `noema-review`의 GitHub App 토큰 TTL이
+"오래 대기 후 오래 실행"되는 잡의 실제 실행시간을 못 버티는 문제는
+`scripts/ci/noema_review_gate.py`/토큰 발급 스텝의 별도 수정이 필요하며
+아직 손대지 않았다. (c) `strix`가 "실행 중" 취소되는 3번째 증상의 정확한
+트리거(타임아웃 vs 리소스 한도 vs sweep)는 로그만으로 확정하지 못했다 —
+`always()` 단계로 업로드되는 `strix-reports` 아티팩트를 다음 발생 시 직접
+받아 확인해야 한다.
+
 ## 5. 실행 루프와 고객의 다음 행동
 
 각 hourly pass는 아래 순서를 유지한다.
@@ -1798,11 +1868,28 @@ email_records` 4곳이 `is_read`(ORM Python-side 기본값만 있고 DB 서버�
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1297 — current-head Strix serialization과 scoped close cleanup의 hosted Checks·독립 승인을 재확인한 뒤 보호된 auto-merge를 기다린다.
-2. ContextualWisdomLab/.github#1345/#1347 — 각각 normalizer 선형 스캔과 web-E2E isolation/SSRF 수정의 terminal Checks·Strix·Noema 증거를 같은 HEAD에서 재확인한다.
-3. ContextualWisdomLab/.github#1326 — Appguardrail/macOS hourly caller를 current CodeRabbit finding 및 APA citation evidence와 함께 재검토한다.
-4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
-5. `scripts/ci/select_nvidia_nim_model.py`(호출자 없음, 위 §5의 여러 항목이 이미 문서화)를 별도의 작은 PR(`fix/remove-orphaned-nim-model-resolver`)로 분리 제거했다 — `#1437` 리뷰 스레드가 명시적으로 요청한 대로 direct-NIM cleanup을 pool-flip 논의와 분리했다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은 git history를 가리키도록 갱신했다.
+(2026-09-02 갱신 — 이전 항목 #1297/#1345/#1347/#1326은 더 이상 열린 PR
+목록에 없어 이미 병합·종료된 것으로 보고 제거했다; 재오픈되면 다시
+추가한다.)
+
+1. `ContextualWisdomLab/.github#1658` — 이 문서 위 절이 기록한
+   `LLM_TIMEOUT=300`→`0` 한 줄 수정. terminal Checks·독립 승인을 확인한 뒤
+   병합한다.
+2. `ContextualWisdomLab/.github#1612` — Noema exact-changed-line-manifest
+   근본 수정. `#1610`(Strix coverage 회귀, 선행 필요)과 위 `#1658`이 먼저
+   반영되어야 이 PR 자체의 `exact-head-path-policy`가 정상적으로 평가된다.
+3. `ContextualWisdomLab/naruon#1502` — Postgres CI 서비스 컨테이너 gap
+   (위 2026-09-01 절). `strix`/`noema-review`/`coverage-evidence`가
+   중앙 리뷰 게이트 병목(위 2026-09-02 절)에 묶여 있으므로, 그 병목이
+   완화되는 대로 재확인한다.
+4. `ContextualWisdomLab/.github#1538` — 이 문서 자체의 2026-09-01 Postgres
+   gap 기록 PR. `opencode-review`가 같은 병목에 묶여 있다.
+5. 열린 PR 인벤토리(§1.3 disclaimer 대상, 병합 판단에는 재사용하지 않음)가
+   `.github` 저장소 한 곳만 50건을 넘는다(2026-09-02 관측, 이 문서 헤더의
+   2026-08-26 스냅샷 값 107은 갱신 대상) — "PR 소진"에는 아직 멀었다;
+   다음 hourly pass는 새 PR을 여는 대신 이 백로그를 review→fix→merge
+   순서로 우선 소진한다. G-01/G-02/G-05/G-06/G-15는 그 백로그 안에서
+   해당하는 소유 저장소 PR로 연결한다.
 
 ## 6. Compliance and data boundary
 
