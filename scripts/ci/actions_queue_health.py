@@ -9,7 +9,7 @@ exact timestamp used for queue-age calculations.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
 import sys
@@ -32,7 +32,6 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
 TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure",)
-TERMINAL_DIAGNOSTIC_LOOKBACK = timedelta(days=7)
 TERMINAL_DIAGNOSTIC_MAX_API_PAGES = MAX_API_PAGES
 
 
@@ -94,13 +93,6 @@ def _pull_request_identity_view(
     }
 
 
-def _terminal_diagnostic_created_filter(snapshot_timestamp: str) -> str:
-    """Return an encoded rolling lower bound for terminal incident evidence."""
-    diagnostic_cutoff = parse_timestamp(snapshot_timestamp) - TERMINAL_DIAGNOSTIC_LOOKBACK
-    cutoff_text = diagnostic_cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
-    return quote(f">={cutoff_text}", safe="")
-
-
 def collect_snapshot(
     repositories: Sequence[str],
     *,
@@ -118,7 +110,6 @@ def collect_snapshot(
         "+00:00", "Z"
     )
     parse_timestamp(snapshot_timestamp)
-    terminal_created_filter = _terminal_diagnostic_created_filter(snapshot_timestamp)
     collected_repositories: list[dict[str, Any]] = []
     collection_errors: list[dict[str, str]] = []
     active_statuses = ("in_progress", "pending", "queued", "requested", "waiting")
@@ -194,34 +185,6 @@ def collect_snapshot(
                     "active workflow run snapshot changed during collection"
                 )
 
-            terminal_diagnostic_snapshot: dict[int, dict[str, Any]] = {}
-            for terminal_status in TERMINAL_DIAGNOSTIC_STATUSES:
-                workflow_runs = _list_payload(
-                    github_json(
-                        f"repos/{repository_name}/actions/runs?status={terminal_status}"
-                        f"&created={terminal_created_filter}"
-                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
-                        paginate=True,
-                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
-                        runner=runner,
-                    ),
-                    "workflow_runs",
-                    max_items=(
-                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
-                    ),
-                )
-                for workflow_run in workflow_runs:
-                    workflow_run_id = workflow_run.get("id")
-                    if (
-                        isinstance(workflow_run_id, bool)
-                        or not isinstance(workflow_run_id, int)
-                        or workflow_run_id <= 0
-                    ):
-                        raise QueueHealthError(
-                            "workflow run id must be a positive integer"
-                        )
-                    terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
-
             try:
                 final_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner
@@ -255,6 +218,42 @@ def collect_snapshot(
                 pull_request["number"]: pull_request
                 for pull_request in final_pull_requests
             }
+            terminal_diagnostic_snapshot: dict[int, dict[str, Any]] = {}
+            current_head_shas = sorted(
+                {pull_request["head_sha"] for pull_request in final_pull_requests}
+            )
+            for current_head_sha in current_head_shas:
+                encoded_head_sha = quote(current_head_sha, safe="")
+                workflow_runs = _list_payload(
+                    github_json(
+                        f"repos/{repository_name}/actions/runs?status=completed"
+                        f"&head_sha={encoded_head_sha}"
+                        f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                        paginate=True,
+                        max_pages=TERMINAL_DIAGNOSTIC_MAX_API_PAGES,
+                        runner=runner,
+                    ),
+                    "workflow_runs",
+                    max_items=(
+                        WORKFLOW_RUN_PAGE_SIZE * TERMINAL_DIAGNOSTIC_MAX_API_PAGES
+                    ),
+                )
+                for workflow_run in workflow_runs:
+                    if str(workflow_run.get("conclusion") or "").lower() not in (
+                        TERMINAL_DIAGNOSTIC_STATUSES
+                    ):
+                        continue
+                    workflow_run_id = workflow_run.get("id")
+                    if (
+                        isinstance(workflow_run_id, bool)
+                        or not isinstance(workflow_run_id, int)
+                        or workflow_run_id <= 0
+                    ):
+                        raise QueueHealthError(
+                            "workflow run id must be a positive integer"
+                        )
+                    terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
+
             observed_snapshot = dict(second_snapshot)
             observed_snapshot.update(terminal_diagnostic_snapshot)
             runs_by_id: dict[int, dict[str, Any]] = {}
