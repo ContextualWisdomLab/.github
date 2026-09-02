@@ -283,6 +283,22 @@ def test_ambiguous_put_rejects_history_success_without_live_convergence(monkeypa
         )
 
 
+def test_ambiguous_put_zero_poll_configuration_still_fails_closed(monkeypatch) -> None:
+    """A misconfigured empty settlement loop must fail closed rather than imply success."""
+    module = load_module()
+    target = repository_target(module)
+    desired = module._desired_payload(repository_payload(), target)
+    monkeypatch.setattr(module, "AMBIGUOUS_WRITE_SETTLEMENT_POLLS", 0)
+
+    with pytest.raises(module.RulesetGovernanceError, match="remains unresolved"):
+        module._confirm_ambiguous_put(
+            target,
+            baseline_version=10,
+            desired=desired,
+            expected_main_sha="a" * 40,
+        )
+
+
 def test_verify_only_rejects_drift_outside_reconciler_projection(monkeypatch) -> None:
     """Canonical audit drift cannot be reported as converged merely because review fields match."""
     module = load_module()
