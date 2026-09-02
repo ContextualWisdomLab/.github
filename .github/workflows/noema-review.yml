@@ -630,13 +630,93 @@ jobs:
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
 
+      - name: Refresh repository-scoped Noema GitHub App token for publication
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
+        id: noema_github_app_publication_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_credential.outputs.repository }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: write
+          permission-security-events: read
+          permission-statuses: read
+          permission-vulnerability-alerts: read
+
+      - name: Refresh repository-scoped Noema OIDC app token for publication
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'oidc'
+        id: noema_oidc_publication_token
+        env:
+          OIDC_AUDIENCE: ${{ vars.NOEMA_OIDC_AUDIENCE || 'cwl-noema-review' }}
+          TOKEN_EXCHANGE_URL: ${{ vars.NOEMA_TOKEN_EXCHANGE_URL || vars.NOEMA_EXCHANGE_URL || '' }}
+        run: |
+          set -euo pipefail
+
+          fail_unavailable() {
+            local message="$1"
+            echo "::error::$message"
+            exit 1
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            fail_unavailable "Noema publication app token exchange unavailable: OIDC request environment is missing."
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            fail_unavailable "Noema publication app token exchange unavailable: OIDC token request did not complete."
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            fail_unavailable "Noema publication app token exchange unavailable: OIDC token response was empty."
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${oidc_token}" \
+              --data "$(jq -cn --arg target_repository "$TARGET_REPOSITORY" '{target_repository:$target_repository}')" \
+              "${TOKEN_EXCHANGE_URL}"
+          )"; then
+            fail_unavailable "Noema publication app token exchange unavailable: app token request did not complete."
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            fail_unavailable "Noema publication app token exchange unavailable: app token response was empty."
+          fi
+
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
       - name: Revalidate live Noema target before publication
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
         id: live_pr_publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_publication_token.outputs.token || '' }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema publication revalidation has no fresh credential for the explicitly selected reviewer source; refusing any GITHUB_TOKEN fallback."
+            exit 1
+          fi
           if ! pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
             echo "::error::Could not refresh the live pull request before Noema publication."
             exit 1
@@ -661,29 +741,11 @@ jobs:
           fi
           echo "proceed=true" >>"$GITHUB_OUTPUT"
 
-      - name: Refresh repository-scoped Noema GitHub App token for publication
-        if: env.PR_NUMBER != '' && steps.live_pr_publish.outputs.proceed == 'true' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
-        id: noema_github_app_publication_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
-          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
-          owner: ContextualWisdomLab
-          repositories: ${{ steps.noema_credential.outputs.repository }}
-          permission-actions: read
-          permission-checks: read
-          permission-contents: read
-          permission-metadata: read
-          permission-pull-requests: write
-          permission-security-events: read
-          permission-statuses: read
-          permission-vulnerability-alerts: read
-
       - name: Publish prepared Noema verdict on the exact live head
         if: env.PR_NUMBER != '' && steps.live_pr_publish.outputs.proceed == 'true' && steps.noema_prepare.outputs.prepared == 'true'
         env:
-          GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '' }}
-          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
+          GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_publication_token.outputs.token || '' }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc-refresh' || '' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_publication_token.outputs['installation-id'] }}
         run: |
