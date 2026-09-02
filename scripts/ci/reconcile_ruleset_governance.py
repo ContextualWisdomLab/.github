@@ -10,11 +10,11 @@ the exact protected-main revision, serialized owner-plane execution, and the
 immutable ruleset-history surface. If history proves a hidden pre-PUT edit was
 overwritten, the reconciler restores the newest displaced administrator state
 before failing; recovery re-checks immutable history and protected-main identity
-before every recovery write. Ambiguous mutation results are settled from live
-state plus immutable history instead of being treated as ordinary request
-failures or retried blindly. The canonical audit is executed against projected
-and live state so this narrow reconciler never reports broader policy drift as
-converged.
+before every recovery write. Ambiguous mutation and recovery results are settled
+from live state plus immutable history instead of being treated as ordinary
+request failures or retried blindly. The canonical audit is executed against
+projected and live state so this narrow reconciler never reports broader policy
+drift as converged.
 """
 
 from __future__ import annotations
@@ -49,12 +49,16 @@ AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS = (
 # normal guarded mutation path, start/mid/end ambiguous-result observations, the
 # full bounded collision-recovery chain, post-confirmation checks, and the final
 # workflow verify-only pass. Each blocking API/auditor operation is bounded by
-# API_REQUEST_TIMEOUT_SECONDS; settlement sleep spans one additional client
-# timeout horizon. The workflow contract test derives its minimum job timeout
-# from this function rather than maintaining a second independent estimate.
+# API_REQUEST_TIMEOUT_SECONDS; every ambiguous recovery may consume one full
+# additional settlement horizon before it is declared unresolved. The workflow
+# contract test derives its minimum job timeout from this function rather than
+# maintaining a second independent estimate.
 BASE_MUTATION_BLOCKING_OPERATIONS_PER_TARGET = 7
 AMBIGUOUS_SETTLEMENT_BLOCKING_OPERATIONS_PER_TARGET = 12
 RECOVERY_BLOCKING_OPERATIONS_PER_ATTEMPT = 7
+RECOVERY_AMBIGUOUS_EXTRA_BLOCKING_OPERATIONS_PER_ATTEMPT = (
+    AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1
+)
 POST_CONFIRM_BLOCKING_OPERATIONS_PER_TARGET = 2
 FINAL_VERIFY_BLOCKING_OPERATIONS_PER_TARGET = 2
 
@@ -143,14 +147,19 @@ def worst_case_apply_seconds(*, target_count: int) -> int:
     blocking_operations = (
         BASE_MUTATION_BLOCKING_OPERATIONS_PER_TARGET
         + AMBIGUOUS_SETTLEMENT_BLOCKING_OPERATIONS_PER_TARGET
-        + COLLISION_RECOVERY_LIMIT * RECOVERY_BLOCKING_OPERATIONS_PER_ATTEMPT
+        + COLLISION_RECOVERY_LIMIT
+        * (
+            RECOVERY_BLOCKING_OPERATIONS_PER_ATTEMPT
+            + RECOVERY_AMBIGUOUS_EXTRA_BLOCKING_OPERATIONS_PER_ATTEMPT
+        )
         + POST_CONFIRM_BLOCKING_OPERATIONS_PER_TARGET
         + FINAL_VERIFY_BLOCKING_OPERATIONS_PER_TARGET
     )
-    per_target_seconds = (
-        blocking_operations * API_REQUEST_TIMEOUT_SECONDS
-        + AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS
+    settlement_seconds = (
+        AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS
+        + COLLISION_RECOVERY_LIMIT * AMBIGUOUS_WRITE_SETTLEMENT_WINDOW_SECONDS
     )
+    per_target_seconds = blocking_operations * API_REQUEST_TIMEOUT_SECONDS + settlement_seconds
     return target_count * per_target_seconds
 
 
@@ -486,6 +495,28 @@ def _desired_payload(live: dict[str, Any], target: RulesetTarget) -> dict[str, A
     return desired
 
 
+def _settle_ambiguous_recovery_history(
+    target: RulesetTarget,
+    *,
+    current_version: int,
+) -> list[Any]:
+    """Wait one bounded client horizon for an ambiguous recovery PUT to appear."""
+
+    for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
+        history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
+        if not history:
+            raise RulesetGovernanceError(
+                "ambiguous ruleset recovery PUT exposed no history"
+            )
+        if _history_version_id(history[0]) != current_version:
+            return history
+        if poll_index < AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
+            time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+    raise RulesetGovernanceError(
+        "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
+    )
+
+
 def _recover_displaced_history_state(
     target: RulesetTarget,
     *,
@@ -502,9 +533,9 @@ def _recover_displaced_history_state(
     becomes the next recovery target. A newer live state observed before a
     recovery write is never overwritten. Privileged recovery revalidates the
     reviewed protected-main SHA immediately before every PUT. Ambiguous recovery
-    results settle against immutable history before any further write, then
-    either continue the proven predecessor chain or fail closed. The loop is
-    bounded and never blindly retries a timed-out recovery PUT.
+    results settle across one complete client-timeout horizon before any later
+    recovery write is considered, so a delayed request cannot be duplicated.
+    The recovery chain remains bounded and fails closed.
     """
 
     for _attempt in range(COLLISION_RECOVERY_LIMIT):
@@ -522,27 +553,11 @@ def _recover_displaced_history_state(
         try:
             _gh_api("PUT", target.endpoint, body=displaced_payload)
         except (AmbiguousRulesetWriteError, subprocess.TimeoutExpired):
-            history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
-            if not history:
-                raise RulesetGovernanceError(
-                    "ambiguous ruleset recovery PUT exposed no history"
-                )
+            history = _settle_ambiguous_recovery_history(
+                target,
+                current_version=current_version,
+            )
             recovery_version = _history_version_id(history[0])
-            if recovery_version == current_version:
-                for _poll_index in range(1, AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
-                    time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
-                    history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
-                    if not history:
-                        raise RulesetGovernanceError(
-                            "ambiguous ruleset recovery PUT exposed no history"
-                        )
-                    recovery_version = _history_version_id(history[0])
-                    if recovery_version != current_version:
-                        break
-                else:
-                    raise RulesetGovernanceError(
-                        "ambiguous ruleset recovery PUT outcome remains unresolved after settlement window"
-                    )
             if len(history) < 2:
                 raise RulesetGovernanceError(
                     "ambiguous ruleset recovery PUT exposed no predecessor"
