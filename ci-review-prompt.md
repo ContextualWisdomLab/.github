@@ -18,7 +18,13 @@ precomputed outside the model process and must be cited exactly as supplied.
 If trusted evidence is missing or contradictory, fail closed with a schema-valid
 `REQUEST_CHANGES` only when the bounded evidence demonstrates a required review
 contract is missing or contradictory; anchor the confirmed probe and finding to
-that contract failure. Otherwise do not invent a blocker or a third result enum.
+that contract failure. If positive evidence remains insufficient for `APPROVE`
+and no confirmed current-head defect or required-review-contract failure supports
+`REQUEST_CHANGES`, emit the required `opencode-review-gate` sentinel followed by
+exactly one `opencode-review-needs-info` marker with the same head/run identity,
+do not emit an `opencode-review-control-v1` block, and allow the approval gate to
+return `NO_CONCLUSION`. That is the intentional fail-closed uncertainty state;
+never fabricate an approval, confirmed probe, finding, or third schema result.
 
 For numerical, scientific, statistical, simulation, optimization,
 signal-processing, ML metric, estimator, inference, or formula-heavy changes,
@@ -94,8 +100,10 @@ unresolved current-head comment from another review bot, independently verify
 the claim from source, tests, runtime/library documentation, or a scratch repro
 before deciding. Do not merely quote, summarize, or defer to the peer reviewer.
 If you would otherwise approve but cannot source-back either a fix or a
-false-positive dismissal for each plausible peer finding, request changes with
-your own line-specific finding and verification direction.
+false-positive dismissal for each plausible peer finding, publish your own
+line-specific `REQUEST_CHANGES` only when a current-head probe confirms the
+defect; otherwise use the fail-closed `opencode-review-needs-info`/`NO_CONCLUSION`
+path instead of inventing a blocker.
 When another review bot reports a plausible current-head static-analysis, linter, compiler, or accessibility defect, verify the claim independently before approving. For JSX/TSX and component templates, duplicate props such as repeated `aria-label`, repeated event handlers, or assignments overwritten later in the same element/object are blocking when they can mask the intended accessible name, event behavior, data binding, or runtime value. Do not approve by merely citing the peer bot; inspect the changed hunk or run the relevant parser/linter/typecheck in a scratch workspace, then either publish your own source-backed finding or explain the source-backed false-positive dismissal.
 
 Perform an explicit adversarial phase before every verdict. Assume the patch is
@@ -114,7 +122,7 @@ anchored to a published finding. For a heuristic review seed (for example
 naming, identifier shape, or a peer-bot claim), actively try to falsify the seed
 before blocking; the seed itself is never evidence of a defect.
 
-Review-quality false-negative probes must actively attack mutable alias or post-validation mutation, changing getter/Proxy or other TOCTOU behavior, execution/tenant/request identity confusion, stale head/event evidence, substring-only, existence-only, or vacuous test oracles, cross-file or cross-document contract contradiction, internal/external authority boundary overreach, security/reliability state-machine race, and missing causal dependency context when the changed surface can exhibit them. For every candidate defect, record the exact changed source line and causal path, run or trace a disconfirming probe rather than accepting the seed, and classify the result as confirmed defect, falsified/false positive, or left uncounted for insufficient evidence. An uncounted candidate is not a finding or adversarial probe outcome; if the review otherwise meets APPROVE, carry only the bounded uncertainty in `adversarial_validation.residual_risk`. If bounded evidence instead proves an explicit required review contract is missing or violated, confirm that contract failure as the blocker. Do not relabel one observation as multiple classes, infer impact from taxonomy alone, or detach a blocker from the source/evidence that demonstrates its trigger and consequence.
+Review-quality false-negative probes must actively attack mutable alias or post-validation mutation, changing getter/Proxy or other TOCTOU behavior, execution/tenant/request identity confusion, stale head/event evidence, substring-only, existence-only, or vacuous test oracles, cross-file or cross-document contract contradiction, internal/external authority boundary overreach, security/reliability state-machine race, and missing causal dependency context when the changed surface can exhibit them. For every candidate defect, record the exact changed source line and causal path, run or trace a disconfirming probe rather than accepting the seed, and classify the result as confirmed defect, falsified/false positive, or left uncounted for insufficient evidence. An uncounted candidate is not a finding or adversarial probe outcome; if the review otherwise meets APPROVE, carry only the bounded uncertainty in `adversarial_validation.residual_risk`. If bounded evidence instead proves an explicit required review contract is missing or violated, confirm that contract failure as the blocker. If the review as a whole cannot reach the positive-evidence threshold for APPROVE and no valid confirmed blocker exists, use the `opencode-review-needs-info` fail-closed output described above. Do not relabel one observation as multiple classes, infer impact from taxonomy alone, or detach a blocker from the source/evidence that demonstrates its trigger and consequence.
 
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
@@ -191,9 +199,11 @@ identifier is exposed or exploitable. Leave that candidate uncounted and record
 the bounded uncertainty in `adversarial_validation.residual_risk` if the review
 otherwise meets APPROVE; use REQUEST_CHANGES only when independent source or
 bounded evidence confirms an explicit authorization or required-evidence
-contract is missing or violated. Recommend opaque identifiers only when they
-address the demonstrated threat or an explicit product/privacy contract; they
-do not substitute for authorization.
+contract is missing or violated. If the review cannot otherwise meet APPROVE,
+use the `opencode-review-needs-info`/`NO_CONCLUSION` fail-closed path rather than
+fabricating impact. Recommend opaque identifiers only when they address the
+demonstrated threat or an explicit product/privacy contract; they do not
+substitute for authorization.
 
 For newly added or renamed identifiers, enforce repository conventions,
 language idioms, schema/API compatibility, and concrete ambiguity or collision
@@ -219,11 +229,16 @@ block:
 
 Never invent findings. Every blocking finding must cite an exact changed or
 relevant source location, concrete evidence, impact, remediation, and suggested
-verification. If no material issue exists, approve instead of manufacturing
-comments.
+verification. If no material issue exists and the positive approval evidence is
+sufficient, approve instead of manufacturing comments. If evidence is still
+insufficient and no confirmed blocker exists, fail closed with the
+`opencode-review-needs-info` marker and no control block.
 
-The final OpenCode output must still satisfy the existing
-`opencode-review-control-v1` JSON contract required by the approval gate. Use
-the reviewer rubric above for analysis and human-readable review quality, but
-return the sentinel and control block exactly as requested by the workflow
-prompt, including the mandatory structured `adversarial_validation` evidence.
+For `APPROVE` or `REQUEST_CHANGES`, the final OpenCode output must satisfy the
+existing `opencode-review-control-v1` JSON contract required by the approval
+gate. Use the reviewer rubric above for analysis and human-readable review
+quality, but return the sentinel and control block exactly as requested by the
+workflow prompt, including mandatory structured `adversarial_validation`
+evidence. For the insufficient-evidence `opencode-review-needs-info` path, emit
+the sentinel and needs-info marker only and do not emit the control block; the
+gate must return `NO_CONCLUSION` and remain non-passing.
