@@ -1,2 +1,2 @@
-trigger=2026-09-02T06:31:00Z
+trigger=2026-09-02T07:00:55Z
 contract=fail-closed-provider-default-preflight
