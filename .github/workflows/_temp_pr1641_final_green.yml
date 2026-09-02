@@ -1,0 +1,427 @@
+name: Temporary PR1641 final review-quality GREEN
+
+on:
+  push:
+    branches:
+      - fix/noema-observed-defect-corpus-current-main-20260902
+    paths:
+      - .github/workflows/_temp_pr1641_final_green.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temp-pr1641-source-evidence-edge-repair-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact writer head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-locked review dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Revalidate exact writer head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          local_head="$(git rev-parse HEAD)"
+          if [ -z "$remote_head" ] || [ "$remote_head" != "$local_head" ]; then
+            echo "::error::writer head moved: local=$local_head remote=$remote_head"
+            exit 1
+          fi
+
+      - name: Materialize externally demonstrated RED regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          target = Path("tests/test_noema_class_evidence_observation_contract.py")
+          text = target.read_text(encoding="utf-8")
+
+          old_marker_test = re.compile(
+              r"def test_overlong_omission_marker_cannot_be_source_evidence\(\) -> None:\n.*?(?=\n\ndef test_overlong_class_observation_is_rejected_before_semantic_admission)",
+              re.S,
+          )
+          new_marker_tests = textwrap.dedent(r'''
+          def test_literal_omission_marker_is_valid_real_source_evidence() -> None:
+              """A real source line matching the display marker must not be discarded."""
+              marker = "[overlong changed line content omitted]"
+              diff = f"""diff --git a/src/tool.py b/src/tool.py
+          --- a/src/tool.py
+          +++ b/src/tool.py
+          @@ -1 +1 @@
+          -old = 1
+          +{marker}
+          """
+              verdict = _verdict(observations=True, source_excerpt=True)
+              for probe in verdict["adversarial_validation"]["probes"]:
+                  for field, witness in probe["class_evidence"].items():
+                      witness["source_excerpt"] = marker
+                      witness["observation"] = f"{marker} is exact source evidence for {probe['probe_kind']}:{field}."
+              noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
+          def test_fetch_diff_synthetic_omission_never_becomes_changed_source(monkeypatch) -> None:
+              """Prompt truncation metadata cannot alias a genuine changed source line."""
+              marker = "[overlong changed line content omitted]"
+              prefix = """diff --git a/src/tool.py b/src/tool.py
+          --- a/src/tool.py
+          +++ b/src/tool.py
+          @@ -1 +1 @@
+          -old = 1
+          +"""
+              raw = prefix + ("x" * (noema.MAX_DIFF_CHARS + 128))
+              monkeypatch.setattr(noema, "run", lambda _args: raw)
+              bounded, truncated = noema.fetch_diff("owner/repo", 1)
+              assert truncated is True
+              assert marker in bounded
+              assert f"+{marker}" not in bounded
+              texts = noema.changed_diff_line_texts(bounded)
+              assert marker not in texts.values()
+              assert set(texts) == noema.changed_diff_locations(bounded)
+          ''').strip()
+          text, count = old_marker_test.subn(new_marker_tests, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one omission-marker test replacement, found {count}")
+
+          parser_test = re.compile(
+              r"def test_changed_diff_line_texts_covers_context_markers_and_no_newline_marker\(\) -> None:\n.*?(?=\n\ndef test_changed_diff_line_texts_fails_closed_when_hunk_paths_are_missing)",
+              re.S,
+          )
+          new_parser_test = textwrap.dedent(r'''
+          def test_changed_diff_line_texts_preserves_literal_marker_and_no_newline_marker() -> None:
+              """A literal marker is real source; only Git's no-newline metadata is skipped."""
+              marker = "[overlong changed line content omitted]"
+              diff = f"""diff --git a/src/tool.py b/src/tool.py
+          --- a/src/tool.py
+          +++ b/src/tool.py
+          @@ -1,3 +1,3 @@
+           context
+          -{marker}
+          +{marker}
+          -old
+          +new
+          \\ No newline at end of file
+          """
+              texts = noema.changed_diff_line_texts(diff)
+              assert texts == {{
+                  ("src/tool.py", 2, "LEFT"): marker,
+                  ("src/tool.py", 2, "RIGHT"): marker,
+                  ("src/tool.py", 3, "LEFT"): "old",
+                  ("src/tool.py", 3, "RIGHT"): "new",
+              }}
+              assert set(texts) == noema.changed_diff_locations(diff)
+          ''').strip()
+          text, count = parser_test.subn(new_parser_test, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one changed-diff parser test replacement, found {count}")
+
+          if "def test_whitespace_only_changed_source_requires_explicit_blank_marker()" not in text:
+              text += "\n\n" + textwrap.dedent(r'''
+              def test_whitespace_only_changed_source_requires_explicit_blank_marker() -> None:
+                  """Whitespace-only source cannot satisfy the quote guard via incidental spacing."""
+                  source = "    "
+                  diff = f"""diff --git a/src/tool.py b/src/tool.py
+              --- a/src/tool.py
+              +++ b/src/tool.py
+              @@ -1 +1 @@
+              -old = 1
+              +{source}
+              """
+                  verdict = _verdict(observations=True, source_excerpt=True)
+                  for probe in verdict["adversarial_validation"]["probes"]:
+                      for field, witness in probe["class_evidence"].items():
+                          witness["source_excerpt"] = source
+                          witness["observation"] = (
+                              f"Incidental    spacing is not a source quote for {probe['probe_kind']}:{field}."
+                          )
+                  with pytest.raises(noema.NoemaModelOutputError, match="quote the exact source_excerpt"):
+                      noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
+              def test_long_changed_line_uses_structural_exact_source_binding() -> None:
+                  """An over-cap exact source remains reviewable without impossible prose repetition."""
+                  source = "x" * (noema.MAX_THREAD_BODY_CHARS + 64)
+                  diff = f"""diff --git a/src/tool.py b/src/tool.py
+              --- a/src/tool.py
+              +++ b/src/tool.py
+              @@ -1 +1 @@
+              -old = 1
+              +{source}
+              """
+                  verdict = _verdict(observations=True, source_excerpt=True)
+                  for probe in verdict["adversarial_validation"]["probes"]:
+                      for field, witness in probe["class_evidence"].items():
+                          witness["source_excerpt"] = source
+                          witness["observation"] = (
+                              f"Bounded structural observation for {probe['probe_kind']}:{field} at the exact cited line."
+                          )
+                  noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+              ''').strip() + "\n"
+
+          target.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Prove source-evidence regressions are specifically RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          specs=(
+            "tests/test_noema_class_evidence_observation_contract.py::test_literal_omission_marker_is_valid_real_source_evidence"
+            "tests/test_noema_class_evidence_observation_contract.py::test_fetch_diff_synthetic_omission_never_becomes_changed_source"
+            "tests/test_noema_class_evidence_observation_contract.py::test_whitespace_only_changed_source_requires_explicit_blank_marker"
+            "tests/test_noema_class_evidence_observation_contract.py::test_long_changed_line_uses_structural_exact_source_binding"
+          )
+          for spec in "${specs[@]}"; do
+            log="$(mktemp)"
+            set +e
+            python -m pytest -q "$spec" >"$log" 2>&1
+            status=$?
+            set -e
+            cat "$log"
+            if [ "$status" -eq 0 ]; then
+              echo "::error::expected RED regression was already GREEN: $spec"
+              exit 1
+            fi
+            if ! grep -q "1 failed" "$log"; then
+              echo "::error::RED was not the intended test failure: $spec"
+              exit 1
+            fi
+          done
+
+      - name: Apply causal production and traceability repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          source = Path("scripts/ci/noema_review_gate.py")
+          text = source.read_text(encoding="utf-8")
+
+          old = '            complete += f"\\n{partial[0]}{marker}"'
+          new = textwrap.dedent('''
+                      # Synthetic truncation metadata stays outside the +/- changed-line
+                      # grammar so a genuine source line with identical text remains distinct.
+                      complete += f"\\n{marker}"
+          ''').strip("\n")
+          if text.count(old) != 1:
+              raise SystemExit(f"fetch_diff marker anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          parser_pattern = re.compile(
+              r"def changed_diff_locations\(diff: str\) -> set\[tuple\[str, int, str\]\]:\n.*?(?=\n\ndef parse_diff_path)",
+              re.S,
+          )
+          shared_parser = textwrap.dedent(r'''
+          def _changed_diff_evidence(
+              diff: str,
+          ) -> tuple[set[tuple[str, int, str]], dict[tuple[str, int, str], str]]:
+              """Parse changed coordinates and exact source text in one state machine."""
+              locations: set[tuple[str, int, str]] = set()
+              texts: dict[tuple[str, int, str], str] = {}
+              old_path = new_path = ""
+              old_line = new_line = 0
+              in_hunk = False
+              for raw_line in diff.splitlines():
+                  if raw_line.startswith("diff --git "):
+                      old_path = new_path = ""
+                      in_hunk = False
+                      continue
+                  if not in_hunk and raw_line.startswith("--- "):
+                      old_path = parse_diff_path(raw_line[4:], "a/")
+                      in_hunk = False
+                      continue
+                  if not in_hunk and raw_line.startswith("+++ "):
+                      new_path = parse_diff_path(raw_line[4:], "b/")
+                      in_hunk = False
+                      continue
+                  match = DIFF_HUNK_RE.match(raw_line)
+                  if match:
+                      old_line, new_line = map(int, match.groups())
+                      in_hunk = True
+                      continue
+                  if not in_hunk or raw_line.startswith(r"\ No newline"):
+                      continue
+                  if raw_line.startswith("+"):
+                      if not new_path:
+                          return set(), {}
+                      location = (new_path, new_line, "RIGHT")
+                      locations.add(location)
+                      texts[location] = raw_line[1:]
+                      new_line += 1
+                  elif raw_line.startswith("-"):
+                      if not old_path:
+                          return set(), {}
+                      location = (old_path, old_line, "LEFT")
+                      locations.add(location)
+                      texts[location] = raw_line[1:]
+                      old_line += 1
+                  else:
+                      old_line += 1
+                      new_line += 1
+              return locations, texts
+
+
+          def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
+              """Return exact LEFT/RIGHT changed-line locations from a unified diff."""
+              return _changed_diff_evidence(diff)[0]
+
+
+          def changed_diff_line_texts(diff: str) -> dict[tuple[str, int, str], str]:
+              """Return exact changed-side source text keyed by canonical diff location."""
+              return _changed_diff_evidence(diff)[1]
+          ''').strip()
+          text, count = parser_pattern.subn(shared_parser, text, count=1)
+          if count != 1:
+              raise SystemExit(f"changed-diff parser replacement count={count}")
+
+          old = '        source_marker = source_excerpt if source_excerpt else "<blank>"'
+          new = (
+              '        source_is_blank = not source_excerpt.strip()\n'
+              '        source_marker = "<blank>" if source_is_blank else source_excerpt'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"source marker anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '        if source_marker not in observation:'
+          new = (
+              '        if (source_is_blank or len(source_excerpt) <= MAX_THREAD_BODY_CHARS) and '\
+              'source_marker not in observation:'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f"source quote predicate anchor count={text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old_prompt = "The observation must quote that exact source_excerpt (or <blank>) and explain the claimed behavior."
+          new_prompt = (
+              "For an empty or whitespace-only line the observation must quote <blank>; for a nonblank "
+              "source_excerpt no longer than MAX_THREAD_BODY_CHARS it must quote the exact source_excerpt. "
+              "Longer nonblank lines remain exactly bound by the separately validated source_excerpt field, "
+              "while observation stays bounded and explains the claimed behavior."
+          )
+          if text.count(old_prompt) != 1:
+              raise SystemExit(f"prompt source-evidence anchor count={text.count(old_prompt)}")
+          text = text.replace(old_prompt, new_prompt, 1)
+          source.write_text(text, encoding="utf-8")
+
+          additions = {
+              "docs/product-technical-gap-baseline.md": textwrap.dedent('''
+              ## 2026-09-02 — Noema source-evidence parser convergence
+
+              External review demonstrated that bounded-diff display metadata and a genuine source line with identical text were conflated, while coordinate and source extraction duplicated one unified-diff state machine. The review gate now parses changed coordinates and exact source together, keeps synthetic truncation metadata outside the +/- changed-line grammar, accepts genuine marker-shaped source, treats whitespace-only source as explicit `<blank>`, and uses structural exact-source equality for over-cap lines that cannot fit in bounded observation prose. These are executable false-positive/false-negative fixtures, not vendor wording or benchmark claims. Candidate truth remains exact-head only until protected checks succeed.
+              '''),
+              "docs/doctoring/noema-observed-defect-corpus-current-main.md": textwrap.dedent('''
+              ## 2026-09-02 exact-source edge corpus
+
+              The corpus now distinguishes synthetic truncation metadata from literal source with the same visible text, exercises whitespace-only and over-cap source excerpts, and asserts coordinate/source parsers cannot diverge because both views come from one state machine. This preserves exact changed-line evidence without lexical causal heuristics.
+              '''),
+          }
+          for path, addition in additions.items():
+              target = Path(path)
+              body = target.read_text(encoding="utf-8")
+              heading = addition.strip().splitlines()[0]
+              if heading not in body:
+                  target.write_text(body.rstrip() + "\n\n" + addition.strip() + "\n", encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          body = changelog.read_text(encoding="utf-8")
+          entry = (
+              "- Converge Noema changed-line coordinate/source parsing into one state machine; synthetic diff-truncation "
+              "metadata no longer aliases a genuine marker-shaped source line, whitespace-only source requires `<blank>`, "
+              "and over-cap exact source stays structurally reviewable without impossible prose repetition.\n"
+          )
+          if entry not in body:
+              if "## [Unreleased]\n" in body:
+                  body = body.replace("## [Unreleased]\n", "## [Unreleased]\n" + entry, 1)
+              elif "## Unreleased\n" in body:
+                  body = body.replace("## Unreleased\n", "## Unreleased\n" + entry, 1)
+              else:
+                  body = entry + "\n" + body
+              changelog.write_text(body, encoding="utf-8")
+          PY
+
+      - name: Verify focused and broader GREEN contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q scripts/ci
+          python -m pytest -q \
+            tests/test_noema_class_evidence_observation_contract.py \
+            tests/test_noema_observed_defect_corpus_current_main.py
+          python -m pytest -q tests/test_noema_*.py
+          git diff --check
+
+      - name: Remove all PR1641 temporary writer identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f \
+            .github/workflows/_temp_pr1641_source_evidence_edge_repair.yml \
+            .github/workflows/_temp_pr1641_final_green.yml
+          if git ls-files | grep -E '(^|/)(_temp_pr1641|temp_pr1641)'; then
+            echo "::error::temporary PR1641 identity remains tracked in the publishable tree"
+            exit 1
+          fi
+          git diff --check
+
+      - name: Recheck remote writer head before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${GITHUB_REF_NAME}"
+          remote_head="$(git rev-parse "origin/${GITHUB_REF_NAME}")"
+          local_parent="$(git rev-parse HEAD)"
+          if [ "$remote_head" != "$local_parent" ]; then
+            echo "::error::writer branch moved before publish: local=$local_parent remote=$remote_head"
+            exit 1
+          fi
+
+      - name: Publish verified successor with workflow-starting credential only
+        shell: bash
+        env:
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WORKFLOW_PUSH_TOKEN:-}" ]; then
+            echo "::error::No workflow-starting mutation credential is configured; refusing github.token publication."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "::error::repair produced no publishable delta"
+            exit 1
+          fi
+          git commit -m "fix(noema): converge exact-source evidence parsing"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
