@@ -2628,16 +2628,40 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
 
-## OpenCode Go is not a registered provider source — confirmed gap, deferred implementation (2026-09-02)
+## OpenCode Go endpoint is not registered — corrected after owner input (2026-09-02, corrected 2026-09-03)
 
-**Status:** Confirmed gap, not yet implemented. Recorded here per this session's throttle agreement (org-wide GitHub Actions capacity at the 60-concurrent-runner plan ceiling) — implementation deferred to a later, non-urgent iteration rather than opened as a new PR immediately.
+**Correction (2026-09-03):** the entry originally recorded here claimed OpenCode Go needs its own,
+*distinct* API key from OpenCode Zen. **The repository owner corrected this directly: the OpenCode Zen
+API key and the OpenCode Go API key are the same credential.** The cited OpenCode documentation text
+("You sign in to OpenCode Zen, subscribe to Go, and copy your API key") is consistent with that reading
+once re-parsed correctly — subscribing to Go on an existing Zen account unlocks the Go endpoints for
+that account's *existing* Zen key, rather than issuing a new one; "copy your API key" means the same key
+you already have, not a newly-generated one. The `credential_name="OPENCODE_GO_API_KEY"` /
+"separate credential" framing below was wrong and must not be relied on. Original text kept, struck
+through in spirit, for traceability; see the corrected status line.
 
-**Question investigated.** Whether OpenCode Go shares credentials/discovery with the already-registered `opencode_zen` provider source in `contextual-orchestrator`, or needs its own.
+**Status:** Partially open, credential question closed. What's still unconfirmed: whether
+`contextual-orchestrator` needs a distinct `ProviderModelSource` at all for the different
+`/zen/go/v1/...` base URL (reusing `OPENCODE_ZEN_API_KEY` as the credential either way), or whether Go
+models are otherwise already reachable through the existing `opencode_zen` source. That implementation
+question is deferred per this session's throttle agreement (org-wide GitHub Actions capacity at the
+60-concurrent-runner plan ceiling), not urgent.
 
-**Evidence, independently verified from two sources:**
-1. `contextual_orchestrator/model_discovery.py` on `contextual-orchestrator`'s protected `main` (fetched directly, not via code search) registers `opencode_zen` (`credential_name="OPENCODE_ZEN_API_KEY"`) as a `ProviderModelSource`. No `opencode_go`, `OPENCODE_GO`, or "OpenCode Go" string exists anywhere in the repository (verified by direct grep of the fetched source; a code-search cross-check returned the same zero count).
-2. OpenCode's own documentation (`opencode.ai/docs/go`, fetched directly) states Go requires signing in to Zen, then *subscribing to Go separately* to obtain a distinct API key ("You sign in to OpenCode Zen, subscribe to Go, and copy your API key") — a paid ($10/month) subscription, not an automatic Zen entitlement. Go's endpoints are also distinct: `https://opencode.ai/zen/go/v1/{responses,chat/completions,messages}`, versus Zen's own `https://opencode.ai/zen/v1/...` paths, and OpenCode configs address Go models with a distinct `opencode-go/<model-id>` identifier.
+**Question investigated.** Whether OpenCode Go shares credentials/discovery with the already-registered
+`opencode_zen` provider source in `contextual-orchestrator`, or needs its own.
 
-**Conclusion.** This is a genuine gap, not a naming/discovery oversight: OpenCode Go is a separate paid product requiring its own credential and its own `ProviderModelSource` registration (own `credential_name`, e.g. `OPENCODE_GO_API_KEY`, and the `/zen/go/v1/...` base URL) — it cannot be reached through the existing `opencode_zen` registration regardless of what's configured. No `.env`/secret currently exists for it either.
+**Evidence:**
+1. `contextual_orchestrator/model_discovery.py` on `contextual-orchestrator`'s protected `main` (fetched directly, not via code search) registers `opencode_zen` (`credential_name="OPENCODE_ZEN_API_KEY"`) as a `ProviderModelSource`. No `opencode_go`, `OPENCODE_GO`, or "OpenCode Go" string exists anywhere in the repository (verified by direct grep of the fetched source; a code-search cross-check returned the same zero count) — i.e. nothing currently probes the `/zen/go/v1/...` endpoints at all, regardless of credential.
+2. OpenCode's own documentation (`opencode.ai/docs/go`, fetched directly): Go's endpoints are distinct from Zen's — `https://opencode.ai/zen/go/v1/{responses,chat/completions,messages}` versus Zen's own `https://opencode.ai/zen/v1/...` paths — and OpenCode configs address Go models with a distinct `opencode-go/<model-id>` identifier. The credential used against those endpoints is the existing Zen key (owner-confirmed), not a separate one.
 
-**Next step (deferred, not urgent).** Add a `ProviderModelSource` for `opencode_go` in `contextual_orchestrator/model_discovery.py` following the same pattern as `opencode_zen`, gated on an `OPENCODE_GO_API_KEY` secret being present (absent-by-default, matching this repo's existing fail-closed provider-registration convention). Requires a Go subscription and its API key to actually exercise in CI; until then this stays a documented, deferred gap rather than a blocking one.
+**Conclusion.** The gap is narrower than originally recorded: no new credential/secret is needed
+(`OPENCODE_ZEN_API_KEY` covers both). What may still be missing is a `ProviderModelSource` (or an
+extension of the existing `opencode_zen` one) that actually queries the `/zen/go/v1/...` endpoints —
+today nothing in `model_discovery.py` does, so Go-specific models are not discovered even though the
+credential to reach them already exists in the org's secrets.
+
+**Next step (deferred, not urgent).** Confirm whether Go models differ from what the existing
+`opencode_zen` Zen-endpoint query already returns (i.e., whether Go exposes different/additional models
+worth a dedicated query), and if so add that query — reusing `OPENCODE_ZEN_API_KEY`, not a new secret —
+to `contextual_orchestrator/model_discovery.py`. Until then this stays a documented, deferred item
+rather than a blocking one.
