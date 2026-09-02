@@ -31,7 +31,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
-TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure",)
+TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled")
 TERMINAL_DIAGNOSTIC_MAX_API_PAGES = MAX_API_PAGES
 
 
@@ -376,6 +376,9 @@ def build_report(
             ),
             None,
         )
+        report_row["admission_state"] = (
+            "runner_assigned" if report_row["runner_assigned"] else "runner_not_assigned"
+        )
         if matching_job and matching_job.get("created_at"):
             report_row["queue_age_started_at"] = matching_job["created_at"]
             report_row["queue_age_source"] = "job_created_at"
@@ -387,7 +390,20 @@ def build_report(
             and report_row["run_conclusion"] == "STARTUP_FAILURE"
             and not report_row["jobs_materialized"]
         ):
+            report_row["admission_state"] = "startup_failure_before_job_materialization"
             report_row["blocker"] = "startup_failure_before_job_materialization"
+            report_row["recommended_action"] = (
+                "inspect_actions_control_plane_without_leaf_bypass"
+            )
+        elif (
+            report_row["identity_state"] == "current_head"
+            and report_row["run_conclusion"] == "CANCELLED"
+            and matching_job is not None
+            and not report_row["runner_assigned"]
+            and matching_job.get("steps_count", 0) == 0
+        ):
+            report_row["admission_state"] = "cancelled_before_runner_assignment"
+            report_row["blocker"] = "cancelled_before_runner_assignment"
             report_row["recommended_action"] = (
                 "inspect_actions_control_plane_without_leaf_bypass"
             )
@@ -426,6 +442,22 @@ def build_report(
     report["summary"]["duplicate_pending_lane_count"] = len(
         duplicate_pending_lanes
     )
+    cancelled_before_runner_assignment_count = sum(
+        report_row.get("admission_state") == "cancelled_before_runner_assignment"
+        for report_row in report["runs"]
+    )
+    report["summary"]["cancelled_before_runner_assignment_count"] = (
+        cancelled_before_runner_assignment_count
+    )
+    if cancelled_before_runner_assignment_count:
+        external_action = (
+            "Inspect Actions runner admission, billing/usage, runner-group policy, "
+            "scheduler capacity, and cancellation provenance; cancelled pre-runner "
+            "evidence remains incomplete."
+        )
+        if external_action not in report["summary"]["external_actions"]:
+            report["summary"]["external_actions"].append(external_action)
+            report["summary"]["external_actions"].sort()
     return report
 
 
