@@ -3,7 +3,7 @@
 작성 기준일: **2026-09-02 (execution checkpoint appended)**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `86ef3e71305daebce2d825c667f7f0619e1f55a5`
-이전 스냅샷의 열린 PR 수: **107** (아래 표는 2026-08-26 관측값이며, 아래 checkpoint가 최신 실행 상태다)
+현재 열린 PR 수: **107** (아래 표는 2026-08-26 관측값이며, 아래 checkpoint가 최신 실행 상태다)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 

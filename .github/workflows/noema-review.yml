@@ -497,8 +497,7 @@ jobs:
             fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
-          app_token="$(jq -er '.token | select(type == "string" and length > 0)' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
+          if ! app_token="$(jq -er '.token | select(type == "string" and length > 0)' <<<"$token_response")"; then
             fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
 
