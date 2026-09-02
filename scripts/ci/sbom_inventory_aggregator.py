@@ -479,45 +479,61 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Aggregate org SBOMs into a central inventory."
     )
     argument_parser.add_argument(
-        "--org", default="ContextualWisdomLab", help="GitHub organization login"
+        "--org",
+        dest="organization_name",
+        default="ContextualWisdomLab",
+        help="GitHub organization login",
     )
     argument_parser.add_argument(
         "--output-dir",
+        dest="output_directory",
         default="docs/sbom",
         help="Directory for inventory.json and inventory.md",
     )
     argument_parser.add_argument(
         "--repo",
-        dest="repos",
+        dest="repository_names",
         action="append",
         default=None,
         help="Explicit repo (owner/name); repeatable. Overrides org discovery.",
     )
     argument_parser.add_argument(
-        "--generated-at", default="", help="Timestamp label for the markdown header"
+        "--generated-at",
+        dest="generated_timestamp",
+        default="",
+        help="Timestamp label for the markdown header",
     )
     argument_parser.add_argument(
-        "--self-test", action="store_true", help="Run in-process assertions and exit"
+        "--self-test",
+        dest="self_test_requested",
+        action="store_true",
+        help="Run in-process assertions and exit",
     )
     return argument_parser
 
 
 def main(argv: list[str]) -> int:  # pragma: no cover - CLI orchestration
     """CLI entry point: discover repos, collect SBOMs, write the inventory."""
-    cli_args = build_arg_parser().parse_args(argv)
-    if cli_args.self_test:
+    cli_arguments = build_arg_parser().parse_args(argv)
+    if cli_arguments.self_test_requested:
         self_test()
         return 0
     repository_names = (
-        cli_args.repos if cli_args.repos else list_org_repos(cli_args.org)
+        cli_arguments.repository_names
+        if cli_arguments.repository_names
+        else list_org_repos(cli_arguments.organization_name)
     )
     repository_inventories = collect_inventories(repository_names)
     inventory_payload = build_inventory(repository_inventories)
-    generated_at = cli_args.generated_at or "unspecified"
+    generated_timestamp = cli_arguments.generated_timestamp or "unspecified"
     inventory_markdown = render_inventory_markdown(
-        inventory_payload, generated_at=generated_at
+        inventory_payload, generated_at=generated_timestamp
     )
-    write_inventory(inventory_payload, inventory_markdown, Path(cli_args.output_dir))
+    write_inventory(
+        inventory_payload,
+        inventory_markdown,
+        Path(cli_arguments.output_directory),
+    )
     summary_payload = inventory_payload["summary"]
     print(
         f"Wrote inventory for {summary_payload['repo_count']} repos, "
