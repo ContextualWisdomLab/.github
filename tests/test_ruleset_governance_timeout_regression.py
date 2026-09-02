@@ -357,7 +357,7 @@ def test_recovery_timeout_refuses_unexpected_newer_history_state(monkeypatch) ->
 
     with pytest.raises(
         module.RulesetGovernanceError,
-        match="ambiguous ruleset recovery PUT outcome remains unresolved after settlement window",
+        match="ambiguous ruleset recovery PUT left a newer state after settlement window; refusing overwrite",
     ):
         module._recover_displaced_history_state(
             target,
