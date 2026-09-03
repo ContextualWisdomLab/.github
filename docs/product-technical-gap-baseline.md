@@ -4082,3 +4082,48 @@ without further investigation needed on `quality-gate` specifically.
 **Not touched:** an unrelated, pre-existing local modification to `.Jules/palette.md` in the shared scratch
 clone (`/private/tmp/cwl-sweep/newsdom-api`) was left unstaged — verified via `git status --short` before
 `git add` that only the intended test file was staged.
+
+## `newsdom-api#794` — `trivy-fs` MEDIUM×3 on `pypdf` 6.15.0, fixed at the base branch — 2026-09-03
+
+**Trigger.** A follow-up Autofix `<ci-monitor-event>` on the same `newsdom-api#784` flagged a `trivy-fs`
+failure. Its head SHA (`3a5bb19...`) predated this session's own `pytest`/`quality-gate` fix
+(`newsdom-api#784` commit `2ba859e` above) — the finding was real and independent of that earlier fix, not
+stale noise.
+
+**Root cause.** `trivy fs .` reported 3 genuine MEDIUM CVEs against the locked `pypdf==6.15.0` artifact:
+CVE-2026-84309 (a crafted cyclic `/Next` outline-tree structure drives `TreeObject.insert_child` into an
+infinite loop on a writing code path), CVE-2026-84310 (`_get_outline` traversal has no global entry-count or
+nesting-depth limit, allowing long runtimes/large memory use on a crafted outline), CVE-2026-84311 (a reused
+-XObject form graph without a visited/memoization guard in `PageObject._extract_text` /
+`extract_xform_text` produces exponentially many traversal paths). Confirmed against OSV
+(`osv.dev/vulnerability/CVE-2026-84309` et al.): all three fixed upstream in pypdf 6.16.0/6.16.1. All three
+are direct availability risks on `newsdom-api`'s untrusted-PDF-upload ingestion path, not abstract
+transitive findings.
+
+**Fix — at the base branch, not the triggering PR.** `newsdom-api`'s own `trivy-fs` step explicitly instructs
+"Remediate each finding at the shared base branch so open PRs inherit the fix," and `newsdom-api`'s default
+branch is `develop` (verified via `gh api repos/.../newsdom-api --jq .default_branch`), which was confirmed
+independently pinned to the same vulnerable `pypdf==6.15.0`. Patching PR #784's own branch would have fixed
+only that one PR and left every other open `newsdom-api` PR re-hitting the identical `trivy-fs` failure.
+Instead: branched `security/pypdf-6.16.1-cve-2026-84309-84311` off `origin/develop`, raised the direct floor
+to `pypdf>=6.16.1,<7.0` (`uv lock` resolved 6.16.2, the current latest release), and updated the repo's own
+paired contract tests (`tests/test_pypdf_security_floor.py`'s `_REQUIRED_PYPDF_VERSION`/`_CURRENT_PYPDF_CVES`
+/`_LOCKED_PYPDF_REQUIREMENT`, `tests/test_project_metadata.py`'s two pinned-string assertions) plus the
+repo's existing `docs/doctoring/dependency-security-baseline.md` doctoring record (new dated paragraph +
+APA-7th OSV/PyPI reference entries, following its established citation style) and a matching Korean
+`CHANGELOG.md` `### Security` bullet in that repo's own established prior-bump style. Opened
+[newsdom-api#794](https://github.com/ContextualWisdomLab/newsdom-api/pull/794) against `develop`.
+
+**Verification before push:** full suite `483 passed`, 100% branch coverage over `src/newsdom_api`;
+`uvx pip-audit` → "No known vulnerabilities found"; a local `trivy fs .` run (installed via `brew install
+trivy` for this check) against the updated lock → `0` vulnerabilities on the `uv.lock` target, matching the
+CI job's own scan exactly. GitHub's own push-triggered Dependabot alert count for the repo's default branch
+(3 moderate) independently corroborated the same 3 findings before this fix, and is expected to clear once
+#794 merges.
+
+**Cross-reference.** Same "remediate the base branch, not the triggering PR" pattern this session already
+applied for `.github`'s own hardening work; also the second real, independent CI-monitor-flagged finding on
+`newsdom-api#784` this tick (the first being the `pytest`/`quality-gate` reusable-workflow-call `env:` fix
+directly above) — both genuine bugs, neither a false alarm, consistent with this session's practice of
+verifying every Autofix finding against the actual job log before acting rather than assuming either "real
+bug" or "noise" by default.
