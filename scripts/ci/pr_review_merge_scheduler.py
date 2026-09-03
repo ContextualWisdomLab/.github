@@ -109,12 +109,47 @@ def install_fail_fast_rate_limit_policy() -> None:
     _scheduler_core.gh_api_json = _fail_fast_gh_api_json
 
 
-def _record_deferred_rate_limit(error_message: str) -> None:
-    """Write a typed deferred receipt without treating it as completed work."""
+def _argument_value(
+    argument_values: Sequence[str], option_name: str
+) -> str | None:
+    """Return one CLI option value without assuming parser internals."""
 
+    for argument_index, argument_value in enumerate(argument_values):
+        if argument_value != option_name:
+            continue
+        value_index = argument_index + 1
+        if value_index < len(argument_values):
+            return argument_values[value_index]
+        return None
+    return None
+
+
+def _is_opencode_post_approval_followup(
+    argument_values: Sequence[str],
+) -> bool:
+    """Identify the best-effort OpenCode post-publication scheduler caller."""
+
+    argument_set = set(argument_values)
+    return (
+        os.environ.get("GITHUB_WORKFLOW", "") == "OpenCode Review Dispatch"
+        and _argument_value(argument_values, "--max-prs") == "1"
+        and _argument_value(argument_values, "--review-dispatch-limit") == "0"
+        and _argument_value(argument_values, "--merge-mode")
+        == "direct_or_auto"
+        and "--pr-number" in argument_set
+        and "--no-trigger-reviews" in argument_set
+        and "--enable-auto-merge" in argument_set
+        and "--no-update-branches" in argument_set
+    )
+
+
+def _record_deferred_rate_limit(error_message: str) -> None:
+    """Write a typed OpenCode follow-up defer receipt."""
+
+    retry_owner = "Required PR Review Merge Scheduler heartbeat"
     receipt = (
         "scheduler_outcome=deferred_rate_limit; "
-        "retry_owner=next_bounded_heartbeat; "
+        f"retry_owner={retry_owner}; "
         f"reason={error_message}"
     )
     print(receipt, file=sys.stderr)
@@ -126,23 +161,26 @@ def _record_deferred_rate_limit(error_message: str) -> None:
     with summary_path.open("a", encoding="utf-8") as summary_file:
         summary_file.write("### PR review scheduler deferred\n\n")
         summary_file.write("- outcome: `deferred_rate_limit`\n")
-        summary_file.write("- retry owner: next bounded heartbeat\n")
+        summary_file.write(f"- retry owner: {retry_owner}\n")
         summary_file.write("- runner-held sleep: 0 seconds\n")
         summary_file.write(f"- reason: `{error_message}`\n\n")
 
 
 def run_cli(argument_values: Sequence[str]) -> int:
-    """Run the scheduler, accepting primary rate-limit deferral as handled."""
+    """Run the scheduler with caller-scoped primary-rate-limit handling."""
 
     install_fail_fast_rate_limit_policy()
     try:
         return int(_scheduler_core.main(list(argument_values)))
     except RuntimeError as exc:
-        if _scheduler_core.is_rate_limited_error(exc):
+        if (
+            _scheduler_core.is_rate_limited_error(exc)
+            and _is_opencode_post_approval_followup(argument_values)
+        ):
             _record_deferred_rate_limit(str(exc))
-            # The existing caller retries any non-zero status three times with
-            # runner-held sleeps. A typed defer is an accepted handoff to the
-            # next bounded heartbeat, so return success to stop that outer loop.
+            # This exact caller retries every non-zero result three times with
+            # runner-held sleeps. Its follow-up is best-effort because the
+            # scheduled/PR-event scheduler remains authoritative.
             return 0
         print(str(exc), file=sys.stderr)
         return 1
