@@ -13,7 +13,7 @@ on:
 
 concurrency:
   # PR-number scope keeps stale dispatches replaced for the current head.
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
