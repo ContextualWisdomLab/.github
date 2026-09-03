@@ -66,6 +66,7 @@ fragment SchedulerPullRequestFields on PullRequest {
   }
   statusCheckRollup {
     contexts(first: 100) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         __typename
         ... on CheckRun {
@@ -139,6 +140,28 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
 }
 """
 
+PR_CONTEXTS_PAGE_QUERY = """\
+query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      statusCheckRollup {
+        contexts(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CheckRun {
+              name status conclusion startedAt detailsUrl
+              checkSuite { createdAt workflowRun { workflow { name } } }
+            }
+            ... on StatusContext { context state }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 OPEN_PRS_PAGE_SIZE = 25
 # Defends against a pathological GraphQL pageInfo loop when backfilling a PR's
 # full review history; 500 pages * 100 reviews/page is far beyond any
@@ -158,6 +181,8 @@ OPENCODE_WORKFLOW_NAMES = {
     "Required OpenCode Review",
     "OpenCode Review Dispatch",
 }
+OPENCODE_REVIEW_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
+REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW = "__unknown_github_actions_workflow__"
 RUNNING_CHECK_STATES = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE"}
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
@@ -169,6 +194,7 @@ CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
 )
 ACTIONS_JOB_DETAILS_URL_RE = re.compile(r"/actions/runs/\d+/job/(\d+)(?:[/?#]|$)")
+ACTIONS_RUN_DETAILS_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/job/\d+)?(?:[/?#]|$)")
 DIRECT_MERGE_AUTO_FALLBACK_MARKERS = (
     "base branch policy prohibits the merge",
     "is not mergeable",
@@ -855,6 +881,37 @@ def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) ->
             )
 
 
+def complete_paginated_pr_contexts(repo: str, pr: dict[str, Any]) -> None:
+    """Load every status-context page before selecting a required workflow run."""
+    contexts = ((pr.get("statusCheckRollup") or {}).get("contexts") or {})
+    page_info = contexts.get("pageInfo") or {}
+    nodes = list(contexts.get("nodes") or [])
+    owner, name = validate_github_repository(repo).split("/", 1)
+    pages = 0
+    while page_info.get("hasNextPage"):
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise RuntimeError("Status context pagination did not provide an end cursor")
+        pages += 1
+        if pages > MAX_REVIEW_PAGINATION_PAGES:
+            raise RuntimeError("Status context pagination exceeded its safety bound")
+        payload = gh_graphql(
+            PR_CONTEXTS_PAGE_QUERY,
+            owner=owner,
+            name=name,
+            number=int(pr["number"]),
+            cursor=cursor,
+        )
+        pull_request = ((payload.get("data") or {}).get("repository") or {}).get(
+            "pullRequest"
+        ) or {}
+        page_contexts = ((pull_request.get("statusCheckRollup") or {}).get("contexts") or {})
+        nodes.extend(page_contexts.get("nodes") or [])
+        page_info = page_contexts.get("pageInfo") or {}
+    contexts["nodes"] = nodes
+    contexts["pageInfo"] = page_info
+
+
 def github_resource_inaccessible(exc: RuntimeError) -> bool:
     """Return whether GitHub denied an API read for the current integration token."""
 
@@ -921,20 +978,59 @@ def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return reviews
 
 
+def fetch_workflow_names_by_check_suite_rest(
+    repo: str, head_sha: str
+) -> dict[int, str]:
+    """Return exact-head GitHub Actions workflow names keyed by check-suite ID.
+
+    REST check-run payloads omit workflow identity. The Actions run list
+    preserves the shared check-suite ID, allowing the REST fallback to
+    retain the same workflow-level policy boundary as the GraphQL path.
+    When the integration cannot read Actions, callers receive an empty
+    map and GitHub Actions checks are marked with a fail-closed sentinel.
+    """
+    workflow_names: dict[int, str] = {}
+    page = 1
+    while True:
+        try:
+            payload = gh_api_json(
+                f"repos/{repo}/actions/runs?head_sha={quote(head_sha, safe='')}"
+                f"&per_page=100&page={page}"
+            )
+        except RuntimeError as exc:
+            if github_resource_inaccessible(exc):
+                return {}
+            raise
+        workflow_runs = payload.get("workflow_runs") or []
+        for workflow_run in workflow_runs:
+            suite_id = workflow_run.get("check_suite_id")
+            workflow_name = str(workflow_run.get("name") or "").strip()
+            if suite_id is not None and workflow_name:
+                workflow_names[int(suite_id)] = workflow_name
+        if len(workflow_runs) < 100:
+            break
+        page += 1
+    return workflow_names
+
+
 def rest_check_node(
-    check: dict[str, Any], suite_created_at_by_id: dict[int, str] | None = None
+    check: dict[str, Any],
+    suite_created_at_by_id: dict[int, str] | None = None,
+    workflow_name_by_suite_id: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """Convert a REST check-run payload into the GraphQL status rollup shape.
 
-    ``suite_created_at_by_id`` maps each check suite's REST ``id`` to its
-    ``created_at`` timestamp -- the REST check-run payload itself only
-    carries the check suite's bare ``id`` (see ``rest_pr_node``), so that
-    lookup is how this function attaches the same ``checkSuite.createdAt``
-    signal the GraphQL fragment fetches directly, keeping
-    ``check_run_recency_key`` behaviorally consistent across both paths.
+    ``suite_created_at_by_id`` and ``workflow_name_by_suite_id`` attach
+    the check-suite recency and workflow identity that GraphQL exposes
+    directly. Unknown GitHub Actions workflow identity is represented by
+    a fail-closed sentinel so it cannot be mistaken for a source failure.
     """
     suite_id = (check.get("check_suite") or {}).get("id")
     suite_created_at = (suite_created_at_by_id or {}).get(suite_id)
+    workflow_name = (workflow_name_by_suite_id or {}).get(suite_id)
+    if not workflow_name and (check.get("app") or {}).get("slug") == "github-actions":
+        workflow_name = REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW
+    workflow = {"name": workflow_name} if workflow_name else {}
     return {
         "__typename": "CheckRun",
         "name": check.get("name"),
@@ -942,7 +1038,10 @@ def rest_check_node(
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
         "startedAt": check.get("started_at"),
         "detailsUrl": check.get("details_url"),
-        "checkSuite": {"createdAt": suite_created_at, "workflowRun": {"workflow": {}}},
+        "checkSuite": {
+            "createdAt": suite_created_at,
+            "workflowRun": {"workflow": workflow},
+        },
     }
 
 
@@ -976,12 +1075,21 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     head_repo = head.get("repo") or {}
     reviews = fetch_all_pr_reviews_rest(repo, number)
     checks = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-runs?per_page=100")
+    check_runs = checks.get("check_runs") or []
     check_suites = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/check-suites?per_page=100")
     suite_created_at_by_id = {
         suite["id"]: suite.get("created_at")
         for suite in (check_suites.get("check_suites") or [])
         if suite.get("id") is not None
     }
+    workflow_name_by_suite_id = (
+        fetch_workflow_names_by_check_suite_rest(repo, str(head.get("sha") or ""))
+        if any(
+            (check.get("app") or {}).get("slug") == "github-actions"
+            for check in check_runs
+        )
+        else {}
+    )
     combined_status = gh_api_json(f"repos/{repo}/commits/{head.get('sha')}/status")
     files = gh_api_json(f"repos/{repo}/pulls/{number}/files?per_page=20")
     rest_merge_state = REST_MERGEABLE_STATE_MAP.get(
@@ -1010,8 +1118,12 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [
-                    rest_check_node(check, suite_created_at_by_id)
-                    for check in (checks.get("check_runs") or [])
+                    rest_check_node(
+                        check,
+                        suite_created_at_by_id,
+                        workflow_name_by_suite_id,
+                    )
+                    for check in check_runs
                 ]
                 + [
                     rest_status_node(status)
@@ -1151,7 +1263,15 @@ def fetch_compare_branch_freshness(repo: str, pr: dict[str, Any]) -> dict[str, A
 
 
 def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
-    """Attach REST mergeability evidence to GraphQL pull request payloads."""
+    """Attach REST mergeability evidence to non-draft GraphQL pull request payloads.
+
+    ``inspect_pr`` returns for a draft PR (dispatching at most a draft review)
+    before it ever reads ``restMergeableState``/``compareStatus``/
+    ``compareBehindBy``, so refreshing those for a draft is two REST calls
+    (``pulls/{number}`` and ``compare/...``) spent on evidence no decision
+    ever consults. Skipping drafts here is pure dead-call elimination, not a
+    change to which non-draft PR gets merged/updated/reviewed.
+    """
 
     def enrich(pr: dict[str, Any]) -> None:
         """Attach REST mergeability evidence to one pull request payload."""
@@ -1166,17 +1286,18 @@ def enrich_rest_mergeable_states(repo: str, prs: list[dict[str, Any]]) -> None:
         except RuntimeError as exc:
             pr["compareBranchFreshnessError"] = bounded_error_summary(str(exc))
 
-    if not prs:
+    mergeable_candidates = [pr for pr in prs if not pr.get("isDraft")]
+    if not mergeable_candidates:
         return
 
-    if len(prs) <= 1:
-        for pr in prs:
+    if len(mergeable_candidates) <= 1:
+        for pr in mergeable_candidates:
             enrich(pr)
         return
 
-    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(prs))
+    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(mergeable_candidates))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for _ in executor.map(enrich, prs):
+        for _ in executor.map(enrich, mergeable_candidates):
             pass
 
 
@@ -1251,7 +1372,8 @@ def is_strix_context(node: dict[str, Any]) -> bool:
         )
         workflow_name = workflow.get("name")
         return workflow_name in {"Strix Security Scan", "Strix"} or (
-            node.get("name") == "strix" and workflow_name is None
+            node.get("name") == "strix"
+            and workflow_name in {None, REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW}
         )
     return (node.get("context") or "") in {"strix", "Strix Security Scan"}
 
@@ -1273,6 +1395,38 @@ def matching_actions_job_id(pr: dict[str, Any], predicate: Any) -> str | None:
         if job_id:
             return job_id
     return None
+
+
+def matching_actions_run_id(pr: dict[str, Any], predicate: Any) -> int | None:
+    """Return the newest matching check-run's workflow run id, if exposed.
+
+    Devin Review finding on PR #1507 ("Older review run remains blocking"):
+    an earlier version of this function returned the first predicate match
+    found scanning ``context_nodes`` in reverse, which is only the newest
+    match when GitHub happens to return the rollup in chronological order --
+    not guaranteed, and not true for every real payload. With multiple
+    same-purpose check runs present (reruns, or two dispatches racing), that
+    could select an older, already-resolved run while a genuinely newer
+    failure sat unselected and unrerun. This now ranks every match with the
+    same ``check_run_recency_key`` signal ``_newest_check_run_per_identity``
+    uses to resolve reruns elsewhere in this file, so position in the list
+    never decides the winner -- only actual recency does.
+    """
+    candidates: list[tuple[tuple[int, datetime, int], int]] = []
+    for index, node in enumerate(context_nodes(pr)):
+        if node.get("__typename") != "CheckRun" or not predicate(node):
+            continue
+        match = ACTIONS_RUN_DETAILS_URL_RE.search(node.get("detailsUrl") or "")
+        if match:
+            candidates.append(
+                (
+                    check_run_recency_key(
+                        node, parse_github_datetime(node.get("startedAt")), index
+                    ),
+                    int(match.group(1)),
+                )
+            )
+    return max(candidates)[1] if candidates else None
 
 
 def parse_github_datetime(value: str | None) -> datetime | None:
@@ -2523,6 +2677,30 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
         return
     require_github_actions_control_actor(action)
     run_github_actions(["gh", "api", "-X", "POST", f"repos/{repo}/actions/jobs/{job_id}/rerun"])
+    # A rerun brings a completed run back to queued/in_progress; invalidate
+    # any cached active_workflow_runs snapshot so it is not read as stale.
+    reset_active_workflow_runs_cache()
+
+
+_active_workflow_runs_cache: dict[
+    tuple[str, tuple[str, ...], str | None, str | None, str | None], list[dict[str, Any]]
+] = {}
+
+
+def reset_active_workflow_runs_cache() -> None:
+    """Clear the per-invocation cache backing :func:`active_workflow_runs`.
+
+    ``main`` calls this once at the top of every scheduler run so the cache
+    never survives across separate invocations sharing a process (tests
+    calling ``main`` more than once, most notably). It must also be called
+    immediately after anything that changes GitHub Actions run state --
+    force-cancelling, rerunning, or dispatching a run -- so a later read in
+    the same run observes that mutation instead of a stale pre-mutation
+    snapshot; :func:`force_cancel_workflow_runs`, :func:`rerun_actions_job`,
+    :func:`dispatch_opencode_review`, and :func:`dispatch_strix_evidence` all
+    do this immediately after their mutating call.
+    """
+    _active_workflow_runs_cache.clear()
 
 
 def active_workflow_runs(
@@ -2531,19 +2709,34 @@ def active_workflow_runs(
     *,
     event: str | None = None,
     created: str | None = None,
+    head_sha: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return workflow runs for a repository, optionally narrowed server-side.
 
-    ``event`` and ``created`` map directly onto GitHub's ``List workflow
-    runs for a repository`` REST query parameters (``event`` selects the
-    triggering webhook event, ``created`` accepts a date/range qualifier
-    such as ``>=2026-08-24T00:00:00Z``). Both are omitted by default so
-    existing callers keep fetching every run for the given statuses
-    unfiltered; a caller with a naturally bounded lookup -- one whose
-    target repository's run history only grows, such as a same-head
-    dispatch search -- should pass them to avoid paginating history it can
-    never use.
+    ``event``, ``created``, and ``head_sha`` map directly onto GitHub's
+    ``List workflow runs for a repository`` REST query parameters (``event``
+    selects the triggering webhook event, ``created`` accepts a date/range
+    qualifier such as ``>=2026-08-24T00:00:00Z``, ``head_sha`` narrows to
+    runs for one exact commit). All three are omitted by default so existing
+    callers keep fetching every run for the given statuses unfiltered; a
+    caller with a naturally bounded lookup -- one whose target repository's
+    run history only grows, such as a same-head dispatch search, or one
+    scoped to a single known commit -- should pass them to avoid paginating
+    history it can never use.
+
+    Results are memoized per exact ``(repo, statuses, event, created,
+    head_sha)`` combination for the life of the cache (cleared by
+    :func:`reset_active_workflow_runs_cache`). The scheduler's queue sweep
+    calls the unfiltered ``(repo, ("queued", "in_progress"))`` shape from
+    every non-draft PR's unconditional stale-run check plus every review
+    dispatch check, all against the one repository a scheduler invocation
+    ever targets -- without memoization that is up to two redundant,
+    repository-wide, paginated REST calls per PR for identical data.
     """
+    cache_key = (repo, tuple(statuses), event, created, head_sha)
+    cached = _active_workflow_runs_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
     runs: list[dict[str, Any]] = []
     for status in statuses:
         args = [
@@ -2563,11 +2756,14 @@ def active_workflow_runs(
             args += ["-f", f"event={event}"]
         if created:
             args += ["-f", f"created={created}"]
+        if head_sha:
+            args += ["-f", f"head_sha={head_sha}"]
         payload = json.loads(run_github_actions(args))
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
-    return runs
+    _active_workflow_runs_cache[cache_key] = runs
+    return list(runs)
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
@@ -2583,7 +2779,15 @@ def stale_pr_run_ids(
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> list[str]:
     """Return active run ids for older heads of the same pull request."""
-    head = str(pr.get("headRefOid") or "").lower()
+    raw_head = pr.get("headRefOid")
+    try:
+        head = validate_git_sha(str(raw_head or "")).lower()
+    except (TypeError, ValueError) as exc:
+        print(
+            f"::warning::stale_pr_run_ids: PR #{pr.get('number')} in {repo} has an "
+            f"invalid or unresolved headRefOid; preserving active runs ({exc})."
+        )
+        return []
     number = int(pr["number"])
     stale: list[str] = []
     for run_data in active_workflow_runs(repo, statuses):
@@ -2620,7 +2824,15 @@ def active_review_run_refs(
     centralized_dispatch = bool(
         (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
     )
-    head = str(pr.get("headRefOid") or "").lower()
+    raw_head = pr.get("headRefOid")
+    try:
+        head = validate_git_sha(str(raw_head or "")).lower()
+    except (TypeError, ValueError) as exc:
+        print(
+            f"::warning::active_review_run_refs: PR #{pr.get('number')} in {target_repo} has an "
+            f"invalid or unresolved headRefOid; preserving review runs ({exc})."
+        )
+        return [], []
     number = int(pr["number"])
     dispatch_title_prefixes = tuple(
         f"{title} {target_repo}#{number}@"
@@ -2798,6 +3010,12 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(executor.map(cancel_one, (str(run_id) for run_id in run_ids)))
 
+    # A cancelled run is no longer queued/in_progress; drop any cached
+    # active_workflow_runs snapshot so the next read (this same PR's later
+    # checks, or a later PR sharing this repository) sees the change instead
+    # of replaying it from before the cancellation.
+    reset_active_workflow_runs_cache()
+
     failures = {run_id: reason for run_id, reason in results if reason is not None}
     for run_id, reason in failures.items():
         print(
@@ -2808,34 +3026,235 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     return failures
 
 
-def force_cancel_workflow_run_refs(run_refs: Sequence[tuple[str, str]]) -> None:
-    """Force-cancel repository-qualified runs while retaining bounded batches."""
-    runs_by_repo: dict[str, list[str]] = {}
-    for run_repo, run_id in run_refs:
-        runs_by_repo.setdefault(run_repo, []).append(run_id)
-    for run_repo, run_ids in runs_by_repo.items():
-        force_cancel_workflow_runs(run_repo, run_ids)
+def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
+    """Return fresh open PR authority, including explicitly identified draft state."""
+    payload = gh_api_json(f"repos/{repo}/pulls/{number}")
+    if not isinstance(payload, dict) or str(payload.get("state") or "").lower() != "open":
+        raise ValueError(f"PR #{number} in {repo} is not a resolvable open pull request")
+    if payload.get("draft") not in {True, False}:
+        raise ValueError(f"PR #{number} in {repo} has no authoritative live draft state")
+    validate_git_sha(str(((payload.get("head") or {}).get("sha")) or ""))
+    return payload
+
+
+def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
+    """Return fresh active workflow-run evidence immediately before cancellation."""
+    payload = gh_api_json(f"repos/{run_repo}/actions/runs/{run_id}")
+    if not isinstance(payload, dict) or str(payload.get("status") or "").lower() not in {
+        "queued",
+        "in_progress",
+    }:
+        raise ValueError(f"workflow run {run_repo}#{run_id} is not active")
+    return payload
+
+
+def _fresh_pr_head_for_cancellation(repo: str, number: int) -> str:
+    """Return the validated head SHA from fresh ready/open PR authority."""
+    payload = _fresh_open_pr_for_cancellation(repo, number)
+    return validate_git_sha(str(((payload.get("head") or {}).get("sha")) or "")).lower()
+
+
+def _direct_pr_run_still_superseded(repo: str, number: int, run_id: str) -> bool:
+    """Return whether a direct PR run is still older than the freshly fetched live head."""
+    try:
+        run_data = _fresh_active_run_for_cancellation(repo, run_id)
+        if run_data.get("event") == "repository_dispatch" or not workflow_run_mentions_pr(
+            run_data, number
+        ):
+            raise ValueError("workflow run no longer has direct pull-request authority")
+        run_head = validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+        live_head = _fresh_pr_head_for_cancellation(repo, number)
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        print(
+            f"::warning::Preserving workflow run {run_id} in {repo}: "
+            f"live stale-run revalidation failed closed ({exc})."
+        )
+        return False
+    return run_head != live_head
+
+
+def _review_run_target_head(
+    run_data: dict[str, Any], repo: str, workflow: str, number: int
+) -> str:
+    """Return a validated target head for one direct or trusted central review run."""
+    if run_data.get("event") == "repository_dispatch":
+        titles = {"Required OpenCode Review", workflow, *OPENCODE_WORKFLOW_NAMES}
+        display_title = str(run_data.get("display_title") or "")
+        prefixes = tuple(
+            f"{title} {repo}#{number}@" for title in sorted(titles, key=len, reverse=True)
+        )
+        prefix = next((candidate for candidate in prefixes if display_title.startswith(candidate)), None)
+        if prefix is None:
+            raise ValueError("repository_dispatch run has no trusted target identity")
+        return validate_git_sha(display_title.removeprefix(prefix)).lower()
+    if not workflow_run_mentions_pr(run_data, number):
+        raise ValueError("review run no longer belongs to the target pull request")
+    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+
+
+def _review_run_still_superseded(
+    repo: str,
+    workflow: str,
+    number: int,
+    run_repo: str,
+    run_id: str,
+) -> bool:
+    """Return whether one review run remains stale against fresh ready/open PR authority."""
+    try:
+        run_data = _fresh_active_run_for_cancellation(run_repo, run_id)
+        run_head = _review_run_target_head(run_data, repo, workflow, number)
+        live_head = _fresh_pr_head_for_cancellation(repo, number)
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        print(
+            f"::warning::Preserving review run {run_repo}#{run_id}: "
+            f"live stale-run revalidation failed closed ({exc})."
+        )
+        return False
+    return run_head != live_head
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel queued or running workflows for older heads of the same PR."""
+    """Force-cancel only direct-run candidates still proven stale at the destructive boundary."""
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-pr-runs")
-    run_ids = stale_pr_run_ids(repo, pr)
-    force_cancel_workflow_runs(repo, run_ids)
-    return run_ids
+    number = int(pr["number"])
+    candidates = [str(run_id) for run_id in stale_pr_run_ids(repo, pr)]
+
+    def cancel_one(run_id: str) -> str | None:
+        """Revalidate and cancel one direct workflow-run candidate when still stale."""
+        if not _direct_pr_run_still_superseded(repo, number, run_id):
+            return None
+        failures = force_cancel_workflow_runs(repo, [run_id])
+        if run_id in failures:
+            return None
+        return run_id
+
+    if len(candidates) <= 1:
+        results = [cancel_one(run_id) for run_id in candidates]
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(candidates))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(cancel_one, candidates))
+    return [run_id for run_id in results if run_id is not None]
 
 
 def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel older OpenCode runs for the same PR before retrying current head."""
+    """Force-cancel only review candidates still proven stale at the destructive boundary."""
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-opencode-review")
+    number = int(pr["number"])
     _, stale_refs = active_opencode_run_refs(repo, workflow, pr)
-    force_cancel_workflow_run_refs(stale_refs)
-    return [run_id for _, run_id in stale_refs]
 
+    def cancel_one(run_ref: tuple[str, str]) -> str | None:
+        """Revalidate and cancel one review-run candidate when still stale."""
+        run_repo, run_id = run_ref
+        if not _review_run_still_superseded(repo, workflow, number, run_repo, run_id):
+            return None
+        failures = force_cancel_workflow_runs(run_repo, [run_id])
+        if run_id in failures:
+            return None
+        return run_id
+
+    if len(stale_refs) <= 1:
+        results = [cancel_one(run_ref) for run_ref in stale_refs]
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(stale_refs))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(cancel_one, stale_refs))
+    return [run_id for run_id in results if run_id is not None]
+
+
+
+
+def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
+    """Return the current-head Required OpenCode Review run id via a bounded lookup.
+
+    Devin Review finding on PR #1507 ("Large check rollups never wake"):
+    ``matching_actions_run_id`` only sees the GraphQL ``statusCheckRollup``
+    fragment's first 100 status/check contexts
+    (``PULL_REQUEST_FIELDS_FRAGMENT``'s ``contexts(first: 100)``). A pull
+    request already carrying at least 100 contexts -- dozens of CI/security
+    workflows across several pushes and reruns is realistic in this
+    organization -- can push the real Required OpenCode Review check run
+    past that page, so the in-memory scan finds nothing even though the run
+    exists. This is a REST fallback, not a rewrite of that scan: it is
+    scoped server-side to the exact triggering event, the exact workflow
+    file path, and the exact current head SHA (GitHub's ``head_sha`` list
+    filter), so it stays a bounded, targeted lookup -- never an unfiltered
+    history walk -- and finds the run whether it is still queued/running or
+    already completed (the realistic failure mode is a stuck ``failure``
+    conclusion on an otherwise-valid exact-head run).
+    """
+    if not GIT_SHA_RE.fullmatch(head_sha):
+        return None
+    target_repo = validate_github_repository(repo)
+    newest_id: int | None = None
+    newest_started: datetime | None = None
+    for run_data in active_workflow_runs(
+        target_repo,
+        ("queued", "in_progress", "completed"),
+        event="pull_request_target",
+        head_sha=head_sha,
+    ):
+        if run_data.get("path") != OPENCODE_REVIEW_WORKFLOW_PATH:
+            continue
+        if str(run_data.get("head_sha") or "").lower() != head_sha.lower():
+            continue
+        run_id = run_data.get("id")
+        if not run_id:
+            continue
+        started_at = parse_github_datetime(
+            run_data.get("run_started_at") or run_data.get("created_at")
+        )
+        is_newer = started_at is not None and (
+            newest_started is None or started_at > newest_started
+        )
+        if newest_id is None or is_newer:
+            newest_id = int(run_id)
+            if started_at is not None:
+                newest_started = started_at
+    return newest_id
+
+
+def _cancel_revalidated_review_run_refs(
+    repo: str,
+    workflow: str,
+    pr: dict[str, Any],
+    run_refs: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Cancel only review refs still proven stale immediately before each destructive call.
+
+    A failed/malformed live read is preservation authority, not permission to
+    dispatch a duplicate review. The returned first list therefore contains
+    every active candidate that could not be proven stale; callers fold those
+    refs into their current/busy set. Multiple candidates retain the scheduler's
+    existing bounded executor and deterministic input ordering.
+    """
+    if not run_refs:
+        return [], []
+    number = int(pr["number"])
+
+    def cancel_one(run_ref: tuple[str, str]) -> tuple[str, tuple[str, str]]:
+        """Revalidate one candidate and cancel it only while it remains stale."""
+        run_repo, run_id = run_ref
+        if not _review_run_still_superseded(repo, workflow, number, run_repo, run_id):
+            return "preserved", run_ref
+        failures = force_cancel_workflow_runs(run_repo, [run_id])
+        if run_id in failures:
+            return "preserved", run_ref
+        return "cancelled", run_ref
+
+    if len(run_refs) == 1:
+        outcomes = [cancel_one(run_refs[0])]
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(run_refs))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            outcomes = list(executor.map(cancel_one, run_refs))
+    preserved = [run_ref for state, run_ref in outcomes if state == "preserved"]
+    cancelled = [run_ref for state, run_ref in outcomes if state == "cancelled"]
+    return preserved, cancelled
 
 def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch trusted OpenCode for the PR head, or report an active run.
@@ -2849,7 +3268,10 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
-        force_cancel_workflow_run_refs(stale_run_refs)
+        preserved_run_refs, _cancelled_run_refs = _cancel_revalidated_review_run_refs(
+            repo, workflow, pr, stale_run_refs
+        )
+        current_run_refs = [*current_run_refs, *preserved_run_refs]
         if current_run_refs:
             print(
                 "OpenCode review dispatch skipped: active same-head workflow run(s) "
@@ -2864,6 +3286,20 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     head_ref = validate_git_ref(pr["headRefName"])
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
+    client_payload: dict[str, Any] = {
+        "target_repository": target_repo,
+        "pr_number": int(pr["number"]),
+        "pr_base_ref": base_ref,
+        "pr_base_sha": base_sha,
+        "pr_head_ref": head_ref,
+        "pr_head_sha": head_sha,
+    }
+    complete_paginated_pr_contexts(target_repo, pr)
+    required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
+    if required_run_id is None:
+        required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
+    if required_run_id is not None:
+        client_payload["required_run_id"] = required_run_id
     run_github_dispatch(
         [
             "gh",
@@ -2877,23 +3313,28 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         stdin=json.dumps(
             {
                 "event_type": "opencode-review",
-                "client_payload": {
-                    "target_repository": target_repo,
-                    "pr_number": int(pr["number"]),
-                    "pr_base_ref": base_ref,
-                    "pr_base_sha": base_sha,
-                    "pr_head_ref": head_ref,
-                    "pr_head_sha": head_sha,
-                },
+                "client_payload": client_payload,
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
+
+
+def is_strix_scan_check_run(node: dict[str, Any]) -> bool:
+    """Return whether a check run is the authoritative Strix scan job."""
+    return (
+        node.get("__typename") == "CheckRun"
+        and node.get("name") == "strix"
+        and is_strix_context(node)
+    )
 
 
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
-    job_id = matching_actions_job_id(pr, is_strix_context)
+    job_id = matching_actions_job_id(pr, is_strix_scan_check_run)
     if job_id:
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
         return "rerun" if not dry_run else "dry_run"
@@ -2907,7 +3348,10 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
     )
-    force_cancel_workflow_run_refs(stale_run_refs)
+    preserved_run_refs, cancelled_refs = _cancel_revalidated_review_run_refs(
+        repo, workflow, pr, stale_run_refs
+    )
+    current_run_refs = [*current_run_refs, *preserved_run_refs]
     if current_run_refs:
         print(
             "Strix evidence dispatch skipped: active same-head workflow run(s) "
@@ -2918,12 +3362,12 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return "already_running"
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    stale_ids = {run_id for _, run_id in stale_run_refs}
+    cancelled_ids = {run_id for _, run_id in cancelled_refs}
     busy_refs = [
         (dispatch_repo, str(run_data["id"]))
         for run_data in active_workflow_runs(dispatch_repo)
         if run_data.get("id")
-        and str(run_data["id"]) not in stale_ids
+        and str(run_data["id"]) not in cancelled_ids
         and run_data.get("name") == workflow
         and run_data.get("event") == "repository_dispatch"
         and str(run_data.get("display_title") or "").startswith(
@@ -2960,6 +3404,9 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             }
         ),
     )
+    # A dispatch queues a new run; invalidate any cached active_workflow_runs
+    # snapshot so a later busy/current-run check in this same invocation sees it.
+    reset_active_workflow_runs_cache()
     return "dispatched"
 
 
@@ -5111,6 +5558,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     """Run the scheduler CLI."""
+    # Each invocation is a fresh look at GitHub; never reuse another
+    # invocation's active_workflow_runs cache (relevant when a process
+    # calls main() more than once, tests included).
+    reset_active_workflow_runs_cache()
     args = parse_args(argv)
     if args.self_test:
         self_test()
