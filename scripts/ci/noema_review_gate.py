@@ -14,6 +14,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -204,6 +205,25 @@ class NoemaModelOutputError(RuntimeError):
 class NoemaTransportError(RuntimeError):
     """Raised when the bounded review transport cannot produce usable evidence."""
 
+
+# Exception types that can ONLY occur before a request is ever sent -- a
+# refused TCP connection, a DNS lookup failure, or a failed TLS handshake.
+# Deliberately narrow: a generic timeout (socket.timeout/TimeoutError) is
+# excluded because urlopen's single blocking call gives no way to tell a
+# connect-phase timeout from a response-phase one apart, so it must not be
+# conclusively labeled "connecting" (Devin Review, same PR as the phase
+# rename this refines).
+_DEFINITELY_PRE_SEND_TRANSPORT_ERRORS = (
+    ConnectionRefusedError,
+    socket.gaierror,
+    ssl.SSLError,
+)
+
+
+def _is_definitely_pre_send_failure(exc: BaseException) -> bool:
+    """True only for an exception that proves no request was ever sent."""
+    candidate = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(candidate, _DEFINITELY_PRE_SEND_TRANSPORT_ERRORS)
 
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
@@ -1729,14 +1749,18 @@ def call_llm(
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
-        # HTTPError is the one exception type that only occurs once a full
-        # response (status line + headers) was actually received -- any
-        # other transport exception here means opener.open() never got that
-        # far, so the connection itself is the honest culprit.
+        # "awaiting_response" is the safe default for any pre-response
+        # failure: it is at least as likely to be true (an HTTPError proves
+        # it outright; a timeout or other ambiguous transport error cannot
+        # be conclusively placed in either phase given urlopen's single
+        # blocking call) as the alternative, and for this loopback gateway
+        # sidecar a genuine connect-level failure is the rare case, not the
+        # common one. Only the exception types that PROVE no request was
+        # ever sent (refused/DNS/TLS) fall back to "connecting".
         reported_phase = (
-            "awaiting_response"
-            if active_phase == "connecting" and isinstance(exc, urllib.error.HTTPError)
-            else active_phase
+            "connecting"
+            if active_phase == "connecting" and _is_definitely_pre_send_failure(exc)
+            else "awaiting_response" if active_phase == "connecting" else active_phase
         )
         print(
             f"::warning::Noema gateway attempt outcome=failed phase={reported_phase} "
