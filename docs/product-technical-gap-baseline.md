@@ -2649,12 +2649,58 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Formerly open, gateway-owned — now fixed, PR open.** The missing model/provider attribution on the real-call failure path (`served_model=unknown` where preflight proves the sidecar can report this detail) is root-caused and fixed: `ContextualWisdomLab/contextual-orchestrator#1037` (branch `fix/invoke-failover-attempt-telemetry`, based on `main` @ `f4e5fc67`, open, not yet merged). Root cause: `TaskOrchestrator._invoke`'s failover loop (`contextual_orchestrator/orchestrator.py:7660-7893`) tracked only the single most recent candidate's failure (`last_upstream_error`/`last_provider_response_error`, overwritten on every new candidate), discarding every earlier candidate's `agent_id`/`model`/`provider_name`/failure reason the moment the loop moved on — so a fully-exhausted pool's raised exception could only ever describe the last agent tried, exactly matching the `served_model=unknown` symptom above. Fix: `ProviderUpstreamError.detail` now conditionally surfaces `attempts` (one record per candidate: `agent_id`/`model`/`provider`/`error_code`/`provider_status`/`retryable`/`retry_attempt`, reusing the existing `_record_tool_fallback` shape — never raw exception text) and `stop_reason`, populated at all 3 of `_invoke`'s existing "candidate exhausted" exit points; `server.py`'s error-message helper surfaces the count/reason; a second, compounding bug (the 413 `request_too_large` handler silently dropping `exc.detail` via a missing 4th `_send_error` argument) was fixed alongside it since it shares the same attribution-loss shape. RED-then-GREEN on 3 new tests, regression guards (`test_detail_and_transport_are_preserved_for_callers`, `test_invoke_preserves_final_classified_failure_across_candidates`, `test_all_agents_failing_raises_after_trying_every_candidate`) confirmed unmodified, full suite green. Zero line-range overlap with the concurrently-active PR #1032 (confirmed via diff comparison — #1032 touches `_orchestrated_provider_completion`'s schema-repair accounting; this touches `_invoke`'s failover loop, a different code path), branched from `main` directly rather than stacked. `.github`-side follow-up still needed once both #1661 and #1037 land: `scripts/ci/noema_review_gate.py`'s `call_llm` catches `urllib.error.HTTPError` without calling `exc.read()`, so it cannot see the response body CO now sends on failure, and `_extract_served_model` only reads a top-level `data.get("model")` while CO nests everything under `error.detail`/`error_detail` — the caller needs its own small patch to actually surface what the gateway now provides.
 
-## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — resolved
+## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — existing-repo gap closed, future-repo gap open
 
 **Problem.** Every ruleset-injected `codeql-pr.yml` run in every repository covered by org ruleset `18156473` (confirmed: bandscope, naruon, aFIPC, pg-erd-cloud, xtrmLLMBatchPython, wardnet, spanning 2026-09-02T20:12:52Z through 2026-09-03T03:15:43Z) concluded `startup_failure` with **zero check runs created** — while every other required workflow in the same PRs at the same time enqueued normally. Example: [wardnet run 33710719228](https://github.com/ContextualWisdomLab/wardnet/actions/runs/33710719228).
 
 **Root cause.** Not a workflow-YAML defect, and not the job-output-derived `strategy.matrix` a prior hypothesis in this session pursued and disproved before shipping a wasted fix. GitHub categorically disallows `github/codeql-action/*` inside a ruleset-required workflow — confirmed via the run's own browser-rendered error annotation, which the REST API does not surface (`gh api .../jobs` returns an empty `jobs` array with no diagnostic text for this failure class; a real gap in what this org's tooling can see through the API alone, worth remembering the next time a `startup_failure` needs live diagnosis).
 
 **Fix, applied and independently verified.** `codeql-pr.yml` removed from ruleset `18156473`'s required-workflow list (9 entries remain: `close-empty-pr.yml` through `osv-scanner-pr.yml`; confirmed live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`). GitHub's native code-scanning default setup enabled on all 23 ruleset-covered repositories that had zero real CodeQL coverage from any source — ground-truth checked via `code-scanning/default-setup` state and actual analyses, not by grepping for a workflow file name (some repos run CodeQL from oddly-named files, which a filename-only sweep would miss): CalendarWeave, ConceptWeave, DiagramWeave, ELUNVERA, EmbedRelay, LineageWeave, Orgmetra, OriginWeave, PolicyWeave, TEPP, accounting-information-platform, context-graph-contracts, disksage, enterprise-architecture-core, j-planner, 4 `learning-*` repos, life-os, pingora-gateway, quarantine-sandbox-runtime, supply-chain-control-plane. Independently spot-checked 3 of the 23 (ConceptWeave, pingora-gateway, quarantine-sandbox-runtime): all `state: "configured"`. `.github` itself is unaffected either way (excluded from ruleset `18156473`; its own native `codeql-pr.yml` runs were never in the failing population).
+
+**Devin Review caught the original write-up overclaimed "resolved."** A full org-wide sweep (all 74
+`ContextualWisdomLab` repositories, checked live via `code-scanning/default-setup` state plus a
+per-repository `.github/workflows` listing to catch repo-local CodeQL files the default-setup API can't
+see) found 24 more repositories beyond the original 23 with zero real coverage, not just the ones already
+named. Of those 24: 4 already had a working repo-local `codeql.yml` (`keyverse`, `newsdom-api`, `bandscope`
+— already tracked in `docs/org-required-workflow-rollout.md`'s inventory table — plus `OmniRoute`,
+`litellm-patched-proxy`, `mightyETL`, `pg-erd-cloud`, correctly not needing default setup, which GitHub
+refuses to enable alongside a custom scanning workflow); 4 are private repos where Advanced Security itself
+is off (`IRT-bibliography-set`, `xtrm-lead-pi-outbound`, `ccube-jco-potential-customer`,
+`trivy-sarif-repro` — the last is archived) — **left un-actioned here**, since turning on GHAS for a
+private repository is a billing decision (per-active-committer cost), not a mechanical fix, and needs the
+user's own call rather than being enabled unilaterally. The remaining 16 (`kaefa`, `aFIPC`,
+`linux-cluster-ops`, `argos`, `contextual-orchestrator`, `inkspan`, `g7`, `saju-caldav`, `9drive`,
+`macos_utility_packs`, `graphify`, `four-pillars`, `mhtml-etl-gateway`, `psychometrics-commons`,
+`metering-billing-platform`, `governance-risk-compliance`) had genuinely zero coverage of any kind —
+including `contextual-orchestrator` itself, this ecosystem's central LLM gateway. Default setup enabled on
+all 16 directly via `PATCH /repos/{owner}/{repo}/code-scanning/default-setup`, each with GitHub's own
+API-reported supported-language list for that repo (the endpoint rejects `javascript`/`typescript`/`rust`
+as discrete values — only the combined `javascript-typescript` is valid, and Rust has no default-setup
+language support at all yet, so `contextual-orchestrator` and `psychometrics-commons` get every other
+detected language covered but not their Rust code specifically, a real, separate, currently-unclosed gap
+worth its own follow-up once/if CodeQL's default setup adds Rust). Verified each landed (`state: "configured"`)
+and a real scan run was queued (`run_id` returned) for all 16.
+
+**Future repositories: Devin's concern is real, and this sweep does not close it.** Checked whether the
+org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended", confirmed live via
+`gh api orgs/ContextualWisdomLab/code-security/configurations/defaults` — note the plain configuration-list
+endpoint misleadingly shows `default_for_new_repos: null` for the same configuration; the dedicated
+`/defaults` endpoint is the one that's actually authoritative) is the reason future repos would stay
+covered. It is not reliable: of the 16 gapped repositories above, 4 are forks (`argos`, `g7`, `9drive`,
+`graphify` — GitHub does not apply org default security configurations to forks, expected, not a bug) and 2
+predate the configuration entirely (`kaefa`, `aFIPC`, created 2017). But **11 are plain, non-fork
+repositories created between 2026-05-09 and 2026-08-18** — `linux-cluster-ops`, `contextual-orchestrator`,
+`keyverse`, `inkspan`, `saju-caldav`, `macos_utility_packs`, `four-pillars`, `mhtml-etl-gateway`,
+`psychometrics-commons`, `metering-billing-platform`, `governance-risk-compliance` — every one of them well
+after this configuration's own `updated_at` of 2025-03-04, and none of them ever received it. Only 3
+repositories org-wide (`noema`, `feelanet-adfs`, `pg-llm-batch`) actually show configuration `17` attached
+via `orgs/{org}/code-security/configurations/17/repositories`, out of 74 total. This is the same
+"silently-inactive required check" pattern this document has recorded before, now confirmed in a new
+domain (org-level security-configuration application, not required-workflow ruleset activation): the
+setting exists, looks fully configured, and simply does not fire for most new repositories. **Not fixed
+here.** The two real options — a periodic reconciliation sweep that catches repos the org policy missed
+(in direct tension with this backlog's own item 15, which asks to remove scheduled sweep workflows for
+rate-limit reasons), or escalating the unreliable `default_for_new_repos` behavior to GitHub support — are a
+product/operational decision this record surfaces rather than makes.
 
 **Cross-reference.** This is a fresh instance of the "silently-inactive required check" pattern this document has recorded before — a required check that looks fully configured but fails (or, in the earlier instances, silently never fires) under a narrower activation condition than the surrounding docs assumed.

@@ -101,6 +101,24 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
+**Superseded (2026-09-03): `codeql-pr.yml` is deliberately no longer required-workflow-injected.**
+GitHub categorically disallows `github/codeql-action/*` inside a ruleset-required workflow — every
+ruleset-injected `codeql-pr.yml` run across every covered repository concluded `startup_failure` with zero
+check runs created (confirmed via live run evidence, not a workflow-YAML defect this repo could fix; see
+`docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from ruleset `18156473`'s
+required-workflow list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`; 9 entries
+remain, `close-empty-pr.yml` through `osv-scanner-pr.yml`, no CodeQL entry). Coverage now comes from
+GitHub's native code-scanning default setup, enabled directly per repository (`code-scanning/default-setup`
+state `configured`) rather than through this ruleset. **Do not treat the paragraphs below as current
+operator guidance or "drift" to restore** — they describe the pre-2026-09-03 design and are kept for
+history. The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is
+supposed to make this automatic for every newly created repository, but item 41's investigation confirmed
+it is empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and
+2026-08-18 — well after that policy's own `updated_at` of 2025-03-04 — never received it. Closing that
+specific gap (a periodic reconciliation sweep, vs. this org's stated aversion to more scheduled workflows
+for rate-limit reasons) is recorded as still open in `docs/product-technical-gap-baseline.md`'s item 41
+entry, not decided here.
+
 The central `.github/workflows/codeql-pr.yml`, `.github/workflows/scorecard-pr.yml`,
 and `.github/workflows/osv-scanner-pr.yml` workflows supply PR-head and merge-preview
 code scanning analyses for ruleset `18156473` `code_scanning` (CodeQL, Scorecard,
