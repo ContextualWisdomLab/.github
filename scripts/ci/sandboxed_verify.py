@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 
@@ -33,6 +33,26 @@ DEFAULT_IGNORE = (
     "htmlcov",
     "dist",
     "build",
+    # Credential-bearing dotfiles/dirs a repo checkout can carry (npm/pip
+    # registry tokens, git credential helpers, cloud/SSH/GPG config). The
+    # sandboxed command's own workspace mount is writable, so anything copied
+    # in here is both readable and tamperable by the command under test --
+    # these must never ride along with an ordinary repo copy.
+    ".env",
+    ".env.*",
+    ".envrc",
+    # Note: DEFAULT_ENV_TEMPLATE_ALLOWLIST below carves committed,
+    # secret-free dotenv templates back out of the ".env.*" glob above.
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".pgpass",
+    ".git-credentials",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
 )
 SECRET_ENV_TOKENS = (
     "TOKEN",
@@ -55,8 +75,19 @@ SAFE_ENV_ALLOWLIST = (
     "TZ",
     "PYTHONPATH",
 )
+# Committed, secret-free dotenv templates. These match the ".env.*" glob in
+# DEFAULT_IGNORE (which exists to exclude real credential-bearing dotenv
+# variants such as ".env.local" or ".env.production") but carry no secrets
+# themselves, so verification commands that read them for local defaults
+# must still find them in the sandboxed copy.
+DEFAULT_ENV_TEMPLATE_ALLOWLIST = (
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+)
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAXIMUM_SYMLINK_HOPS = 40
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -138,14 +169,169 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
+def _reject_escaping_symlinks(destination: Path) -> None:
+    """Fail closed if any symlink copied into the workspace resolves outside it.
+
+    ``shutil.copytree(..., symlinks=True)`` preserves the exact target string
+    of every symlink instead of dereferencing it, so a repository can carry a
+    symlink whose (possibly absolute, possibly ``..``-laden) target resolves
+    outside the copied tree. A command later run against the copy — under OS
+    sandboxing or, in ``--isolation disabled`` debugging mode, directly on the
+    host — must never be able to follow such a link to read or write a file
+    outside the workspace boundary, defeating the isolation this module
+    exists to provide. Every symlink under ``destination`` is walked hop by
+    hop purely lexically (see ``_reject_escaping_symlink_chain``), so a link
+    whose own target was itself excluded from the copy by ``DEFAULT_IGNORE``
+    or ``extra_ignores`` -- or is simply broken -- is not confused with one
+    that escapes; the first symlink found to actually escape, or whose chain
+    cannot be resolved, aborts the whole copy rather than being silently
+    dropped or repaired, since a repository author who plants one such link
+    cannot be assumed not to have planted others.
+
+    Walking starts from ``root`` -- ``destination`` fully resolved -- rather
+    than ``destination`` itself, and every symlink found is then checked
+    with ``path.relative_to(root)``. When some *ancestor* of ``destination``
+    is itself reached through a symlink (for example a temp directory whose
+    default OS location is a symlink, unrelated to anything the copied
+    repository controls), ``destination`` and ``root`` are different, only
+    lexically equal-looking strings for the same real location. Walking from
+    the unresolved ``destination`` would then yield paths still prefixed
+    with that unresolved string, which are never actually relative to
+    ``root`` -- so ``relative_to`` raises before this function's own escape
+    check ever runs, rejecting an entirely legitimate copy that contains no
+    escaping symlink at all. Walking from ``root`` instead guarantees every
+    yielded path already shares ``root``'s own resolved prefix, so
+    ``relative_to`` only ever fails for the cases this function exists to
+    reject.
+    """
+    root = destination.resolve(strict=True)
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            _resolve_symlink_components(
+                path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path
+            )
+
+
+def _resolve_symlink_components(
+    parts: Sequence[str],
+    resolved: Path,
+    root: Path,
+    active: set[Path],
+    hops_remaining: list[int],
+    candidate: Path,
+) -> Path:
+    """Resolve ``parts`` one component at a time, raising on escape or cycle.
+
+    Uses ``os.readlink`` at every hop instead of ``Path.resolve()``, which
+    requires the fully-resolved path to exist (``strict=True``) or is
+    unreliable for detecting a cycle across Python versions (``strict=False``,
+    the default) -- either way conflating a symlink escape with a symlink
+    that merely points at a target this function never had to check for
+    existence. A dangling target -- for example one whose file was excluded
+    from the copy by ``DEFAULT_IGNORE`` -- is therefore accepted as long as
+    it still resolves inside ``root``: verification must still run despite
+    the broken link. Only an absolute target, a component that steps outside
+    ``root``, or a chain that revisits a symlink it is *currently in the
+    middle of following* (an unresolvable cycle) raises.
+
+    Each path component is checked individually, and a component found to be
+    a symlink is resolved via a recursive call, rather than resolving a whole
+    target string in one ``os.path.normpath`` call -- a target can itself
+    contain an intermediate component that is a symlink, for example
+    ``some-alias/../secret`` where ``some-alias`` is itself a relative,
+    entirely-legitimate-looking internal symlink. Collapsing that whole
+    string lexically in one step would cancel ``some-alias`` against the
+    following ``..`` textually, silently ignoring that following
+    ``some-alias`` for real can land somewhere shallower or deeper than one
+    directory level. Recursion is what makes the cycle check precise: a
+    symlink is added to ``active`` only while its own target is being
+    resolved and removed again as soon as that resolution returns
+    successfully, so the *same* symlink referenced twice in one chain --
+    once fully resolved before the second reference is ever reached, not a
+    real loop -- is accepted, while a symlink that (directly or through
+    others) points back to itself while still being resolved is rejected. A
+    hop budget, shared across the whole recursive walk, bounds the total
+    number of symlinks followed so a chain that never repeats still fails
+    closed instead of walking forever; only actually dereferencing a symlink
+    spends one unit of that budget, so a chain of exactly
+    ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
+    """
+    for component in parts:
+        if component == "..":
+            if resolved == root:
+                raise ValueError(f"workspace symlink escapes the sandbox root: {candidate}")
+            resolved = resolved.parent
+            continue
+        step = resolved / component
+        if not step.is_symlink():
+            resolved = step
+            continue
+        if step in active:
+            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+        if hops_remaining[0] <= 0:
+            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+        active.add(step)
+        hops_remaining[0] -= 1
+        target = Path(os.readlink(step))
+        if target.is_absolute():
+            raise ValueError(
+                f"workspace symlink escapes the sandbox root: {step} -> {target}"
+            )
+        resolved = _resolve_symlink_components(
+            target.parts, resolved, root, active, hops_remaining, candidate
+        )
+        active.discard(step)
+    return resolved
+
+
+def _ignore_with_env_template_allowlist(
+    default_patterns: Sequence[str], extra_patterns: Sequence[str]
+) -> Callable[[str, list[str]], set[str]]:
+    """Build a ``copytree`` ignore function that spares committed env templates.
+
+    ``shutil.ignore_patterns`` has no way to match a glob like ``.env.*``
+    while excepting specific names from it, so a committed, secret-free
+    template such as ``.env.example`` matches the same pattern used to
+    exclude real credential-bearing dotenv files and would otherwise vanish
+    from the sandboxed copy right along with them. This builds two
+    *separate* pattern-based ignore functions -- one from ``default_patterns``
+    (``DEFAULT_IGNORE``, whose broad ``.env.*`` glob the allowlist exists to
+    carve an exception out of) and one from ``extra_patterns`` (a caller's
+    explicit ``--ignore``/``extra_ignores``) -- and un-ignores a name found in
+    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` only when it was matched *solely* by
+    the default patterns. A name the caller explicitly asked to exclude via
+    ``extra_patterns`` -- for example because in their repository a file
+    named ``.env.example`` happens to carry something sensitive despite the
+    generic name -- stays excluded even though it is also one of the generic
+    template names: the allowlist must never override an explicit caller
+    exclusion, only the built-in broad glob.
+    """
+    default_ignore = shutil.ignore_patterns(*default_patterns)
+    extra_ignore = shutil.ignore_patterns(*extra_patterns)
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        """Apply both pattern sets, sparing env template names not explicitly excluded."""
+        default_ignored = default_ignore(directory, names)
+        extra_ignored = extra_ignore(directory, names)
+        protected = {
+            name
+            for name in default_ignored
+            if name in DEFAULT_ENV_TEMPLATE_ALLOWLIST and name not in extra_ignored
+        }
+        return (default_ignored | extra_ignored) - protected
+
+    return _ignore
+
+
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
         raise ValueError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
-    ignore = shutil.ignore_patterns(*(DEFAULT_IGNORE + tuple(extra_ignores)))
+    ignore = _ignore_with_env_template_allowlist(DEFAULT_IGNORE, tuple(extra_ignores))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
+    _reject_escaping_symlinks(destination)
     return destination
 
 
@@ -208,7 +394,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     exit_code = 1
     copied_repo = sandbox / "repo"
     try:
-        copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        try:
+            copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
+        except ValueError as exc:
+            print(f"sandboxed-verify: workspace copy rejected: {exc}", file=sys.stderr)
+            exit_code = 125
+            return exit_code
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
         print(f"sandboxed-verify: command={' '.join(args.command)}")
