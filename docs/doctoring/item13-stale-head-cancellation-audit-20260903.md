@@ -156,14 +156,19 @@ runs at the margin but cannot lift the ceiling).
   configuration bug *as evidenced by its own cited example* (`ContextualWisdomLab/naruon#1528`). It does not — that PR
   never exhibited a multi-SHA race; see Result 2. Item 13 should be marked accordingly in
   `docs/product-technical-gap-baseline.md`, alongside the confirmed finding below rather than instead of it.
-- **Confirmed, not-yet-fixed finding (raised by Devin Review, adversarially re-verified twice with no
-  refutation found):** `noema-review.yml`'s native `cancel-in-progress` can cancel a genuinely current run
-  when GitHub processes an older push's `synchronize` event after a newer one — GitHub does not guarantee
-  webhook/dispatch delivery order, and this workflow's concurrency group has no head-SHA component to make
-  such an inversion harmless. See the corrected caveat under Result 1's table for the full mechanism and the
-  corroborating evidence that `strix.yml` and `opencode-review.yml` both deliberately avoid this exact
-  pattern already. Not fixed here — this is a code change to live, security-critical CI configuration and
-  deserves a dedicated PR with its own regression test, not a same-breath edit to a documentation PR.
+- **Confirmed finding, fix proposed but not yet merged (raised by Devin Review, adversarially re-verified
+  twice with no refutation found):** `noema-review.yml`'s native `cancel-in-progress` can cancel a genuinely
+  current run when GitHub processes an older push's `synchronize` event after a newer one — GitHub does not
+  guarantee webhook/dispatch delivery order, and this workflow's concurrency group has no head-SHA component
+  to make such an inversion harmless. See the corrected caveat under Result 1's table for the full mechanism
+  and the corroborating evidence that `strix.yml` and `opencode-review.yml` both deliberately avoid this
+  exact pattern already. **Fix pushed as commit `31e46db` on `ContextualWisdomLab/.github#1661`** (a peer
+  session ported `opencode-review.yml`'s own `#1568` fix: the event's head SHA added as a third group-key
+  segment), independently re-verified against that branch — but `31e46db` is not reachable from `main`
+  (`git compare main...31e46db` reports `diverged`, `#1661` still open), and `main`'s live `noema-review.yml`
+  still has the pre-fix group with no head-SHA component. Do not mark this closed on `main` until `#1661`
+  merges — the same "proposed vs. landed" distinction Devin caught once already on this record's sibling PR
+  (`.github#1765`'s phase-labeling citation).
 - **Open, unverified lead, not a finding:** whether naruon's `pr-governance.yml` fires more often than
   necessary per PR (six runs on one SHA in this one case) is worth a dedicated, evidence-first follow-up
   investigation of that PR's actual label/review event history before concluding anything — recorded here
