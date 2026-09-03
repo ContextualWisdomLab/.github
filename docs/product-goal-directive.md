@@ -80,7 +80,7 @@ Per this file's own conflict policy above: this note is the resolution, and `doc
 
 > 웹은 비동기 처리·k6 E2E를 적용해 모든 페이지 p95≤20ms를 맞춘다. 초과하면 profile하고 runtime·언어·framework가 원인이면 계약·정확성을 보존해 Rust 우선 기술·hot path·언어로 바꾼다. 표본 축소·측정 제외·비현실적 cache warm-up은 금지한다. JavaScript bundle·heap·DOM·hydration·main thread·GC가 메모리·지연을 키우면 dependency·rendering·Frontend stack을 교체한다.
 
-`p95≤20ms` is an aggressive target (competitive with p50 for many stacks); read it as the goal to profile and drive toward, not a hard gate that blocks merges on its own until §7's existing verification-first posture and this session's own realistic-benchmark discipline (no artificial cache warm-up, no sample-shrinking) have been applied to reach it honestly.
+`p95≤20ms` is an aggressive, binding target (competitive with p50 for many stacks), not aspirational — the directive states it as a requirement ("맞춘다"), and this addendum does not soften that. §7's existing verification-first posture and this session's own realistic-benchmark discipline (no artificial cache warm-up, no sample-shrinking, no measurement exclusion) govern *how* the target must be measured honestly; they are not an exception to whether it applies.
 
 > close_connection을 인스턴스 속성으로만 가정하는 잠재 버그를 점검한다. Docker는 Podman 또는 colima로 대체할 수 있다. 컨테이너 병목이면 shm_size와 PostgreSQL 등 응용 설정을 하드웨어에 맞게 자동 튜닝한다. 주로 compose로 운영해 k8s 전환성을 확보한다. Docker container 프로젝트명은 고정하되 테스트 격리 때만 override하고 달성 후 격리 컨테이너를 제거한다. MLX·CPU·CUDA·OpenCL의 Docker/Podman/Colima 처리법을 ADR에 기록·반영하고 Native Module 분리가 필요하면 독립 서비스로 개발한다.
 
