@@ -16,7 +16,7 @@ Reproduced from the linked evidence:
 failed with `NoemaRepairDeadlineExceeded: Noema repair exceeded 900-second
 absolute wall-clock deadline` on 2026-09-02T02:28 UTC — no further specifics,
 matching the complaint exactly. The item-39 example
-(`contextual-orchestrator` run `33580381913`, PR #1008) is the same class of
+(`contextual-orchestrator` run `33580381913`, ContextualWisdomLab/contextual-orchestrator#1008) is the same class of
 failure, same day.
 
 Already fixed on this branch's base, same day: PR (`a28fc2f`,
@@ -36,7 +36,7 @@ test (`tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py`) forbids
 reappearing; ran it plus `tests/test_noema_repair_attempt_telemetry.py`
 locally (25 passed) to confirm it holds on this branch.
 
-The item-39 PR (`contextual-orchestrator#1008`, head `f35ee58d`) is still
+The item-39 PR (ContextualWisdomLab/contextual-orchestrator#1008, head `f35ee58d`) is still
 `mergeable_state: blocked`, but its Noema check now shows a fresh attempt
 queued at `2026-09-02T19:32:21Z` — after the fix merged — sitting `queued`
 with no conclusion yet. That is the already-documented org-wide Actions
