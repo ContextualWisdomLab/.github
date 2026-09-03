@@ -25,6 +25,13 @@
 # MEDIUM/HIGH/CRITICAL finding blocks every PR in that repo until it is fixed.
 # Trivy itself exits 0 so SARIF is always available; the following parser prints
 # exact findings and then fails the job.
+#
+# NOTE on the changed-scope gate: each job below now runs only when the
+# `changed-scope` job's diff-scoped output says it is in scope (`code` for
+# trivy-fs/scorecard, `deps` for osv-scan/dependency-review). A doc/image-only
+# PR skips every one of these jobs, and `scheduled-security-scan.yml` (push +
+# default-branch schedule) and `scorecard-analysis.yml` (push + weekly cron)
+# remain the full repo-wide backstops that make those skips safe.
 name: Security Scan
 
 on:
@@ -49,8 +56,71 @@ permissions:
   contents: read
 
 jobs:
-  osv-scan:
+  changed-scope:
+    name: Detect changed scope
+    # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
+    # runs this workflow in another repository, and a trigger-level skip would
+    # leave `.github`'s classic required contexts Pending forever. Both
+    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
+    # here and consumed through `needs`. See
+    # docs/doctoring/required-workflow-path-filter-boundary.md.
+    # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      deps: ${{ steps.scope.outputs.deps }}
+    steps:
+      - name: Classify changed paths
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
+
+  osv-scan:
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -85,7 +155,7 @@ jobs:
         id: osv_base
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
         with:
           scan-args: |
             --format=json
@@ -103,7 +173,7 @@ jobs:
         if: steps.osv_base.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
         with:
           scan-args: |
             --format=json
@@ -136,7 +206,7 @@ jobs:
         id: osv_head
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
         with:
           scan-args: |
             --format=json
@@ -154,7 +224,7 @@ jobs:
         if: steps.osv_head.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@a82132c0bd6c7261ffcb78e754c46c70ab57ad9a # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
         with:
           scan-args: |
             --format=json
@@ -208,7 +278,7 @@ jobs:
               if len(findings) > 50:
                   print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
       - name: Report PR-introduced OSV findings
-        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        uses: google/osv-scanner-action/osv-reporter-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.3.8
         with:
           scan-args: |
             --output=results.sarif
@@ -271,7 +341,8 @@ jobs:
           retention-days: 5
 
   dependency-review:
-    if: github.event.action != 'closed'
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -349,7 +420,8 @@ jobs:
           comment-summary-in-pr: never
 
   trivy-fs:
-    if: github.event.action != 'closed'
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -455,7 +527,8 @@ jobs:
           echo "::warning::Trivy SARIF upload to code scanning failed after the filesystem scan. The Trivy finding log above remains the hard gate, so upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings."
 
   scorecard:
-    if: github.event.action != 'closed'
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
     runs-on: ubuntu-24.04
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
