@@ -331,6 +331,14 @@ SENTINEL_PREFIX = "<!-- opencode-review-gate "
 
 def extract_model_prose(raw_output: str) -> str:
     """Return the human review body, stripping sentinel and control JSON."""
+    if "<!-- opencode-review-" not in raw_output:
+        # Neither SENTINEL_PREFIX nor CONTROL_START's shared literal prefix
+        # occurs anywhere, so the loop below is guaranteed to append every
+        # line unchanged -- skip the per-line prefix checks for the common
+        # case of a plain-prose response, without changing line-ending
+        # normalization behavior.
+        return "\n".join(raw_output.splitlines()).strip()
+
     lines: list[str] = []
     skipping_control = False
     for line in raw_output.splitlines():

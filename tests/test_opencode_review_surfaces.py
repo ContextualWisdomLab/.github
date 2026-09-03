@@ -503,6 +503,31 @@ def test_extract_model_prose_strips_sentinel_and_control() -> None:
     assert "opencode-review-control-v1" not in prose
 
 
+def test_extract_model_prose_fast_path_matches_slow_path_on_plain_text() -> None:
+    """The no-marker fast path is byte-identical to the full line-scan result."""
+    raw = "line one\r\nline two\r\n\r\nline three\n"
+
+    fast_result = surfaces.extract_model_prose(raw)
+
+    lines: list[str] = []
+    skipping_control = False
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(surfaces.SENTINEL_PREFIX):
+            continue
+        if stripped.startswith(surfaces.CONTROL_START):
+            skipping_control = True
+            continue
+        if skipping_control:
+            if stripped.endswith("-->"):
+                skipping_control = False
+            continue
+        lines.append(line)
+    slow_result = "\n".join(lines).strip()
+
+    assert fast_result == slow_result == "line one\nline two\n\nline three"
+
+
 def test_format_request_changes_keeps_model_prose_and_strips_fake_anchor() -> None:
     """REQUEST_CHANGES keeps the model walkthrough and never cites workflow:1."""
     body = surfaces.format_request_changes_review(
