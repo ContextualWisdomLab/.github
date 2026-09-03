@@ -10,11 +10,14 @@ on:
   # trigger and delegate every implementation step to this versioned owner.
   workflow_call:
 
-# A merge burst or a schedule/push collision needs only the newest repository
-# state. Canceling the obsolete scan prevents duplicate runner boot and SARIF
-# uploads without weakening the next authoritative default-branch result.
+# Coalesce only duplicate invocations for the same immutable source revision.
+# GitHub orders concurrency admission by event arrival, not commit ancestry, so a
+# repository/ref-only group would let a delayed old event cancel a newer scan.
+# Cross-revision cleanup belongs to a worker that revalidates the live default
+# branch SHA immediately before cancellation; this workflow never assumes event
+# arrival order is repository-history order.
 concurrency:
-  group: scorecard-analysis-${{ github.repository }}-${{ github.ref }}
+  group: scorecard-analysis-${{ github.repository }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions: read-all
