@@ -75,7 +75,14 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
     assert 'context="codeql-dispatch/${LANGUAGE}"' in workflow
     assert "OPENCODE_REPOSITORY_DISPATCH_ACTOR" in workflow
-    assert "OPENCODE_REPOSITORY_DISPATCH_TARGETS" in workflow
+    # Deliberately NOT vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS: that allowlist
+    # scopes a gradual ~12-repo OpenCode review rollout, while ruleset
+    # 18156473 covers ~ALL org repos except noema/.github/IRT-bibliography-set
+    # -- reusing the narrower list would silently break CodeQL dispatch for
+    # every repo not already on the OpenCode rollout list. (The name is
+    # mentioned in an explanatory comment, which is fine -- only an actual
+    # `vars.` reference would reintroduce the bug.)
+    assert "vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS" not in workflow
     # This file must never itself become subject to the required-workflow
     # codeql-action restriction: it must not be a pull_request-triggered file.
     assert "pull_request:" not in workflow
@@ -112,7 +119,6 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "DISPATCH_ACTOR": "seonghobae",
         "DISPATCH_SENDER": "seonghobae",
         "ALLOWED_DISPATCH_ACTOR": "seonghobae",
-        "ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github,ContextualWisdomLab/naruon",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
         "SUPPLIED_BASE_REF": "main",
@@ -156,16 +162,38 @@ def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
     assert "authorization rejected actor=" in result.stdout
 
 
-def test_codeql_scan_dispatch_validate_step_rejects_target_not_allowlisted(tmp_path):
-    """A dispatch targeting a repository outside the configured allowlist is rejected."""
+def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
+    """Unlike opencode-review-dispatch.yml, any ContextualWisdomLab repo is accepted.
+
+    CodeQL is meant to run for ~ALL org repos (ruleset 18156473's scope), not
+    the curated ~12-repo OpenCode review rollout list -- a repo that would be
+    rejected by that other allowlist must still be accepted here.
+    """
+    not_on_opencode_rollout_list = "ContextualWisdomLab/some-other-repo"
+    pull_request = _matching_pull_request()
+    pull_request["base"]["repo"]["full_name"] = not_on_opencode_rollout_list
+    pull_request["head"]["repo"]["full_name"] = not_on_opencode_rollout_list
+
     result = _run_validate_step(
         tmp_path,
-        {"TARGET_REPOSITORY": "ContextualWisdomLab/not-allowlisted"},
+        {"TARGET_REPOSITORY": not_on_opencode_rollout_list},
+        pull_request,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"target_repository={not_on_opencode_rollout_list}" in result.output_path.read_text(encoding="utf-8")
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_non_org_target(tmp_path):
+    """A dispatch targeting a repository outside ContextualWisdomLab is rejected."""
+    result = _run_validate_step(
+        tmp_path,
+        {"TARGET_REPOSITORY": "some-other-org/repo"},
         _matching_pull_request(),
     )
 
     assert result.returncode == 1
-    assert "absent from the configured exact repository allowlist" in result.stdout
+    assert "target outside ContextualWisdomLab" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):

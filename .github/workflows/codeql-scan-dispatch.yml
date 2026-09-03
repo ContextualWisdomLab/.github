@@ -124,16 +124,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           # A rerun retains github.actor from the original dispatch; authorize
-          # the identity that initiated the current run or rerun instead. Reuses
-          # the same allowlist as opencode-review-dispatch.yml: both handlers
-          # are dispatched the same way (an app token minted by the same
-          # exchange endpoint, from a repository_dispatch step running inside a
-          # required workflow in a ContextualWisdomLab repository), so one
-          # actor/target allowlist covers both dispatch kinds.
+          # the identity that initiated the current run or rerun instead.
+          # Reuses the same actor identity check as opencode-review-dispatch.yml
+          # (both mint their dispatching token via the same exchange endpoint),
+          # but deliberately does NOT reuse its OPENCODE_REPOSITORY_DISPATCH_TARGETS
+          # allowlist: that list scopes a deliberately gradual OpenCode review
+          # rollout to ~12 repos, whereas ruleset 18156473 (confirmed live via
+          # `gh api orgs/ContextualWisdomLab/rulesets/18156473`) covers
+          # ~ALL org repos except noema/.github/IRT-bibliography-set. Central
+          # CodeQL is meant to run for every one of those repos, not a curated
+          # subset -- reusing the narrower list would silently break CodeQL
+          # dispatch for every repo not already on the OpenCode rollout list.
+          # The org-membership regex below is the actual scope boundary here.
           DISPATCH_ACTOR: ${{ github.triggering_actor }}
           DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
           ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
-          ALLOWED_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
@@ -147,20 +152,6 @@ jobs:
             [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
             [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
             printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
-            exit 1
-          fi
-
-          target_allowed=0
-          IFS=',' read -r -a allowed_dispatch_targets <<<"$ALLOWED_DISPATCH_TARGETS"
-          for allowed_target in "${allowed_dispatch_targets[@]}"; do
-            allowed_target="${allowed_target//[[:space:]]/}"
-            if [ -n "$allowed_target" ] && [ "$TARGET_REPOSITORY" = "$allowed_target" ]; then
-              target_allowed=1
-              break
-            fi
-          done
-          if [ "$target_allowed" -ne 1 ]; then
-            printf '::error::repository_dispatch authorization rejected target=%s because it is absent from the configured exact repository allowlist.\n' "${TARGET_REPOSITORY:-<empty>}"
             exit 1
           fi
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
