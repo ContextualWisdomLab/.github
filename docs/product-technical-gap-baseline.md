@@ -4053,3 +4053,32 @@ something absent) held for the wardnet correction; the EgressWeave correction is
 verifying "library X can't do Y" requires reading X's own policy/configuration surface, not just its
 README/marketing feature list, before recommending against adoption. Saved to
 `feedback_verify_org_wide_before_declaring_unstarted.md`.
+
+## `newsdom-api#784` — reusable-workflow-call job wrongly required an `env:` key it cannot have — fixed, 2026-09-03
+
+**Trigger.** Autofix `<ci-monitor-event>` flagged `ContextualWisdomLab/newsdom-api#784` ("ci(workflows): use
+central reusable dependency-review.yml") with two failing checks, `quality-gate` and `pytest`.
+
+**Root cause.** `newsdom-api`'s repo-local contract test
+`tests/test_workflow_runtime_env.py::test_each_workflow_job_forces_javascript_actions_to_node24` asserted
+`job_data["env"]["FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"] is True` for every job in every workflow file. PR #784
+added a `dependency-review` job shaped as `uses: ContextualWisdomLab/.github/.github/workflows/dependency-
+review.yml@5f8e5b2a...` (a reusable-workflow-call job). That job shape's GitHub Actions schema supports only
+`name`/`needs`/`if`/`permissions`/`secrets`/`strategy`/`uses`/`with` — it cannot carry an `env:` key at all,
+so the test's blanket assertion raised `KeyError: 'env'` rather than a real safety gap. Confirmed the
+underlying safety property still holds: the *called* workflow's own job, in `.github`'s
+`dependency-review.yml`, already sets `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` in its own `env:` block —
+that workflow's own test is the correct place to guard it, not this caller's.
+
+**Fix.** Added a `if "uses" in job_data: continue` exemption branch (with the reasoning above as an in-file
+comment) to `test_each_workflow_job_forces_javascript_actions_to_node24` in the PR's own branch
+(`consolidate/dependency-review-reusable-workflow`, commit `2ba859e`). Verified locally against the full
+suite before pushing: `uv sync --locked --extra dev && uv run pytest --cov=src/newsdom_api --cov-branch
+--cov-report=term-missing --cov-fail-under=100` → `484 passed`, 100% coverage, matching the CI job's own
+invocation exactly. `quality-gate` and `pytest` turned out to be two independent jobs both running the
+identical `pytest --cov=...` command (confirmed via each job's step list and logs) — one fix resolves both
+without further investigation needed on `quality-gate` specifically.
+
+**Not touched:** an unrelated, pre-existing local modification to `.Jules/palette.md` in the shared scratch
+clone (`/private/tmp/cwl-sweep/newsdom-api`) was left unstaged — verified via `git status --short` before
+`git add` that only the intended test file was staged.
