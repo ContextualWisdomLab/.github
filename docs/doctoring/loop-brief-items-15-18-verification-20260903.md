@@ -1,4 +1,4 @@
-# Loop-brief items 4, 15-18, 39: verified already resolved, no further change needed
+# Loop-brief items 4, 15-18, 38, 39: verified already resolved, no further change needed
 
 ## Context
 
@@ -42,6 +42,34 @@ queued at `2026-09-02T19:32:21Z` — after the fix merged — sitting `queued`
 with no conclusion yet. That is the already-documented org-wide Actions
 job-queue ceiling (#1754), not a recurrence of the repair-deadline bug; no
 separate action taken here.
+
+## Item 38 — auto-PR CodeQL into every new repository
+
+Checked whether new repositories actually get CodeQL coverage, and how. Two
+mechanisms exist, deliberately not overlapping:
+
+- GitHub's native org-level "code scanning default setup" (org code-security
+  configuration id `17`, "GitHub recommended") is attached to exactly 3
+  repositories: `noema`, `feelanet-adfs`, `pg-llm-batch`
+  (`gh api orgs/ContextualWisdomLab/code-security/configurations/17/repositories`).
+  `noema` needs this because it is one of the ruleset's own exclusions below.
+- The org required-workflow ruleset (`18156473`) requires `codeql-pr.yml`
+  (among others) on `repository_name: {include: ["~ALL"], exclude: ["noema",
+  ".github", "IRT-bibliography-set"]}` — `~ALL` is a *dynamic* match, so a
+  brand-new repository is covered from its very first pull request with zero
+  manual or automated action, the moment that PR exists. `.github` runs
+  `codeql-pr.yml` directly on its own `pull_request` trigger instead of via
+  the ruleset (excluding a ruleset's own source repo from being its own
+  target avoids a self-referential double-trigger). `IRT-bibliography-set`
+  has neither mechanism, consistent with its name suggesting a non-code data
+  repository CodeQL would not apply to anyway.
+
+This is a *better* answer than the requested one, not a missing one: a
+required-workflow ruleset with a dynamic `~ALL` target means no PR ever needs
+to be opened into a new repository at all — the central `codeql-pr.yml`
+already enforces itself there automatically, which is exactly this repo's
+own stated preference for centralized, zero-drift required workflows over
+per-repository copies. No action taken.
 
 ## Item 15 — remove `org-queue-sweep` if plain GitHub Actions syntax can do it
 
