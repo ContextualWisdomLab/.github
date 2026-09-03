@@ -409,12 +409,30 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
 
     errors = audit.audit_ruleset(payload)
 
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
     assert "central required workflow .github/workflows/scorecard-pr.yml is configured 2 times" in errors
     assert "exactly two approving reviews are not required" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
     assert "merge and squash are not both allowed merge methods" in errors
+
+
+def test_audit_reports_each_malformed_workflow_entry_by_index() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        "not-a-dict",
+        {"path": 42},
+        {"no_path_key": True},
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
+    assert "central required workflow entry 2 is malformed" in errors
 
 
 def test_audit_handles_malformed_rule_parameter_shapes() -> None:
