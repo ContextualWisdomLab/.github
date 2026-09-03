@@ -64,12 +64,44 @@ mechanisms exist, deliberately not overlapping:
   has neither mechanism, consistent with its name suggesting a non-code data
   repository CodeQL would not apply to anyway.
 
-This is a *better* answer than the requested one, not a missing one: a
-required-workflow ruleset with a dynamic `~ALL` target means no PR ever needs
-to be opened into a new repository at all — the central `codeql-pr.yml`
-already enforces itself there automatically, which is exactly this repo's
-own stated preference for centralized, zero-drift required workflows over
-per-repository copies. No action taken.
+The `~ALL` dynamic-target mechanism is a better answer than a bot-authored
+PR *when it actually fires* — but it didn't always. Devin's review on this
+PR correctly caught that `codeql-pr.yml`'s own `on: pull_request: branches:
+[main, master, develop]` filter is a second, narrower gate underneath the
+ruleset's dynamic target, and it silently produced **zero** CodeQL checks for
+a repository whose default branch has a different name. Verified live before
+the review comment arrived at concluding text: `j-planner` (default branch
+`gh-pages`, real open PR #2 as of this writing) received every other
+required check — `opencode-review`, `noema-review`, `strix`, the
+`security-scan.yml`-bundled `osv-scan`/`trivy-fs`/`scorecard`/`Semgrep
+OSS`/`dependency-review` (that workflow deliberately has no branch
+restriction, "Do not restrict the base ref" per its own comment) — but not
+one `Detect CodeQL languages` or `Analyze (...)` check of any kind. Three
+additional org repositories (`argos`, `OmniRoute`, `graphify` — all forks,
+default branches `developmental`, `release/v3.8.50`, `v8` respectively) were
+equally exposed.
+
+**Fixed**, not just documented: removed the `branches: [main, master,
+develop]` restriction from `codeql-pr.yml`'s `pull_request` trigger, matching
+`security-scan.yml`'s own established "do not restrict the base ref"
+precedent — the ruleset's `ref_name: ["~DEFAULT_BRANCH"]` condition is
+already the authoritative gate for which branch qualifies, so the workflow's
+own hardcoded list was pure redundant risk, not a second layer of intended
+protection. Updated the one contract-test assertion that pinned the old
+line (`tests/test_codeql_pr_workflow_contract.py:19`); the workflow's other
+17 assertions, the CodeQL-action-version-pin test, and the SARIF-gate
+behavioral test all still pass, `actionlint` reports no errors, and the file
+still parses as valid YAML.
+
+**Not fixed here** (Devin's second, independent catch, correct but out of
+this PR's scope): the language-detection matrix in the same workflow only
+recognizes GitHub Actions, JavaScript/TypeScript, Python, and Java/Kotlin —
+CodeQL also supports C/C++, C#, Go, Ruby, and Swift, none of which this
+matrix detects; a repository containing only one of those falls back to
+scanning `actions` alone rather than its real source. That is a larger,
+separately-scoped change (new per-language file-detection heuristics plus
+matching contract-test coverage) rather than a one-line fix, and is tracked
+as a follow-up rather than rushed into this PR.
 
 ## Item 15 — remove `org-queue-sweep` if plain GitHub Actions syntax can do it
 
