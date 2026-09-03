@@ -295,7 +295,6 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         "source_repository": arguments.source_repository,
         "source_sha": arguments.source_sha,
         "evidence_artifact_name": arguments.evidence_artifact_name,
-        "evidence_artifact_digest": arguments.evidence_artifact_digest,
         "predicate_type": arguments.predicate_type,
         "cyclonedx_schema": arguments.cyclonedx_schema,
         "artifacts": {
