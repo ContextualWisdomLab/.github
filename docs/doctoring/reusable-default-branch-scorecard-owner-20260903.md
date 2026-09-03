@@ -53,26 +53,37 @@ jobs:
 ```
 
 Do not add `runs-on`, `steps`, copied Scorecard logic, inherited secrets, or a second concurrency group to the
-caller job. The called owner already serializes by caller repository and ref. A caller-side group with the same
-identity could cancel its own called workflow.
+caller job. The called owner already coalesces duplicate invocations for the caller repository, ref, and exact
+source SHA. A caller-side group with the same identity could cancel its own called workflow.
 
 ## Concurrency decision
 
-Default-branch scans are state snapshots rather than an ordered deployment ledger. When several commits land
-before a runner becomes available, only the newest repository/ref state is authoritative. The owner therefore
-uses one group per `${{ github.repository }}/${{ github.ref }}` with `cancel-in-progress: true`; obsolete scans
-may be cancelled rather than consuming runner boot and SARIF upload capacity.
+GitHub concurrency admission follows event arrival order, not commit ancestry. A group containing only caller
+repository and ref would therefore permit a delayed event for an older commit to cancel a scan already running
+for a newer commit. The owner instead includes `${{ github.repository }}`, `${{ github.ref }}`, and
+`${{ github.sha }}` in the group and uses `cancel-in-progress: true`. Only duplicate invocations for the same
+immutable source revision can cancel one another; distinct revisions never share a cancellation boundary.
 
-This differs deliberately from `Current Head Run Coalescer`: that workflow performs queue-cleanup mutation, so
-its active worker must finish and only the latest pending trigger is retained.
+This choice deliberately does **not** use event arrival as a default-branch history oracle. Cross-revision queue
+cleanup, when needed, belongs to a separate trusted worker that re-fetches the live default-branch SHA and
+revalidates both candidate run identity and commit ancestry immediately before cancellation. Until that guarded
+owner exists, retaining an older scan is safer than allowing it to destroy newer authoritative evidence.
+
+This also differs deliberately from `Current Head Run Coalescer`: that workflow performs queue-cleanup mutation,
+so its active worker must finish and only the latest pending trigger is retained.
 
 ## TDD and rollout evidence
 
 - RED `76617d0a1f4bd0126d0e610362328ace2dd02612`: contract requires `workflow_call`, preserved push/schedule,
-  repository/ref concurrency, immutable action pins, credential hygiene, and SARIF upload behavior while the
-  owner workflow still lacks the reusable/concurrency contract.
-- GREEN `aaf0fa5241348648e43618f949f44b82028abaa2`: owner workflow implements that contract.
-- Focused reconstructed exact-content test: `3 passed`.
+  reusable ownership, immutable action pins, credential hygiene, and SARIF upload behavior while the owner
+  workflow still lacks the reusable contract.
+- GREEN `aaf0fa5241348648e43618f949f44b82028abaa2`: owner workflow implements the initial reusable contract.
+- Review RED `ef88c78aa64b6922f50d4a6a3e34f1900d04694f`: parsed-YAML contracts require the exact-SHA concurrency
+  boundary while production still groups only by repository/ref. The same commit replaces comment-sensitive
+  substring checks with structural YAML assertions.
+- Review GREEN `7f99d560e8eaa9ab2cec46600b3321e9b0700669`: production adds the exact source SHA to the group and records
+  the owner boundary for any future cross-revision cleanup.
+- Focused reconstructed exact-content test before review: `3 passed`.
 - Rollout remains incomplete until the central PR merges and each consumer pins the resulting merge SHA.
 
 ## Consumer acceptance criteria
@@ -86,7 +97,8 @@ For each consumer repository:
 5. Prove a default-branch push or governed canary invokes the central workflow in the caller context, checks out
    the consumer commit, produces Scorecard output, and attempts SARIF upload under the declared permissions.
 6. Confirm the central PR-required Scorecard and default-branch caller do not both trigger for the same event.
-7. Merge through ordinary protection unless the exact central queue-control chicken-and-egg condition applies.
+7. Confirm a delayed older-revision event cannot cancel a newer-revision scan.
+8. Merge through ordinary protection unless the exact central queue-control chicken-and-egg condition applies.
 
 `wardnet#160` and `semantic-data-portal#93` remain open repair branches until these criteria are satisfied; they
 must not be closed merely to reduce the PR count.
@@ -98,6 +110,9 @@ https://docs.github.com/actions/reference/workflows-and-actions/reusing-workflow
 
 GitHub. (2026). *Reuse workflows*. GitHub Docs.
 https://docs.github.com/actions/how-tos/reuse-automations/reuse-workflows
+
+GitHub. (2026). *Control the concurrency of workflows and jobs*. GitHub Docs.
+https://docs.github.com/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
 
 Open Source Security Foundation. (2026). *OSSF Scorecard action*. GitHub.
 https://github.com/ossf/scorecard-action
