@@ -20,6 +20,15 @@ concurrency:
   group: scorecard-analysis-${{ github.repository }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
+# Queue two default-branch pushes into one run rather than letting them stack
+# unbounded; cancel-in-progress stays false (same tradeoff as strix.yml) so a
+# security-scan run for an older main commit is never discarded mid-flight --
+# it still finishes and uploads that commit's SARIF evidence, it is just no
+# longer allowed to run alongside a newer queued push for the same branch.
+concurrency:
+  group: scorecard-analysis-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions: read-all
 
 jobs:
