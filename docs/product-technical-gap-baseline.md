@@ -2689,6 +2689,7 @@ status is no longer settled ground — Keyverse ADR-0014 was updated in the same
 say so plainly and must be re-validated once the org-membership contract is rebuilt on
 whichever PR the `chatgpt/*` stack lands as. Flagging this rather than letting a closed
 upstream PR read as a landed dependency is the point of this entry existing at all.
+
 ## Noema single-request model-control ownership — PR #1672 (2026-09-02)
 
 **Status:** Merged into protected `main` as `a28fc2f4e185df7847e2f2f5f6ec561d1e84805d`; fresh exact-head hosted evidence remains an operational acceptance item.
