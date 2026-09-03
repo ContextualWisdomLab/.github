@@ -16,7 +16,8 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     )
 
     assert "name: CodeQL PR" in workflow
-    assert "branches: [main, master, develop]" in workflow
+    assert "branches: [main, master, develop]" not in workflow
+    assert "Do not restrict the base ref" in workflow
     assert workflow.count("upload: false") == 2
     assert "upload: always" not in workflow
     assert workflow.count("Enforce CodeQL Medium+ SARIF gate") == 2
