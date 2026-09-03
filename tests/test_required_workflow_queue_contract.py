@@ -407,7 +407,12 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     scans for *other* PRs to be blocked by it.
     """
     workflow = workflow_text("strix.yml")
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+    # Isolate the strix: job's own text first: cancel-superseded-pr-runs above
+    # it now carries its own (PR-scoped, dedup-only) concurrency: block, so a
+    # naive first-match split on the bare "concurrency:" literal would grab
+    # that job's block instead of this one.
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
+    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
 
