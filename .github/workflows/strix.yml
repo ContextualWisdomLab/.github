@@ -68,7 +68,7 @@ on:
 
 concurrency:
   # PR-number scope keeps the queue on the current HEAD.
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
