@@ -8,11 +8,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     # No branches: filter, deliberately -- see opencode-review.yml/noema-review.yml's
-    # identical choice. This required-check's org-ruleset target is
-    # `~DEFAULT_BRANCH` (any branch name), not a fixed list; a repository whose
-    # default branch is not literally named main/master/develop would never
-    # fire this trigger, leaving its required CodeQL check permanently absent
-    # rather than passing or failing (Devin Review on `.github#1661`).
+    # identical choice. The org required-workflow ruleset already scopes this
+    # to each repository's actual default branch via ref_name: ["~DEFAULT_BRANCH"],
+    # whatever it is named; a hardcoded [main, master, develop] list silently
+    # produced zero CodeQL checks for any repository with a different default
+    # branch name (confirmed live: a repository defaulting to gh-pages
+    # received every other required check but no CodeQL check at all --
+    # Devin Review on `.github#1661`) and would also block coverage for
+    # stacked PRs targeting a non-default feature branch, matching
+    # security-scan.yml's own "Do not restrict the base ref" precedent.
 
 concurrency:
   group: >-

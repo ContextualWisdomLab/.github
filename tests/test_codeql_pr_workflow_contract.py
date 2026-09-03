@@ -24,6 +24,8 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     trigger_end = workflow.index("\n\n", trigger_start)
     trigger_lines = workflow[trigger_start:trigger_end].splitlines()
     assert not any(line.strip().startswith("branches:") for line in trigger_lines)
+    assert "branches: [main, master, develop]" not in workflow
+    assert "Do not restrict the base ref" in workflow
     assert workflow.count("upload: false") == 2
     assert "upload: always" not in workflow
     assert workflow.count("Enforce CodeQL Medium+ SARIF gate") == 2
