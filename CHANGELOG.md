@@ -24,6 +24,22 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - **Catch scheduler target-list drift before it silently fails an hourly heartbeat.** `hourly-review-repair.yml`'s per-cron `target_repository` matrix and the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`) are two independently hand-maintained lists with no structural link -- three repositories (`governance-risk-compliance`, `nonnest2`, `quarantine-sandbox-runtime`) were added to the hourly matrix without a corresponding variable update, so their hourly heartbeat failed closed with "target repository is not allowlisted" until each was found and fixed the same day. Added `scripts/ci/opencode_repository_dispatch_targets.json`, a hand-maintained mirror of the variable's live value, and a new contract test (`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller target is present in it, so a future PR that repeats the omission fails at review time instead of at the next silent hourly failure. See `docs/doctoring/scheduler-target-list-drift-20260902.md`.
+- **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
+  scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
+  heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
+  `cron: "30 * * * *"` (see `docs/doctoring/actions-queue-saturation-hourly-sweep.md`),
+  and the Python regression `tests/test_actions_queue_saturation_scheduler_cadence.py`
+  was updated to match at the time — but the parallel bash contract in
+  `scripts/ci/test_strix_quick_gate.sh` still asserted the literal old string, so
+  every PR whose required `exact-head-path-policy` check ran this script against a
+  current `main` checkout failed on an assertion the workflow file itself could no
+  longer satisfy, regardless of the PR's own diff. Updated the assertion to the
+  current cron string and corrected an adjacent stale "15-minute organization sweep
+  / 30-minute scheduled scan" description to the current hourly/hourly cadence.
+  Verified: `bash scripts/ci/test_strix_quick_gate.sh` now passes against unmodified
+  `main` (confirmed failing before this fix, on the same clean clone); full suite
+  unaffected (2600+ passed, 100% coverage, 100% docstrings) since this is a
+  bash-only assertion string with no Python-side counterpart to update.
 - **Consolidate the two genuinely duplicate quality-CI callers behind one reusable
   `workflow_call` gate; leave the other six alone.** An audit of the 8
   `.github/workflows/*-quality-ci.yml` bootstrap-templated files found only one pair —
