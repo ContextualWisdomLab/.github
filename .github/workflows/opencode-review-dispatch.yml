@@ -13,11 +13,7 @@ on:
 
 concurrency:
   # PR-number scope keeps stale dispatches replaced for the current head.
-  group: >-
-    opencode-review-repository-dispatch-${{
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number) ||
-    github.run_id }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
