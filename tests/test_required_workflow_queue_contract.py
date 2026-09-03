@@ -281,13 +281,35 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             )
             assert "cancel-in-progress: false" in concurrency_contract
         elif filename == "noema-review.yml":
+            # Job-level (scoped to noema-review only), not workflow-level: a
+            # workflow-level block would put the structurally-separate
+            # cancel-superseded-noema-runs job in the very group it exists to
+            # unblock, deadlocking it behind a long-running older-head review
+            # that (by design) has no wall-clock deadline. Mirrors
+            # opencode-review.yml's own job-level restructuring above.
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
             assert "github.event_name" not in concurrency_contract.split(
                 "cancel-in-progress:", 1
             )[0]
-            assert "github.event.action == 'synchronize'" in concurrency_contract
-            assert "github.event.action == 'closed'" in concurrency_contract
+            # Deliberately NOT scoped by head SHA and deliberately
+            # cancel-in-progress: false -- docs/doctoring/
+            # item13-stale-head-cancellation-audit-20260903.md found that a
+            # workflow-level group with no head-SHA component plus native
+            # cancel-in-progress: true let a delayed, out-of-order
+            # synchronize event for an OLDER head cancel the run already
+            # active for a NEWER, valid head at run-creation time -- before
+            # that older run's own stale-trigger check ever ran. Setting
+            # cancel-in-progress to unconditionally false closes that: the
+            # active run in this group is never preempted by anything
+            # regardless of event arrival order. The structurally separate
+            # cancel-superseded-noema-runs job performs the actual,
+            # live-head-validated retirement instead.
+            assert "cancel-in-progress: false" in concurrency_contract
+            assert "github.event.action == 'synchronize'" not in concurrency_contract
+            assert "github.event.action == 'closed'" not in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -702,9 +724,12 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    # The concurrency block is job-level (scoped to noema-review), not
+    # workflow-level -- see test_required_pull_request_workflows_cancel_
+    # superseded_runs's noema-review.yml branch for the full rationale.
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
 
-    assert "workflow_run:" not in concurrency_contract
+    assert "\n  workflow_run:" not in workflow
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
@@ -712,9 +737,9 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "github.event.action == 'synchronize'" in concurrency_contract
-    assert "github.event.action == 'closed'" in concurrency_contract
-    assert "cancel-in-progress: true" not in concurrency_contract
+    assert "github.event.action == 'synchronize'" not in concurrency_contract
+    assert "github.event.action == 'closed'" not in concurrency_contract
+    assert "cancel-in-progress: false" in concurrency_contract
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 

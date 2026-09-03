@@ -37,7 +37,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
         workflow_step(
             workflow_text("noema-review.yml"),
             "Cancel queued and running Noema reviews for the closed pull request",
-        ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
+        ).split("        run: |\n", 1)[1].split("\n  cancel-superseded-noema-runs:", 1)[0]
     )
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {
@@ -381,7 +381,9 @@ def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
     single-repository scan that also dispatches a review and updates a branch.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split("\n  noema-review:\n", 1)[0]
+    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split(
+        "\n  cancel-superseded-noema-runs:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is not None, "cancel-closed-pr-runs must declare a job-level timeout-minutes"

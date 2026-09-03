@@ -3,6 +3,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -32,24 +33,36 @@ def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
 def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     """Pin the invariants this cancellation mechanism must hold together.
 
-    Several Devin Review rounds landed on this same cancellation mechanism in
-    one day (see the matching ``docs/product-technical-gap-baseline.md``
-    entry for the full narrative), each closing a gap the previous fix left
-    open:
+    ``docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`` found
+    a real, confirmed race: GitHub evaluates a workflow's concurrency group
+    at run-creation time, before any job or step runs, using only the
+    triggering event's payload. A workflow-level group shared by every push
+    to a PR, combined with native ``cancel-in-progress: true``, meant a
+    delayed, out-of-order ``synchronize`` event for an OLDER head could
+    cancel the run already active for a genuinely NEWER, valid head --
+    before that older run's own "Reject a stale trigger" step ever got a
+    chance to self-abort. The fix mirrors strix.yml's
+    ``cancel-superseded-pr-runs`` and opencode-review.yml's
+    ``cancel-superseded-opencode-review-runs``: ``noema-review`` now carries
+    its own job-level concurrency group with cancel-in-progress
+    unconditionally ``false`` (nothing in that group is ever natively
+    preempted, so event arrival order can no longer matter), and a
+    structurally separate ``cancel-superseded-noema-runs`` job -- with no
+    concurrency block of its own, so it is never blocked by that group --
+    performs the actual, live-head-validated retirement via a direct Actions
+    API call.
 
     1. A live new-head trigger must cancel a still-running older-head run of
        the same PR (proven end to end by
        ``test_superseded_cleanup_preserves_current_and_newer_run_ids``,
        executing the real production jq selector).
-    2. A delayed ``workflow_run``/``repository_dispatch`` completion for an
-       OLDER head must never cancel a genuinely current run -- pinned here by
-       the head-inclusive concurrency group assertions below (native
-       protection, independent of this step) AND by the step-level ``if:``
-       gate restricting this explicit cancellation entirely to live
-       ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
-       execution never even reaches this step.
+    2. A native, run-creation-time cancellation must never be able to kill a
+       genuinely current run regardless of event arrival order -- pinned here
+       by the job-level concurrency assertions below: cancel-in-progress is
+       unconditionally ``false``, not conditioned on ``github.event.action``
+       at all, so no arrival order lets one run preempt another natively.
     3. A cancellation step whose OWN trigger was confirmed live at the start
-       of the job must still never cancel a run dispatched AFTER its own
+       of its job must still never cancel a run dispatched AFTER its own
        dispatch, even though its own multi-pass scan can take long enough in
        wall-clock time for such a run to appear in the active-runs listing:
        proven by ``test_superseded_cleanup_preserves_current_and_newer_run_ids``
@@ -62,27 +75,46 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        ``test_superseded_cleanup_survives_a_transient_live_head_lookup_failure``.
     """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
-    assert "github.event.workflow_run" not in concurrency
-    assert "github.event.action == 'synchronize'" in concurrency
-    assert "github.event.action == 'closed'" in concurrency
-    assert "cancel-in-progress: true" not in concurrency
+
+    # No workflow-level concurrency block: that would put
+    # cancel-superseded-noema-runs (below) in the very group it exists to
+    # unblock, deadlocking it behind a long-running older-head review that
+    # (by design) has no wall-clock deadline. Concurrency is job-level only,
+    # scoped to the noema-review job (4-space indent).
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert re.search(r"(?m)^    concurrency:", workflow)
+
+    concurrency_group = workflow.split("concurrency:", 1)[1].split("cancel-in-progress:", 1)[0]
+    assert "github.event.workflow_run" not in concurrency_group
+    assert "noema-review-${{" in concurrency_group
+    assert "github.event.action" not in concurrency_group
+    assert re.search(r"cancel-in-progress:\s*false\b", workflow)
+
     assert "Cancel superseded Noema runs after live-head validation" in workflow
-    assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
-        "Cancel superseded Noema runs after live-head validation"
+    # The cancellation job now runs structurally separately from, and BEFORE
+    # (in file order, matching job execution order), the noema-review job it
+    # protects -- it is no longer a step nested inside that job.
+    assert workflow.index("Cancel superseded Noema runs after live-head validation") < workflow.index(
+        "Reject a stale trigger before credential or model setup"
     )
-    cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
-    job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
-    assert "actions: write" in job_header
-    # Invariant 2 (step-level half): only a live pull_request_target trigger
-    # may even attempt this cancellation -- workflow_run and
-    # repository_dispatch executions (which can legitimately be delayed by
-    # hours) skip this step entirely and rely solely on the head-inclusive
-    # concurrency group above.
-    assert (
-        "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''"
-        in cleanup
+    cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1].split(
+        "\n  noema-review:", 1
+    )[0]
+    cancel_job_header = workflow.split("\n  cancel-superseded-noema-runs:", 1)[1].split(
+        "    steps:", 1
+    )[0]
+    assert "actions: write" in cancel_job_header
+    review_job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
+    assert re.search(r"(?m)^      actions: write$", review_job_header) is None, (
+        "the Actions-cancel write permission moved to cancel-superseded-noema-runs; "
+        "noema-review no longer calls that API"
     )
+    # Invariant 2 (step-level half): this step now also runs for
+    # repository_dispatch retries (which share noema-review's concurrency
+    # group and need the same unblocking path), gated only on a resolved PR
+    # number -- the job-level `if:` above already restricts which trigger
+    # types reach this step at all.
+    assert "if: env.PR_NUMBER != ''" in cleanup
     assert 'select(.id < $current)' in cleanup
     # The live-head re-check must be error-guarded (an `if !` command
     # substitution), never a bare assignment under set -euo pipefail -- a

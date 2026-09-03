@@ -32,10 +32,18 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 5)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
-        """Require every Noema Review job to use explicit Ubuntu 24.04."""
+        """Require every Noema Review job to use explicit Ubuntu 24.04.
+
+        3, not 2: docs/doctoring/item13-stale-head-cancellation-audit-20260903.md's
+        fix split the live-head-validated cancellation logic out of the
+        noema-review job into its own structurally separate
+        cancel-superseded-noema-runs job (mirroring strix.yml's
+        cancel-superseded-pr-runs and opencode-review.yml's
+        cancel-superseded-opencode-review-runs), a third job on this image.
+        """
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
 
 
 if __name__ == "__main__":
