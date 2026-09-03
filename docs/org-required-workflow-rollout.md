@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-28 KST
+Updated: 2026-09-03 KST
 
 ## Decision
 
@@ -12,11 +12,17 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths:
+- Active required workflow paths (live-verified 2026-09-03, nine entries — this
+  list previously undercounted by omitting `scorecard-pr.yml` and
+  `osv-scanner-pr.yml`, added to the ruleset weeks earlier per the "CodeQL
+  ruleset gap" fix but never reflected here; see the 2026-09-03 entry below for
+  why `codeql-pr.yml` is deliberately absent):
   - `.github/workflows/close-empty-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
+  - `.github/workflows/osv-scanner-pr.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
+  - `.github/workflows/scorecard-pr.yml`
   - `.github/workflows/security-scan.yml`
   - `.github/workflows/strix.yml`
   - `.github/workflows/sast-semgrep.yml`
@@ -101,18 +107,36 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
-The central `.github/workflows/codeql-pr.yml`, `.github/workflows/scorecard-pr.yml`,
-and `.github/workflows/osv-scanner-pr.yml` workflows supply PR-head and merge-preview
-code scanning analyses for ruleset `18156473` `code_scanning` (CodeQL, Scorecard,
+**Correction (2026-09-03): `codeql-pr.yml` is no longer part of the required
+set.** Every ruleset-injected run of it, in every one of the ~71 covered
+repositories, concluded `startup_failure` with zero check runs ever created —
+GitHub disallows `github/codeql-action/init` and `github/codeql-action/analyze`
+inside a required workflow (a platform restriction, not a configuration
+defect; the REST API surfaces no reason, only the run page's web UI
+annotation does). It was removed from ruleset `18156473`'s required
+`workflows` list; see the 2026-09-03 dated entry below for the full
+investigation, the coverage-gap check performed before removing it, and the
+23 repositories that were given real CodeQL coverage via GitHub's native
+`code-scanning/default-setup` as part of the same fix. The paragraphs below
+describe the mechanism as it was designed and as it still applies to
+`scorecard-pr.yml`/`osv-scanner-pr.yml`, which remain required and
+functioning; do not re-add any workflow using `github/codeql-action` to a
+required-workflow ruleset entry.
+
+The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml`
+workflows supply PR-head and merge-preview
+code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
 osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
 Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
+`.github/workflows/codeql-pr.yml` used the same trigger shape and merge-preview
+technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
+`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
+the ephemeral merge ref OID) before its removal above.
 
-CodeQL merge preview checks out `refs/pull/<n>/merge` and uploads SARIF with
-`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit,
-not the ephemeral merge ref OID.
-
-Repository-local `codeql.yml` push/default-branch scans may remain for branch
-history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.
+Repository-local `codeql.yml` push/default-branch scans, or GitHub's native
+`code-scanning/default-setup`, are now the only source of CodeQL coverage —
+PR merge gates cannot rely on a central required-workflow CodeQL check for the
+platform reason above.
 
 ### Repository-local CodeQL inventory (2026-07-04)
 
@@ -201,7 +225,11 @@ The active ruleset no longer maintains a repository-name allowlist. Live
 ruleset inspection on 2026-07-02 18:15 KST reports
 `repository_name.include=["~ALL"]`, so all current and future organization
 repositories inherit the seven central required workflows on their default
-branch unless a later ruleset exclusion is added. The table below is the public
+branch unless a later ruleset exclusion is added. **The required-workflow
+count has since changed** — see the "Active required workflow paths" list
+under Decision above for the live count (nine as of 2026-09-03); this
+paragraph's "seven" reflects the 2026-07-02 inspection it cites, not the
+current state. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 | Repository | Visibility | Default branch | Flow | Open PRs | Local central-workflow copies on default branch | Rollout status |
@@ -238,6 +266,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 ## Evidence from this rollout
 
+- On 2026-09-03 12:20 KST, ruleset `18156473` was updated to remove `.github/workflows/codeql-pr.yml` from its required `workflows` list, bringing the count to nine. Every ruleset-injected run of that workflow, in every one of the ~71 covered repositories, had concluded `startup_failure` with zero check runs ever created — the REST API surfaces no reason, but the run page's web UI "Annotations" panel does: `github/codeql-action/init` and `github/codeql-action/analyze` are categorically disallowed inside a required workflow, a GitHub platform restriction confirmed by independent web corroboration, not a defect in the workflow file's own content. Before treating removal as safe, real CodeQL coverage was ground-truth-verified (via `code-scanning/analyses`, not workflow-file-name pattern matching — some repositories run CodeQL from unexpectedly-named files, e.g. `contextual-orchestrator`'s coverage comes from `security.yml:codeql_analysis`) across all 71 covered repositories: 48 already had real coverage from a local workflow or GitHub's native default-setup; 23 (`CalendarWeave`, `ConceptWeave`, `DiagramWeave`, `ELUNVERA`, `EmbedRelay`, `LineageWeave`, `Orgmetra`, `OriginWeave`, `PolicyWeave`, `TEPP`, `accounting-information-platform`, `context-graph-contracts`, `disksage`, `enterprise-architecture-core`, `j-planner`, `learning-content-studio`, `learning-interoperability-contracts`, `learning-management-platform`, `learning-record-store`, `life-os`, `pingora-gateway`, `quarantine-sandbox-runtime`, `supply-chain-control-plane`) had none from any source and were given GitHub's native `code-scanning/default-setup` (`trivy-sarif-repro` excluded — an archived, explicitly-throwaway repro repository, not a real coverage gap). `.github#1768` records this in `docs/product-technical-gap-baseline.md`.
 - On 2026-08-28 21:43 KST, ruleset `21732164` was created with active enforcement for every non-default branch. Reproduction on an existing LineageWeave PR head and a new branch returned GH013 before either ref could emit the required workflow event. The ruleset was returned to `evaluate` mode at 21:49 KST; the audit now fails if this impossible all-ref contract is reactivated.
 
 - On 2026-06-30 08:33 KST, organization ruleset `18156473` was changed from an explicit repository-name list to `repository_name.include=["~ALL"]` while keeping `ref_name.include=["~DEFAULT_BRANCH"]` and the same three central required workflow paths from `.github@refs/heads/main`.
