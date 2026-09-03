@@ -2686,7 +2686,7 @@ real Batch API should be gated to agents that actually support it, rather than a
 model), before doing any new investigation.
 
 **Verified: yes, it does, correctly.** PR `ContextualWisdomLab/contextual-orchestrator#1021` (`fix(batch): gate real Batch API on declared
-batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`) adds an explicit
+batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`, head `ecac975d8bff2090027ca13b44f94c020548466b` as of this verification — re-check that exact commit, not just the PR number, since it can move) adds an explicit
 `ModelAgent.batch_endpoint_supported: bool | None` field — mirroring the existing
 `reasoning_effort_supported` capability-declaration pattern — and changes `batch_chat()`'s routing so
 the real async Batch API (`/files`, `/batches`, `/files/{id}/content`) is only ever addressed when
@@ -2991,7 +2991,6 @@ regularly-running workflow (checking a live org/repo variable requires network a
 repo's offline `pytest tests` suite) — left as an open follow-up in the doctoring record rather than
 implemented, to keep this fix a pure test-and-mirror addition with zero risk to production scheduler
 workflows.
-**Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
 
 ## 2026-09-03 backlog items 4/39 follow-up: a second, later timeout fix on top of PR #1672
 
