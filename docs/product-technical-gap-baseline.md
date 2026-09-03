@@ -2856,7 +2856,10 @@ recurring in a new subsystem.
 ## Item 7 (EgressWeave/wardnet adoption in contextual-orchestrator) — "zero work started" claim corrected, then own "EgressWeave incompatible" conclusion corrected — 2026-09-03
 
 **Status:** Investigated via direct code reading (fresh clone), then re-verified via a 9-agent workflow after
-user pushback. Not a code change. Full record:
+user pushback, then further refined after Devin's automated PR review correctly challenged the redesign
+sketch's client-lifecycle/resolver-seam/timeout-scoping details (all three verified against EgressWeave's
+source; corrected recommendation now uses only `egressweave.validate_egress_url_details()`, not the full
+`build_egress_sync_client()` transport). Not a code change. Full record:
 `docs/doctoring/egressweave-wardnet-adoption-audit-contextual-orchestrator-20260903.md`.
 
 **First correction.** This session had earlier reported item 7 to the user as "손도 안 됨" (zero work started,

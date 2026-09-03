@@ -1,6 +1,6 @@
 # Doctoring record: EgressWeave/wardnet adoption audit for contextual-orchestrator (2026-09-03)
 
-- **Date:** 2026-09-03 (revised same day — see "Correction" below)
+- **Date:** 2026-09-03 (revised twice same day — see "Correction" and "Correction 2" below)
 - **Subject:** backlog item 7 — "각종 통신 보안 이슈는 EgressWeave 그리고 wardnet을 이용해서 처리하는 쪽으로
   이관 바람" (migrate communication-security concerns to EgressWeave and wardnet). This session had
   previously reported item 7 to the user as "손도 안 됨" (zero work started) based on a shallow read; a first
@@ -19,6 +19,49 @@ tested "local-development exception" (`EgressPolicy(allow_local=True)`) built fo
 corrected findings replace Finding 2 and Finding 3 below; Findings 1 and 4 are unaffected. This also surfaced
 several genuine, previously-unverified gaps in `ModelClient`'s own transport (Finding 5) that EgressWeave
 would close — the opposite of this record's original, too-confident dismissal.
+
+## Correction 2 — 2026-09-03, same day, review feedback on this PR
+
+Devin's automated review on this PR (comment IDs `3922894674`, `3923057235`, `3923057436`, `3923057593`)
+correctly challenged the *first correction's* own redesign sketch on three technical points, each verified
+directly against EgressWeave's source rather than taken on faith:
+
+1. **"`build_egress_sync_client` resolves aliases internally and exposes no resolver seam."** Confirmed:
+   `ValidatedEgressURL` (`validation.py:55-75`) is a frozen, `init=False` dataclass whose `__init__`
+   unconditionally raises `TypeError("ValidatedEgressURL objects must come from a validation function")`;
+   results are only ever produced by `_make_validated_egress_url`, which stamps an HMAC integrity signature
+   (`_validated_egress_url_signature`) no external caller can forge. There is no code-level hook to hand the
+   library a pre-resolved address for an alias. The real mechanism is one level down: `_resolve_all_global_addresses`
+   calls plain `socket.getaddrinfo(hostname, port, ...)` — the OS resolver — so an alias only works if it is a
+   *genuinely resolvable hostname* (an `/etc/hosts` entry, a container DNS alias, or equivalent) that
+   `getaddrinfo` itself resolves to `127.0.0.1`, not an in-process Python-level override "in front of"
+   EgressWeave. The original sketch's "small resolver in front of EgressWeave's own DNS resolution" wording
+   was imprecise in exactly the way Devin flagged.
+2. **"Calling `build_egress_sync_client` per request discards pooling and repeats DNS validation... needs
+   bounded, origin-specific clients with deterministic closure."** Correct as a critique of adopting
+   `build_egress_sync_client`/the full `httpx.Client` transport for `ModelClient`. This is resolved by not
+   adopting that entry point at all — see the revised Finding 2 recommendation below, which uses only the
+   validation function and leaves `ModelClient`'s existing (already poolless, open-per-request)
+   `http.client` transport untouched. No client-lifecycle question is introduced.
+3. **"EgressWeave caps connect, read, write, and pool waits through one transport. It cannot govern only
+   connection establishment as proposed without redesign."** Confirmed at the source: `EgressTimeoutPolicy`
+   (`timeout_policy.py:26-66`) is a frozen dataclass with four independent phase ceilings
+   (`connect_timeout_seconds`, `read_timeout_seconds`, `write_timeout_seconds`, `pool_timeout_seconds`, each
+   default `5.0`), and `__post_init__` unconditionally rejects a non-finite value for *any* of them
+   ("`{field} must be finite and greater than zero`") — so a caller cannot request an unbounded read/write
+   timeout, and that ceiling is baked into the SAME `_PinnedEgressTransport` that performs the pinned
+   connect-and-read as one atomic operation (splitting "validate/connect" from "read/write" across two
+   different clients would reopen exactly the DNS-rebinding window pinning exists to close). The original
+   sketch's claim that EgressWeave could be "scoped narrowly to the connection-establishment phase only" while
+   keeping request/response timeout separate does not hold for `build_egress_sync_client`. **It does hold**
+   for the narrower `validate_egress_url_details`-only integration adopted in the revised Finding 2: that
+   function has no `httpx` dependency at all and governs only its own independent, always-finite
+   `dns_timeout_seconds` — it never touches request read/write timeouts, so there is nothing to "scope" or
+   reconcile with `ModelClient.timeout` in the first place.
+
+Findings 2 and 5 below are revised to reflect this narrower, verified integration. The corrected
+recommendation is unaffected in substance — EgressWeave adoption remains not blocked by the local-provider
+requirement — but the *mechanism* is now the validation function, not the full client builder.
 
 ## Method
 
@@ -75,17 +118,20 @@ rejects an IP literal as the authority hostname even under `allow_local=True`
 (`_is_ip_literal`/`_looks_like_ip_literal`, `validation.py:358-367`, proven by
 `_validate_remote_authority_is_allowed`). So today's exact `base_url` strings cannot be handed to EgressWeave
 verbatim. **That is an integration task (alias local providers to a bare single-label hostname instead of a
-raw IP, with a small resolver mapping the alias back to the right loopback address), not a library
-incompatibility** — the distinction the original version of this record collapsed.
+raw IP), not a library incompatibility** — the distinction the original version of this record collapsed.
 
-**Corrected recommendation:** EgressWeave adoption for `ModelClient`'s provider-request path is *not* blocked
-by the local-provider requirement. It is a real, buildable integration — construct one `EgressPolicy` per
-`ModelClient` instance from the configured `ModelAgent.base_url` list (remote `http(s)://` hosts pass through
-unchanged; each `mlx://`/`local://` agent gets a synthesized bare-hostname alias, e.g. `mlx-lm-local`, backed
-by a small alias→loopback resolver in front of EgressWeave's own DNS resolution), replacing
-`_open_provider`/`_connect_validated` with `build_egress_sync_client(url, policy=policy)`. This is a genuine,
-scoped implementation task for `contextual-orchestrator`'s own repo — not done in this record (see "What
-remains open" below) — not a recommendation against adoption.
+**Corrected recommendation, revised again after review (see "Correction 2" below):** EgressWeave adoption for
+`ModelClient`'s provider-request path is *not* blocked by the local-provider requirement. The right-sized
+integration uses only EgressWeave's **validation function**
+(`egressweave.validate_egress_url_details(url, policy=policy) -> ValidatedEgressURL | None`, a pure DNS+SSRF
+check with its own independent `dns_timeout_seconds` and zero dependency on `httpx`/request execution — see
+`src/egressweave/validation.py`'s imports) as a drop-in replacement for `ModelClient._validate_provider`'s
+~40 lines of hand-rolled `socket.getaddrinfo`/`ipaddress` validation, returning the same
+`(hostname, port, addresses)` shape `_connect_validated` already consumes today. `ModelClient`'s own
+`http.client`-based transport, retry/backoff, streaming, and timeout handling are otherwise **unchanged** —
+this deliberately does *not* adopt `build_egress_sync_client`'s full `httpx.Client` (see Finding 5's
+correction for why). This is a genuine, scoped implementation task for `contextual-orchestrator`'s own repo —
+not done in this record (see "What remains open" below) — not a recommendation against adoption.
 
 ## Finding 3 (retracted): the "asymmetry" in the original record was a misreading — `_validate_provider` already does the conditional filtering
 
@@ -150,19 +196,24 @@ evidenced gaps EgressWeave's feature set would close — the opposite of the ori
   decompression-bomb path is incidental to `http.client` not auto-negotiating compression, not an intentional
   "force identity" design decision the way EgressWeave documents it.
 
-**Timeout-model tension — real but not a blocker if scoped correctly, with one unverified sub-claim flagged.**
-This org has a standing "no default Application/Agent/Gateway timeout ceiling" directive
-(confirmed live in this same worktree's own recent history: commit `69e80bd`, "remove the 300s LLM_TIMEOUT
-cap" from `strix.yml`), and `ModelClient.timeout` is architecturally the same shape — an unbounded, fully
-overridable default, not an enforced ceiling. If EgressWeave's transport were adopted wholesale as "the"
-timeout authority, that would conflict with this precedent. But scoped correctly — EgressWeave governing only
-the connection-establishment/DNS-resolution/SSRF-policy phase inside `_open_provider`/`_connect_validated`,
-while `ModelClient.timeout`, retries, backoff, and candidate failover stay exactly where they are today, fully
-operator-configurable — the two layers don't actually conflict. **Caveat carried forward honestly:** the
-claim that "EgressWeave enforces an immutable timeout ceiling" was asserted from its README's feature list in
-this investigation but never verified against EgressWeave's own source the way the SSRF/allowlist question
-was (none of the cited `validation.py`/`policy.py` lines touch timeout logic) — treat that specific claim as
-unconfirmed until it gets the same source-line verification, not as a settled premise.
+**Timeout-model tension (revised in Correction 2, now source-verified both ways) — real for the full client
+builder, moot for the validation-only integration this record now recommends.** This org has a standing "no
+default Application/Agent/Gateway timeout ceiling" directive (confirmed live in this same worktree's own
+recent history: commit `69e80bd`, "remove the 300s LLM_TIMEOUT cap" from `strix.yml`), and `ModelClient.timeout`
+is architecturally the same shape — an unbounded, fully overridable default, not an enforced ceiling.
+**Verified this is a real conflict for `build_egress_sync_client`:** `EgressTimeoutPolicy`
+(`timeout_policy.py:26-66`) unconditionally requires all four phase timeouts (connect/read/write/pool) to be
+finite and positive — `__post_init__` raises `ValueError` on any non-finite value — so a `ModelClient` calling
+`chat()` with `timeout=None` (fully supported and used today) could never be honored by that transport; EgressWeave
+would force some finite ceiling onto every request regardless of operator intent. **But this tension only
+applies if `build_egress_sync_client`'s full transport is adopted**, which Correction 2 above already ruled
+out for other reasons (client lifecycle, no resolver seam for the local-provider alias). The recommended
+narrower integration — calling only `validate_egress_url_details(url, policy=policy)` as a validation utility
+— has zero request-timeout entanglement (confirmed: `validation.py` never imports `httpx`; the function's only
+timing constraint is its own independent, always-finite `dns_timeout_seconds`, a bounded DNS lookup deadline
+that is uncontroversial and unrelated to how long an LLM inference call may run). So for the integration this
+record actually recommends, there is nothing to reconcile: `ModelClient.timeout`, retries, backoff, and
+candidate failover stay exactly where they are today, fully operator-configurable including unbounded.
 
 **Docs cross-check, one risk flagged:** `docs/planning/adrs/0032-model-group-cost-aware-discovery.md:53-56`
 states "Wardnet, not this Python service, owns destination policy, DNS pinning, redirects, and body limits" —
@@ -203,8 +254,12 @@ ADR sentence to the audited path here, that would be a misreading worth catching
   already-known `TaskOrchestrator._invoke` overall-deadline gap).
 - `ContextualWisdomLab/EgressWeave` (cloned fresh for the correction pass): `src/egressweave/validation.py`,
   `src/egressweave/policy.py`, `docs/security-model.md`, `tests/test_allow_local_security.py`,
-  `tests/test_exact_local_allowlist.py`; plus an executed proof-of-concept against the real source. PyPI
-  `egressweave` 0.1.0.
+  `tests/test_exact_local_allowlist.py`; plus an executed proof-of-concept against the real source. For
+  Correction 2 (Devin review feedback), additionally: `src/egressweave/sync_transport.py`
+  (`build_egress_sync_client`, `build_pinned_https_client`), `src/egressweave/timeout_policy.py`
+  (`EgressTimeoutPolicy`), and `src/egressweave/__init__.py`'s `__all__` (confirming
+  `validate_egress_url_details` is a public, documented standalone entry point, not an internal helper).
+  PyPI `egressweave` 0.1.0.
 - `conductor/tracks/003-autonomous-pr-ecosystem-loop/plan.md` (contextual-orchestrator repo) — the existing
   org-wide observation ("`egressweave`, `wardnet` — shared security infra... other services should be
   consuming rather than reinventing") this record narrows to a specific, evidenced finding for one repo.
