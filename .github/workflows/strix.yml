@@ -17,6 +17,9 @@ on:
     # no build scripts). A diff touching even one non-listed file still scans.
     # The weekly full-tree schedule below re-scans protected branches with no
     # path filter, backstopping every path.
+    # This filter is only evaluated for natively-triggered runs. Repositories
+    # covered by org ruleset 18156473 have every 'on:' filter ignored; the
+    # job-level gate below is what skips them.
     paths-ignore:
       - '**/*.md'
       - '**/*.markdown'
@@ -35,9 +38,11 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, closed]
     # Same conservative doc/image-only skip for PR scans. GitHub evaluates these
-    # path filters against the PR's full base..head diff, so a PR is skipped only
-    # when EVERY changed file is a non-executable doc/image asset; any code,
-    # config, build, or workflow change still triggers the scan. The run-name
+    # path filters only for natively-triggered runs -- i.e. in the three
+    # repositories ruleset 18156473 excludes (.github, noema,
+    # IRT-bibliography-set). In every other repository the ruleset ignores
+    # them, so the same doc/image-only decision is enforced by the
+    # changed-scope job below. The run-name
     # includes the PR number and head SHA for status grouping, while the
     # concurrency group is scoped per repository and event class to prevent
     # shared-provider key rate-limit storms. Strix runs intentionally do not
@@ -77,6 +82,68 @@ permissions:
   models: read
 
 jobs:
+  changed-scope:
+    name: Detect changed scope
+    # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
+    # runs this workflow in another repository, and a trigger-level skip would
+    # leave `.github`'s classic required contexts Pending forever. Both
+    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
+    # here and consumed through `needs`. See
+    # docs/doctoring/required-workflow-path-filter-boundary.md.
+    # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
+    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      deps: ${{ steps.scope.outputs.deps }}
+    steps:
+      - name: Classify changed paths
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
+
   cancel-superseded-pr-runs:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
     runs-on: ubuntu-24.04
@@ -180,7 +247,8 @@ jobs:
           done
 
   strix:
-    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    needs: changed-scope
+    if: (github.event_name != 'pull_request_target' || github.event.action != 'closed') && needs.changed-scope.outputs.code == 'true'
     concurrency:
       # Keep provider-backed scans serial per repository and event class while
       # allowing the trusted cleanup job above to retire an obsolete head now.
