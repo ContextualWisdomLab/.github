@@ -3,8 +3,9 @@
 - Centralize OSSF Scorecard execution, SARIF filtering, and code-scanning upload in
   `.github/workflows/scorecard-analysis.yml` while preserving the canonical owner's
   default-branch push and weekly schedule and exposing a `workflow_call` contract.
-- Restrict duplicate cancellation to the same caller repository, ref, and exact
-  source SHA so a delayed old event cannot cancel a newer authoritative scan.
+- Keep the ref-scoped, `cancel-in-progress: false` concurrency group `.github#1768`
+  already established (queue rather than cancel a burst of same-ref pushes, so an
+  in-flight scan's SARIF evidence for its own commit is never discarded).
 - Keep consumer rollout incomplete until each repository replaces copied logic with
   a thin caller pinned to the central merge commit SHA, declares the required caller
   token permissions, preserves its actual default-branch and schedule triggers,

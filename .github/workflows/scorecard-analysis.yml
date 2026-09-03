@@ -10,21 +10,16 @@ on:
   # trigger and delegate every implementation step to this versioned owner.
   workflow_call:
 
-# Coalesce only duplicate invocations for the same immutable source revision.
-# GitHub orders concurrency admission by event arrival, not commit ancestry, so a
-# repository/ref-only group would let a delayed old event cancel a newer scan.
-# Cross-revision cleanup belongs to a worker that revalidates the live default
-# branch SHA immediately before cancellation; this workflow never assumes event
-# arrival order is repository-history order.
-concurrency:
-  group: scorecard-analysis-${{ github.repository }}-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: true
-
 # Queue two default-branch pushes into one run rather than letting them stack
 # unbounded; cancel-in-progress stays false (same tradeoff as strix.yml) so a
 # security-scan run for an older main commit is never discarded mid-flight --
 # it still finishes and uploads that commit's SARIF evidence, it is just no
 # longer allowed to run alongside a newer queued push for the same branch.
+# (This deliberately does NOT scope by exact SHA: a ref-scoped group with
+# cancel-in-progress: false is what bounds runaway concurrent Scorecard scans
+# across a burst of pushes -- SHA-scoping would give every distinct commit its
+# own group, restoring unlimited-parallel-scans, the exact resource-consumption
+# problem this group exists to prevent. See #1768.)
 concurrency:
   group: scorecard-analysis-${{ github.ref }}
   cancel-in-progress: false

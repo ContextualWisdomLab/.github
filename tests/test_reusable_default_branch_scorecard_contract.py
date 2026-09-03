@@ -284,16 +284,27 @@ def test_scorecard_analysis_is_reusable_without_losing_branch_history_triggers()
     )
 
 
-def test_scorecard_analysis_coalesces_only_duplicate_exact_revision_runs() -> None:
-    """An old delayed event must never cancel a newer revision scan."""
+def test_scorecard_analysis_never_discards_an_in_flight_scans_evidence() -> None:
+    """A newer queued push must never cancel an older scan mid-flight.
+
+    .github#1768 (merged before this PR's own concurrency work landed) already
+    added a ref-scoped, cancel-in-progress: false group to this file for
+    exactly this reason: an in-flight Scorecard run's SARIF evidence for its
+    own commit must never be discarded, only serialized behind. This PR's own
+    earlier draft added a second, SHA-scoped, cancel-in-progress: true group to
+    the same file -- a real, independently-reasoned fix for a different
+    concern (the #1568-class stale-cancels-fresh race), but mutually exclusive
+    with #1768's group as a single `concurrency:` block: SHA-scoping gives
+    every distinct commit its own group, which would restore unbounded
+    concurrent scans across a push burst -- the exact problem #1768 closed,
+    and a direct regression of this org's standing Actions-queue-congestion
+    priority. Kept #1768's group as authoritative.
+    """
     workflow_contract = _load_workflow_contract()
 
     assert _mapping_contract(workflow_contract, ("concurrency",)) == {
-        "group": (
-            "scorecard-analysis-${{ github.repository }}-${{ github.ref }}-"
-            "${{ github.sha }}"
-        ),
-        "cancel-in-progress": "true",
+        "group": "scorecard-analysis-${{ github.ref }}",
+        "cancel-in-progress": "false",
     }
 
 

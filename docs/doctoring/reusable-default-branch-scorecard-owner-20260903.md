@@ -53,21 +53,30 @@ jobs:
 ```
 
 Do not add `runs-on`, `steps`, copied Scorecard logic, inherited secrets, or a second concurrency group to the
-caller job. The called owner already coalesces duplicate invocations for the caller repository, ref, and exact
-source SHA. A caller-side group with the same identity could cancel its own called workflow.
+caller job. The called owner already coalesces same-ref invocations; a caller-side group with an overlapping
+identity could cancel its own called workflow.
 
 ## Concurrency decision
 
-GitHub concurrency admission follows event arrival order, not commit ancestry. A group containing only caller
-repository and ref would therefore permit a delayed event for an older commit to cancel a scan already running
-for a newer commit. The owner instead includes `${{ github.repository }}`, `${{ github.ref }}`, and
-`${{ github.sha }}` in the group and uses `cancel-in-progress: true`. Only duplicate invocations for the same
-immutable source revision can cancel one another; distinct revisions never share a cancellation boundary.
+This PR's own earlier draft reasoned that GitHub concurrency admission follows event arrival order, not commit
+ancestry, and scoped the group by `${{ github.repository }}`, `${{ github.ref }}`, and `${{ github.sha }}` with
+`cancel-in-progress: true` so only duplicate invocations of the same immutable revision could cancel one another.
+That reasoning is sound in isolation, but `.github#1768` (merged to `main` before this PR's own branch caught
+up) had independently added a *different*, already-reviewed concurrency group to this same file: scoped by
+`${{ github.ref }}` only, `cancel-in-progress: false`, so an in-flight scan for an older commit always finishes
+and uploads that commit's SARIF evidence rather than being cancelled, and a burst of pushes queues (GitHub's
+default single-pending-successor behavior) instead of running unboundedly in parallel.
 
-This choice deliberately does **not** use event arrival as a default-branch history oracle. Cross-revision queue
-cleanup, when needed, belongs to a separate trusted worker that re-fetches the live default-branch SHA and
-revalidates both candidate run identity and commit ancestry immediately before cancellation. Until that guarded
-owner exists, retaining an older scan is safer than allowing it to destroy newer authoritative evidence.
+**Merging this branch as-is produced two `concurrency:` keys in one YAML mapping -- a real bug, not a stylistic
+duplication: YAML resolves a repeated mapping key to its last occurrence, so the SHA-scoped block was silently
+discarded at parse time regardless of author intent.** The two designs are also structurally incompatible as a
+single `concurrency:` block, not just redundant: SHA-scoping gives every distinct commit its own group, which
+means NOTHING ever queues behind anything else -- restoring the unbounded-concurrent-scans problem `#1768`
+exists to prevent. Given this organization's standing priority of reducing GitHub Actions queue congestion
+(a plan-level 60-job ceiling shared across the whole org), `#1768`'s ref-scoped, cancel-false group was kept as
+authoritative and this PR's SHA-scoped block was removed. The narrower concern the SHA-scoped design addressed
+(a delayed duplicate event for the exact same commit) remains a real, if much rarer, residual risk -- not
+closed here.
 
 This also differs deliberately from `Current Head Run Coalescer`: that workflow performs queue-cleanup mutation,
 so its active worker must finish and only the latest pending trigger is retained.
@@ -84,6 +93,10 @@ so its active worker must finish and only the latest pending trigger is retained
 - Review GREEN `7f99d560e8eaa9ab2cec46600b3321e9b0700669`: production adds the exact source SHA to the group and records
   the owner boundary for any future cross-revision cleanup.
 - Focused reconstructed exact-content test before review: `3 passed`.
+- **Post-review correction, before merge:** `.github#1768` landed its own, incompatible concurrency group for
+  this same file while this PR's branch was still in flight (see "Concurrency decision" above). The exact-SHA
+  group GREEN commit above is accurate as a record of this PR's own development, but is NOT the state that
+  merged -- the final concurrency block keeps `#1768`'s ref-scoped, `cancel-in-progress: false` group instead.
 - Rollout remains incomplete until the central PR merges and each consumer pins the resulting merge SHA.
 
 ## Consumer acceptance criteria
