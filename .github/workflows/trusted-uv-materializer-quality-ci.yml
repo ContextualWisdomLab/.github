@@ -27,7 +27,7 @@ on:
       - "pyproject.toml"
 
 concurrency:
-  group: trusted-uv-materializer-quality-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
