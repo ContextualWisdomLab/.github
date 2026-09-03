@@ -25,15 +25,14 @@ EXPECTED_EXCLUSIONS = {".github", "IRT-bibliography-set", "noema"}
 REQUIRED_EXCLUSION_PROBES = {".github", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/close-empty-pr.yml",
-    ".github/workflows/codeql-pr.yml",
     ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
-    ".github/workflows/osv-scanner-pr.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
-    ".github/workflows/scorecard-pr.yml",
     ".github/workflows/security-scan.yml",
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
+    ".github/workflows/osv-scanner-pr.yml",
+    ".github/workflows/scorecard-pr.yml",
 )
 STACKED_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
 
@@ -138,10 +137,6 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
             continue
         workflows_by_path.setdefault(workflow["path"], []).append(workflow)
 
-    required_path_set = set(REQUIRED_WORKFLOW_PATHS)
-    for path in sorted(set(workflows_by_path) - required_path_set):
-        errors.append(f"unexpected central required workflow {path}")
-
     for path in REQUIRED_WORKFLOW_PATHS:
         matches = workflows_by_path.get(path, [])
         if not matches:
@@ -158,6 +153,10 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
                 f"central required workflow {path} must use source repository "
                 f"{SOURCE_REPOSITORY_ID} at {SOURCE_REF}"
             )
+
+    unexpected_paths = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
+    for path in unexpected_paths:
+        errors.append(f"unexpected workflow present in required set: {path}")
 
     review_rules = _typed_rules(payload, "pull_request")
     if len(review_rules) != 1:

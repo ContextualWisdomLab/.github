@@ -12,7 +12,7 @@ def test_rollout_scope_matches_canonical_exclusions() -> None:
     for repository in EXPECTED_EXCLUSIONS:
         assert f"`{repository}`" in rollout
     assert "all current and future organization\nrepositories inherit" not in rollout
-    assert "outside that exclusion set inherits the ten central" in rollout
+    assert "outside that exclusion set inherits the nine central" in rollout
 
 
 def test_doctoring_records_documentation_gate_closed() -> None:
