@@ -1,10 +1,8 @@
 import json
-import os
 import re
 from pathlib import Path
 import subprocess
 import sys
-import textwrap
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,11 +19,10 @@ def test_codeql_pr_workflow_gates_head_and_merge_sarif_locally() -> None:
     assert workflow.count("upload: false") == 2
     assert "upload: always" not in workflow
     assert workflow.count("Enforce CodeQL Medium+ SARIF gate") == 2
-    assert workflow.count("CODEQL_FINDING rule=") == 2
+    assert workflow.count("scripts/ci/codeql_sarif_gate.py") == 2
+    assert "codeql_sarif_gate.py codeql-results-head" in workflow
+    assert "codeql_sarif_gate.py codeql-results-merge" in workflow
     assert workflow.count("Preserve CodeQL SARIF evidence") == 2
-    assert "security-severity" in workflow
-    assert "score >= 4.0" in workflow
-    assert "result.get(\"suppressions\")" in workflow
     assert "detect-languages:" in workflow
     assert "java-kotlin" in workflow
     assert "-name '*.java'" in workflow
@@ -61,16 +58,15 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
 def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
     tmp_path: Path,
 ) -> None:
+    """codeql-pr.yml's gate step must invoke the shared script with the right directory arg."""
     workflow = (REPO_ROOT / ".github/workflows/codeql-pr.yml").read_text(
         encoding="utf-8"
     )
     marker = "      - name: Enforce CodeQL Medium+ SARIF gate\n"
     start = workflow.index(marker)
-    run_start = workflow.index("        run: |\n", start) + len("        run: |\n")
-    run_end = workflow.index("\n      - name:", run_start)
-    script = textwrap.dedent(
-        "\n".join(line[10:] for line in workflow[run_start:run_end].splitlines())
-    )
+    next_step = workflow.index("\n      - name:", start)
+    step_body = workflow[start:next_step]
+    assert "run: python3 scripts/ci/codeql_sarif_gate.py codeql-results-head" in step_body
 
     sarif_dir = tmp_path / "codeql-results-head"
     sarif_dir.mkdir()
@@ -113,10 +109,9 @@ def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
         ),
         encoding="utf-8",
     )
-    env = {**os.environ, "CODEQL_SARIF_DIR": str(sarif_dir)}
+    gate_script = REPO_ROOT / "scripts/ci/codeql_sarif_gate.py"
     blocked = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env,
+        [sys.executable, str(gate_script), str(sarif_dir)],
         check=False,
         capture_output=True,
         text=True,
@@ -140,8 +135,7 @@ def test_codeql_sarif_gate_logs_and_fails_only_unsuppressed_medium_plus(
     ]
     sarif_path.write_text(json.dumps(payload), encoding="utf-8")
     clean = subprocess.run(
-        [sys.executable, "-c", script],
-        env=env,
+        [sys.executable, str(gate_script), str(sarif_dir)],
         check=False,
         capture_output=True,
         text=True,
