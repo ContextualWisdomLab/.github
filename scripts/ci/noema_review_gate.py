@@ -993,11 +993,11 @@ def _strip_trailing_commas_outside_strings(text: str) -> str:
     in_string = False
     escaped = False
     index = 0
+    start = 0
     length = len(text)
     while index < length:
         char = text[index]
         if in_string:
-            result.append(char)
             if escaped:
                 escaped = False
             elif char == "\\":
@@ -1008,23 +1008,24 @@ def _strip_trailing_commas_outside_strings(text: str) -> str:
             continue
         if char == '"':
             in_string = True
-            result.append(char)
             index += 1
             continue
         if char == ",":
             lookahead = index + 1
             while lookahead < length and text[lookahead] in " \t\r\n":
                 lookahead += 1
-            previous = len(result) - 1
-            while previous >= 0 and result[previous] in " \t\r\n":
+            previous = index - 1
+            while previous >= 0 and text[previous] in " \t\r\n":
                 previous -= 1
-            prior = result[previous] if previous >= 0 else ""
+            prior = text[previous] if previous >= 0 else ""
             value_ending = prior in {'"', '}', ']'} or prior.isdigit() or prior in {'e', 'l'}
             if lookahead < length and text[lookahead] in "}]" and value_ending:
+                result.append(text[start:index])
                 index += 1
+                start = index
                 continue
-        result.append(char)
         index += 1
+    result.append(text[start:index])
     return "".join(result)
 
 
