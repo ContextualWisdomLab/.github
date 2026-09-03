@@ -242,7 +242,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename != "noema-review.yml":
+        if filename not in {"noema-review.yml", "opencode-review.yml"}:
             assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
@@ -254,16 +254,25 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             )
         elif filename == "opencode-review.yml":
             assert "opencode-review-bootstrap-" in concurrency_contract
-            # Unlike the other required pull-request workflows below, this
-            # group is deliberately also scoped by exact head SHA: a
-            # delayed, out-of-order run for an older head must not be able
-            # to cancel the authoritative run already active for a newer
-            # head (Devin Review on `#1568`). Same-head events still share
-            # one group and can still cancel each other.
+            # Deliberately NOT scoped by head SHA and deliberately
+            # cancel-in-progress: false (reverted/refined 2026-09-03 by
+            # explicit user directive plus peer review): head-SHA scoping
+            # (originally added for Devin Review's `#1568` finding) meant
+            # every push to a PR got its own concurrency group, so rapid
+            # successive pushes no longer cancelled each other's in-flight
+            # runs -- they queued up independently instead, worsening the
+            # self-inflicted queue-thrashing pattern this org measured
+            # directly (236/300 cancelled runs from concurrent push volume).
+            # Plain repo+PR-number scoping with cancel-in-progress: false
+            # structurally closes the #1568 race instead of reopening it:
+            # nothing in the group is ever preempted, so a late-arriving
+            # older-head run can never evict a current one at any arrival
+            # order -- see the workflow's own comment for the full mechanism.
             assert (
                 "github.event.pull_request.head.sha || github.run_id"
-                in concurrency_contract
+                not in concurrency_contract
             )
+            assert "cancel-in-progress: false" in concurrency_contract
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
@@ -301,8 +310,12 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename not in {"opencode-review.yml"}:
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
+        # No required pull-request workflow scopes its concurrency group by
+        # head SHA any more (2026-09-03): noema-review.yml and
+        # opencode-review.yml both dropped it the same day, independently,
+        # in favor of cancel-in-progress: false -- see the elif branches
+        # above for the full reasoning. No exclusion needed.
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
