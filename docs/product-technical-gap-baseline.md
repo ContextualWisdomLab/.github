@@ -2628,6 +2628,71 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
 
+## 2026-09-02 `test_strix_quick_gate.sh` stale cron assertion left broken by the `#1630` cadence lengthening
+
+**Problem.** The required `exact-head-path-policy` check (which runs `bash
+scripts/ci/test_strix_quick_gate.sh` against the exact PR head) was failing on
+multiple, unrelated open PRs (observed directly on `.github#1476`, a PR whose own
+diff never touches this script or the scheduler workflow) with:
+
+```
+FAIL: scheduler wakes frequently enough to clear auto-merge PRs that become stale
+after their initial PR events (missing 'cron: "*/30 * * * *"')
+```
+
+**Root cause.** `#1630` (referenced in `docs/doctoring/actions-queue-saturation-hourly-sweep.md`)
+deliberately lengthened `pr-review-merge-scheduler.yml`'s repository-local heartbeat
+from a quarter-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
+reduce Actions-capacity pressure during the sustained organization-wide queue
+saturation this session repeatedly documented. The Python regression
+`tests/test_actions_queue_saturation_scheduler_cadence.py` was correctly updated at
+the time (it now asserts `'- cron: "30 * * * *"' in workflow` and explicitly
+`'*/30 * * * *' not in workflow`) — but the parallel bash contract test,
+`scripts/ci/test_strix_quick_gate.sh`, was not, and kept asserting the literal old
+string. This is a genuine, reproducible defect on protected `main` itself, not a
+symptom of any one PR being stale: I confirmed it by running the script directly
+against an unmodified, freshly cloned `main` (commit `8c085835`) before making any
+change, and it failed with the identical message.
+
+**Why this matters at organization scale.** `exact-head-path-policy` is a required
+check for every PR touching Strix-quick-gate-covered paths, checked out against
+each PR's own exact head but running this trusted base-branch script. Since the
+assertion can never pass against the current, correctly-updated workflow file, this
+was a standing, silent block on an unbounded number of unrelated PRs across the
+whole `.github` PR queue until fixed at the root -- exactly the class of "root
+cause outside any one PR's diff" issue this session's operating directive requires
+be fixed at the canonical location rather than worked around per-PR.
+
+**Fix.** Updated the one stale assertion (`scripts/ci/test_strix_quick_gate.sh`)
+from `'cron: "*/30 * * * *"'` to `'cron: "30 * * * *"'`, matching the workflow's
+actual current value and the already-correct Python-side assertion. Also corrected
+an adjacent stale human-readable description ("scheduler isolates the 15-minute
+organization sweep from the separate 30-minute scheduled scan") to the current
+hourly/hourly cadence -- both `org-queue-sweep` and this repository-local scan are
+now hourly, so the old minute figures described a schedule that no longer exists.
+
+**Verification.** `bash scripts/ci/test_strix_quick_gate.sh` — confirmed FAIL on
+unmodified `main` before the change, confirmed PASS after. Full suite:
+`coverage run -m pytest tests -q` — all passed; `coverage report --fail-under=100`
+— 100% on `scripts/ci/`; `interrogate` — 100%. This is a bash-string-only fix with
+no Python production code touched, so the full-suite pass is a non-regression
+check, not evidence the fix itself works — the direct before/after script run is
+that evidence.
+
+**Risk of this fix itself.** Essentially none: a one-line literal-string update in
+a test assertion, verified to both fail before and pass after against the exact
+same unmodified `main` checkout. No workflow, script, or other test file changed.
+
+**Expected effect.** `exact-head-path-policy` stops failing organization-wide PRs
+on this assertion once this fix reaches protected `main`; any PR whose branch has
+already synced past this point (or syncs after) picks it up automatically.
+
+**Follow-up.** None identified — this closes the specific gap. If a future cadence
+change lands again, the durable fix is process, not code: update every test that
+asserts the literal cron string (currently exactly these two files) in the same PR
+that changes the cron value, per this repo's own "contract tests pin workflows AND
+prose" convention already stated in `CLAUDE.md`.
+
 ## Item 4 fresh evidence: gateway 500 after a 649.5s "connecting" phase with `served_model=unknown` — 2026-09-03
 
 **Status:** A live, current instance of item 4's still-open telemetry complaint, distinct from the already-resolved html4tree/900-second caller-repair-deadline case above (that mechanism was removed by PR #1672). Recorded here from a fresh, exact job log. Two distinct defects were found in the one error line below, both root-caused and both with a fix proposed but not yet merged: a caller-owned phase-mislabeling bug (this repository's own `scripts/ci/noema_review_gate.py`, see below) and a gateway-owned attribution gap (`contextual-orchestrator`'s `_invoke` failover loop, relayed to and fixed by the peer session with deep context in that repo, see below).
@@ -2746,3 +2811,99 @@ only to that narrower scope, not to the fuller picture "Item 41" documents.**
 **Context Map / responsibility boundary.** `.github` owns which checks are *required*, not how each repository's own CodeQL analysis is *produced* — that responsibility already varies per repository (local workflow vs. native default-setup) and this fix does not centralize it further. A future central-CodeQL redesign, if wanted, should follow the same thin-required-entrypoint-dispatches-to-a-`.github`-native-workflow pattern `strix.yml`/`opencode-review.yml` already use, per the accompanying doctoring note.
 
 **Evidence / acceptance.** Live-verified: ruleset `18156473`'s `workflows` rule no longer lists `codeql-pr.yml` (`gh api orgs/ContextualWisdomLab/rulesets/18156473`); all 23 repositories return `state: configured` (some still finishing their one-time setup run, queued behind ordinary Actions capacity, not a recurring cost). Full mechanism writeup: `docs/doctoring/codeql-pr-required-workflow-always-fails.md` (branch `claude/fix-codeql-required-workflow-restriction`, `ContextualWisdomLab/.github#1767`). Do not re-add any workflow using `github/codeql-action` to a required-workflows ruleset entry in this or any GitHub organization — the restriction is platform-level, not something this org's configuration can work around.
+
+## Item 23 (Noema review-gate failure retrospective) — 17 incidents re-aggregated into 5 root-cause shapes, improvement plan produced — 2026-09-03
+
+**Status:** Retrospective complete; underlying fixes not yet implemented (deliberately deferred, see below).
+Full record: `docs/doctoring/noema-review-failure-retrospective-and-improvement-plan-20260903.md`.
+
+**What was done.** Re-read all 7 `noema-review-gate` incident sections already in this document (all dated
+2026-08-31), all 6 pre-existing Noema-specific `docs/doctoring/` records, and all 5 GitHub issues whose
+title names a Noema review-gate failure mode (`.github#1611`, `#1613`, `#1637` open; `#1596`, `#1614`
+closed) — full text of each, not just titles or headers. Grouped the resulting 17 incidents by root-cause
+mechanism rather than by date, since several incidents on the same date share one underlying defect.
+
+**Finding: 5 root-cause shapes, one of which is the clear highest-leverage fix.** (1) *Crash-before-repair-boundary*
+— 4 incidents where code parsing/decoding an untrusted gateway response ran before `call_llm`'s one
+repair-retry boundary, so each new response shape (malformed JSON, non-UTF-8 bytes, truncation, and a
+still-open budget-exhaustion variant) crashed the check instead of reaching the safety net one layer over.
+(2) *A fix for one bug introduces a different bug* — 2 incidents, including a fail-closed crash fix that
+itself leaked LLM output to a public Actions log via an insufficient regex scrubber. (3) *Race-condition
+"is this head still live" guards, independently reimplemented in 5 places, each with its own distinct bug*
+— the stale-trigger guard, the close-cleanup job, the repair-retry path, the live-head re-check added to fix
+repair-retry, and a structurally identical guard in `opencode-review.yml`'s verdict poller. This is the
+single most concrete, actionable finding in the whole retrospective: one shared, well-tested
+`assert_head_is_live()` primitive replacing all 5 hand-written copies would mean a 6th version of this same
+bug has nowhere left to reoccur. (4) *Infrastructure/lifecycle*, not code-logic — 3 incidents (App token
+outliving a long review, this document's own item-13 concurrency-group finding, a stale pinned upstream
+commit). (5) *Still open, not yet resolved* — `.github#1611`/`#1613`/`#1637` describe overlapping symptoms
+of the same underlying gap and are recommended to be fixed as one coordinated PR rather than three
+independent patches, to avoid a third instance of shape (2).
+
+**Not implemented here, deliberately.** All four concrete improvement-plan items in the doctoring
+record — a unified response-parsing helper, the unified live-head-guard primitive, one coordinated fix for
+the three open issues, and a semgrep rule to catch the two recurring anti-patterns before review finds them
+again — are changes to live, security-critical CI logic (`scripts/ci/noema_review_gate.py`,
+`noema-review.yml`, `opencode-review.yml`). Consistent with this document's standing practice (see the
+item-13 entry above), a documentation-only PR does not bundle a live-workflow-logic change; each belongs in
+its own PR with dedicated regression tests reproducing the specific incident it targets.
+
+**Cross-reference.** The live-head-guard duplication (shape 3) is a fresh instance of the pattern already on
+record as `docs/doctoring` and this document's "silently-inactive required check" / duplicated-ad-hoc-guard
+family — the same lesson (one shared, correctly-implemented primitive beats N independent reimplementations)
+recurring in a new subsystem.
+
+## Item 7 (EgressWeave/wardnet adoption in contextual-orchestrator) — "zero work started" claim corrected, then own "EgressWeave incompatible" conclusion corrected — 2026-09-03
+
+**Status:** Investigated via direct code reading (fresh clone), then re-verified via a 9-agent workflow after
+user pushback, then further refined after Devin's automated PR review correctly challenged the redesign
+sketch's client-lifecycle/resolver-seam/timeout-scoping details (all three verified against EgressWeave's
+source; corrected recommendation now uses only `egressweave.validate_egress_url_details()`, not the full
+`build_egress_sync_client()` transport). Not a code change. Full record:
+`docs/doctoring/egressweave-wardnet-adoption-audit-contextual-orchestrator-20260903.md`.
+
+**First correction.** This session had earlier reported item 7 to the user as "손도 안 됨" (zero work started,
+architecturally unaddressed). That was wrong for wardnet. **wardnet is already integrated**, for Camoufox
+browsing session isolation: `compose.camoufox-wardnet.yaml` routes the isolated
+`camofox-browser`/`camofox-mcp` containers' only egress path through wardnet (DNS-pinned egress +
+authenticated CONNECT proxy, no published ports) — real, deployed infrastructure backing ADR-0123 (item 14's
+foundation), not a design note.
+
+**Second correction (same day, before merge): the first EgressWeave analysis was itself wrong.** It concluded
+"EgressWeave's default SSRF posture is actively incompatible with [local mlx:// provider support], not an
+edge case it happens to miss" — based on EgressWeave's README/PyPI listing alone, without checking its actual
+policy API. **The user challenged this directly ("버그네") and was right.** EgressWeave ships a documented,
+tested "local-development exception" — `EgressPolicy(allow_local=True)` plus a bare single-label hostname in
+`allowed_hosts` — verified by reading the real source (`src/egressweave/validation.py:167-202`,
+`policy.py:462-475`), its own worked local-LLM example (`docs/security-model.md`'s
+`EgressPolicy.from_hosts("ollama", allow_local=True, ...)`), passing tests
+(`tests/test_allow_local_security.py`, `tests/test_exact_local_allowlist.py`), and an executed
+proof-of-concept confirming one policy instance can simultaneously allow a public provider and a local one.
+**The real, narrower issue:** `contextual-orchestrator`'s actual `ModelAgent.base_url` values are raw
+loopback IP literals (`mlx://127.0.0.1:8080/v1`), and EgressWeave's allowlist unconditionally rejects an IP
+literal as the authority hostname even under `allow_local=True` — so today's exact `base_url` strings can't
+be handed to EgressWeave verbatim. **That is a buildable integration task (alias local providers to a bare
+hostname, resolve the alias back to loopback), not a library incompatibility** — the distinction the first
+analysis collapsed into a blanket "don't adopt" recommendation.
+
+**Also retracted:** the first pass's claimed "asymmetry" (`ModelClient._resolve_addresses` allegedly missing
+public-address filtering that `provider_transport.py` has) was a misreading — it looked only at the raw
+DNS-pinning helper and missed that `_validate_provider` (`orchestrator.py:2766-2804`), the actual caller on
+every live request path, already applies the identical conditional filtering (loopback-only for confirmed
+local providers, public-only otherwise). No undocumented gap exists there.
+
+**New finding from the correction pass: EgressWeave would close several genuine, previously-unverified gaps
+in `ModelClient`'s own transport** — response size bounding (CWE-400) absent on the primary chat and
+streaming paths (present elsewhere in the file via `_read_bounded_response`, just not wired to chat), no
+outbound request size pre-flight bounding, no phase-split (connect/read/write) timeout enforcement, HTTP
+method allowlisting enforced only as a source-code convention rather than at runtime, and redirect rejection
+that is an emergent side effect of the transport choice rather than a stated, tested policy. One claim from
+this pass is flagged as itself unverified rather than carried forward as settled: whether EgressWeave
+actually enforces an "immutable" timeout ceiling was asserted from its feature list, not checked against its
+timeout-handling source the way the SSRF/allowlist question was.
+
+**Cross-reference.** The underlying lesson (verify org-wide state and target-repo code before declaring
+something absent) held for the wardnet correction; the EgressWeave correction is a distinct, sharper lesson —
+verifying "library X can't do Y" requires reading X's own policy/configuration surface, not just its
+README/marketing feature list, before recommending against adoption. Saved to
+`feedback_verify_org_wide_before_declaring_unstarted.md`.
