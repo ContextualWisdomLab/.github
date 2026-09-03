@@ -250,12 +250,26 @@ jobs:
     needs: changed-scope
     if: (github.event_name != 'pull_request_target' || github.event.action != 'closed') && needs.changed-scope.outputs.code == 'true'
     concurrency:
-      # Keep provider-backed scans serial per repository and event class while
-      # allowing the trusted cleanup job above to retire an obsolete head now.
+      # PR-scoped (workflow-repository-PR), matching every other central
+      # required workflow's group-key convention. This was deliberately
+      # repository-wide instead, from 2026-08-24 through 2026-09-03, because
+      # PR-scoping is what caused a real litellm.RateLimitError storm against
+      # the shared NVIDIA NIM key on 2026-08-23/24 (.github#1297) -- widening
+      # it back reintroduces that risk, now at a larger blast radius since
+      # Strix is required org-wide via ruleset 18156473. Restored to PR-scoped
+      # on explicit owner authorization (2026-09-03) after confirming the two
+      # NVIDIA NIM credentials (NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB)
+      # have independent rate limits (~40 RPM each per community-reported
+      # figures, no official SLA) rather than a shared pool -- see
+      # docs/product-technical-gap-baseline.md for the full tradeoff writeup.
+      # cancel-in-progress stays false: a same-PR push still queues behind an
+      # in-flight scan for that PR rather than cancelling it, preserving that
+      # head's scan log (the trusted cleanup job above independently retires
+      # a genuinely superseded head).
       group: >-
         strix-${{
           (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
-          format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository) ||
+          format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository, github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id) ||
           format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
         }}
       cancel-in-progress: false
