@@ -73,9 +73,11 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        executing the real production jq selector).
     2. A delayed ``workflow_run``/``repository_dispatch`` completion for an
        OLDER head must never cancel a genuinely current run -- pinned here by
-       the head-inclusive concurrency group assertions below (native
-       protection, independent of this step) AND by the step-level ``if:``
-       gate restricting this explicit cancellation entirely to live
+       the unconditional ``cancel-in-progress: false`` assertions below
+       (native protection: the active run is never preempted by anything
+       entering the group, regardless of event type or arrival order,
+       independent of this step) AND by the step-level ``if:`` gate
+       restricting this explicit cancellation entirely to live
        ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
        execution never even reaches this step.
     3. A cancellation step whose OWN trigger was confirmed live at the start
@@ -94,8 +96,7 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
     assert "github.event.workflow_run" not in concurrency
-    assert "github.event.action == 'synchronize'" in concurrency
-    assert "github.event.action == 'closed'" in concurrency
+    assert "cancel-in-progress: false" in concurrency
     assert "cancel-in-progress: true" not in concurrency
     assert "Cancel superseded Noema runs after live-head validation" in workflow
     assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
@@ -107,8 +108,9 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     # Invariant 2 (step-level half): only a live pull_request_target trigger
     # may even attempt this cancellation -- workflow_run and
     # repository_dispatch executions (which can legitimately be delayed by
-    # hours) skip this step entirely and rely solely on the head-inclusive
-    # concurrency group above.
+    # hours) skip this step entirely and rely solely on the unconditional
+    # cancel-in-progress: false concurrency group above, which never
+    # preempts the active run regardless of what triggered the new entrant.
     assert (
         "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''"
         in cleanup

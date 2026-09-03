@@ -270,16 +270,30 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event_name" not in concurrency_contract.split(
                 "cancel-in-progress:", 1
             )[0]
-            assert "github.event.action == 'synchronize'" in concurrency_contract
-            assert "github.event.action == 'closed'" in concurrency_contract
-            # Exact head SHA (not just PR number), mirroring opencode-review.yml's
-            # own #1568 fix: without this, a delayed/out-of-order synchronize
-            # for an older head shares its group with -- and can cancel -- the
-            # run already active for a newer head (item 13 audit,
-            # docs/doctoring/item13-stale-head-cancellation-audit-20260903.md).
+            # PR number only, no head SHA, and cancel-in-progress
+            # unconditionally false -- not the #1568-style SHA-scoped fix
+            # opencode-review.yml uses. A SHA-scoped group gives every push
+            # its own group, so under the org's saturated Actions ceiling a
+            # stale per-push run is only retired by a separate cleanup job
+            # that shares that same congested admission queue and can
+            # itself sit stuck behind it, letting superseded runs pile up
+            # rather than being promptly evicted. cancel-in-progress: false
+            # fixes the original #1568-class hazard just as completely
+            # without that cost: the active run is never preempted
+            # regardless of event arrival order, so a late old-head event
+            # can no longer kill a valid newer-head run no matter how the
+            # group is scoped -- and GitHub's own single-pending-slot rule
+            # still evicts an intermediate queued push for free. Whichever
+            # instance actually runs is never trusted blindly either way:
+            # "Reject a stale trigger before credential or model setup"
+            # re-fetches the live PR head and fails closed on a mismatch.
             group_only = concurrency_contract.split("cancel-in-progress:", 1)[0]
-            assert "github.event.pull_request.head.sha" in group_only
-            assert "github.event.client_payload.pr_head_sha" in group_only
+            assert "github.event.pull_request.head.sha" not in group_only
+            assert "github.event.client_payload.pr_head_sha" not in group_only
+            assert (
+                concurrency_contract.split("cancel-in-progress:", 1)[1].strip()
+                == "false"
+            )
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -287,7 +301,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
+        if filename not in {"opencode-review.yml"}:
             assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -685,8 +699,7 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "github.event.action == 'synchronize'" in concurrency_contract
-    assert "github.event.action == 'closed'" in concurrency_contract
+    assert "cancel-in-progress: false" in concurrency_contract
     assert "cancel-in-progress: true" not in concurrency_contract
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
