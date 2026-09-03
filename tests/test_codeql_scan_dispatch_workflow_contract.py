@@ -1,8 +1,8 @@
 """Structure and shell-syntax contract for the new codeql-scan-dispatch.yml handler.
 
-docs/adr/0025-codeql-required-workflow-dispatch-architecture.md designs this
-file as the native (non-required-workflow) half of the CodeQL dispatch+poll
-rewrite. It is not wired up to codeql-pr.yml yet -- that rewrite is a
+ContextualWisdomLab/.github#1772 designs this file as the native
+(non-required-workflow) half of the CodeQL dispatch+poll rewrite. It is not
+wired up to codeql-pr.yml yet -- that rewrite is a
 separate, still-pending follow-up -- so this only guards the handler's own
 structure and shell syntax, mirroring the established pattern in
 tests/test_opencode_workflow_shell_syntax.py and
