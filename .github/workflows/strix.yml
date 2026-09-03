@@ -146,6 +146,22 @@ jobs:
 
   cancel-superseded-pr-runs:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
+    # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
+    # below) before selecting or cancelling anything, so it fully subsumes
+    # whatever an older, not-yet-run instance would have done. cancel-in-progress
+    # true is the right shape here (current-head-run-coalescer.yml instead uses
+    # its own admission-order queueing, since each of its queued instances
+    # carries a DIFFERENT specific expected-head only it can act on): it caps
+    # this job to one running + one queued per PR instead of letting a push
+    # burst pile up N independent, mutually-non-deduped sweeps that each cost a
+    # full admission slot under the shared 60-job ceiling. Matches
+    # codeql-pr.yml's established group-key style (PR-number scoped).
+    concurrency:
+      group: >-
+        cancel-superseded-pr-runs-${{
+        github.event.pull_request.base.repo.full_name || github.repository }}-${{
+        github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     # Bound this gh-api-only cleanup job so a stuck call (rate limit, hung
     # `gh api --paginate`) cannot silently occupy a runner for GitHub's
