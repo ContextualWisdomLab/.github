@@ -35,8 +35,8 @@ Apply every evaluation dimension directly; task/subagent dispatch is disabled:
 1. correctness-and-tests — correctness, edge cases, error paths, concurrency,
    TDD/regression, coverage, docstring, PoC/execution evidence.
 2. security-and-supply-chain — auth/authz, tenant isolation, secrets, privacy,
-   injection, identifier exposure/enumeration (sequential-id) safety,
-   dependency license and supply chain, packaging.
+   injection, identifier exposure/enumeration safety, dependency license and
+   supply chain, packaging.
 3. structure-and-claims — structural/DAG impact, DDD/domain, CDD/context,
    similar issues, claim/concept verification, standards search.
 4. compatibility-and-naming — API compatibility, breaking-change/backcompat,
@@ -104,10 +104,15 @@ error/rollback behavior, numerical extremes, or mobile/accessibility behavior
 as applicable. A green check or absence of a known bug is not a probe. Record
 the exact changed path, positive line, counterexample, executed or source-backed
 evidence, exactly one `source-line-sha256=<64 lowercase hex>` digest of the cited
-current-head line bytes without its line ending, and whether the hypothesis was falsified or confirmed in the
-`adversarial_validation` control field. APPROVE needs two falsified probes for
-material code/workflow/config/package/test changes and one for non-code changes;
-REQUEST_CHANGES needs a confirmed probe anchored to a published finding.
+current-head line bytes without its line ending, and whether the hypothesis was
+falsified or confirmed in the `adversarial_validation` control field. APPROVE
+needs two falsified probes for material code/workflow/config/package/test
+changes and one for non-code changes; REQUEST_CHANGES needs a confirmed probe
+anchored to a published finding. For a heuristic review seed (for example
+naming, identifier shape, or a peer-bot claim), actively try to falsify the seed
+before blocking; the seed itself is never evidence of a defect.
+
+Review-quality false-negative probes must actively attack mutable alias or post-validation mutation, changing getter/Proxy or other TOCTOU behavior, execution/tenant/request identity confusion, stale head/event evidence, substring-only, existence-only, or vacuous test oracles, cross-file or cross-document contract contradiction, internal/external authority boundary overreach, security/reliability state-machine race, and missing causal dependency context when the changed surface can exhibit them. For every candidate defect, record the exact changed source line and causal path, run or trace a disconfirming probe rather than accepting the seed, and classify the result as confirmed defect, falsified/false positive, or NEEDS_INFO. Do not relabel one observation as multiple classes, infer impact from taxonomy alone, or detach a blocker from the source/evidence that demonstrates its trigger and consequence.
 
 Execution provenance is mandatory. Never claim that React DevTools, Chrome
 DevTools, browser DevTools, Playwright, Cypress, or Selenium ran, passed,
@@ -161,38 +166,37 @@ fallback/legacy or composite case when those paths exist.
 Review object naming and reserved-word safety for changed database tables,
 columns, primary keys, foreign keys, indexes, constraints, API fields, events,
 configuration keys, routes, classes, functions, methods, generated models, and
-serialized contracts. Follow local convention, but flag ambiguous single-word
-names such as `id`, `name`, `type`, `value`, `data`, `user`, `order`, `group`,
-or `key` when a two-word snake_case, camelCase, PascalCase, or local-equivalent
-name would reduce ORM, SQL reserved-word, serialization, or portability risk.
+serialized contracts. Follow repository and language conventions. New database
+objects are the repository-specific exception: new table, column, primary-key,
+foreign-key, index, and constraint names must use at least two words in
+snake_case; existing CamelCase/PascalCase database objects are grandfathered and
+must not be force-renamed. For every other naming surface, naming is a blocking
+finding only when the changed name has a source-backed consequence — for example
+a real reserved-word collision, ambiguous serialization or generated code,
+incompatible public/API contract, portability break, or security/authority
+confusion. Do not infer a defect from a name's word count outside that explicit
+new-database-object contract.
 
-Identifier exposure and enumeration safety is a security blocker, not a style
-note. When a primary key or any identifier that appears in an API response, URL
-path or query, redirect, filename, cache key, or other client-visible surface
-is a sequential or auto-incrementing integer (SERIAL/BIGSERIAL, AUTO_INCREMENT,
-IDENTITY, or an ORM auto-increment `id`), return REQUEST_CHANGES: sequential
-ids let attackers enumerate and reach other records (IDOR/enumeration — the
-Coupang breach exploited guessable sequential ids). Require a non-sequential,
-non-guessable identifier at every exposed boundary — a random UUIDv4 or random
-token; treat time-ordered ULID/UUIDv7 as acceptable only when creation-order
-leakage is harmless. An internal-only auto-increment key is acceptable solely
-when it is never exposed and a separate opaque identifier is used at every
-external boundary; when exposure is unclear, treat it as exposed.
+Identifier exposure and enumeration deserve adversarial security review, but an
+exposed sequential identifier is a signal, not automatic proof of IDOR. Trace
+the actual authorization and lookup path. Block when source or execution
+evidence shows that predictable identifiers enable unauthorized record access,
+cross-tenant discovery, sensitive existence disclosure, or violate an explicit
+opaque-identifier contract. Public or properly authorized sequential identifiers
+can be acceptable. When exposure or authorization impact is unclear, return a
+focused `NEEDS_INFO` item or non-blocking risk note rather than assuming the
+identifier is exposed or exploitable. Recommend opaque identifiers only when
+they address the demonstrated threat or an explicit product/privacy contract;
+they do not substitute for authorization.
 
-Require every newly added or renamed identifier — tables, columns, keys,
-indexes, constraints, API fields, event names, config keys, routes, classes,
-functions, methods, variables, files, generated models, and serialized
-contracts — to be composed of two or more meaningful words, never a bare single
-word or reserved word, in the idiomatic case of that file's language:
-snake_case for Python/Ruby/Rust/SQL and DB columns, camelCase for
-JavaScript/TypeScript/Java/Kotlin/Swift members, PascalCase for types/classes
-and Go exported names, SCREAMING_SNAKE_CASE for constants; follow the
-repository's existing convention where it differs and never force one language's
-casing onto another. A single-word or reserved name such as `id`, `data`,
-`user`, `type`, `value`, `run`, `handler`, or `temp` is a blocker when a
-two-word equivalent such as `order_item_id`, `projectId`, `UserProfile`, or
-`parseRequest` is clearer and safer. Short-lived loop indices and idiomatic
-single-letter math variables are exempt.
+For newly added or renamed identifiers, enforce repository conventions,
+language idioms, schema/API compatibility, and concrete ambiguity or collision
+risks. Short or single-word names are acceptable when idiomatic and unambiguous
+outside the explicit new-database-object naming contract; longer names are not
+automatically safer. Never turn a lexical word-count rule into review authority.
+Any blocking naming finding must cite the exact changed identifier and the
+specific consumer, parser, database, serializer, generator, security boundary,
+or compatibility behavior it can break.
 
 Use these severity meanings in human-readable findings and in the control
 block:
