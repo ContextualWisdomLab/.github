@@ -1771,6 +1771,11 @@ updates and merges").
   때와 구분 불가) 수정. `has_any_strix_vulnerability_report_artifact()` 신규 가드 추가, ~13,000줄
   테스트 하네스의 fake-strix stub 약 30곳을 EXIT trap 백스톱으로 retrofit, 신규 회귀 시나리오
   `success-zero-report-artifacts`로 수정 자체를 증명.
+  **Correction (2026-09-03)**: #1495는 2026-09-01에 병합 없이 closed됨 — 연결된 Ready 전환(draft→ready)
+  mutation이 커넥터 GraphQL 스키마 불일치로 깨져 있어, 동일한 브랜치/head를 그대로 새 non-draft PR
+  `.github`#1563 ("require authoritative report artifacts on success")로 다시 열었다. 이 항목이 서술하는
+  수정 코드와 신규 회귀 시나리오는 (동일 head이므로) 여전히 유효하지만, 현재 살아있는 PR 번호는 #1495가
+  아니라 #1563이며, 이 correction 작성 시점까지 #1563도 아직 main에 병합되지 않았다(open, non-draft).
 - **#1494** 위 감사와 별개로, 이번 세션에서 새로 연 모든 PR(6건 이상)이 100% 재현되는 `opencode-review`
   필수 체크 경합에 부딪힘을 확인·문서화(#1485, 이 세션 이전에 이미 기록됨)한 뒤 근본 수정. `opencode-review.yml`이
   `pull_request_target`에서 즉시 검증하지만 실제 리뷰는 별도 `repository_dispatch` 경로로 훨씬 늦게
@@ -1779,6 +1784,13 @@ updates and merges").
   않아 다른 저장소에서는 관측 불가능함을 확인하고, 대신 모든 저장소에 배포되는
   `pr-review-merge-scheduler.yml`의 완료를 리스닝하도록 설계. 크레덴셜 확장 없음, 체크섬/PR 스푸핑
   불가능함을 trust-boundary 분석으로 확인.
+  **Correction (2026-09-03)**: #1494는 병합되지 않았다 — main에 merge하려던 중, 동일한 경합(#1485가 기록한
+  바로 그 경합)이 이미 다른 메커니즘으로 고쳐져 있음을 발견해 2026-08-31에 "superseded"로 closed됨. 실제로
+  main에 landed된 수정은 그보다 먼저 병합된 `.github`#1497 ("require substantive agent verdicts",
+  `4a5dfd82`)로, `opencode-review-target` job 안에서 리뷰를 능동적으로 dispatch한 뒤 최대 180×30s(90분)
+  동안 동기적으로 poll하는 방식이며, 이 항목이 서술하는 #1494의 수동적 `workflow_run` 재진입 설계와는
+  근본적으로 다른 아키텍처다. 위 문단의 경합 분석 자체는 유효하지만, "근본 수정"을 한 것은 #1494가 아니라
+  이미 병합된 #1497이다.
 
 **`noema`:** **#517** `src/index.ts`의 `claimVerifiedOidcUsage()`가 `NOEMA_OIDC_REPLAY_GUARD`
 바인딩이 없을 때 `return false`로 fail-open — 반환값이 어디서도 게이팅에 쓰이지 않아 replay 방어 없이
