@@ -248,6 +248,57 @@ exit 0; fi` pattern already used everywhere else in this job.
   `client_payload` shape against the new env-derivation fallback chain,
   confirming an exact key-name match.
 
+## A subsequent Devin pass found a real bug that 3-lens adversarial verification missed
+
+The first eviction-detection step above was committed after 3-lens
+adversarial verification found and fixed one real problem (the `cancelled`-
+conclusion ambiguity documented above) and all three lenses concluded it was
+otherwise safe to ship. A later Devin Review pass on the pushed commit found
+a second real problem in the exact same step, plus one more in the
+sibling cancel loop — a useful, humbling data point that adversarial
+verification catches most, not all, real gaps, especially in genuinely
+subtle concurrent-systems reasoning.
+
+**Bug 1 (cancel loop): failed cancellations never retry.** In
+`Cancel superseded Noema runs after live-head validation`,
+`seen[$run_id]=1` was set unconditionally before attempting to cancel a run
+— including when the cancel API call itself then *failed* (a transient rate
+limit or network blip). A failed-but-marked-seen run was silently skipped
+for the rest of that pass **and** the second pass, leaving a genuinely stale
+run uncancelled and able to block the current head's review indefinitely —
+exactly the failure mode this whole job exists to prevent. Fixed by moving
+`seen[$run_id]=1` to fire only after a successful cancel, or after a failed
+cancel where a fresh `GET` on that run independently confirms
+`status == "completed"` (already terminal, nothing to retry); otherwise the
+run stays unmarked so the second pass retries it.
+
+**Bug 2 (eviction detection): a routine, everyday event was flagged as an
+eviction.** The detection step's disambiguation (this record's own earlier
+section) correctly ruled out "cancelled while active" and "PR closed," but
+missed the single most common case: a genuinely **newer** push legitimately
+claiming the group's one pending slot from an older push's still-pending
+job — GitHub's single-pending-slot rule working exactly as intended, not a
+bug. That case also produces a cancelled-without-`started_at` sibling on an
+open PR, which the prior logic could not distinguish from the genuine
+out-of-order eviction it was built to catch — so it would have fired a
+misleading `::error::` on ordinary multi-push activity, not just the rare
+race. Fixed by adding a third signal: comparing the PR's **live head SHA**
+against this run's own `EXPECTED_HEAD_SHA`. If the live head has already
+moved past this run's head, some newer push already superseded it —
+routine, no alert. Only when the live head still *equals* this run's own
+head (proving no newer push has taken over) does the step alarm. This is
+the piece that actually distinguishes "a newer, different push legitimately
+took my slot" (fine) from "something claimed my slot without moving the PR
+forward" (the genuine bug) — the earlier version had no way to tell those
+apart.
+
+Both fixes were themselves run through a second 3-lens adversarial
+verification pass (separate agents than the first, explicitly told about
+the miss) before this commit, specifically instructed to verify the
+eviction-detection fix did not accidentally suppress the *true* positive
+while fixing the false one. See this record's own commit history / the
+`.github#1661` PR discussion for that pass's findings.
+
 ## Suggested next steps (not yet started)
 
 - Design and adversarially verify one of the two full-fix candidates above
