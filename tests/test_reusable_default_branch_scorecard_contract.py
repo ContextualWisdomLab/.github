@@ -335,7 +335,7 @@ def test_scorecard_analysis_keeps_authoritative_sarif_boundaries() -> None:
 
     analysis_path = _step_path_by_name(workflow_contract, "Run analysis")
     assert workflow_contract[analysis_path + ("uses",)] == (
-        "ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a"
+        "ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc"
     )
     assert _mapping_contract(
         workflow_contract,
