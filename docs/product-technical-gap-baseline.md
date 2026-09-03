@@ -2657,18 +2657,25 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Fix, applied and independently verified.** `codeql-pr.yml` removed from ruleset `18156473`'s required-workflow list (9 entries remain: `close-empty-pr.yml` through `osv-scanner-pr.yml`; confirmed live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`). GitHub's native code-scanning default setup enabled on all 23 ruleset-covered repositories that had zero real CodeQL coverage from any source — ground-truth checked via `code-scanning/default-setup` state and actual analyses, not by grepping for a workflow file name (some repos run CodeQL from oddly-named files, which a filename-only sweep would miss): CalendarWeave, ConceptWeave, DiagramWeave, ELUNVERA, EmbedRelay, LineageWeave, Orgmetra, OriginWeave, PolicyWeave, TEPP, accounting-information-platform, context-graph-contracts, disksage, enterprise-architecture-core, j-planner, 4 `learning-*` repos, life-os, pingora-gateway, quarantine-sandbox-runtime, supply-chain-control-plane. Independently spot-checked 3 of the 23 (ConceptWeave, pingora-gateway, quarantine-sandbox-runtime): all `state: "configured"`. `.github` itself is unaffected either way (excluded from ruleset `18156473`; its own native `codeql-pr.yml` runs were never in the failing population).
 
-**Devin Review caught the original write-up overclaimed "resolved."** A full org-wide sweep (all 74
-`ContextualWisdomLab` repositories, checked live via `code-scanning/default-setup` state plus a
-per-repository `.github/workflows` listing to catch repo-local CodeQL files the default-setup API can't
-see) found 24 more repositories beyond the original 23 with zero real coverage, not just the ones already
-named. Of those 24: 4 already had a working repo-local `codeql.yml` (`keyverse`, `newsdom-api`, `bandscope`
-— already tracked in `docs/org-required-workflow-rollout.md`'s inventory table — plus `OmniRoute`,
-`litellm-patched-proxy`, `mightyETL`, `pg-erd-cloud`, correctly not needing default setup, which GitHub
-refuses to enable alongside a custom scanning workflow); 4 are private repos where Advanced Security itself
-is off (`IRT-bibliography-set`, `xtrm-lead-pi-outbound`, `ccube-jco-potential-customer`,
-`trivy-sarif-repro` — the last is archived) — **left un-actioned here**, since turning on GHAS for a
-private repository is a billing decision (per-active-committer cost), not a mechanical fix, and needs the
-user's own call rather than being enabled unilaterally. The remaining 16 (`kaefa`, `aFIPC`,
+**Devin Review caught the original write-up overclaimed "resolved," and a first correction attempt still
+had the arithmetic wrong** (labeled a group of 7 repositories as 4, and folded two separate result buckets
+into one total — caught again, corrected here with the counts double-checked against the raw sweep output
+before writing them down). A full org-wide sweep (all 74 `ContextualWisdomLab` repositories, checked live
+via `code-scanning/default-setup` state plus a per-repository `.github/workflows` listing to catch
+repo-local CodeQL files the default-setup API can't see) found two separate buckets of repositories beyond
+the original 23 (46 repos were already correctly `configured`; `46 + 24 + 4 = 74` checks out): **24
+repositories reported `not-configured`**, and **4 separate repositories 403'd** with "Code Security must be
+enabled" (Advanced Security itself is off for those 4). Of the 24 `not-configured`: 1 is `.github` itself
+(excluded from this sweep's remediation — it uses its own native, non-ruleset-injected `codeql-pr.yml`,
+already separately verified as unaffected), **7** already had a working repo-local `codeql.yml`
+(`keyverse`, `newsdom-api`, `bandscope` — already tracked in `docs/org-required-workflow-rollout.md`'s
+inventory table — plus `OmniRoute`, `litellm-patched-proxy`, `mightyETL`, `pg-erd-cloud`, correctly not
+needing default setup, which GitHub refuses to enable alongside a custom scanning workflow), leaving **16**
+genuinely gapped (`1 + 7 + 16 = 24`). The 4 that 403'd are private repos where Advanced Security itself is
+off (`IRT-bibliography-set`, `xtrm-lead-pi-outbound`, `ccube-jco-potential-customer`, `trivy-sarif-repro` —
+the last is archived) — **left un-actioned here**, since turning on GHAS for a private repository is a
+billing decision (per-active-committer cost), not a mechanical fix, and needs the user's own call rather
+than being enabled unilaterally. The 16 genuinely gapped repositories (`kaefa`, `aFIPC`,
 `linux-cluster-ops`, `argos`, `contextual-orchestrator`, `inkspan`, `g7`, `saju-caldav`, `9drive`,
 `macos_utility_packs`, `graphify`, `four-pillars`, `mhtml-etl-gateway`, `psychometrics-commons`,
 `metering-billing-platform`, `governance-risk-compliance`) had genuinely zero coverage of any kind —
