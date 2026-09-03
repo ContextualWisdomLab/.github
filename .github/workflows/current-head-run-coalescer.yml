@@ -4,13 +4,6 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
-concurrency:
-  group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  # Do not restore cancel-in-progress: true here. This job is the control-plane
-  # worker that retires redundant runs; cancelling it during a push burst lets
-  # the redundant runs survive and worsens the 60-job ceiling.
-  cancel-in-progress: false
-
 permissions:
   actions: write
   contents: read
@@ -18,6 +11,29 @@ permissions:
 
 jobs:
   coalesce:
+    # A plain cancel-in-progress:false only protects a RUNNING job; GitHub
+    # concurrency groups still retain just one PENDING (queued) run and
+    # silently replace it whenever another run enters the same group --
+    # regardless of cancel-in-progress (Devin Review on this PR caught that
+    # the first fix here didn't actually cover this). Under near-zero
+    # Actions admission, rapid same-PR pushes were replacing each queued
+    # coalescer instance before it ever got a runner (verified 2026-09-03:
+    # PR #1741's own required-review checks sat stuck queued because the
+    # coalescer never once executed for it). queue: max is the GitHub
+    # Actions feature that actually fixes this -- up to 100 pending runs
+    # are kept and run in order instead of only the latest surviving, so at
+    # least one eventually gets a runner rather than being repeatedly
+    # evicted while still queued (already used the same way by this repo's
+    # own agent-mention-router.yml:29-31). current_head_run_coalescer.py
+    # re-fetches live PR/association/sibling state immediately before
+    # cancelling anything (see its own module docstring) -- it never trusts
+    # the head SHA it was triggered with, so multiple queued instances each
+    # eventually running in sequence is safe, not merely tolerated: a
+    # "stale" instance acting on live-refetched state is exactly as correct
+    # as a fresh one.
+    concurrency:
+      group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
