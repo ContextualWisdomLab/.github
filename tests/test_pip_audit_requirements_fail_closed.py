@@ -71,6 +71,26 @@ def test_hashed_lock_requires_one_pep508_exact_pin(
     assert module.is_hashed_lock(path) is expected
 
 
+@pytest.mark.parametrize(
+    "hash_field",
+    (
+        "--hash=sha256:" + "a" * 63,  # one hex character short
+        "--hash=sha256:" + "g" * 64,  # not a hex digit
+        "--hash=md5:" + "a" * 32,  # wrong digest algorithm
+    ),
+)
+def test_malformed_hash_field_is_not_a_complete_lock(
+    tmp_path: pathlib.Path, hash_field: str
+) -> None:
+    """A hash field that fails the exact SHA-256 shape may not bypass resolution."""
+
+    module = load_module()
+    path = tmp_path / "requirements-contract.txt"
+    path.write_text(f"demo==1.0.0 {hash_field}\n", encoding="utf-8")
+
+    assert module.is_hashed_lock(path) is False
+
+
 def test_invalid_hash_sibling_cannot_suppress_source_audit(
     tmp_path: pathlib.Path,
 ) -> None:
