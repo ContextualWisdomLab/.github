@@ -1667,14 +1667,17 @@ def call_llm(
     attempt_started = time.monotonic()
     # urllib's opener.open() is one blocking call covering DNS/TCP/TLS setup,
     # sending the request, AND waiting for the upstream response's status
-    # line/headers -- it returns no hook to time those separately. For a
-    # loopback gateway sidecar, connection setup is near-instant, so nearly
-    # all of this phase's observed duration is actually the upstream
-    # provider's own processing/inference time, not network connection time.
-    # Named for what it actually measures, not literally "connecting", so a
-    # multi-hundred-second duration here reads as "the gateway/provider was
-    # slow to respond," not as a network connectivity problem.
-    active_phase = "awaiting_response"
+    # line/headers -- it returns no hook to time those separately, so this
+    # single phase cannot by itself distinguish "never connected" from
+    # "connected, sent, and is still waiting on the provider." The except
+    # block below resolves that ambiguity from the exception's own type
+    # instead: urllib.error.HTTPError means a full request/response cycle
+    # completed and a real status code came back (so any duration here is
+    # provider/inference latency, not a connectivity problem, exactly the
+    # multi-hundred-second-stall-then-500 shape this repo has hit in
+    # production); any other transport exception means no response was ever
+    # received, so "connecting" -- unmodified -- remains accurate.
+    active_phase = "connecting"
     served_model: str | None = None
     try:
         with opener.open(request) as response:  # nosec B310
@@ -1726,14 +1729,23 @@ def call_llm(
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
+        # HTTPError is the one exception type that only occurs once a full
+        # response (status line + headers) was actually received -- any
+        # other transport exception here means opener.open() never got that
+        # far, so the connection itself is the honest culprit.
+        reported_phase = (
+            "awaiting_response"
+            if active_phase == "connecting" and isinstance(exc, urllib.error.HTTPError)
+            else active_phase
+        )
         print(
-            f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
+            f"::warning::Noema gateway attempt outcome=failed phase={reported_phase} "
             f"duration={elapsed:.1f}s requested_model={model} served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
-            f"phase={active_phase}, requested_model={model}, served_model={model_note}"
+            f"phase={reported_phase}, requested_model={model}, served_model={model_note}"
         )
         if isinstance(exc, NoemaModelOutputError):
             raise NoemaModelOutputError(

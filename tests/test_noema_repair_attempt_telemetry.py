@@ -94,14 +94,18 @@ def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) 
 def test_transport_failure_reports_requested_model_and_not_literal_connecting(
     monkeypatch, capsys
 ) -> None:
-    """A failure before any response is read must not blame "connecting".
+    """An HTTPError (a real status line came back) must not blame "connecting".
 
     ``opener.open()`` is one blocking call spanning DNS/TCP/TLS setup, the
     request, AND the wait for the upstream response -- for a loopback
-    gateway sidecar that connects near-instantly, a slow failure here is
-    almost always the upstream provider being slow to respond, not a
-    network connectivity problem. The phase label must reflect that instead
-    of misleadingly reading "connecting" for a multi-minute stall.
+    gateway sidecar that connects near-instantly, an HTTPError here means
+    the connection, handshake, and request send all succeeded and a real
+    (if unwelcome) status code came back, so the delay was almost always
+    the upstream provider being slow to respond, not a network
+    connectivity problem. See the sibling
+    ``test_pre_response_failures_still_report_connecting`` for the
+    opposite case (a genuine connection failure, which must still report
+    "connecting" -- Devin Review's own follow-up on this rename).
     """
     calls, kwargs = _invoke_once(
         monkeypatch,
@@ -229,6 +233,28 @@ def test_connect_failures_are_one_request_and_typed(monkeypatch, failure) -> Non
     with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
         gate.call_llm(**kwargs)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("socket timeout"),
+        gate.urllib.error.URLError("Connection refused"),
+    ],
+)
+def test_pre_response_failures_still_report_connecting(monkeypatch, capsys, failure) -> None:
+    """A failure with no HTTP status ever received is a real connectivity
+    problem (DNS/TCP/TLS/timeout before any response) -- Devin Review's
+    follow-up on the awaiting_response rename: don't let a genuine
+    connection failure get mislabeled as provider latency either.
+    """
+    calls, kwargs = _invoke_once(monkeypatch, open_error=failure)
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "phase=connecting" in output
+    assert "phase=awaiting_response" not in output
 
 
 def test_truncated_read_is_one_request_and_typed(monkeypatch) -> None:
