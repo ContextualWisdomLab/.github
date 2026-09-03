@@ -134,6 +134,22 @@ def test_legacy_monkeypatches_are_forwarded_to_the_core_module(
     assert scheduler_facade.DEFAULT_STALE_OPENCODE_MINUTES is sentinel
 
 
+def test_wildcard_import_preserves_the_original_public_scheduler_api() -> None:
+    """Export delegated public APIs through the stable facade path."""
+
+    imported_namespace: dict[str, object] = {}
+    exec(
+        "from scripts.ci.pr_review_merge_scheduler import *",
+        imported_namespace,
+    )
+
+    assert imported_namespace["main"] is scheduler_core.main
+    assert imported_namespace["gh_graphql"] is scheduler_core.gh_graphql
+    assert imported_namespace["gh_api_json"] is scheduler_core.gh_api_json
+    assert "_scheduler_core" not in imported_namespace
+    assert "main" in scheduler_facade.__all__
+
+
 def test_core_owns_the_existing_dispatch_contract_markers() -> None:
     """Keep static dispatch evidence on the implementation, not only facade."""
 
@@ -155,3 +171,4 @@ def test_facade_installs_no_reset_lookup_on_the_production_entrypoint() -> None:
     assert "rate_limit_retry_delay_seconds(" not in facade_source
     assert '["gh", "api", "rate_limit"]' not in facade_source
     assert "deferring without runner-held sleep" in facade_source
+    assert "__all__ = tuple(" in facade_source
