@@ -43,7 +43,7 @@ parameters to the reusable scheduler:
 ```yaml
 target_repository: ContextualWisdomLab/clearfolio
 base_branch: main
-max_prs: "50"
+max_prs: "200"
 max_dispatches: "1"
 retry_hours: "1"
 ```
@@ -65,7 +65,7 @@ The Orgmetra caller provides the following immutable operating parameters:
 ```yaml
 target_repository: ContextualWisdomLab/Orgmetra
 base_branch: develop
-max_prs: "50"
+max_prs: "200"
 max_dispatches: "1"
 retry_hours: "2"
 ```

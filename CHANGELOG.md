@@ -6,6 +6,10 @@
 
 - Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
 
+### Hourly review-repair queue-scan bound
+
+- Raised `hourly-review-repair.yml`'s `max_prs` from `"50"` to `"200"` for all 20 targets. All 18 original per-repository callers this file consolidated were uniformly `"50"` only because none had picked up the fix `#1397` proposed for BandScope specifically (root cause: an oldest-first scan capped at 50 never reaches a repository's newer non-draft work once its open-PR queue exceeds that bound -- BandScope's had already reached 136). `#1397` never merged before this consolidation deleted its target file out from under it, leaving the underlying cap live and unfixed for all 20 targets; independently confirmed live for `ContextualWisdomLab/.github` itself, which had 117 open PRs as of 2026-09-03. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
+
 ## [Unreleased]
 
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
