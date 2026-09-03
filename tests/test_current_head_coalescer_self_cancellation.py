@@ -1,4 +1,4 @@
-"""Regression contract for the run-coalescer worker's own concurrency policy."""
+"""Regression contracts for the run-coalescer worker's concurrency policy."""
 
 from pathlib import Path
 
@@ -7,8 +7,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
 
 
-def test_current_head_coalescer_cannot_cancel_its_active_cleanup_worker() -> None:
-    """Push bursts must queue the next cleanup instead of killing the active cleanup."""
+def test_current_head_coalescer_preserves_active_and_pending_cleanup_workers() -> None:
+    """Push bursts must preserve the active cleanup and queued successors."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
     concurrency_block = workflow_text.split("concurrency:", 1)[1].split("\npermissions:", 1)[0]
     active_lines = [
@@ -19,3 +19,5 @@ def test_current_head_coalescer_cannot_cancel_its_active_cleanup_worker() -> Non
 
     assert "cancel-in-progress: false" in active_lines
     assert "cancel-in-progress: true" not in active_lines
+    assert "queue: max" in active_lines
+    assert "queue: single" not in active_lines
