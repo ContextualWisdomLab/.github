@@ -195,13 +195,23 @@ runs at the margin but cannot lift the ceiling).
 
 ## Audit trail
 
+**Devin Review correctly flagged that the two run IDs below are not durable, externally checkable evidence
+on their own.** `wf_eb15dd2b-ad1` and `wf_68f78449-bb6` are internal Claude Code orchestration-tool run
+identifiers, local to the session that produced them — they have no repository path, no public URL, and no
+way for a future reader (human or agent) to open and inspect them. They are recorded here only as an
+internal audit trail of *how* this record's investigation was structured (agent counts, investigate-vs-verify
+split), not as the evidence itself. The actual checkable evidence is what each finding above cites inline:
+exact file paths and line ranges in this repository, `raw.githubusercontent.com` fetches of the live
+workflow files, `gh api` calls against the GitHub REST API (rulesets, runs, jobs, PRs), and named PR/commit
+references (`#1568`, `ContextualWisdomLab/naruon#1528`). Any future reader who doubts a finding above should
+re-run those same file reads and API calls, not attempt to open these run IDs.
+
 - Workflow run `wf_eb15dd2b-ad1` (9 agents: 4 investigate, 1 direct-evidence pull, 4 adversarial verify) —
-  full per-agent transcripts and the complete unredacted findings/verification JSON live in that run's
-  journal.
+  internal orchestration record only, per the caveat above.
 - Workflow run `wf_68f78449-bb6` (4 agents: 2 investigate, 2 adversarial verify) — the follow-up
   investigation of the two substantive Devin Review findings above (`noema-review.yml`'s confirmed
-  concurrency bug, `strix.yml`'s refuted paths-ignore claim); full per-agent transcripts and the complete
-  unredacted findings/verification JSON live in that run's journal.
+  concurrency bug, `strix.yml`'s refuted paths-ignore claim); internal orchestration record only, per the
+  caveat above.
 - `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` — the root-cause record this evidence
   corroborates.
 - `docs/product-technical-gap-baseline.md` — backlog item 13's original text and citation, to be updated
