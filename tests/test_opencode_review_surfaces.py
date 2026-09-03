@@ -410,6 +410,13 @@ def test_rust_api_symbols_skip_missing_and_symlink_sources(tmp_path: Path) -> No
     )
 
 
+def test_rust_api_symbols_skips_regex_when_pub_absent(tmp_path: Path) -> None:
+    """Files with no 'pub' substring take the fast path and skip regex scanning."""
+    source = tmp_path / "lib.rs"
+    source.write_text("fn private_helper() {}\n", encoding="utf-8")
+    assert surfaces.rust_api_symbols(tmp_path, ["lib.rs"]) == []
+
+
 def test_rust_api_symbols_replace_invalid_utf8(tmp_path: Path) -> None:
     """A malformed Rust text blob cannot abort review-surface publication."""
     source = tmp_path / "lib.rs"

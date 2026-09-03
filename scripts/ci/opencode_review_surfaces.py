@@ -218,6 +218,8 @@ def rust_api_symbols(source_root: Path | None, raw_paths: Sequence[str]) -> list
         if not candidate.is_file() or candidate.is_symlink():
             continue
         text = candidate.read_text(encoding="utf-8", errors="replace")
+        if "pub" not in text:
+            continue
         for match in PUB_ITEM_RE.finditer(text):
             name = match.group("name")
             if name not in seen:
