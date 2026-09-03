@@ -108,13 +108,25 @@ item 13 hypothesized is not what happened here. What actually happened, quoted d
   on this PR and whether they are governance-irrelevant, or a considered design for distinguishing genuinely
   new gate-relevant information from a redundant re-trigger. Recorded as still open, not fixed.
 
-This is the same root cause `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` already
-identified (a plan-level concurrent-job ceiling), now corroborated with a concrete, painful, individually
-named example instead of aggregate counts: a real open PR's real review evidence sat queued for over a day
-— not because anything is misconfigured, but because there was nowhere for it to run sooner. This
-strengthens, rather than changes, that record's conclusion and its recommendation (a plan-tier decision or
-added runner capacity is the actual fix; workflow-file consolidation reduces total triggered runs at the
-margin but cannot lift the ceiling).
+**Precision on what this evidence actually establishes (Devin Review):** the 23h22m and 24+ hour waits prove
+queueing occurred; on their own they do not prove a plan-level concurrent-job ceiling is the *exclusive*
+cause, only that they are consistent with one. `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`
+treats its own live API counts (jobs `in_progress` vs. `queued`) the same way — as corroboration for that
+theory, not as independent proof of it; that record does not claim otherwise, and neither does this one. A
+misconfigured scheduler, a starved runner label (a real, separately-documented org history — see this
+repository's own `ubuntu-latest` floating-image finding), or some other single-repository cause could in
+principle also produce a multi-hour wait for one PR. What rules those out *here*, specifically, is that
+Result 1 above already verified all four central workflows' own cancellation/scheduling logic is correct —
+so the wait is not explained by a bug in this PR's own review pipeline, which narrows the remaining
+explanation toward capacity rather than proving it by elimination of every other conceivable cause.
+
+With that precision stated, this evidence is consistent with, and corroborates, the root cause
+`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` already identified (a plan-level concurrent-job
+ceiling) — now with a concrete, individually named example instead of only aggregate counts: a real open
+PR's real review evidence sat queued for over a day, with no workflow-configuration defect found to explain
+it. This strengthens, rather than changes, that record's conclusion and its recommendation (a plan-tier
+decision or added runner capacity is the actual fix; workflow-file consolidation reduces total triggered
+runs at the margin but cannot lift the ceiling).
 
 ## What this resolves, and what it does not
 
