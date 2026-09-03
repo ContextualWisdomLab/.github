@@ -4277,3 +4277,46 @@ doesn't crash), then ran the full backend suite in a fresh venv with CI's exact 
 **Noted, not chased down:** the push surfaced "GitHub found 6 vulnerabilities on naruon's default branch (4
 high, 2 moderate)" via Dependabot — unrelated to this fix and outside this session's tracked scope; flagged
 here for whichever session next works `naruon` directly rather than investigated in this pass.
+
+## `naruon#1532` — two real CI-blocking bugs in the naruon-owned password-login PR, both fixed — 2026-09-03
+
+**Trigger.** Autofix flagged `naruon#1532`'s "validate frontend image" check as failing. This PR is
+`feat/naruon-owned-password-login` — the naruon-side counterpart to this session's earlier `keyverse#128`
+ROPC standards-compliance work (item 20: naruon's login/signup calling Keyverse's RESTful API directly, no
+Keycloak page). Investigated via a full log pull rather than trusting the check name alone.
+
+**Bug 1 (the flagged check): a type error, not a logic error.** `frontend/src/lib/account-unification-client.ts`
+declared its request options as `node:http`'s `RequestOptions`, which has no `servername` field (a TLS/SNI
+option) — `next build`'s type-check step failed on `options.servername = hostname` at line 171. The file's
+own sibling, `oidc-token-client.ts`, already gets this right: it imports `RequestOptions` from `node:https`
+instead (a structural superset — `https.RequestOptions` extends `http.RequestOptions` plus the TLS options),
+since the same `options` object is later passed to either `http.request` or `https.request` depending on
+protocol. A straightforward copy-paste inconsistency between two files implementing the identical pinned
+-DNS request pattern — matched the already-correct sibling's import instead of reinventing the fix.
+
+**Bug 2 (found while investigating, not part of the flagged check, but genuinely CI-blocking on the same
+PR): a real race condition in a brand-new test, not flakiness.** The `frontend` test job was also failing —
+confirmed as a genuine, reproducible-every-run failure (not intermittent) by running it standalone and
+against the unmodified file via `git stash`. `oidc-session.test.ts`'s new
+`'opens the authorization URL in a uniquely-named popup and resolves once it broadcasts success'` test — a
+NEW test this PR itself adds, confirmed via `git diff origin/develop...HEAD` — calls
+`broadcastOidcPopupResult(...)` immediately after `openPopup` fires, but `startOidcLogin` only registers its
+`BroadcastChannel` listener (inside `waitForPopupCompletion`) after an async server round-trip completes.
+`BroadcastChannel` does not queue or replay messages for listeners that attach later, so the broadcast is
+silently dropped every run, hanging the test until its 5s timeout. Verified `BroadcastChannel` itself works
+correctly in this jsdom+vitest environment with a standalone throwaway test before concluding it was a
+sequencing bug rather than an environment gap (the throwaway test was written, run, confirmed passing, then
+deleted — never committed). This is correctly a *test* bug, not an implementation bug: the intentional design
+(per the implementation's own doc comment) reserves the popup synchronously first, before any async work, so
+transient user-activation isn't lost — in real usage the popup's actual OAuth interaction takes far longer
+than the async setup, so this race can never manifest in production, only in a test that broadcasts
+immediately. Fixed by waiting for `fakePopup.focus()` (the last synchronous call before the channel is
+created, with no `await` between them) before broadcasting.
+
+**Verification.** Full frontend suite (478 tests across 57 files), `tsc --noEmit`, `eslint`, and
+`next build --webpack` (CI's exact build command) all pass together. Pushed `0f7e32d4`.
+
+**Cross-reference.** A second instance this session of "the check name Autofix flagged wasn't the only real
+bug on the PR" (see `.github#1661`'s two-round Devin Review entry above) — investigating past the one named
+check found a second, independent, genuinely CI-blocking bug on the same PR that a narrower fix would have
+left unresolved for a follow-up round-trip.
