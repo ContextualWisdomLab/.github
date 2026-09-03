@@ -73,6 +73,19 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        itself: a transient failure reading it must stop cleanup without
        crashing the step (and thus the whole job) -- proven by
        ``test_superseded_cleanup_survives_a_transient_live_head_lookup_failure``.
+    5. ``cancel-in-progress: false`` alone only protects a RUNNING slot --
+       GitHub's concurrency group still silently replaces a single PENDING
+       slot the instant another trigger enters the group, regardless of
+       cancel-in-progress (Devin Review, PR #1797). A current-head run
+       sitting pending behind a still-running older-head run could be
+       evicted by a third, out-of-order/stale trigger before it ever gets a
+       runner -- erased, not rejected, so its own stale-trigger guard never
+       runs. ``queue: max`` closes this by retaining up to 100 pending runs
+       in the group instead of only the latest, mirroring this repo's own
+       established fix for the identical failure mode in
+       ``current-head-run-coalescer.yml`` (see
+       ``test_noema_review_job_retains_pending_current_head_run_under_stale_trigger_burst``
+       below and ``docs/doctoring/agent-mention-concurrency-isolation.md``).
     """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
 
@@ -89,6 +102,10 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     assert "noema-review-${{" in concurrency_group
     assert "github.event.action" not in concurrency_group
     assert re.search(r"cancel-in-progress:\s*false\b", workflow)
+    concurrency_block = workflow.split("\n    concurrency:", 1)[1].split(
+        "\n    if:", 1
+    )[0]
+    assert "queue: max" in concurrency_block
 
     assert "Cancel superseded Noema runs after live-head validation" in workflow
     # The cancellation job now runs structurally separately from, and BEFORE
@@ -104,17 +121,21 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
         "    steps:", 1
     )[0]
     assert "actions: write" in cancel_job_header
+    # Scoped to pull_request_target only -- deliberately NOT
+    # repository_dispatch. PR review (owner, PR #1797) caught that an earlier
+    # revision of this job accepted repository_dispatch too, calling the
+    # target repository's Actions API with the plain github.token; that token
+    # is not guaranteed scoped to whatever repository a dispatch payload
+    # names, so the cleanup job's actual Actions-write authority does not
+    # cover it. A correctly token-scoped repository_dispatch cleanup path is
+    # tracked separately in ContextualWisdomLab/.github#1799.
+    assert "github.event_name == 'repository_dispatch'" not in cancel_job_header
+    assert "github.event.client_payload.target_repository" not in cancel_job_header
     review_job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
     assert re.search(r"(?m)^      actions: write$", review_job_header) is None, (
         "the Actions-cancel write permission moved to cancel-superseded-noema-runs; "
         "noema-review no longer calls that API"
     )
-    # Invariant 2 (step-level half): this step now also runs for
-    # repository_dispatch retries (which share noema-review's concurrency
-    # group and need the same unblocking path), gated only on a resolved PR
-    # number -- the job-level `if:` above already restricts which trigger
-    # types reach this step at all.
-    assert "if: env.PR_NUMBER != ''" in cleanup
     assert 'select(.id < $current)' in cleanup
     # The live-head re-check must be error-guarded (an `if !` command
     # substitution), never a bare assignment under set -euo pipefail -- a
@@ -128,6 +149,78 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
     assert 'endswith("@" + $head)' in cleanup
     assert "| not)" in cleanup
+
+
+def test_noema_review_job_retains_pending_current_head_run_under_stale_trigger_burst():
+    """Pin the structural fix for Devin Review's PR #1797 pending-eviction finding.
+
+    Scenario the finding describes: an older head H1's run is RUNNING in
+    ``noema-review``'s concurrency group; a current head H2's run is PENDING
+    behind it (the group's one native pending slot). A third, out-of-order or
+    duplicate-stale trigger H3 then arrives. ``cancel-in-progress: false``
+    only protects the RUNNING slot (H1) -- it does nothing for the PENDING
+    slot. Without ``queue: max``, GitHub silently replaces H2 with H3 in the
+    pending slot the instant H3 enters the group: H2 is evicted before it
+    ever gets a runner, so its own "Reject a stale trigger before credential
+    or model setup" step never executes -- H2 isn't rejected as stale, it is
+    erased while still valid. H3 eventually runs in H2's place, correctly
+    self-aborts via that same step (proving the guard works when a run DOES
+    get a runner), but nothing is left queued to review the actual current
+    head.
+
+    This cannot be simulated end to end without GitHub's own scheduler (a
+    real GHA runtime behavior, not application code), so -- matching this
+    repository's own convention for exactly this failure mode in
+    ``tests/test_current_head_coalescer_self_cancellation.py`` -- the
+    executable proxy is a structural pin on the concurrency configuration
+    GitHub's docs specify as the fix: ``queue: max`` retains up to 100
+    pending runs per group instead of only the latest, so H2 above survives
+    to run once H1 finishes rather than being silently replaced by H3. This
+    is combined with confirming the job's own "Reject a stale trigger before
+    credential or model setup" step still gates every path to credential
+    minting or the model call (its Python-script analogue's short-circuit
+    behavior is separately proven by
+    ``test_stale_trigger_stops_before_identity_or_model_work``), so a burst
+    of retained-but-stale pending runs self-aborts cheaply rather than
+    reaching the shared LLM gateway.
+    """
+    workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
+    review_job = workflow.split("\n  noema-review:\n", 1)[1]
+    concurrency_block = review_job.split("concurrency:", 1)[1].split("if:", 1)[0]
+
+    # The fix: retain the pending slot instead of letting GitHub silently
+    # replace it. GitHub's own documentation states queue: max cannot be
+    # combined with cancel-in-progress: true, so this also re-confirms
+    # cancel-in-progress stays false (already pinned above) rather than the
+    # two settings silently conflicting.
+    assert "queue: max" in concurrency_block
+    assert "cancel-in-progress: true" not in concurrency_block
+
+    # The group formula itself is unchanged by this fix (PR #1797's own
+    # description: "same PR-number-scoped formula, unchanged") -- scoped by
+    # repository and PR number, still no head-SHA segment (rejected earlier,
+    # see the workflow's own comment, to avoid reopening the queue-thrashing
+    # regression opencode-review.yml hit under SHA-scoped groups).
+    group = concurrency_block.split("group:", 1)[1].split("cancel-in-progress:", 1)[0]
+    assert "noema-review-" in group
+    assert "github.event.pull_request.base.repo.full_name" in group
+    assert "github.event.pull_request.number" in group
+    assert "github.event.pull_request.head.sha" not in group
+
+    # A queued-but-stale run that DOES survive to get a runner (retained by
+    # queue: max rather than erased) must still never reach credential
+    # minting, sidecar provisioning, or the model call before its own
+    # live-head guard runs -- this is what makes retaining every pending
+    # trigger cheap rather than a cost/rate-limit risk (unlike strix.yml,
+    # whose own live-head guard sits after real setup work and which
+    # therefore deliberately does not use queue: max -- see the workflow's
+    # own comment above this concurrency block).
+    steps = review_job.split("    steps:\n", 1)[1]
+    reject_index = steps.index("Reject a stale trigger before credential or model setup")
+    credential_index = steps.index("Select fail-closed Noema reviewer credential")
+    sidecar_index = steps.index("Provision contextual-orchestrator review sidecar")
+    model_index = steps.index("Prepare Noema model verdict")
+    assert reject_index < credential_index < sidecar_index < model_index
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():

@@ -204,23 +204,28 @@ jobs:
     # which already use this exact job-level-concurrency-plus-unrestricted-
     # cleanup-job shape for the identical reason.
     #
-    # Also runs for repository_dispatch: noema-review's concurrency group is
-    # scoped by target-repo + PR number regardless of which of the two
-    # trigger types produced it, so a pull_request_target push and a
-    # repository_dispatch retry for the same PR share one group and both
-    # need a path to unblock it. repository_dispatch needs no extra trust
-    # check here the way pull_request_target's `head.repo.full_name` check
-    # does: only a principal with this repository's write access can send it
-    # at all (GitHub's own authorization boundary for the dispatches
-    # endpoint), the same trust level noema-review's own `if:` already
-    # extends it below.
+    # pull_request_target only -- deliberately NOT repository_dispatch.
+    # TARGET_REPOSITORY equals github.repository for every pull_request_target
+    # run this job accepts (the required-workflow ruleset materializes this
+    # file's run inside the target repository itself, so github.token is
+    # already scoped to that same repository's Actions API). A
+    # repository_dispatch retry is different: scripts/ci/noema_review_handoff.py
+    # posts it to the TARGET repository's own dispatches endpoint, which is not
+    # necessarily the repository this run executes in, so the plain
+    # github.token used below cannot be assumed to carry Actions-write on
+    # whatever TARGET_REPOSITORY a dispatch payload names. An earlier revision
+    # of this PR extended this job's `if:` to also cover repository_dispatch on
+    # that unverified assumption; PR review (owner, 2026-09-03) caught that a
+    # scoped, cross-repository-capable token has not actually been built for
+    # this job, so claiming dispatch cleanup support here would be asserting
+    # something the central token cannot back up. Reverted to
+    # pull_request_target-only scope; a correctly token-scoped
+    # repository_dispatch cleanup path is tracked separately in
+    # ContextualWisdomLab/.github#1799, not attempted here.
     if: >-
-      (
-        github.event_name == 'pull_request_target'
-        && github.event.action != 'closed'
-        && github.event.pull_request.head.repo.full_name == github.repository
-      )
-      || github.event_name == 'repository_dispatch'
+      github.event_name == 'pull_request_target'
+      && github.event.action != 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -229,20 +234,15 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
-      # Same fallback chain as noema-review's own env block below, so both
-      # jobs agree on target/PR/head for either trigger type.
-      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
-      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+      # No client_payload fallback here: this job no longer accepts
+      # repository_dispatch (see the `if:` comment above), so these always
+      # resolve from the pull_request_target event payload.
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Skip dispatch events without a resolvable PR number
-        if: env.PR_NUMBER == ''
-        run: |
-          echo "::warning::Noema supersede-cleanup received a repository_dispatch event with no client_payload.pr_number; skipping cleanup for this run."
-
       - name: Reject a stale trigger before scanning for superseded runs
-        if: env.PR_NUMBER != ''
         run: |
           set -euo pipefail
           # This job runs independently of noema-review's own "Reject a
@@ -354,10 +354,45 @@ jobs:
     # every push its own group meant rapid successive pushes no longer
     # cancelled each other's in-flight runs and instead queued up
     # independently, worsening this org's measured self-inflicted queue-
-    # thrashing pattern. GitHub's own single-pending-slot rule (independent
-    # of cancel-in-progress) still evicts an intermediate queued push for
-    # free the instant a newer one arrives, so rapid pushes still coalesce
-    # down to "at most one running + one pending" without any SHA segment.
+    # thrashing pattern.
+    #
+    # `queue: max` (Devin Review, PR #1797): cancel-in-progress: false alone
+    # only protects the RUNNING slot. GitHub's concurrency group still keeps
+    # just one PENDING slot and silently replaces it -- regardless of
+    # cancel-in-progress -- the instant another run enters the group. Picture
+    # a current-head run H2 sitting PENDING behind an older, still-running H1:
+    # a third, out-of-order or duplicate-stale trigger H3 then evicts H2 from
+    # the pending slot before H2 ever starts, so H2's own "Reject a stale
+    # trigger" step never gets a chance to run -- it isn't rejected, it is
+    # erased. H3 eventually runs in H2's place, correctly self-aborts as
+    # stale, and nothing is left queued to review the actual current head.
+    # `queue: max` closes this the same way it already closed the identical
+    # failure mode in this repo's own current-head-run-coalescer.yml (first
+    # fixed there with cancel-in-progress: false alone, then Devin Review
+    # caught that fix as incomplete for exactly this pending-eviction gap,
+    # then `queue: max` closed it for real) and matches the established
+    # convention already in force for agent-mention-router.yml,
+    # agent-mention-opencode-dispatch.yml, and agent-mention-noema-dispatch.yml
+    # (docs/doctoring/agent-mention-concurrency-isolation.md). It retains up
+    # to 100 pending runs in this group instead of only the latest, so H2
+    # above survives to get its own runner once H1 finishes, rather than
+    # being silently replaced. Cheap to do here specifically because "Reject
+    # a stale trigger before credential or model setup" below runs early --
+    # before any credential minting, sidecar provisioning, or LLM call -- so
+    # a burst of queued stale instances self-aborts fast, with none of them
+    # reaching the shared NVIDIA NIM/contextual-orchestrator gateway; this is
+    # why strix.yml deliberately does NOT use `queue: max` (its own live-head
+    # validation sits much later, after real setup work) and instead relies
+    # on pr-review-merge-scheduler.yml re-dispatching exact-head evidence at
+    # merge time -- a different job shape needs a different mitigation, and
+    # this job's early-exit shape is exactly why `queue: max` is safe and
+    # cheap here. Residual risk, not eliminated: `queue: max`'s own retention
+    # cap is 100 pending runs (a GitHub-imposed ceiling this workflow cannot
+    # raise) and GitHub does not guarantee strict FIFO dispatch order for the
+    # retained runs -- an extreme burst beyond 100 triggers for one PR while
+    # runner admission stays near zero could still lose a pending run before
+    # it ever queues (see current-head-run-coalescer.yml's own identical
+    # caveat). No incident of that scale has been observed for this workflow.
     # Whichever instance actually gets a runner is not trusted blindly
     # either way: "Reject a stale trigger before credential or model setup"
     # below re-fetches the live PR head and fails closed if it no longer
@@ -371,6 +406,7 @@ jobs:
         github.event.client_payload.pr_number ||
         github.run_id }}
       cancel-in-progress: false
+      queue: max
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own

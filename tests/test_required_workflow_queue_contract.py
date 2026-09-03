@@ -310,6 +310,20 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "cancel-in-progress: false" in concurrency_contract
             assert "github.event.action == 'synchronize'" not in concurrency_contract
             assert "github.event.action == 'closed'" not in concurrency_contract
+            # queue: max (Devin Review, PR #1797): a bare cancel-in-progress:
+            # false only protects the group's RUNNING slot -- GitHub still
+            # silently replaces the single PENDING slot the instant another
+            # trigger enters the group, regardless of cancel-in-progress. A
+            # current-head run sitting pending behind a still-running
+            # older-head run could be evicted by a third, out-of-order/stale
+            # trigger before it ever gets a runner -- erased before its own
+            # stale-trigger guard ever executes, not rejected by it. queue:
+            # max retains up to 100 pending runs per group instead of only
+            # the latest, closing that gap the same way this repo already
+            # closed it for current-head-run-coalescer.yml and the
+            # agent-mention-*.yml workflows (docs/doctoring/
+            # agent-mention-concurrency-isolation.md).
+            assert "queue: max" in concurrency_contract
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -740,6 +754,14 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event.action == 'synchronize'" not in concurrency_contract
     assert "github.event.action == 'closed'" not in concurrency_contract
     assert "cancel-in-progress: false" in concurrency_contract
+    # queue: max (Devin Review, PR #1797): cancel-in-progress: false alone
+    # only protects the RUNNING slot; GitHub still silently replaces the
+    # group's single PENDING slot whenever another trigger arrives,
+    # regardless of cancel-in-progress. queue: max retains up to 100 pending
+    # runs instead of only the latest, matching the established convention
+    # already used by current-head-run-coalescer.yml, agent-mention-router.yml,
+    # agent-mention-opencode-dispatch.yml, and agent-mention-noema-dispatch.yml.
+    assert "queue: max" in concurrency_contract
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
