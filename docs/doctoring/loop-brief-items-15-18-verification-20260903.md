@@ -83,9 +83,15 @@ production incidents that shaped them (#1219, #1223).
 `org-queue-sweep`'s own GitHub REST calls are subject to a third resource
 (GitHub's per-token API rate limit), which is why it already paginates
 conservatively and fails closed past `ORG_SWEEP_MAX_UNAVAILABLE` rather than
-retrying harder. No action taken; removing or rewriting this job would
-re-litigate an already-evidenced design, and none of the three resources
-above are fixable by a workflow-file edit alone.
+retrying harder. Two of the three resources already have a workflow-level
+mitigation in place today (`strix.yml`'s per-repository serialization for the
+LLM-provider limit; `org-queue-sweep`'s own pagination/budget ceilings for
+its GitHub API calls) — this item is asking whether a *further* edit is
+needed, not claiming no edit exists. Only the plan-level 60-job ceiling is
+structurally outside any workflow file's reach, since it caps total
+concurrent jobs org-wide regardless of how any single workflow is written.
+No action taken; removing or rewriting `org-queue-sweep` would re-litigate an
+already-evidenced design without touching any of the three resources.
 
 ## Item 16 — consolidate the per-repo hourly-review-repair caller shown in the linked run
 
