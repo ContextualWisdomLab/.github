@@ -549,15 +549,21 @@ jobs:
           echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
-    # Exact-head concurrency protects a newer authoritative run from delayed
-    # old-head events, while the poll above now revalidates live PR identity on
-    # every wait iteration so an already-running obsolete poll can self-retire
-    # without consuming a second runner. This sibling job remains a defense in
-    # depth for queued/requested old-head runs and for legacy runs created from
-    # older workflow revisions that lack the in-loop self-retirement check.
-    # Every cancellation candidate and every cancellation itself is re-verified
-    # against the live PR head immediately beforehand, so a cleanup run that is
-    # itself delayed/stale cannot cancel a still-authoritative run.
+    # This job -- not the bootstrap concurrency group above -- is the primary
+    # mechanism that actively cancels a same-PR run for an outdated head. The
+    # bootstrap group is now `cancel-in-progress: false` (see its own comment):
+    # nothing is ever preempted there, by design, to structurally close the
+    # #1568 stale-cancels-fresh race regardless of arrival order. This job
+    # achieves precise, safe "cancel only outdated runs of the same PR"
+    # instead: it re-verifies the live PR head immediately before selecting
+    # candidates AND immediately before every individual cancellation call, so
+    # a cleanup run that is itself delayed/stale cannot cancel a
+    # still-authoritative run, and it only ever targets runs whose recorded
+    # head no longer matches the live one. The poll step above also
+    # revalidates live PR identity on every wait iteration as a second,
+    # independent line of defense, so an already-running obsolete poll
+    # self-retires even if this cleanup job's own run for that event is
+    # delayed or fails.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
     runs-on: ubuntu-24.04
     permissions:
