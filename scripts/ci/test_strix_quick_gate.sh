@@ -1559,7 +1559,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" 'pull_request_target:' "scheduler can run as an organization required workflow without repository-local copies"
 	assert_file_contains "$workflow_file" 'auto_merge_enabled' "scheduler rechecks already stale PRs as soon as native auto-merge is enabled"
 	assert_file_contains "$workflow_file" 'workflows: ["Required OpenCode Review", "Strix Security Scan"]' "scheduler reruns after review or security evidence completion so approvals can trigger merge/update actions"
-	assert_file_contains "$workflow_file" 'cron: "*/30 * * * *"' "scheduler wakes frequently enough to clear auto-merge PRs that become stale after their initial PR events"
+	assert_file_contains "$workflow_file" 'cron: "30 * * * *"' "scheduler wakes on an hourly heartbeat to clear auto-merge PRs that become stale after their initial PR events"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
