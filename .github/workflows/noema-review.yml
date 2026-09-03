@@ -227,6 +227,11 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
       CURRENT_RUN_ID: ${{ github.run_id }}
+      # CURRENT_RUN_ID is only ever a valid run identifier under the repo
+      # this run actually executes in -- distinct from TARGET_REPOSITORY
+      # whenever a repository_dispatch retry names a sibling. Used below by
+      # the eviction-detection step, which inspects THIS run's own jobs.
+      CURRENT_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Skip dispatch events without a resolvable PR number
         if: env.PR_NUMBER == ''
@@ -234,6 +239,7 @@ jobs:
           echo "::warning::Noema supersede-cleanup received a repository_dispatch event with no client_payload.pr_number; skipping cleanup for this run."
 
       - name: Reject a stale trigger before scanning for superseded runs
+        id: validate_target
         if: env.PR_NUMBER != ''
         run: |
           set -euo pipefail
@@ -244,10 +250,9 @@ jobs:
           # down this file) validates this exact format before using
           # TARGET_REPOSITORY for anything (Devin Review,
           # completeness-vs-original-findings lens, 2026-09-03); apply the
-          # identical check here for consistency, even though actual
-          # exploitability is already bounded by GITHUB_TOKEN's own
-          # repo-scoping (an arbitrary repos/<string>/... path would simply
-          # fail to authenticate cross-repo).
+          # identical check here for consistency. A malformed value is
+          # rejected outright regardless of which credential ends up being
+          # used against it below.
           if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
             echo "::error::Noema supersede-cleanup target repository must belong to ContextualWisdomLab; observed ${TARGET_REPOSITORY:-<empty>}."
             exit 1
@@ -256,9 +261,89 @@ jobs:
             echo "::error::Noema supersede-cleanup trigger did not provide a canonical lowercase exact head SHA."
             exit 1
           fi
+          echo "repository_name=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve a repository-scoped credential for cross-repository cleanup
+        # github.token above is scoped to THIS run's own repository. For a
+        # same-repository pull_request_target run -- the dominant path, since
+        # this workflow reaches sibling repositories only through the
+        # required-workflow ruleset, which runs the job IN that target
+        # repository's own context -- TARGET_REPOSITORY equals
+        # github.repository and github.token already has everything the
+        # cancel step below needs. It is only for a repository_dispatch retry
+        # naming a SIBLING target_repository (the "Default-branch-only retry
+        # entrypoint" above) that github.token cannot see that repository at
+        # all: every gh api call below would fail to authenticate, and the
+        # added repository_dispatch cleanup coverage would silently cancel
+        # nothing (Devin Review, 2026-09-03: "Sibling retry cleanup never
+        # authenticates") -- defeating the retry entrypoint's exact purpose
+        # of unblocking a stuck sibling review stuck behind a genuinely stale
+        # run (Noema inference has no wall-clock deadline by design, see this
+        # job's own header comment). Mint a repository-scoped GitHub App
+        # installation token the same way the noema-review job below already
+        # does for its own cross-repo publication calls, narrowed to just the
+        # two permissions this job's API calls use. If the App credential
+        # isn't configured, degrade the same way every other transient
+        # failure in this job already does: warn and skip, never fail the
+        # job over an ancillary cleanup path.
+        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository
+        id: cleanup_credential
+        env:
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::Noema supersede-cleanup has no repository-scoped credential configured for cross-repository target ${TARGET_REPOSITORY}; skipping cross-repository cancellation for this run rather than attempting it with a token that cannot see that repository."
+          fi
+
+      - name: Mint repository-scoped token for cross-repository Noema cleanup
+        # continue-on-error is deliberate: cleanup_credential above only
+        # proves the App secrets are CONFIGURED, not that this specific
+        # mint call will succeed -- the App may not be installed on this
+        # particular sibling repository (installation scope is independent
+        # of whether the org-level client-id/private-key secrets exist), or
+        # the exchange may hit a transient API error. Without
+        # continue-on-error, that failure would fail this step outright and
+        # (via the next step's implicit success() gate) skip the cancel
+        # step below and mark this whole job "failure" -- contradicting the
+        # "warn and skip, never fail the job over an ancillary cleanup
+        # path" design this job states everywhere else (Devin Review,
+        # 2026-09-03: this step was the one place that didn't honor it).
+        # steps.cleanup_app_token.outcome (unlike .conclusion, which
+        # continue-on-error masks back to "success") still reports the raw
+        # "failure" result, which the next two steps key off instead of
+        # outputs.token being merely empty.
+        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.available == 'true'
+        id: cleanup_app_token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.validate_target.outputs.repository_name }}
+          permission-actions: write
+          permission-pull-requests: read
+
+      - name: Warn when cross-repository token minting failed
+        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.available == 'true' && steps.cleanup_app_token.outcome == 'failure'
+        run: |
+          echo "::warning::Noema supersede-cleanup could not mint a repository-scoped token for cross-repository target ${TARGET_REPOSITORY} (App secrets are configured, but the mint call itself failed -- possibly not installed on that repository); skipping cross-repository cancellation for this run."
 
       - name: Cancel superseded Noema runs after live-head validation
-        if: env.PR_NUMBER != ''
+        # Gated on the mint step's own outcome, not just cleanup_credential's
+        # availability check: a same-repository run never needed a mint at
+        # all (first disjunct), while a cross-repository run must have
+        # actually succeeded at minting a usable token (second disjunct) --
+        # "available" alone would let a mint failure through to here with an
+        # empty GH_TOKEN below.
+        if: env.PR_NUMBER != '' && (env.TARGET_REPOSITORY == github.repository || steps.cleanup_app_token.outcome == 'success')
+        env:
+          GH_TOKEN: ${{ (env.TARGET_REPOSITORY == github.repository) && github.token || steps.cleanup_app_token.outputs.token }}
         run: |
           set -euo pipefail
           declare -A seen=()
@@ -425,10 +510,38 @@ jobs:
         # `if: always()` so a run that exits early above (the cancel loop's
         # own defensive `exit 0`s) still gets checked; every gh api/jq call
         # below degrades to a warning on failure, never fails the job.
+        #
+        # This step makes two gh api calls that need two DIFFERENT repository
+        # scopes, so no single GH_TOKEN value is correct for both -- a
+        # step-level override that applied to the whole step broke the first
+        # call for exactly the case it was meant to fix the second call for
+        # (adversarial re-verification of this same patch, 2026-09-03).
+        # The first lookup below uses CURRENT_REPOSITORY (this run's own
+        # jobs; a run ID is only ever valid under the repository it actually
+        # executed in) with the step's default GH_TOKEN -- plain
+        # github.token, which already covers CURRENT_REPOSITORY regardless
+        # of trigger type. The second lookup further down (the PR live-head
+        # re-check) needs TARGET_REPOSITORY instead -- that one asks about
+        # the PR itself, which lives in the target repository, not this
+        # run's own -- so it explicitly overrides GH_TOKEN inline to
+        # CLEANUP_APP_TOKEN (the same cross-repository token minted above
+        # for the cancel step) when one was minted, falling back to the
+        # ambient github.token when TARGET_REPOSITORY equals
+        # CURRENT_REPOSITORY (the dominant same-repository path, where
+        # CLEANUP_APP_TOKEN is never minted and stays empty). Without that
+        # inline override the second call would silently fail to
+        # authenticate on every cross-repository repository_dispatch retry,
+        # falling to the "unknown" branch below and unconditionally
+        # reporting a false eviction alarm on the routine, common case this
+        # step's own comments describe (a newer push legitimately claiming
+        # the single pending slot) -- defeating this step's whole
+        # three-lens-adversarially-verified disambiguation purpose.
         if: always() && env.PR_NUMBER != ''
+        env:
+          CLEANUP_APP_TOKEN: ${{ steps.cleanup_app_token.outputs.token }}
         run: |
           set -euo pipefail
-          if ! jobs_json="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${CURRENT_RUN_ID}/jobs")"; then
+          if ! jobs_json="$(gh api "repos/${CURRENT_REPOSITORY}/actions/runs/${CURRENT_RUN_ID}/jobs")"; then
             echo "::warning::Could not inspect this run's own jobs to check for a pending-slot eviction of the sibling noema-review job."
             exit 0
           fi
@@ -464,7 +577,7 @@ jobs:
           # own head is still the PR's current head, yet its review never
           # ran, which only a genuine eviction (or something equally worth
           # a human's attention) explains.
-          if ! pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '{state: .state, head_sha: .head.sha}' 2>/tmp/noema-eviction-pr-state-error)"; then
+          if ! pr_json="$(GH_TOKEN="${CLEANUP_APP_TOKEN:-$GH_TOKEN}" gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '{state: .state, head_sha: .head.sha}' 2>/tmp/noema-eviction-pr-state-error)"; then
             echo "::warning::Sibling noema-review job for PR #${PR_NUMBER} was cancelled without ever starting, but the PR's live state could not be re-checked before flagging it -- reporting the eviction anyway since it cannot be ruled out as benign." >&2
             sed 's/^/  /' /tmp/noema-eviction-pr-state-error >&2 || true
             pr_state="unknown"
