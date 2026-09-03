@@ -118,6 +118,45 @@ def test_transient_transport_error_keeps_one_short_retry(
     assert responses == []
 
 
+def test_cli_accepts_typed_rate_limit_defer_without_outer_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Return success only for an explicitly recorded primary-rate-limit defer."""
+
+    summary_path = tmp_path / "step-summary.md"
+    sleeps: list[int] = []
+
+    def deferred_main(argument_values: list[str]) -> int:
+        assert argument_values == ["--self-test"]
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setattr(scheduler_core.time, "sleep", sleeps.append)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+    assert scheduler_facade.run_cli(["--self-test"]) == 0
+    assert sleeps == []
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "outcome: `deferred_rate_limit`" in summary
+    assert "retry owner: next bounded heartbeat" in summary
+    assert "runner-held sleep: 0 seconds" in summary
+
+
+def test_cli_keeps_non_rate_limit_failure_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not relabel an unrelated scheduler defect as accepted deferral."""
+
+    def failing_main(argument_values: list[str]) -> int:
+        assert argument_values == []
+        raise RuntimeError("invalid repository payload")
+
+    monkeypatch.setattr(scheduler_core, "main", failing_main)
+
+    assert scheduler_facade.run_cli([]) == 1
+
+
 def test_legacy_monkeypatches_are_forwarded_to_the_core_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -171,4 +210,6 @@ def test_facade_installs_no_reset_lookup_on_the_production_entrypoint() -> None:
     assert "rate_limit_retry_delay_seconds(" not in facade_source
     assert '["gh", "api", "rate_limit"]' not in facade_source
     assert "deferring without runner-held sleep" in facade_source
+    assert "scheduler_outcome=deferred_rate_limit" in facade_source
+    assert "retry_owner=next_bounded_heartbeat" in facade_source
     assert "__all__ = tuple(" in facade_source
