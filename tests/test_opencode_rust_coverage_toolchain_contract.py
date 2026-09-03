@@ -17,7 +17,10 @@ _DISPATCH_WORKFLOW_PATH = (
     _REPOSITORY_ROOT / ".github/workflows/opencode-review-dispatch.yml"
 )
 _QUALITY_WORKFLOW_PATH = (
-    _REPOSITORY_ROOT / ".github/workflows/opencode-rust-coverage-toolchain-quality-ci.yml"
+    _REPOSITORY_ROOT
+    / ".github"
+    / "workflows"
+    / "agent-review-runtime-quality-ci.yml"
 )
 _NIM_CONTRACT_PATH = (
     _REPOSITORY_ROOT / "tests/test_pr_review_autofix_nvidia_nim_contract.py"
@@ -182,7 +185,7 @@ def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
 
     quality_workflow = _QUALITY_WORKFLOW_PATH.read_text(encoding="utf-8")
     watched_section = quality_workflow.split("    paths:\n", 1)[1].split(
-        "\n\npermissions:\n", 1
+        "\n\n# PR validation only:", 1
     )[0]
     watched_paths = [
         line.strip()[2:].strip('"')
