@@ -107,25 +107,31 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
-**Correction (2026-09-03): `codeql-pr.yml` is no longer part of the required
-set.** Every ruleset-injected run of it, in every one of the ~71 covered
-repositories, concluded `startup_failure` with zero check runs ever created —
-GitHub disallows `github/codeql-action/init` and `github/codeql-action/analyze`
-inside a required workflow (a platform restriction, not a configuration
-defect; the REST API surfaces no reason, only the run page's web UI
-annotation does). It was removed from ruleset `18156473`'s required
-`workflows` list; see the 2026-09-03 dated entry below for the full
-investigation, the coverage-gap check performed before removing it, and the
-23 repositories that were given real CodeQL coverage via GitHub's native
-`code-scanning/default-setup` as part of the same fix. The paragraphs below
-describe the mechanism as it was designed and as it still applies to
-`scorecard-pr.yml`/`osv-scanner-pr.yml`, which remain required and
-functioning; do not re-add any workflow using `github/codeql-action` to a
-required-workflow ruleset entry.
+**Superseded (2026-09-03): `codeql-pr.yml` is deliberately no longer required-workflow-injected.**
+GitHub categorically disallows `github/codeql-action/init` and `github/codeql-action/analyze` inside a
+ruleset-required workflow — every ruleset-injected `codeql-pr.yml` run across every one of the ~71 covered
+repositories concluded `startup_failure` with zero check runs ever created (a platform restriction, not a
+configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
+annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
+ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
+9 entries remain, `close-empty-pr.yml` through `osv-scanner-pr.yml`, no CodeQL entry). Coverage now comes
+from GitHub's native code-scanning default setup, enabled directly per repository
+(`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
+repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
+41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
+"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history, and still describe
+`scorecard-pr.yml`/`osv-scanner-pr.yml`'s mechanism accurately, since those two remain required and
+functioning; do not re-add any workflow using `github/codeql-action` to a required-workflow ruleset entry.
+The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
+make this automatic for every newly created repository, but item 41's investigation confirmed it is
+empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
+well after that policy's own `updated_at` of 2025-03-04 — never received it. Closing that specific gap (a
+periodic reconciliation sweep, vs. this org's stated aversion to more scheduled workflows for rate-limit
+reasons) is recorded as still open in `docs/product-technical-gap-baseline.md`'s item 41 entry, not decided
+here.
 
-The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml`
-workflows supply PR-head and merge-preview
-code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
+The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml` workflows
+supply PR-head and merge-preview code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
 osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
 Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
 `.github/workflows/codeql-pr.yml` used the same trigger shape and merge-preview
