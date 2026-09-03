@@ -4220,3 +4220,25 @@ feature across two review passes on the same PR — a reminder that "the last re
 evidence a feature is complete; a fresh reviewer pass on genuinely new surface area (this file gained ~120
 lines of credential-handling logic across two rounds today) can still find something the previous pass had no
 occasion to look for.
+
+## `naruon#1539` — CodeRabbit: dependency-review caller config test was substring-checked, not structurally — fixed, 2026-09-03
+
+**Trigger.** CodeRabbit flagged `backend/tests/test_release_governance.py`'s assertions for
+`.github/workflows/dependency-review.yml`'s reusable-workflow caller shape (the same "thin caller into the
+central `.github` workflow" pattern this session already fixed for `newsdom-api` and hardened in `keyverse`).
+Real gap: substring checks for `"contents: read"` and `"pull-requests: read"` still pass if a `contents:
+write` line were added alongside them, and neither the substrings nor the SHA-pin regex say anything about
+`fail_on_severity` or `comment_summary_in_pr` silently regressing to a weaker value.
+
+**Fix.** Replaced the substring/regex checks with structured equality: `yaml.safe_load` the workflow file,
+then assert the exact `permissions` mapping at workflow level and the `dependency-review` job's exact `with:`
+mapping. Verified the new assertions against the real file content in an isolated Python check before
+committing (TDD-adjacent: confirm the assertion is actually correct against ground truth, not just that it
+doesn't crash), then ran the full backend suite in a fresh venv with CI's exact invocation (`pip install
+--require-hashes -r requirements-hashes.txt`, `PYTHONWARNINGS=error DISABLE_BACKGROUND_WORKERS=1 pytest -q`):
+1806 passed, 33 skipped. Pushed `7bd59da8`; replied and resolved via the same `gh api` reply + GraphQL
+`resolveReviewThread` pattern used on `.github#1661` above.
+
+**Noted, not chased down:** the push surfaced "GitHub found 6 vulnerabilities on naruon's default branch (4
+high, 2 moderate)" via Dependabot — unrelated to this fix and outside this session's tracked scope; flagged
+here for whichever session next works `naruon` directly rather than investigated in this pass.
