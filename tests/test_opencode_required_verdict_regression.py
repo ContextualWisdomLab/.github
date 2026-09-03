@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import textwrap
@@ -561,18 +560,15 @@ def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
 
     Devin Review on `#1568` found that `converted_to_draft` was missing from
     this workflow's `pull_request_target.types`, so converting a PR to draft
-    while an earlier event's "Fail closed" poll was still running left the
-    stale non-draft poll waiting for a verdict the now-draft PR can never
-    receive -- nothing re-triggered it to notice sooner. Adding
-    `converted_to_draft` to the trigger set doesn't cancel that in-flight
-    poll (the concurrency group is `cancel-in-progress: false`, see the
-    workflow's own comment); instead it's the in-flight poll's own live-state
-    recheck (already run every iteration) that notices the draft flag on its
-    next pass and exits within one `poll_interval_seconds`. This test proves
-    the step-level exemption logic that recheck relies on exits before ever
-    reaching the Reviews API for the exact `PR_ACTION=converted_to_draft`
-    value GitHub sends for that event (`PR_DRAFT` is always `"true"` on that
-    event, mirroring GitHub's own payload).
+    while an earlier event's "Fail closed" poll was still running never fired
+    a fresh run to cancel it via the PR-scoped `cancel-in-progress: true`
+    concurrency group -- the stale non-draft poll kept waiting for a verdict
+    the now-draft PR can never receive. Adding `converted_to_draft` to the
+    trigger set lets a fresh run's draft exemption below take over; this test
+    proves that exemption exits before ever reaching the Reviews API for the
+    exact `PR_ACTION=converted_to_draft` value GitHub sends for that event
+    (`PR_DRAFT` is always `"true"` on that event, mirroring GitHub's own
+    payload).
     """
     result = _run_fail_closed_step(
         tmp_path, pr_action="converted_to_draft", pr_draft="true"
@@ -599,50 +595,32 @@ def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
         "types: [opened, synchronize, reopened, ready_for_review, "
         "converted_to_draft, closed]"
     ) in trigger_block
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" in workflow
 
 
-def test_opencode_review_concurrency_group_is_scoped_by_repo_and_pr_only() -> None:
-    """The concurrency group is keyed by repo + PR number only, and never cancels.
+def test_opencode_review_concurrency_group_is_scoped_by_exact_head() -> None:
+    """The bootstrap concurrency group is keyed by head SHA, not just PR number.
 
-    Devin Review on `#1568` originally found that a delayed, out-of-order run
-    for an older head could cancel the authoritative run already active for
-    a newer head (GitHub cancels whichever run is currently active in a
+    Devin Review on `#1568` found that a delayed, out-of-order run for an
+    older head could cancel the authoritative run already active for a
+    newer head: GitHub cancels whichever run is currently active in a
     concurrency group when a new one starts, with no notion of "older" or
-    "newer"), and scoping the group by exact head SHA was the fix landed at
-    the time. Reverted 2026-09-03 by explicit user directive, refined after
-    peer review: head-SHA scoping meant every push to a PR got its own group,
-    so rapid successive pushes no longer cancelled each other's in-flight
-    runs -- they queued up independently instead, worsening the
-    self-inflicted queue-thrashing pattern this org measured directly
-    (236/300 cancelled runs attributed to concurrent push volume). Plain
-    repo+PR-number scoping combined with `cancel-in-progress: false`
-    structurally closes the #1568 race instead of just trading it for another
-    failure mode: nothing in this group is ever preempted regardless of
-    arrival order, so a late-arriving older-head run can never evict a
-    current one. The "Fail closed without a current-head OpenCode verdict"
-    step's own live-head/live-state revalidation (already run every poll
-    iteration for correctness) is what makes a now-queued older-head run
-    self-exit quickly once it finally gets its turn, instead of running to
-    completion or publishing stale evidence.
-
-    Also confirms the group is JOB-level (on opencode-review-target only),
-    not workflow-level: a workflow-level block would capture the
-    structurally-separate cancel-superseded-opencode-review-runs job too,
-    deadlocking it behind the very run it's supposed to cancel (Devin
-    Review, 2026-09-03, confirmed independently before this fix landed).
+    "newer", so a group shared across different heads let a stale event
+    retire the current head's still-valid run before its own live-head
+    check could ever reject it. Scoping the group by exact head SHA
+    isolates different heads from each other while events for the exact
+    same head (a `converted_to_draft`/`ready_for_review` transition, a
+    `synchronize` retry) still share one group and can still cancel each
+    other, which is what lets `converted_to_draft` retire an active
+    same-head verdict poll.
     """
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert not re.search(r"(?m)^concurrency:", workflow)
-    target_job = workflow.split("\n  opencode-review-target:\n", 1)[1].split(
-        "\n  cancel-superseded-opencode-review-runs:", 1
+    concurrency_block = workflow.split("\n\nconcurrency:\n", 1)[1].split(
+        "\n\npermissions:", 1
     )[0]
-    concurrency_block = target_job.split("    concurrency:\n", 1)[1].split(
-        "\n    permissions:", 1
-    )[0]
-    assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
+    assert "github.event.pull_request.head.sha || github.run_id" in concurrency_block
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
-    assert "cancel-in-progress: false" in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block
 
 
 def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:

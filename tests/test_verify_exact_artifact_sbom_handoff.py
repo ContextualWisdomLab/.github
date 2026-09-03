@@ -58,12 +58,13 @@ def _write_json(path: Path, value: object) -> None:
 
 
 def _identity(arguments: argparse.Namespace) -> dict[str, object]:
-    """Return the pre-upload identity document expected by the verifier."""
+    """Return the exact identity document expected by the verifier."""
     return {
         "schema_version": "1.0",
         "source_repository": arguments.source_repository,
         "source_sha": arguments.source_sha,
         "evidence_artifact_name": arguments.evidence_artifact_name,
+        "evidence_artifact_digest": arguments.evidence_artifact_digest,
         "predicate_type": arguments.predicate_type,
         "cyclonedx_schema": arguments.cyclonedx_schema,
         "artifacts": {
@@ -174,22 +175,6 @@ def test_valid_handoff_is_verified_and_manifest_is_deterministic(tmp_path: Path)
     assert len(manifest["files"]) == 6
     assert json.loads(output.read_text(encoding="utf-8")) == manifest
     assert output.read_text(encoding="utf-8").endswith("\n")
-
-
-def test_outer_artifact_digest_can_arrive_after_inner_identity_is_sealed(
-    tmp_path: Path,
-) -> None:
-    """Keep the GitHub upload receipt outside the bytes whose digest it describes."""
-    arguments = _valid_handoff(tmp_path)
-    identity_path = Path(arguments.evidence_root, "source-identity.json")
-    sealed_identity_digest = _digest(identity_path)
-    identity = json.loads(identity_path.read_text(encoding="utf-8"))
-
-    assert "evidence_artifact_digest" not in identity
-    arguments.evidence_artifact_digest = "sha256:" + ("c" * 64)
-
-    verifier.verify(arguments)
-    assert _digest(identity_path) == sealed_identity_digest
 
 
 def test_main_prints_success_and_returns_zero(

@@ -160,11 +160,11 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
     assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
-    assert "actions: read" in signer
     assert "contents: read" in signer
     assert "id-token: write" in signer
     assert "attestations: write" in signer
     assert "artifact-metadata: write" in signer
+    assert "actions: read" not in signer
 
     for forbidden_permission in (
         "actions: write",

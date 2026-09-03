@@ -14,28 +14,21 @@ class RequiredSecurityRunnerImageContract(unittest.TestCase):
     """Keep required security jobs off the observed starved floating image."""
 
     def test_security_scan_uses_explicit_supported_image(self) -> None:
-        """Require every Security Scan job to use explicit Ubuntu 24.04.
-
-        5, not 4: the `changed-scope` gate job added to skip doc/image-only
-        and dependency-only PR scope (org ruleset 18156473 ignores
-        trigger-level path filters) is a fifth job on this image.
-        """
+        """Require every Security Scan job to use explicit Ubuntu 24.04."""
         workflow = SECURITY_SCAN.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 5)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 4)
 
     def test_sast_semgrep_uses_explicit_supported_image(self) -> None:
         """Require the SAST Semgrep job to use explicit Ubuntu 24.04.
 
         `#1656` removed the sibling `cancel-closed-pr-runs` no-op job (it
         only duplicated PR-stable workflow concurrency), leaving one runner
-        job in this workflow instead of two. It is 2, not 1, again after the
-        `changed-scope` gate job was added to skip doc-only PR scope (org
-        ruleset 18156473 ignores trigger-level path filters).
+        job in this workflow instead of two.
         """
         workflow = SAST_SEMGREP.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 1)
 
 
 if __name__ == "__main__":

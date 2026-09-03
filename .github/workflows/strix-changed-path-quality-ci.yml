@@ -12,7 +12,6 @@ on:
       - "docs/doctoring/strix-quality-timeout-fixtures.md"
       - "scripts/ci/strix_quick_gate.sh"
       - "scripts/ci/test_strix_quick_gate.sh"
-      - "tests/test_docs_only_pr_runner_admission.py"
       - "tests/test_strix_changed_path_policy.py"
       - "tests/test_strix_model_behavior_error.py"
       - "tests/test_strix_nvidia_nim_not_found_fallback.py"

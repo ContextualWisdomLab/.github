@@ -15,15 +15,10 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
     """Keep required review jobs off the observed starved floating image."""
 
     def test_strix_uses_explicit_supported_image(self) -> None:
-        """Require every Strix job to use explicit Ubuntu 24.04.
-
-        4, not 3: the `changed-scope` gate job added to skip doc/image-only
-        PRs (org ruleset 18156473 ignores trigger-level path filters) is a
-        fourth job on this image.
-        """
+        """Require every Strix job to use explicit Ubuntu 24.04."""
         workflow = STRIX.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 4)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
 
     def test_opencode_review_uses_explicit_supported_image(self) -> None:
         """Require every OpenCode Review job to use explicit Ubuntu 24.04."""

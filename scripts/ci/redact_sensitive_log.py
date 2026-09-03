@@ -146,14 +146,18 @@ def _redact_unstructured(text: str) -> str:
     return cleaned
 
 
+_JSON_VALUE_START_CHARS = frozenset('{["-0123456789tfnNI')
+
 def _redact_line(line: str) -> str:
     """Redact one log line, preferring recursive JSON handling when valid."""
     # ⚡ Bolt: Fast O(1) character check to bypass expensive json.loads()
     # throwing JSONDecodeError for obvious non-JSON log lines.
     stripped = line.lstrip(" \t")
-    if stripped and (stripped[0] == "{" or stripped[0] == "["):
+    if stripped and stripped[0] in _JSON_VALUE_START_CHARS:
         try:
             value = json.loads(line)
+            if not isinstance(value, (dict, list)):
+                return _redact_unstructured(line)
             return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
         except json.JSONDecodeError:
             pass

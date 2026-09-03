@@ -23,22 +23,6 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
-  scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
-  heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
-  `cron: "30 * * * *"` (see `docs/doctoring/actions-queue-saturation-hourly-sweep.md`),
-  and the Python regression `tests/test_actions_queue_saturation_scheduler_cadence.py`
-  was updated to match at the time — but the parallel bash contract in
-  `scripts/ci/test_strix_quick_gate.sh` still asserted the literal old string, so
-  every PR whose required `exact-head-path-policy` check ran this script against a
-  current `main` checkout failed on an assertion the workflow file itself could no
-  longer satisfy, regardless of the PR's own diff. Updated the assertion to the
-  current cron string and corrected an adjacent stale "15-minute organization sweep
-  / 30-minute scheduled scan" description to the current hourly/hourly cadence.
-  Verified: `bash scripts/ci/test_strix_quick_gate.sh` now passes against unmodified
-  `main` (confirmed failing before this fix, on the same clean clone); full suite
-  unaffected (2600+ passed, 100% coverage, 100% docstrings) since this is a
-  bash-only assertion string with no Python-side counterpart to update.
 - **Consolidate the two genuinely duplicate quality-CI callers behind one reusable
   `workflow_call` gate; leave the other six alone.** An audit of the 8
   `.github/workflows/*-quality-ci.yml` bootstrap-templated files found only one pair —

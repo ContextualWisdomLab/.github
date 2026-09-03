@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
-import sys
 from collections.abc import Awaitable, MutableMapping
 from functools import wraps
 from typing import Any
@@ -84,18 +83,7 @@ def install_runtime_compatibility() -> Any:
 
     scan_setup.asyncio = UnboundedInferenceAsyncio(scan_setup.asyncio)
 
-    # strix/interface/__init__.py runs ``from .main import main``, which rebinds
-    # the package attribute ``strix.interface.main`` to the *function* it
-    # imports, shadowing the submodule of the same name. Both
-    # ``from strix.interface import main as strix_main`` and
-    # ``import strix.interface.main as strix_main`` resolve through that
-    # shadowed package attribute and return the function, not the module, so
-    # every ``strix_main.<attr>`` access below raised AttributeError. Look the
-    # submodule up directly in sys.modules by its exact dotted path instead,
-    # which the shadow never touches.
-    import strix.interface.main  # noqa: F401 - imported for its sys.modules registration
-
-    strix_main = sys.modules["strix.interface.main"]
+    from strix.interface import main as strix_main
 
     strix_main.asyncio = UnboundedInferenceAsyncio(strix_main.asyncio)
     return strix_main
