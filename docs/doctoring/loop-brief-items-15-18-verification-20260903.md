@@ -24,13 +24,33 @@ is deduplicated by workflow's own top-level `concurrency:` group
 ceiling plus several already-hard-won budget knobs
 (`ORG_SWEEP_MAX_PRS`, `ORG_SWEEP_REVIEW_DISPATCH_LIMIT`,
 `ORG_SWEEP_MAX_UNAVAILABLE`, rotation logic) whose comments cite the specific
-production incidents that shaped them (`.github#1219`, `.github#1223`). The
-rate-limit symptom this item worried about traces to the org's Actions
-plan-level 60-concurrent-job ceiling
-([[project-actions-plan-concurrency-ceiling]], `.github#1754`, docs-only,
-merged) — a billing-tier constraint no workflow-file change can fix.
-No action taken; removing or rewriting this job would re-litigate an
-already-evidenced design.
+production incidents that shaped them (#1219, #1223).
+
+"Rate limit" covers at least two distinct resources here, and this item's
+"rate limit issues" symptom should not be collapsed into one cause:
+
+- The org's Actions **plan-level 60-concurrent-*job*** ceiling (#1754,
+  docs-only, merged) — a billing-tier constraint on how many jobs (of any
+  kind, any repo) can run at once. This is the one that best matches the
+  general "queue piles up instead of shrinking" symptom this loop-brief
+  opened with, and no workflow-file change can fix it.
+- A separate, already-documented **LLM-provider rate limit** — a
+  `litellm.RateLimitError` storm against the shared NVIDIA NIM key from too
+  many *concurrent Strix/review callers* (`.github` PR #1297, 2026-08-23/24;
+  see `.github` PR #1661 /
+  `docs/doctoring/strix-cross-pr-concurrency-starvation-20260902.md`, not yet
+  merged to `main`). That is why `strix.yml`'s scan job deliberately
+  serializes per repository instead of per PR — a different mechanism, a
+  different resource, and not something `org-queue-sweep` itself triggers
+  directly (it can *dispatch* reviews, but it does not call an LLM provider
+  on its own).
+
+`org-queue-sweep`'s own GitHub REST calls are subject to a third resource
+(GitHub's per-token API rate limit), which is why it already paginates
+conservatively and fails closed past `ORG_SWEEP_MAX_UNAVAILABLE` rather than
+retrying harder. No action taken; removing or rewriting this job would
+re-litigate an already-evidenced design, and none of the three resources
+above are fixable by a workflow-file edit alone.
 
 ## Item 16 — consolidate the per-repo hourly-review-repair caller shown in the linked run
 
@@ -67,13 +87,18 @@ audit from scratch would duplicate #1731 rather than extend it.
 
 ## Item 18 — GitHub App installation token format change (`ghs_...`, ~520 chars, stateless)
 
-Searched `scripts/ci/*.py` and `.github/workflows/*.yml` for any assumption
-about installation-token length or prefix shape: no fixed-length checks
-(`len(token) == N`), no prefix/length regexes matching the old `ghs_` format,
-and no truncating display logic keyed to a specific length. The only
-token-shaped regexes present (`noema_review_gate.py:240,245`,
-`pr_review_merge_scheduler.py:254`) are secret-redaction patterns
-(`token\s+<anything-non-whitespace>` -> `***`) that mask a token of any length
-or format when logging — they do not depend on the token being any particular
-size. No action taken; this repository has nothing that would break under the
-announced longer, stateless installation-token format.
+Searched every `.py` and `.sh` file under `scripts/ci/` and `.github/`
+(workflows, and the one composite action at
+`.github/actions/orchestrator-free-sidecar/action.yml`), then re-checked the
+whole repository tree (this repo has no `.yaml`-suffixed files, and
+`opencode.jsonc` and the pinned `requirements-*.txt` files carry nothing
+token-shaped either), for any assumption about installation-token length or
+prefix shape: no fixed-length checks (`len(token) == N`, `token[:N]`), no
+prefix/length regexes matching the old `ghs_` format, and no truncating
+display logic keyed to a specific length. The only token-shaped regexes
+present (`noema_review_gate.py:240,245`, `pr_review_merge_scheduler.py:254`)
+are secret-redaction patterns (`token\s+<anything-non-whitespace>` -> `***`)
+that mask a token of any length or format when logging — they do not depend
+on the token being any particular size. No action taken; this repository has
+nothing that would break under the announced longer, stateless
+installation-token format.
