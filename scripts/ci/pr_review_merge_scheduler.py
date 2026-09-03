@@ -135,6 +135,17 @@ class _SchedulerFacade(types.ModuleType):
         return sorted(set(super().__dir__()) | set(dir(_scheduler_core)))
 
 
+# Python's wildcard import reads ``__all__`` before attribute delegation. Export
+# the original implementation's public API explicitly so consumers retain the
+# same symbols after the implementation/facade split.
+__all__ = tuple(
+    sorted(
+        attribute_name
+        for attribute_name in dir(_scheduler_core)
+        if not attribute_name.startswith("_")
+    )
+)
+
 _FACADE_LOCAL_NAMES = frozenset(globals()) | {"_FACADE_LOCAL_NAMES"}
 sys.modules[__name__].__class__ = _SchedulerFacade
 
