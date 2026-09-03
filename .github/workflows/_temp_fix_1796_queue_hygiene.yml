@@ -1,0 +1,350 @@
+name: Source Fix 1796 Queue Hygiene Owner
+
+on:
+  push:
+    branches:
+      - fix/remove-duplicate-org-sweep-queue-hygiene
+    paths:
+      - .github/workflows/_temp_fix_1796_queue_hygiene.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-1796-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact repair branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/remove-duplicate-org-sweep-queue-hygiene
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install exact test dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/requirements.txt" <<'EOF'
+          coverage==7.15.2 --hash=sha256:b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install --only-binary=:all: --require-hashes -r "${RUNNER_TEMP}/requirements.txt"
+
+      - name: Apply the single-owner queue repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 <<'PY'
+          from __future__ import annotations
+
+          import re
+          import subprocess
+          from pathlib import Path
+
+          root = Path.cwd()
+          workflow_path = root / ".github/workflows/pr-review-merge-scheduler.yml"
+          workflow = workflow_path.read_text(encoding="utf-8")
+
+          stale_env = "      ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}\n"
+          if workflow.count(stale_env) != 1:
+              raise SystemExit("expected exactly one ORG_SWEEP_STALE_QUEUE_HOURS owner line")
+          workflow = workflow.replace(stale_env, "")
+
+          start_marker = "            # Queue hygiene, part 1:"
+          end_marker = '            echo "::endgroup::"\n'
+          start = workflow.find(start_marker)
+          if start < 0:
+              raise SystemExit("queue-hygiene start marker not found")
+          end = workflow.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("queue-hygiene end marker not found")
+          owner_note = """            # Same-PR current-head run retirement belongs to the required
+            # Current Head Run Coalescer. It runs in the target repository,
+            # revalidates the live PR/head before every cancellation, and uses
+            # that repository's github.token rather than this cross-repository
+            # installation credential. Re-enumerating every target repository's
+            # Actions inventory here duplicated that owner, multiplied API calls,
+            # and could keep spending an already exhausted shared installation
+            # bucket. Default-branch or orphan-run retirement requires separate
+            # measured evidence and, if retained, a bounded low-frequency owner.
+"""
+          workflow = workflow[:start] + owner_note + workflow[end:]
+          forbidden = (
+              "ORG_SWEEP_STALE_QUEUE_HOURS",
+              "/actions/runs?status=${active_status}&per_page=100",
+              "scripts/ci/revalidate_queue_cancellation.sh",
+              "# Queue hygiene, part 1:",
+              "# Queue hygiene, part 2:",
+          )
+          present = [token for token in forbidden if token in workflow]
+          if present:
+              raise SystemExit(f"duplicate queue-hygiene residue remains: {present}")
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          scheduler_contract_path = root / "tests/test_queue_cancellation_scheduler_contract.py"
+          scheduler_contract_path.write_text(
+              '''"""Structural contracts for single-owner current-head run coalescing."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCHEDULER = ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
+COALESCER_WORKFLOW = ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+COALESCER_HELPER = ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
+RETIRED_SWEEP_HELPER = ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
+TEMP_WRITER = ROOT / ".github" / "workflows" / "_temp_fix_1796_queue_hygiene.yml"
+
+
+def test_org_sweep_does_not_duplicate_target_repository_actions_inventory() -> None:
+    """Keep same-PR stale-run retirement out of the cross-repository sweep."""
+    workflow = SCHEDULER.read_text(encoding="utf-8")
+
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" not in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" not in workflow
+    assert "scripts/ci/revalidate_queue_cancellation.sh" not in workflow
+    assert "# Queue hygiene, part 1:" not in workflow
+    assert "Current Head Run Coalescer" in workflow
+    assert "target repository's github.token" in workflow
+
+
+def test_target_repository_coalescer_owns_same_pr_current_head_retirement() -> None:
+    """Bind current-head cleanup to target repository, PR, and live head evidence."""
+    workflow = COALESCER_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "pull_request_target:" in workflow
+    assert (
+        "group: current-head-run-coalescer-${{ github.repository }}-"
+        "${{ github.event.pull_request.number }}" in workflow
+    )
+    assert "queue: max" in workflow
+    assert "GH_TOKEN: ${{ github.token }}" in workflow
+    assert "EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert "current_head_run_coalescer.py" in workflow
+    assert COALESCER_HELPER.is_file()
+
+
+def test_legacy_cross_repository_cancellation_helper_is_retired() -> None:
+    """Do not retain an unused second cancellation owner after the handoff."""
+    assert not RETIRED_SWEEP_HELPER.exists()
+    assert not TEMP_WRITER.exists()
+
+
+def test_scheduler_preserves_hourly_bounded_organization_maintenance() -> None:
+    """Keep review/merge maintenance hourly while removing Actions fan-out."""
+    workflow = SCHEDULER.read_text(encoding="utf-8")
+
+    assert '- cron: "0 * * * *"' in workflow
+    assert '*/15 * * * *' not in workflow
+    assert workflow.count("runs-on: ubuntu-24.04") >= 2
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+    assert "github.event_name == 'pull_request_review'" in scan_job.split(
+        "TRIGGER_REVIEWS:", 1
+    )[1].splitlines()[0]
+''',
+              encoding="utf-8",
+          )
+
+          required_contract_path = root / "tests/test_required_workflow_queue_contract.py"
+          required_contract = required_contract_path.read_text(encoding="utf-8")
+          queue_assertions = re.compile(
+              r"    # Queue hygiene: previous-head runs are cancelled immediately, while the\n"
+              r"    # legacy age guard cannot cancel a valid current-head PR run\.\n"
+              r".*?"
+              r"    # Organization sweep budgets must be consumed across the repository loop;",
+              re.DOTALL,
+          )
+          replacement = '''    # Same-PR current-head cleanup is target-repository work. The hourly
+    # organization sweep must not enumerate Actions inventory in every sibling
+    # repository with one shared installation credential.
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" not in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" not in workflow
+    assert "scripts/ci/revalidate_queue_cancellation.sh" not in workflow
+    coalescer = workflow_text("current-head-run-coalescer.yml")
+    assert (
+        "group: current-head-run-coalescer-${{ github.repository }}-"
+        "${{ github.event.pull_request.number }}" in coalescer
+    )
+    assert "GH_TOKEN: ${{ github.token }}" in coalescer
+    assert "queue: max" in coalescer
+    # Organization sweep budgets must be consumed across the repository loop;'''
+          required_contract, count = queue_assertions.subn(replacement, required_contract)
+          if count != 1:
+              raise SystemExit(f"expected one queue assertion block, replaced {count}")
+          required_contract_path.write_text(required_contract, encoding="utf-8")
+
+          rollout_path = root / "docs/org-required-workflow-rollout.md"
+          rollout = rollout_path.read_text(encoding="utf-8")
+          rollout_pattern = re.compile(
+              r"(?ms)^- Queue hygiene posture:.*?(?=^- |\Z)"
+          )
+          rollout_replacement = (
+              "- Current-head retirement posture: the required `Current Head Run Coalescer` "
+              "runs in the target repository with that repository's `github.token`, binds "
+              "its concurrency group to repository and PR number, revalidates the live head, "
+              "and retires only obsolete same-PR runs. The hourly organization sweep no "
+              "longer repeats target-repository Actions inventory reads. Default-branch or "
+              "orphan-run cleanup is not implied by this PR and requires separate measured "
+              "evidence before a bounded owner workflow is retained.\n"
+          )
+          rollout, count = rollout_pattern.subn(rollout_replacement, rollout)
+          if count != 1:
+              raise SystemExit(f"expected one rollout queue-hygiene paragraph, replaced {count}")
+          rollout_path.write_text(rollout, encoding="utf-8")
+
+          history_path = root / "docs/doctoring/queue-hygiene-live-ref-race.md"
+          history = history_path.read_text(encoding="utf-8")
+          status_note = """
+
+> **2026-09-03 supersession:** the live-ref revalidation described below remains
+> valid incident evidence, but the organization sweep is no longer an Actions
+> cancellation owner. Same-PR current-head retirement moved to the target-repository
+> `Current Head Run Coalescer`; the cross-repository helper was removed. See #1796.
+"""
+          if "2026-09-03 supersession" not in history:
+              first_newline = history.find("\n")
+              history = history[: first_newline + 1] + status_note + history[first_newline + 1 :]
+          history_path.write_text(history, encoding="utf-8")
+
+          doctoring_path = root / "docs/doctoring/org-sweep-queue-hygiene-owner-20260903.md"
+          doctoring_path.write_text(
+              """# Organization sweep queue-hygiene ownership — 2026-09-03
+
+## Incident
+
+The hourly organization sweep re-read every target repository's open pull requests,
+default-branch head, queued runs, and in-progress runs after the canonical review and
+merge scheduler had already inspected the repository. Those calls used the same
+cross-repository GitHub App installation credential whose primary bucket was already
+observed exhausted across central workflows. PR #1245 reduced the blast radius but
+left this second inventory path in place.
+
+## Decision
+
+Same-PR stale-run retirement has one canonical owner: `Current Head Run Coalescer`.
+It executes in the target repository, uses the target repository `github.token`, keys
+work by repository and pull-request number, and revalidates live head evidence before
+cancelling anything. The organization sweep retains review, repair dispatch, branch
+update, and merge decisions but does not enumerate target Actions inventories.
+
+Default-branch, manual, and orphan runs are a different lifecycle. They are not silently
+folded into PR cleanup. A future owner must first measure their population and then use
+bounded repository/API/cancellation budgets at a lower cadence. Release, deployment,
+migration, and other non-supersedable runs remain outside cancellation automation.
+
+## Alternatives rejected
+
+- More substring-based rate-limit handling around each queue-hygiene command: preserves
+  duplicate ownership and API amplification.
+- Longer sleeps or retries: holds a runner while the shared bucket is exhausted.
+- Head-SHA concurrency groups: each push creates a new group and therefore cannot retire
+  the preceding head.
+- Repository-wide groups: unrelated pull requests block one another.
+
+## Verification
+
+- The organization sweep contains no `actions/runs?status=...` inventory fan-out.
+- `ORG_SWEEP_STALE_QUEUE_HOURS` and the old cross-repository cancellation helper are gone.
+- The coalescer group is `current-head-run-coalescer-{repository}-{PR number}`.
+- The coalescer uses target `github.token`, exact PR metadata, and live-head validation.
+- Full Python tests, Strix quick gate, compile checks, and clean-tree verification pass
+  before the temporary writer removes itself and commits the source delta.
+
+## Traceability
+
+- Owner issue: #1796
+- Predecessor mitigation: #1245
+- Canonical workflow: `.github/workflows/current-head-run-coalescer.yml`
+- Removed duplicate owner: organization-sweep queue-hygiene block in
+  `.github/workflows/pr-review-merge-scheduler.yml`
+""",
+              encoding="utf-8",
+          )
+
+          changelog_path = root / "CHANGELOG.d/20260903-org-sweep-queue-hygiene-owner.md"
+          changelog_path.write_text(
+              """# Changed
+
+- Make the target-repository `Current Head Run Coalescer` the sole owner of same-PR
+  stale-run retirement. Remove the hourly organization sweep's duplicate per-repository
+  Actions inventory, stale-run cancellation block, legacy age variable, and retired
+  cross-repository cancellation helper so one shared installation token no longer pays
+  for the same current-head classification twice.
+""",
+              encoding="utf-8",
+          )
+
+          base_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          baseline_path = root / "docs/product-technical-gap-baseline.md"
+          baseline = baseline_path.read_text(encoding="utf-8")
+          baseline_entry = f"""
+
+## 2026-09-03 — G-ACTIONS-QUEUE-OWNER: duplicate queue-hygiene ownership
+
+- Observed base: `{base_sha}`
+- Evidence: PR #1245 review threads and protected-main
+  `.github/workflows/current-head-run-coalescer.yml`
+- Gap: the organization sweep repeated open-PR, default-head, and active-run inventory
+  for every target repository after the target-repository coalescer had already become
+  the canonical same-PR retirement owner.
+- Action: remove the duplicate organization-sweep block and old helper; preserve review,
+  update, and merge work in the scheduler; require separately measured justification
+  for any future default-branch/orphan cleanup owner.
+- Acceptance: no target Actions inventory fan-out in the hourly sweep, exact
+  repository+PR coalescer identity, target `github.token`, live-head revalidation,
+  no cross-PR cancellation, and exact-head GREEN evidence.
+- Status: Proposed in #1796 successor branch; not complete until merged and operationally
+  observed.
+"""
+          if "G-ACTIONS-QUEUE-OWNER" not in baseline:
+              baseline += baseline_entry
+          baseline_path.write_text(baseline, encoding="utf-8")
+
+          retired_helper = root / "scripts/ci/revalidate_queue_cancellation.sh"
+          if not retired_helper.exists():
+              raise SystemExit("expected legacy queue cancellation helper before retirement")
+          retired_helper.unlink()
+          PY
+
+      - name: Verify focused and full contracts
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest tests -q
+          python -m coverage report --show-missing --fail-under=100
+          bash scripts/ci/test_strix_quick_gate.sh
+          python -m compileall -q scripts/ci tests
+          git diff --check
+
+      - name: Commit the verified repair and retire this writer
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git rm -- .github/workflows/_temp_fix_1796_queue_hygiene.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "fix(actions): remove duplicate organization queue hygiene"
+          git push origin HEAD:fix/remove-duplicate-org-sweep-queue-hygiene
