@@ -9,8 +9,7 @@ commit and exposed without running build hooks; a lone `--require-hashes`
 directive is not trust evidence. See
 [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md).
 Conflict-scope roots fail closed when the immediate parent directory is a symbolic link.
-OriginWeave hourly NVIDIA NIM repair is a thin caller at minute 10. See [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md).
-nonnest2 hourly NVIDIA NIM repair is a thin caller at minute 16. See [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md).
+All 18 product hourly review-repair callers (OriginWeave at minute 10, nonnest2 at minute 16, and 16 others) are one file, [`.github/workflows/hourly-review-repair.yml`](.github/workflows/hourly-review-repair.yml), a `github.event.schedule` lookup table rather than 18 near-copy-pasted files. See [`docs/doctoring/hourly-review-repair-single-file-consolidation.md`](docs/doctoring/hourly-review-repair-single-file-consolidation.md); the per-repository doctoring records (e.g. [`docs/doctoring/originweave-hourly-review-caller.md`](docs/doctoring/originweave-hourly-review-caller.md), [`docs/doctoring/nonnest2-hourly-review-caller.md`](docs/doctoring/nonnest2-hourly-review-caller.md)) remain as historical background per repository.
 Organization edge runtimes use Cloudflare Pingora. Do not add or preserve active Nginx containers, packages, commands, service/config files, or Kubernetes Nginx ingress annotations/classes. Read [`docs/policies/PINGORA_EDGE_POLICY.md`](docs/policies/PINGORA_EDGE_POLICY.md) and ADR-0019 before changing HTTP edge, static-serving, ingress, TLS, or proxy deployment behavior.
 
 Semgrep hosted scans bind one job-level `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`. See [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md).
@@ -22,11 +21,13 @@ provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
 `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) enter its KV
 as bootstrap transport in the same process that discovers models and serves;
 OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
-`orchestrator/free`. Strix uses the zero-cost `orchestrator/free` pool by
-explicit 2026-08-30 owner decision, superseding the prior `orchestrator/auto`
-(provider-diverse, non-free-admitting) default; private targets still require
-ZDR-compliant routes under
-[`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py).
-See [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)
-and its 2026-08-30 amendment.
+`orchestrator/free`. Strix was switched onto `orchestrator/free` on
+2026-08-30, superseding the prior `orchestrator/auto` (provider-diverse,
+non-free-admitting) default; private targets still require ZDR-compliant
+routes under [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py). That
+switch was made by an autonomous agent session, not per any owner decision —
+see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)'s
+2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
+false claim of explicit owner direction and records the resulting
+availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
