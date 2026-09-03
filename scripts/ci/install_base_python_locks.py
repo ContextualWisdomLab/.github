@@ -39,21 +39,23 @@ DEFERABLE_PREFLIGHT_FAILURES = (
     ),
     re.compile(r"requires a different Python", re.IGNORECASE),
 )
+_PIP_REQUIREMENT_RE = r"[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_.,\s-]+\])?==[^\s,;]+"
 PIP_AVAILABLE_VERSIONS_RE = re.compile(
     r"Could not find a version that satisfies the requirement "
-    r"(?P<requirement>[A-Za-z0-9_.-]+==[^\s,;]+)\s+"
+    rf"(?P<requirement>{_PIP_REQUIREMENT_RE})\s+"
     r"\(from versions:\s*(?P<versions>[^)]*)\)",
     re.IGNORECASE,
 )
 PIP_NO_MATCH_RE = re.compile(
     r"No matching distribution found for "
-    r"(?P<requirement>[A-Za-z0-9_.-]+==[^\s,;]+)",
+    rf"(?P<requirement>{_PIP_REQUIREMENT_RE})",
     re.IGNORECASE,
 )
 PIP_NETWORK_FAILURE_MARKERS = (
     "could not fetch url",
     "temporary failure in name resolution",
     "connectionerror",
+    "connecttimeouterror",
     "readtimeouterror",
     "sslerror",
     "max retries exceeded",

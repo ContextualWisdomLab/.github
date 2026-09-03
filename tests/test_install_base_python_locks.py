@@ -474,6 +474,25 @@ def test_network_failure_cannot_masquerade_as_distribution_gap() -> None:
     assert not installer._is_deferable_preflight_failure(output)
 
 
+def test_connect_timeout_cannot_masquerade_as_distribution_gap() -> None:
+    """A connect-phase timeout remains fatal alongside similar resolver text."""
+    output = (
+        "WARNING: Retrying after connection broken by "
+        "'ConnectTimeoutError(...)'.\n" + ATHERIS_DISTRIBUTION_GAP
+    )
+    assert not installer._is_deferable_preflight_failure(output)
+
+
+def test_extras_pinned_distribution_gap_is_deferable() -> None:
+    """A pinned extras requirement with visible alternatives may be skipped."""
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "atheris[extra]==3.0.0 (from versions: 3.1.0)\n"
+        "ERROR: No matching distribution found for atheris[extra]==3.0.0\n"
+    )
+    assert installer._is_deferable_preflight_failure(output)
+
+
 @pytest.mark.parametrize(
     "output",
     [
