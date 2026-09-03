@@ -4188,3 +4188,35 @@ today (`naruon#1539` noema-review: 1332.6s stall → HTTP 502; `mightyETL#330` n
 5c9d30e phase-labeling fixes, not a regression) — handed off to the "Contextual-orchestrator 통합 개선 (host 2)"
 peer session rather than investigated here, since neither PR had anything in its own diff to fix (the failure
 is entirely upstream) and this session was mid-way through the adversarial-verification work above.
+
+## `.github#1661` follow-up — Devin Review's credential-mode gap, PAT support added — 2026-09-03
+
+**Trigger.** A second Devin Review pass on the same PR, after the round above shipped, found a real, adjacent
+gap: `cancel-superseded-noema-runs`' cross-repository credential resolution only recognized the GitHub App
+mode (`NOEMA_GITHUB_APP_CLIENT_ID`/`PRIVATE_KEY`), even though `noema-review`'s own main job supports three
+modes in priority order — PAT (`NOEMA_REVIEW_TOKEN`), GitHub App, then OIDC. An org configured with only a PAT
+or only OIDC would silently skip cross-repository cancellation regardless, defeating the retry entrypoint the
+same way the prior finding did.
+
+**Verified scope before fixing.** Confirmed live from `naruon#1539`'s own job log (`NOEMA_REVIEW_TOKEN_SOURCE:
+noema-review-github-app`) that this org's actual production configuration currently selects `source=github-app`
+— meaning `NOEMA_REVIEW_TOKEN` (PAT) is not currently set org-wide, so this specific gap was dormant, not
+actively causing failures, at the time it was found. Fixed anyway since it's a real correctness gap that would
+silently reappear if the org's credential configuration ever changed.
+
+**Fix.** Added PAT support to `cleanup_credential` in the same priority order as the main job's own selection
+step (PAT checked first); the mint step now runs only for `source=='github-app'`, since a PAT is already a
+usable token needing no minting. OIDC was deliberately NOT mirrored — Devin's own comment offered "fail or
+document as unsupported" as an acceptable alternative to full replication, and adding OIDC's token-exchange
+flow to this second, already-adversarially-scrutinized job for a mode this org has never used in production
+would trade real complexity for no live benefit. A 2-lens adversarial verification pass on this patch (unlike
+the prior finding, which took 3 rounds) found zero real bugs on the first pass — confirmed by reading the raw
+per-agent journal, not just trusting the summary, since both agents' `findings` arrays were legitimately empty
+rather than silently erroring. Full suite (2765 tests) passed; pushed as `69109d1`. Replied and resolved via
+the same `gh api` reply + GraphQL `resolveReviewThread` pattern as the round above.
+
+**Cross-reference.** Devin found two distinct, real, non-overlapping gaps in the SAME cross-repository cleanup
+feature across two review passes on the same PR — a reminder that "the last review found nothing else" is not
+evidence a feature is complete; a fresh reviewer pass on genuinely new surface area (this file gained ~120
+lines of credential-handling logic across two rounds today) can still find something the previous pass had no
+occasion to look for.
