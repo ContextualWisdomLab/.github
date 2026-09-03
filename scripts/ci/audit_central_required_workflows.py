@@ -189,14 +189,11 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         )
 
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}
-    for workflow in workflows:
+    for index, workflow in enumerate(workflows):
         if not isinstance(workflow, dict) or not isinstance(workflow.get("path"), str):
+            errors.append(f"central required workflow entry {index} is malformed")
             continue
         workflows_by_path.setdefault(workflow["path"], []).append(workflow)
-
-    unexpected_workflows = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
-    if unexpected_workflows:
-        errors.append(f"unexpected central required workflows: {unexpected_workflows}")
 
     for path in REQUIRED_WORKFLOW_PATHS:
         matches = workflows_by_path.get(path, [])

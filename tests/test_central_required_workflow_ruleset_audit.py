@@ -170,7 +170,7 @@ def test_central_ruleset_rejects_unexpected_and_malformed_workflows() -> None:
 
     errors = audit.audit_ruleset(payload)
 
-    assert "unexpected central required workflows: ['.github/workflows/unexpected.yml']" in errors
+    assert "unexpected workflow present in required set: .github/workflows/unexpected.yml" in errors
     assert "central required workflows contain 1 malformed entry" in errors
 
 
@@ -663,12 +663,30 @@ def test_audit_handles_duplicate_workflows_and_unsatisfiable_review_parameters()
 
     errors = audit.audit_ruleset(payload)
 
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
     assert "central required workflow .github/workflows/scorecard-pr.yml is configured 2 times" in errors
     assert "central solo-maintainer ruleset must not require approving reviews" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "central solo-maintainer ruleset must not require last-push approval" in errors
     assert "review-thread resolution protection is disabled" in errors
     assert "only merge and squash may be allowed merge methods" in errors
+
+
+def test_audit_reports_each_malformed_workflow_entry_by_index() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        "not-a-dict",
+        {"path": 42},
+        {"no_path_key": True},
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
+    assert "central required workflow entry 2 is malformed" in errors
 
 
 def test_audit_handles_malformed_rule_parameter_shapes() -> None:
