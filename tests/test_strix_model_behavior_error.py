@@ -17,7 +17,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 QUALITY_WORKFLOW = (
-    REPOSITORY_ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+    REPOSITORY_ROOT
+    / ".github"
+    / "workflows"
+    / "agent-review-runtime-quality-ci.yml"
 )
 
 
