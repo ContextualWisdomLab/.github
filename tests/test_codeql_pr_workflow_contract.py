@@ -45,17 +45,27 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "commits/${HEAD_SHA}/statuses" in workflow
 
 
-def test_codeql_pr_dispatches_once_not_once_per_matrix_shard() -> None:
-    """Only the first matrix shard dispatches; every shard still polls.
+def test_codeql_pr_dispatches_one_language_per_shard_not_the_full_matrix() -> None:
+    """Every shard dispatches, but only its own language, not the full matrix.
 
-    A matrix job's dispatch step firing from every shard would send the same
-    repository_dispatch event N times (once per language) and trigger N
-    redundant full-matrix scans on the .github side -- exactly the wasteful,
-    duplicate-triggering pattern this org's standing directive calls out.
+    Two designs were tried and rejected before this one (see
+    docs/adr/0025-codeql-required-workflow-dispatch-architecture.md history
+    and .github#1778's review thread): (a) only the first shard dispatches
+    with the full matrix, which leaves every OTHER shard blind to that one
+    shard's dispatch failure -- each polls the full 3-hour deadline before
+    self-timing-out for a scan that was never requested; (b) every shard
+    dispatches the full matrix, which triggers N redundant full-matrix scans
+    on the .github side. Dispatching one shard's own single language avoids
+    both: N dispatches total (same real work as one N-language dispatch),
+    and each shard can read its own steps.dispatch.outcome for the poll step
+    below to fail closed immediately, not after 3 hours.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    assert "matrix.language == fromJSON(needs.detect-languages.outputs.matrix).include[0].language" in workflow
+    assert "id: dispatch" in workflow
+    assert 'matrix:[{language:$language,"build-mode":$build_mode}]' in workflow
+    assert "needs.detect-languages.outputs.matrix).include[0]" not in workflow
+    assert "DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}" in workflow
     assert workflow.count("- name: Request current-head CodeQL scan dispatch") == 1
     assert workflow.count("- name: Fail closed without a current-head CodeQL dispatch verdict") == 1
 

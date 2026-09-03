@@ -25,6 +25,22 @@ on:
     # security-scan.yml's own "do not restrict the base ref" precedent.
 
 concurrency:
+  # NOT scoped by head SHA, unlike opencode-review.yml's group -- and that is
+  # a deliberate, tested difference, not an oversight. This file has no
+  # dedicated cancel-on-close cleanup job (see
+  # tests/test_required_workflow_queue_contract.py::test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs),
+  # so this group's own `cancel-in-progress: true` is the ONLY mechanism that
+  # cancels a stale in-flight run when the PR closes. opencode-review.yml can
+  # safely add head SHA to its group because it ALSO runs a separate
+  # cancel-superseded-opencode-review-runs job that sweeps stale runs via
+  # direct API calls regardless of head SHA; adding head SHA here without an
+  # equivalent job would let an older, still-in-flight run for a since-
+  # superseded head survive a close event indefinitely (it and the closing
+  # run would land in different groups and never cancel each other). A
+  # narrower risk remains -- a delayed dispatch for an older head could still
+  # transiently evict a newer head's in-flight poll before that older run's
+  # own live-head recheck self-aborts -- tracked as a follow-up requiring a
+  # dedicated cleanup job, not a one-line group change.
   group: >-
     codeql-pr-${{
     github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name || github.repository }}-${{
@@ -141,15 +157,20 @@ jobs:
       - name: Request current-head CodeQL scan dispatch
         # Dispatch+poll live as sequential steps of ONE job (mirroring
         # opencode-review.yml's opencode-review-target job) specifically so a
-        # dispatch failure fails this job directly -- no separate job means no
-        # needs-based skip to worry about. Since this job matrices over
-        # languages, only the first matrix entry actually dispatches (one
-        # repository_dispatch already carries every language in its payload;
-        # every shard dispatching would fire the same event N times and
-        # trigger N redundant full-matrix scans on the .github side).
-        if: >-
-          needs.detect-languages.outputs.code == 'true' &&
-          matrix.language == fromJSON(needs.detect-languages.outputs.matrix).include[0].language
+        # dispatch failure fails this job directly -- no needs-based skip to
+        # worry about, and (below) the poll step can read this step's own
+        # `outcome` within the same shard. Each shard dispatches only ITS OWN
+        # language (not the full matrix): dispatching the full matrix from a
+        # single shard would leave every OTHER shard blind to that one
+        # shard's dispatch failure, each polling the full 3-hour deadline
+        # before self-timing-out for a scan that was never actually
+        # requested. One dispatch per language costs the same total .github-side
+        # work as one dispatch carrying every language (N single-language
+        # scans either way) while letting every shard fail closed immediately
+        # on its own dispatch failure instead of only detecting it 3 hours
+        # later.
+        id: dispatch
+        if: needs.detect-languages.outputs.code == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           OIDC_AUDIENCE: opencode-github-action
@@ -160,7 +181,8 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MATRIX: ${{ needs.detect-languages.outputs.matrix }}
+          LANGUAGE: ${{ matrix.language }}
+          BUILD_MODE: ${{ matrix.build-mode }}
         run: |
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -178,8 +200,6 @@ jobs:
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
             exit 0
           fi
-
-          matrix_languages="$(printf '%s' "$MATRIX" | jq -c '[.include[] | {language, "build-mode"}]')"
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "::error::CodeQL scan dispatch requires GitHub OIDC."
@@ -205,8 +225,9 @@ jobs:
             --arg pr_base_sha "$PR_BASE_SHA" \
             --arg pr_head_ref "$PR_HEAD_REF" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
-            --argjson matrix "$matrix_languages" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:$matrix}}' |
+            --arg language "$LANGUAGE" \
+            --arg build_mode "$BUILD_MODE" \
+            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:[{language:$language,"build-mode":$build_mode}]}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
 
       - name: Fail closed without a current-head CodeQL dispatch verdict
@@ -217,8 +238,14 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
+          DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
         run: |
           set -euo pipefail
+          if [ "$DISPATCH_OUTCOME" != "success" ]; then
+            echo "::error::CodeQL scan dispatch did not succeed (outcome=${DISPATCH_OUTCOME}); failing closed without polling."
+            exit 1
+          fi
+
           poll_interval_seconds=30
           max_poll_transport_failures=3
           poll_failures=0
