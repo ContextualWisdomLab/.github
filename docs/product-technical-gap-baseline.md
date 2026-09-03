@@ -2852,3 +2852,40 @@ its own PR with dedicated regression tests reproducing the specific incident it 
 record as `docs/doctoring` and this document's "silently-inactive required check" / duplicated-ad-hoc-guard
 family — the same lesson (one shared, correctly-implemented primitive beats N independent reimplementations)
 recurring in a new subsystem.
+
+## Item 7 (EgressWeave/wardnet adoption in contextual-orchestrator) — earlier "zero work started" claim corrected — 2026-09-03
+
+**Status:** Investigated via direct code reading (fresh clone), not a code change. Full record:
+`docs/doctoring/egressweave-wardnet-adoption-audit-contextual-orchestrator-20260903.md`.
+
+**Correction.** This session had earlier reported item 7 to the user as "손도 안 됨" (zero work started,
+architecturally unaddressed). That was wrong for wardnet and incomplete for EgressWeave.
+
+**wardnet is already integrated**, for Camoufox browsing session isolation:
+`compose.camoufox-wardnet.yaml` routes the isolated `camofox-browser`/`camofox-mcp` containers' only egress
+path through wardnet (DNS-pinned egress + authenticated CONNECT proxy, no published ports) — real,
+deployed infrastructure backing ADR-0123 (item 14's foundation), not a design note.
+
+**EgressWeave is genuinely not adopted for `ModelClient`'s core LLM-provider request path — and the evidence
+says this is a considered decision, not an oversight, so it should not be force-adopted.** Three converging
+findings: (1) `nim_benchmark.py`'s own docstring declares the runtime gateway's "provider-neutral,
+standard-library-only contract" as an explicit property, not silence; (2) `ModelClient._open_provider`
+already implements hand-rolled DNS-pinning (resolve once via `_resolve_addresses`, connect to that exact
+address via `_connect_validated`) with a reviewed-code comment and a `nosemgrep` suppression on its one
+`http.client.HTTPSConnection` site — independently providing the same TOCTOU/DNS-rebinding defense
+(CWE-350) EgressWeave would add; (3) `ModelClient` must support local providers (`mlx://`, per
+`docs/planning/adrs/0002-explicit-local-mlx-evaluation.md`) as a first-class, operator-configured case —
+EgressWeave's default SSRF posture (reject private/loopback/link-local addresses) is actively incompatible
+with that supported feature, not an edge case it happens to miss.
+
+**One real but narrow gap identified, not fixed here:** `ModelClient._resolve_addresses` (the runtime path)
+does not filter for public/global addresses the way `provider_transport.py`'s `validated_public_addresses`
+(used only by the non-runtime `nim_benchmark.py`) does — almost certainly intentional given the local-provider
+requirement, but undocumented as such, risking a future well-meaning "fix" that silently breaks local
+provider routing. Left as a small, `contextual-orchestrator`-owned follow-up (a clarifying code comment),
+not bundled into this cross-repo documentation change.
+
+**Cross-reference.** Same shape as this session's earlier ADR-0021 correction (item 19) and the naruon#1486
+Semgrep false-positive (item 5): direct code reading sometimes shows an existing choice is already correct
+for its actual constraints, and "just adopt the shared library" would be a regression, not a fix — verify
+before forcing convergence.
