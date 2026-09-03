@@ -33,24 +33,41 @@ blocks, and verbatim accuracy of every quoted line — before being accepted.
 |---|---|---|---|
 | `strix.yml` | No — group is `strix-<event>-<repo>` only; `cancel-in-progress: false` (deliberate, to preserve scanner logs) | **Yes** | Separate `cancel-superseded-pr-runs` job, same file, fires on `synchronize`/`closed`, lists active runs via the Actions API, matches by workflow name + PR number + head SHA (via `display_title` and `pull_requests[].head.sha`), and POSTs cancel/force-cancel |
 | `opencode-review.yml` | Yes — group includes both PR number and exact head SHA (`opencode-review-bootstrap-<repo>-<pr>-<sha>`), `cancel-in-progress: true` | **Yes** | The SHA-scoped group means native cancellation never even needs to fire cross-SHA (a design fix for a real prior incident, `#1568`, where SHA-agnostic grouping let a stale run wrongly cancel a *newer* one); a dedicated `cancel-superseded-opencode-review-runs` job plus an in-loop live-head self-retirement check (60s poll) provide defense-in-depth |
-| `noema-review.yml` | No — group is `noema-review-<repo>-<pr>` (PR number only); `cancel-in-progress: true` for `synchronize`/`closed` | **Yes\*** | Native cancellation alone suffices here (same group, cancel-in-progress true), *and* a same-job "Cancel superseded Noema runs after live-head validation" step independently re-verifies and cancels via the API as defense-in-depth |
+| `noema-review.yml` | No — group is `noema-review-<repo>-<pr>` (PR number only); `cancel-in-progress: true` for `synchronize`/`closed` | **No\*** | The same-job "Cancel superseded Noema runs after live-head validation" step is real and correctly implemented, but it runs too late to prevent the specific failure mode below — this is a **confirmed, unfixed bug**, not a caveat |
 | `pr-review-merge-scheduler.yml` | No (PR-number only) for the scheduler's own runs; native cancellation handles those | **Yes, for every repo except `.github` itself** | The `org-queue-sweep` job's hourly cross-repo sweep lists every queued/in-progress run of *any* workflow (reaching Strix/OpenCode/Noema runs directly, not just this scheduler's own), classifies by `head_sha` mismatch against the PR's live head, re-validates immediately before acting, and cancels. Explicitly excludes `ContextualWisdomLab/.github` from its target list — this repo's own PRs rely on Strix/OpenCode/Noema's own (separately verified, correct) mechanisms plus a same-head duplicate-run coalescer (`current-head-run-coalescer.yml`), not this sweep |
 
-**\*Caveat on `noema-review.yml`, raised by Devin Review on this PR and not fully closed here:** GitHub's
-native `cancel-in-progress` cancels whichever run most recently *entered* the concurrency group — it keys
-on run-creation order, not head-SHA recency. If GitHub ever processed an older push's `synchronize` event
-after a newer push's `synchronize` event had already created its run, native cancellation would retire the
-newer, correct run instead of the stale one; the older run's own "Reject a stale trigger before credential
-or model setup" step would then correctly reject itself, but only after the current head's run was already
-gone. `tests/test_noema_review_gate.py` proves the *explicit* "Cancel superseded Noema runs" step cannot do
-this (its `.id < $current` ordering guard is pinned end to end), and proves a delayed
-`workflow_run`/`repository_dispatch` retry cannot reach that step at all — but neither covers native
-`cancel-in-progress` deciding between two live `pull_request_target` events processed out of creation
-order, which happens above any step in this workflow and is not something workflow YAML can independently
-guard against. This investigation found no evidence this has ever occurred (GitHub's own event ordering for
-a single PR's webhooks is the only thing preventing it, not this repo's code) and did not attempt to
-reproduce it — recorded as an open, unverified risk distinct from item 13's own (refuted) hypothesis, not
-asserted away.
+**\*`noema-review.yml` has a confirmed, real concurrency bug, raised by Devin Review and independently
+adversarially re-verified twice (both the initial investigation and a dedicated refutation attempt failed
+to find any flaw) — this is not a hedge, it is a confirmed finding requiring correction to the table row
+above and the session's earlier premature "no bug to fix" framing.** GitHub evaluates a workflow's top-level
+`concurrency:` block at run-creation time, before any job or step of that run executes, using only the
+triggering event's payload. When a new run enters a busy group with `cancel-in-progress: true`, GitHub
+cancels whatever is *currently active* in that group unconditionally — as a side effect of the new run
+merely starting, not as a result of anything the new run's own logic decides. `noema-review.yml`'s group
+(`noema-review-<repo>-<pr>`, no head SHA component) means **every** push to a PR shares one group with every
+other push to that same PR. If GitHub's webhook/dispatch pipeline ever processes an older push's
+`synchronize` event *after* a newer push's `synchronize` event has already started its run — GitHub does
+not guarantee delivery order — the older run's mere entry into the group cancels the newer, valid,
+current-head run immediately, **before** the older run ever reaches its own "Reject a stale trigger before
+credential or model setup" step. That step then correctly identifies itself as stale and self-aborts — but
+only after it has already destroyed the one valid review in flight, leaving the actual current head with no
+review at all. Neither the in-job "Cancel superseded Noema runs" step (which only mops up runs with a
+strictly *smaller* run id, i.e. genuinely earlier-dispatched ones — it cannot protect a run from a
+later-dispatched cancellation) nor any pre-flight gate (none can exist here: GitHub evaluates
+`concurrency:` before any job step runs, full stop) closes this. **Strong corroborating evidence that this
+is a real, known-avoidable hazard, not a theoretical nitpick:** `strix.yml`'s own `strix` job explicitly sets
+`cancel-in-progress: false` specifically to avoid this exact class of problem, with an inline comment
+explaining the reasoning, and `opencode-review.yml` closes the identical hazard by scoping its group with
+the exact head SHA (a fix already shipped for a real prior incident, `#1568`) rather than relying on native
+cancel-in-progress at all. `noema-review.yml` uses neither established mitigation — it is the one central
+workflow in this org that still uses the blunt, unguarded pattern the other two deliberately moved away
+from. No evidence this has actually fired in production was found or sought (GitHub's own typical event
+ordering, not any code in this repository, is the only thing that has prevented it so far) — but "not yet
+observed" is not the same claim as "not a bug," and this record's own initial draft conflated the two before
+this correction. **Not fixed in this PR** — the safe, precedented fix (adopt `opencode-review.yml`'s
+SHA-scoped-group pattern, or an equivalent live-head pre-validation before group entry) is a code change to
+a live, security-critical CI workflow gating every PR's required review, and deserves its own focused PR
+with a regression test, not a same-breath edit alongside this documentation correction.
 
 All four adversarial verification passes returned `refuted: false` after independently re-fetching the
 live files and checking specifically for missed per-job concurrency blocks, companion cancellation
@@ -61,16 +78,17 @@ review") as adjacent to the `cancel-in-progress: false` line; it is actually ~15
 trigger block's `paths-ignore` comment. The design rationale itself is accurate and real — only its
 in-file location was misdescribed. This does not change the substantive verdict.
 
-**Conclusion: there is no stale-head-cancellation bug to fix for item 13's own hypothesis and cited
-evidence.** Every one of the four central, required-workflow-ruleset workflows this org's own PR pipeline
-depends on already reliably retires a superseded-head run on a new push, through a combination of
-correctly-scoped native GitHub concurrency and purpose-built, independently-verified supplementary
-cancellation jobs — several of which carry their own design-rationale comments citing prior incidents
-(`#1568`) that already taught this exact lesson once — with one caveat (`noema-review.yml`'s native-ordering
-assumption, above) recorded as open rather than verified. Forcing a "fix" here on the strength of item 13's
-hypothesis alone, without this evidence, would have meant inventing a problem that does not exist — the
-throttle this session has held all along (do not force a consolidation, or here a fix, that a real look
-shows is not actually needed) applies.
+**Conclusion, corrected:** three of the four central, required-workflow-ruleset workflows (`strix.yml`,
+`opencode-review.yml`, `pr-review-merge-scheduler.yml`) already reliably retire a superseded-head run on a
+new push, through a combination of correctly-scoped native GitHub concurrency and purpose-built,
+independently-verified supplementary cancellation jobs. `noema-review.yml` does not — it has the one
+confirmed, real, currently-unfixed concurrency bug found in this investigation (above), distinct from item
+13's own hypothesis and cited evidence, which remains refuted (naruon's PR #1528 never exhibited a multi-SHA
+race; see Result 2). Forcing a fix on the strength of item 13's *own* hypothesis and cited evidence alone
+would have meant inventing a problem that does not exist there — but this investigation surfaced a real one
+elsewhere in the same file family, and reporting it accurately, not softening it into an "unverified risk,"
+is the correct application of the same throttle-agreement discipline (don't force what isn't real; don't
+minimize what is).
 
 ## Result 2: the cited evidence shows a different, real, and more severe problem — pure queue starvation
 
@@ -131,30 +149,50 @@ runs at the margin but cannot lift the ceiling).
 ## What this resolves, and what it does not
 
 - **Resolves:** whether item 13's specific "no cancellation on push" complaint reflects a real
-  configuration bug in the four central workflows. It does not — verified, not assumed, across all four,
-  with adversarial re-checking. Item 13 should be marked accordingly in `docs/product-technical-gap-baseline.md`.
-- **Does not resolve:** why the org's real capacity is saturated to the point of 23-24+ hour stalls — that
-  is the plan-level ceiling question `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` already
-  raises as an org-owner billing/plan decision, now with stronger evidence, not a new answer.
+  configuration bug *as evidenced by its own cited example* (`naruon`'s PR #1528). It does not — that PR
+  never exhibited a multi-SHA race; see Result 2. Item 13 should be marked accordingly in
+  `docs/product-technical-gap-baseline.md`, alongside the confirmed finding below rather than instead of it.
+- **Confirmed, not-yet-fixed finding (raised by Devin Review, adversarially re-verified twice with no
+  refutation found):** `noema-review.yml`'s native `cancel-in-progress` can cancel a genuinely current run
+  when GitHub processes an older push's `synchronize` event after a newer one — GitHub does not guarantee
+  webhook/dispatch delivery order, and this workflow's concurrency group has no head-SHA component to make
+  such an inversion harmless. See the corrected caveat under Result 1's table for the full mechanism and the
+  corroborating evidence that `strix.yml` and `opencode-review.yml` both deliberately avoid this exact
+  pattern already. Not fixed here — this is a code change to live, security-critical CI configuration and
+  deserves a dedicated PR with its own regression test, not a same-breath edit to a documentation PR.
 - **Open, unverified lead, not a finding:** whether naruon's `pr-governance.yml` fires more often than
   necessary per PR (six runs on one SHA in this one case) is worth a dedicated, evidence-first follow-up
   investigation of that PR's actual label/review event history before concluding anything — recorded here
   so it is not lost, not asserted as confirmed.
-- **Open, unverified lead, not a finding (raised by Devin Review on this PR):** whether `noema-review.yml`'s
-  native `cancel-in-progress` could ever cancel a genuinely current run because GitHub processed an older
-  push's `synchronize` event after a newer one — see the caveat under Result 1's table. No evidence this has
-  happened was found or sought; closing it would need either a reproduction attempt or an explicit
-  ordering guard (analogous to the existing `.id < $current` guard on the explicit cancellation step, but
-  for native `cancel-in-progress` itself, which workflow YAML cannot directly condition on SHA age).
+- **Investigated and refuted (raised by Devin Review, adversarially re-verified with no refutation found):**
+  a claim that `strix.yml`'s `pull_request_target: paths-ignore:` list suppresses `cancel-superseded-pr-runs`
+  (a job in the same file, sharing the same trigger) for a push whose diff touches only ignored paths,
+  leaving the previous head's Strix scan running indefinitely. `strix.yml`'s own internal gap is real — that
+  half of the claim is correct, and there is no escape hatch inside that file. But a sibling required
+  workflow, `pr-review-merge-scheduler.yml`, has no `paths-ignore` at all and fires unconditionally on the
+  same event; its `scan-pr-queue` job unconditionally calls `cancel_stale_pr_runs()`
+  (`scripts/ci/pr_review_merge_scheduler.py`), which cancels any active run in the repository whose
+  `head_sha` no longer matches the PR's live head — regardless of which workflow created that run —
+  typically within the same push event, with a 30-minute local-cron backstop specifically for
+  `ContextualWisdomLab/.github` (whose own comment already documents this as the reason `org-queue-sweep`'s
+  `.github` exclusion is safe) and an hourly org-wide sweep backstop for every sibling repository. The
+  scenario does not leave a stale Strix scan running indefinitely anywhere.
 - **Bypass-merge authorization:** the user authorized bypass-merge for this investigation as a genuine
-  chicken-and-egg case. It is not used here because no fix was found that needed it — this record is itself
-  a normal docs-only PR, subject to normal review like any other.
+  chicken-and-egg case. It is not used here because no fix was found that needed it for item 13's own
+  hypothesis or the paths-ignore claim; the one confirmed bug found (`noema-review.yml`'s concurrency
+  ordering hazard, above) is deliberately left for its own dedicated fix PR rather than bypass-merged in
+  alongside documentation. This record is itself a normal docs-only PR, subject to normal review like any
+  other.
 
 ## Audit trail
 
 - Workflow run `wf_eb15dd2b-ad1` (9 agents: 4 investigate, 1 direct-evidence pull, 4 adversarial verify) —
   full per-agent transcripts and the complete unredacted findings/verification JSON live in that run's
   journal.
+- Workflow run `wf_68f78449-bb6` (4 agents: 2 investigate, 2 adversarial verify) — the follow-up
+  investigation of the two substantive Devin Review findings above (`noema-review.yml`'s confirmed
+  concurrency bug, `strix.yml`'s refuted paths-ignore claim); full per-agent transcripts and the complete
+  unredacted findings/verification JSON live in that run's journal.
 - `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` — the root-cause record this evidence
   corroborates.
 - `docs/product-technical-gap-baseline.md` — backlog item 13's original text and citation, to be updated
