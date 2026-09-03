@@ -89,7 +89,7 @@
   <div class="page-head">
     <span class="eyebrow">ContextualWisdomLab · .github</span>
     <h1>Repository Dependency Graph &amp; Open PR Status</h1>
-    <p class="lede">Cross-repo dependencies from this session's Topics/Description audit, alongside the current state of the three PRs that came out of that work.</p>
+    <p class="lede">Cross-repo dependencies from this session's Topics/Description audit, alongside the current state of the four PRs this session left open on this repo.</p>
     <p class="lede" style="font-family:'IBM Plex Mono',monospace; font-size:.74rem; color:var(--ink-faint)">Snapshot generated 2026-09-02 (KST). The PR-status panel is a point-in-time record, not live data — check the linked PRs for current state.</p>
   </div>
 
@@ -160,9 +160,6 @@ flowchart TB
   LIN -->|"IRT calibration, optional backend, git-pinned"| FM
   DW -->|"AI-edit adapter"| ORCH
   FP -->|"optional interpretation route"| ORCH
-  NAR -->|"reference threading"| TW
-  NAR -->|"consumes, fail-closed"| CAL
-  LIN -->|"consumes, fail-closed"| CAL
   BATCH -->|"extracted from"| XLB
   RW -->|"originated inside, now independent"| NAR
 
@@ -184,6 +181,9 @@ flowchart TB
   NAR -.->|"extracted issues to manage"| SCOPE
   CODEC -.->|"diarize + minutes"| NAR
   NAR -.->|"agent runtime"| NOEMA
+  NAR -.->|"reference threading (ThreadWeave's claim only)"| TW
+  NAR -.->|"consumes fail-closed (CalendarWeave's claim only)"| CAL
+  LIN -.->|"consumes fail-closed (planned, not wired yet)"| CAL
   NAR -.->|"OIDC relying party (keyverse's claim only)"| KEY
   ERD -.->|"OIDC relying party (keyverse's claim only)"| KEY
   SDP -.->|"OIDC relying party (keyverse's claim only)"| KEY
@@ -242,7 +242,9 @@ flowchart TB
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"
+        integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
   mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
 </script>

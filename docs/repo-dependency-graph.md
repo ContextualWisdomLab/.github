@@ -17,9 +17,10 @@ re-reading every repo.
 
 - **Solid arrow** — confirmed this session: the dependent repo's own README, manifest (`pyproject.toml`
   / `package.json` / `Cargo.toml`), or file tree names the target repo directly.
-- **Dashed arrow** — documented in `CWL-MASTER-CONTEXT.md`'s architecture brief; not independently
-  re-confirmed in the dependent repo's own current README during this session's audit. Treat as
-  "architecturally intended," not "verified as shipped."
+- **Dashed arrow** — documented in `CWL-MASTER-CONTEXT.md`'s architecture brief and/or asserted in
+  the **target** repo's own README; not independently re-confirmed in the dependent repo's own
+  current README/manifest during this session's audit. Treat as "architecturally intended," not
+  "verified as shipped."
 - Arrow direction is **dependent → dependency** for auth/adapter/library relationships (the repo that
   needs the other points at it), and **source → destination** for data-flow relationships (ingestion,
   diarization output, batch routing) — each edge is labeled, so the direction's meaning doesn't need
@@ -89,9 +90,6 @@ flowchart TB
   LIN -->|"IRT calibration, optional backend, git-pinned"| FM
   DW -->|"AI-edit adapter"| ORCH
   FP -->|"optional interpretation route"| ORCH
-  NAR -->|"reference threading"| TW
-  NAR -->|"consumes, fail-closed"| CAL
-  LIN -->|"consumes, fail-closed"| CAL
   BATCH -->|"extracted from"| XLB
   RW -->|"originated inside, now independent"| NAR
 
@@ -115,6 +113,9 @@ flowchart TB
   NAR -.->|"extracted issues -> manage"| SCOPE
   CODEC -.->|"diarize + minutes"| NAR
   NAR -.->|"agent runtime"| NOEMA
+  NAR -.->|"reference threading (ThreadWeave's claim, not naruon's own README)"| TW
+  NAR -.->|"consumes fail-closed (CalendarWeave's claim, not naruon's own README)"| CAL
+  LIN -.->|"consumes fail-closed (LineageWeave ADR 0183: wiring is a later slice)"| CAL
   NAR -.->|"OIDC relying party (keyverse's claim, not naruon's own README)"| KEY
   ERD -.->|"OIDC relying party (keyverse's claim, not pg-erd-cloud's own README)"| KEY
   SDP -.->|"OIDC relying party (keyverse's claim, not semantic-data-portal's own README)"| KEY
@@ -136,7 +137,9 @@ between the two repos — drawing it as a dependency arrow would overstate what'
 Every row's evidence comes from the **dependent** repo's own README/manifest — not from the target's
 description of itself. Five OIDC "relying party" claims that were previously listed here on
 keyverse's own say-so were re-checked directly against each dependent's own README, found
-unconfirmed there, and moved to the dashed table below.
+unconfirmed there, and moved to the dashed table below. Three further rows (`naruon` → `ThreadWeave`,
+`naruon` → `CalendarWeave`, `LineageWeave` → `CalendarWeave`) rested only on the *target's* README
+and moved for the same reason.
 
 | Dependent | Depends on | Relationship | Evidence |
 |---|---|---|---|
@@ -151,19 +154,16 @@ unconfirmed there, and moved to the dashed table below.
 | `LineageWeave` | `fast-mlsirm` | optional `backend` extra, git-commit-pinned (`fast-mlsirm @ git+...@d025b7d`, no PyPI release yet) — LLM-as-Judge → IRT → Fixed-Item Parameter Calibration for periodic reports (ADR 0003) | LineageWeave `pyproject.toml` |
 | `DiagramWeave` | `contextual-orchestrator` | adapter for remote AI edit proposals | DiagramWeave README |
 | `four-pillars` | `contextual-orchestrator` | optional LLM interpretation route (or direct NVIDIA NIM) | four-pillars README |
-| `naruon` | `ThreadWeave` | JWZ/RFC 5256 reference threading, importable standalone | ThreadWeave README ("importable standalone by naruon or any other host") |
-| `naruon` | `CalendarWeave` | consumes fail-closed | CalendarWeave README |
-| `LineageWeave` | `CalendarWeave` | consumes fail-closed | CalendarWeave README |
 | `pg-llm-batch` | `xtrmLLMBatchPython` (private) | extracted from (lineage, not a runtime dependency) | pg-llm-batch README/NOTICE |
 | `RankWeave` | `naruon` | originated inside naruon's Context Search engine; now ships independently | RankWeave README |
 
 ## Documented, not independently re-verified this session (dashed arrows)
 
-These come from `CWL-MASTER-CONTEXT.md`'s architecture brief. The per-repo audit this session read
-each dependent repo's own current README and did not find independent confirmation of the specific
-integration — that's expected for early-stage repos, and not itself a red flag, but it means these
-claims currently rest on the architecture brief and PR history rather than on the dependent repo's own
-documentation.
+These come from `CWL-MASTER-CONTEXT.md`'s architecture brief and/or from the **target** repo's own
+README. The per-repo audit this session read each dependent repo's own current README and did not
+find independent confirmation of the specific integration — that's expected for early-stage repos,
+and not itself a red flag, but it means these claims currently rest on the architecture brief, PR
+history, or the target's own say-so rather than on the dependent repo's own documentation.
 
 | Dependent / source | Target | Relationship |
 |---|---|---|
@@ -190,6 +190,9 @@ documentation.
 | `naruon` | `scopeweave` | extracted issues → manage |
 | `codec-carver` | `naruon` | diarize + minutes |
 | `naruon` | `noema` | agent runtime |
+| `naruon` | `ThreadWeave` | JWZ/RFC 5256 reference threading — ThreadWeave's own README names naruon as a host, but naruon's README, `backend/pyproject.toml`/`requirements.txt`, and a repo-wide code search for `threadweave` (0 hits) show no trace of it |
+| `naruon` | `CalendarWeave` | consumes fail-closed — CalendarWeave's own README makes the claim; naruon's README and a repo-wide code search for `calendarweave` (0 hits) show no reference back |
+| `LineageWeave` | `CalendarWeave` | consumes fail-closed — LineageWeave's own `docs/adr/0183` *does* name CalendarWeave, but records the wiring as "a later consume-only slice" that currently fail-closes unwired: planned, not shipped |
 
 ## Repos with no known cross-repo dependency
 
