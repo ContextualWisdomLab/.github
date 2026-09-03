@@ -15,30 +15,73 @@ separate, human/agent-directed action.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
 from typing import Any, TextIO
 
 
-def audit_codeql_coverage(repositories: list[dict[str, Any]]) -> list[str]:
+# GitHub's default CodeQL schedule is weekly; 35 days (5 weeks) gives one full
+# missed-run cycle of slack before an analysis is treated as stale, so a
+# single skipped scheduled run does not itself trip the audit.
+CODEQL_ANALYSIS_FRESHNESS_DAYS = 35
+
+
+def _is_analysis_fresh_and_successful(
+    latest_codeql_analysis: Any, now: datetime
+) -> bool:
+    """Return True when ``latest_codeql_analysis`` is recent and error-free.
+
+    A malformed or unparseable ``created_at`` -- or a missing/non-dict record
+    -- fails closed (returns False) rather than raising, so one bad record
+    cannot crash the whole audit run.
+    """
+    if not isinstance(latest_codeql_analysis, dict):
+        return False
+    if latest_codeql_analysis.get("error"):
+        return False
+    created_at = latest_codeql_analysis.get("created_at")
+    if not isinstance(created_at, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed >= now - timedelta(days=CODEQL_ANALYSIS_FRESHNESS_DAYS)
+
+
+def audit_codeql_coverage(
+    repositories: list[dict[str, Any]], now: datetime | None = None
+) -> list[str]:
     """Return one human-readable error per repository with zero CodeQL coverage.
 
     A repository is flagged only when it is not archived AND both coverage
-    signals are absent: ``default_setup_state`` is not ``"configured"`` and
-    ``has_recent_codeql_analysis`` is not ``True``. Archived repositories are
-    skipped entirely -- they cannot run workflows or code scanning, so a lack
-    of coverage there is not a real product gap (matching the exclusion of
-    ``trivy-sarif-repro`` from today's manual remediation).
+    signals are absent: ``default_setup_state`` is not ``"configured"``, and
+    ``latest_codeql_analysis`` is not a fresh (within
+    ``CODEQL_ANALYSIS_FRESHNESS_DAYS``), error-free analysis record. Archived
+    repositories are skipped entirely -- they cannot run workflows or code
+    scanning, so a lack of coverage there is not a real product gap (matching
+    the exclusion of ``trivy-sarif-repro`` from today's manual remediation).
     """
+    current = now or datetime.now(timezone.utc)
     errors: list[str] = []
     for repository in repositories:
         if repository.get("archived"):
             continue
         name = repository.get("name")
+        # "configured" is GitHub's own forward-looking commitment to run
+        # CodeQL going forward (like a scheduled cron guarantee), not a
+        # one-time historical scan that can go stale -- so it does not need
+        # the same freshness check as latest_codeql_analysis below. Do not
+        # "fix" this into requiring a completed scan.
         has_default_setup = repository.get("default_setup_state") == "configured"
-        has_recent_analysis = repository.get("has_recent_codeql_analysis") is True
-        if not has_default_setup and not has_recent_analysis:
+        has_fresh_analysis = _is_analysis_fresh_and_successful(
+            repository.get("latest_codeql_analysis"), current
+        )
+        if not has_default_setup and not has_fresh_analysis:
             errors.append(
                 f"{name} has no CodeQL coverage from any source "
                 "(no default-setup, no recent analysis)"

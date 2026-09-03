@@ -105,8 +105,15 @@ jobs:
       - name: Audit organization CodeQL coverage
         env:
           ORG_LOGIN: ContextualWisdomLab
+          ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
         run: |
           set -euo pipefail
+
+          if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then
+            echo "::error::CodeQL coverage audit requires an org-scoped credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) to reliably enumerate private organization repositories; the repository-scoped github.token fallback cannot see them, which would silently narrow this audit to a subset of the organization."
+            exit 1
+          fi
+
           repositories_json="$RUNNER_TEMP/codeql-coverage-organization-repositories.json"
           coverage_json="$RUNNER_TEMP/codeql-coverage-repositories.json"
 
@@ -129,23 +136,24 @@ jobs:
               fi
             fi
 
-            has_recent_analysis=false
+            latest_codeql_analysis=null
             if [ "$archived" != "true" ]; then
               analysis_json="$RUNNER_TEMP/codeql-analysis-${repository//[^A-Za-z0-9_.-]/_}.json"
               if gh api "repos/${ORG_LOGIN}/${repository}/code-scanning/analyses?tool_name=CodeQL&per_page=1" \
-                --jq '.[0].created_at != null' >"$analysis_json" 2>/dev/null; then
-                has_recent_analysis=$(cat "$analysis_json")
+                --jq '.[0] | if . then {created_at, error} else null end' \
+                >"$analysis_json" 2>/dev/null; then
+                latest_codeql_analysis=$(cat "$analysis_json")
               else
-                has_recent_analysis=false
+                latest_codeql_analysis=null
               fi
             fi
 
-            echo "CODEQL_COVERAGE repository=${repository} archived=${archived} default_setup_state=${default_setup_state} has_recent_codeql_analysis=${has_recent_analysis}"
+            echo "CODEQL_COVERAGE repository=${repository} archived=${archived} default_setup_state=${default_setup_state} latest_codeql_analysis=${latest_codeql_analysis}"
             jq --arg name "$repository" \
               --argjson archived "$archived" \
               --argjson default_setup_state "$default_setup_state" \
-              --argjson has_recent_codeql_analysis "$has_recent_analysis" \
-              '. + [{name: $name, archived: $archived, default_setup_state: $default_setup_state, has_recent_codeql_analysis: $has_recent_codeql_analysis}]' \
+              --argjson latest_codeql_analysis "$latest_codeql_analysis" \
+              '. + [{name: $name, archived: $archived, default_setup_state: $default_setup_state, latest_codeql_analysis: $latest_codeql_analysis}]' \
               "$coverage_json" >"${coverage_json}.next"
             mv "${coverage_json}.next" "$coverage_json"
           done < <(jq -r '.[] | [.name, (.archived | tostring)] | @tsv' "$repositories_json")

@@ -1,8 +1,11 @@
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 import json
 from pathlib import Path
 
 from scripts.ci import audit_org_codeql_coverage as audit
+
+NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
 def covered_by_default_setup(name: str) -> dict:
@@ -11,17 +14,18 @@ def covered_by_default_setup(name: str) -> dict:
         "name": name,
         "archived": False,
         "default_setup_state": "configured",
-        "has_recent_codeql_analysis": False,
+        "latest_codeql_analysis": None,
     }
 
 
-def covered_by_recent_analysis(name: str) -> dict:
-    """Return a repository payload covered by a recent CodeQL analysis run."""
+def covered_by_recent_analysis(name: str, *, days_ago: int = 1) -> dict:
+    """Return a repository payload covered by a recent, successful CodeQL analysis."""
+    created_at = (NOW - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
     return {
         "name": name,
         "archived": False,
         "default_setup_state": None,
-        "has_recent_codeql_analysis": True,
+        "latest_codeql_analysis": {"created_at": created_at, "error": ""},
     }
 
 
@@ -31,12 +35,12 @@ def uncovered(name: str, archived: bool = False) -> dict:
         "name": name,
         "archived": archived,
         "default_setup_state": None,
-        "has_recent_codeql_analysis": False,
+        "latest_codeql_analysis": None,
     }
 
 
 def test_empty_repository_list_reports_no_gaps() -> None:
-    assert audit.audit_codeql_coverage([]) == []
+    assert audit.audit_codeql_coverage([], now=NOW) == []
 
 
 def test_all_covered_repositories_report_no_gaps() -> None:
@@ -45,13 +49,13 @@ def test_all_covered_repositories_report_no_gaps() -> None:
         covered_by_recent_analysis("contextual-orchestrator"),
     ]
 
-    assert audit.audit_codeql_coverage(repositories) == []
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
 
 
 def test_uncovered_repository_is_flagged() -> None:
     repositories = [uncovered("Orgmetra")]
 
-    assert audit.audit_codeql_coverage(repositories) == [
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
         "Orgmetra has no CodeQL coverage from any source "
         "(no default-setup, no recent analysis)"
     ]
@@ -65,7 +69,7 @@ def test_mixed_covered_and_uncovered_flags_only_gaps() -> None:
         uncovered("life-os"),
     ]
 
-    assert audit.audit_codeql_coverage(repositories) == [
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
         "j-planner has no CodeQL coverage from any source "
         "(no default-setup, no recent analysis)",
         "life-os has no CodeQL coverage from any source "
@@ -76,17 +80,119 @@ def test_mixed_covered_and_uncovered_flags_only_gaps() -> None:
 def test_archived_uncovered_repository_is_excluded() -> None:
     repositories = [uncovered("trivy-sarif-repro", archived=True)]
 
-    assert audit.audit_codeql_coverage(repositories) == []
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
 
 
 def test_default_setup_alone_counts_as_coverage() -> None:
     repositories = [covered_by_default_setup("PolicyWeave")]
 
-    assert audit.audit_codeql_coverage(repositories) == []
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
 
 
 def test_recent_analysis_alone_counts_as_coverage() -> None:
     repositories = [covered_by_recent_analysis("TEPP")]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
+
+
+def test_stale_analysis_older_than_threshold_is_not_coverage() -> None:
+    stale_days = audit.CODEQL_ANALYSIS_FRESHNESS_DAYS + 1
+    repositories = [covered_by_recent_analysis("StaleRepo", days_ago=stale_days)]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "StaleRepo has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    ]
+
+
+def test_analysis_exactly_at_threshold_boundary_still_counts() -> None:
+    repositories = [
+        covered_by_recent_analysis(
+            "BoundaryRepo", days_ago=audit.CODEQL_ANALYSIS_FRESHNESS_DAYS
+        )
+    ]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
+
+
+def test_fresh_analysis_with_error_is_not_coverage() -> None:
+    repositories = [
+        {
+            "name": "ErroredRepo",
+            "archived": False,
+            "default_setup_state": None,
+            "latest_codeql_analysis": {
+                "created_at": NOW.isoformat().replace("+00:00", "Z"),
+                "error": "out of disk or memory",
+            },
+        }
+    ]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "ErroredRepo has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    ]
+
+
+def test_malformed_analysis_timestamp_fails_closed_without_crashing() -> None:
+    repositories = [
+        {
+            "name": "MalformedRepo",
+            "archived": False,
+            "default_setup_state": None,
+            "latest_codeql_analysis": {"created_at": "not-a-timestamp", "error": ""},
+        }
+    ]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "MalformedRepo has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    ]
+
+
+def test_naive_analysis_timestamp_is_treated_as_utc() -> None:
+    repositories = [
+        {
+            "name": "NaiveTimestampRepo",
+            "archived": False,
+            "default_setup_state": None,
+            "latest_codeql_analysis": {
+                "created_at": NOW.replace(tzinfo=None).isoformat(),
+                "error": "",
+            },
+        }
+    ]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == []
+
+
+def test_missing_analysis_created_at_is_not_coverage() -> None:
+    repositories = [
+        {
+            "name": "MissingTimestampRepo",
+            "archived": False,
+            "default_setup_state": None,
+            "latest_codeql_analysis": {"error": ""},
+        }
+    ]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "MissingTimestampRepo has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    ]
+
+
+def test_null_latest_analysis_is_not_coverage() -> None:
+    repositories = [uncovered("NullAnalysisRepo")]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "NullAnalysisRepo has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    ]
+
+
+def test_audit_codeql_coverage_defaults_now_to_current_time() -> None:
+    repositories = [covered_by_recent_analysis("DefaultNowRepo", days_ago=0)]
 
     assert audit.audit_codeql_coverage(repositories) == []
 
