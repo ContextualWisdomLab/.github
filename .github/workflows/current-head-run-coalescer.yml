@@ -4,9 +4,20 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
+# cancel-in-progress: false is deliberate, not a default left unconsidered.
+# current_head_run_coalescer.py re-fetches live PR/association/sibling state
+# immediately before cancelling anything (see its own module docstring) --
+# it never trusts the head SHA it was triggered with, so an older, still-
+# queued coalescer instance is exactly as correct as a fresh one once it
+# finally runs. Under near-zero Actions admission, rapid same-PR pushes
+# were cancelling each queued coalescer instance before it ever got a
+# runner (verified 2026-09-03: PR #1741's own required-review checks sat
+# stuck queued because the coalescer never once executed for it), so this
+# job -- alone among this repo's PR-scoped workflows -- must be allowed to
+# survive a superseding push rather than evicted by one.
 concurrency:
   group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   actions: write
