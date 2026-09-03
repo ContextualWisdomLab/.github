@@ -83,8 +83,8 @@ in-file location was misdescribed. This does not change the substantive verdict.
 new push, through a combination of correctly-scoped native GitHub concurrency and purpose-built,
 independently-verified supplementary cancellation jobs. `noema-review.yml` does not — it has the one
 confirmed, real, currently-unfixed concurrency bug found in this investigation (above), distinct from item
-13's own hypothesis and cited evidence, which remains refuted (naruon's PR #1528 never exhibited a multi-SHA
-race; see Result 2). Forcing a fix on the strength of item 13's *own* hypothesis and cited evidence alone
+13's own hypothesis and cited evidence, which remains refuted (`ContextualWisdomLab/naruon#1528` never
+exhibited a multi-SHA race; see Result 2). Forcing a fix on the strength of item 13's *own* hypothesis and cited evidence alone
 would have meant inventing a problem that does not exist there — but this investigation surfaced a real one
 elsewhere in the same file family, and reporting it accurately, not softening it into an "unverified risk,"
 is the correct application of the same throttle-agreement discipline (don't force what isn't real; don't
@@ -133,10 +133,14 @@ treats its own live API counts (jobs `in_progress` vs. `queued`) the same way �
 theory, not as independent proof of it; that record does not claim otherwise, and neither does this one. A
 misconfigured scheduler, a starved runner label (a real, separately-documented org history — see this
 repository's own `ubuntu-latest` floating-image finding), or some other single-repository cause could in
-principle also produce a multi-hour wait for one PR. What rules those out *here*, specifically, is that
-Result 1 above already verified all four central workflows' own cancellation/scheduling logic is correct —
-so the wait is not explained by a bug in this PR's own review pipeline, which narrows the remaining
-explanation toward capacity rather than proving it by elimination of every other conceivable cause.
+principle also produce a multi-hour wait for one PR. What narrows toward capacity *here*, specifically, is
+that Result 1 above already verified three of the four central workflows' cancellation/scheduling logic is
+fully correct, and that the fourth's (`noema-review.yml`'s) confirmed bug has a different failure signature
+than what this evidence shows: that bug wrongly *cancels* a still-current run outright, whereas Result 2's
+runs sat *queued* for 23h22m/24+ hours with no cancellation at all. A run stuck queued that long, never
+cancelled, is not the symptom the confirmed bug produces — so this specific wait is still not explained by a
+known bug in this PR's own review pipeline, which narrows the remaining explanation toward capacity rather
+than proving it by elimination of every other conceivable cause.
 
 With that precision stated, this evidence is consistent with, and corroborates, the root cause
 `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` already identified (a plan-level concurrent-job
@@ -149,7 +153,7 @@ runs at the margin but cannot lift the ceiling).
 ## What this resolves, and what it does not
 
 - **Resolves:** whether item 13's specific "no cancellation on push" complaint reflects a real
-  configuration bug *as evidenced by its own cited example* (`naruon`'s PR #1528). It does not — that PR
+  configuration bug *as evidenced by its own cited example* (`ContextualWisdomLab/naruon#1528`). It does not — that PR
   never exhibited a multi-SHA race; see Result 2. Item 13 should be marked accordingly in
   `docs/product-technical-gap-baseline.md`, alongside the confirmed finding below rather than instead of it.
 - **Confirmed, not-yet-fixed finding (raised by Devin Review, adversarially re-verified twice with no
