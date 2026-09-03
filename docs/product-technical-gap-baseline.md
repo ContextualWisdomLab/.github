@@ -2630,7 +2630,7 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 ## Item 4 fresh evidence: gateway 500 after a 649.5s "connecting" phase with `served_model=unknown` — 2026-09-03
 
-**Status:** A live, current instance of item 4's still-open telemetry complaint, distinct from the already-resolved html4tree/900-second caller-repair-deadline case above (that mechanism was removed by PR #1672). Recorded here from a fresh, exact job log. Two distinct defects were found in the one error line below: a caller-owned phase-mislabeling bug (this repository's own `scripts/ci/noema_review_gate.py` — fix proposed, not yet merged, see below) and a still-open gateway-owned attribution gap (`contextual-orchestrator`, relayed to the peer session with deep context in that repo).
+**Status:** A live, current instance of item 4's still-open telemetry complaint, distinct from the already-resolved html4tree/900-second caller-repair-deadline case above (that mechanism was removed by PR #1672). Recorded here from a fresh, exact job log. Two distinct defects were found in the one error line below, both root-caused and both with a fix proposed but not yet merged: a caller-owned phase-mislabeling bug (this repository's own `scripts/ci/noema_review_gate.py`, see below) and a gateway-owned attribution gap (`contextual-orchestrator`'s `_invoke` failover loop, relayed to and fixed by the peer session with deep context in that repo, see below).
 
 **Evidence, pulled directly from the run.** `ContextualWisdomLab/fast-mlsirm#1518`, "Required Noema Review" run [`33646974279`](https://github.com/ContextualWisdomLab/fast-mlsirm/actions/runs/33646974279/job/100304078562), job `100304078562`, step "Prepare Noema model verdict," `head_sha` `b8e72773c34cd2f383bf44f492e52bf61736c680`. The sidecar's own **preflight** probe (`02:41:24Z`) reports rich per-route detail for the `orchestrator/free` pool — 12 candidates probed, 5 ready, 7 rejected, each with an explicit `agent_id`/`model`/`provider`/`error_type` (`TimeoutError` or `HTTPError` with an `http_status`). The **real** verdict call that follows (`two_phase.py`'s actual `chat/completions` request, started `02:41:29Z`) then produces zero log output for **10 minutes 54 seconds**, until:
 
@@ -2714,7 +2714,18 @@ product/operational decision this record surfaces rather than makes.
 
 ## `codeql-pr.yml` required-workflow hard limit closed org-wide — 2026-09-03
 
-**Status:** Closed. Ruleset fix live (admin:org); documented in `.github#1767`; coverage gap independently closed same day.
+**Superseded/extended by "Item 41" above (Devin Review: this and that entry recorded the same closure with
+different scope and counts, a real duplication risk for future operational drift — consolidating here
+rather than deleting either, since each has content the other lacks).** This entry is the original,
+narrower finding (23 gapped repositories, ruleset fix, `.github#1767`) from earlier the same day. "Item 41"
+above is the same finding re-verified with a full 74-repository sweep (not the ~71-repository ruleset-only
+scope this entry used) that found 16 *more* gapped repositories this entry's narrower sweep missed,
+including `contextual-orchestrator`, plus the still-open future-repository gap this entry does not address.
+**Treat "Item 41" above as the current, complete record; this entry's specific repository list and `#1767`
+citation remain historically accurate for the narrower 23-repository fix, but "Status: Closed" below applies
+only to that narrower scope, not to the fuller picture "Item 41" documents.**
+
+**Status:** Closed for its own 23-repository scope (superseded above). Ruleset fix live (admin:org); documented in `.github#1767`; coverage gap independently closed same day.
 
 **Root cause.** Ruleset `18156473` ("CWL Central required workflows") dispatched `.github/workflows/codeql-pr.yml` into every one of the ~71 covered repositories as a required workflow. Every such dispatch concluded `startup_failure` with zero check runs created — a 100% failure rate, not intermittent. The REST API surfaces no reason; the web UI's run-page annotation does: `github/codeql-action/init` and `github/codeql-action/analyze` are categorically disallowed inside a required workflow (confirmed against GitHub's own stated rationale — CodeQL needs repository-level configuration that the cross-repo required-workflow dispatch context cannot provide). No edit to `codeql-pr.yml`'s own content (matrix shape, permissions, `if:` gating) can fix this; it is a platform constraint, not a configuration defect. Two sessions converged on this independently the same day via the browser UI (the API alone hides it); a third session's initial hypothesis (a job-output-derived `strategy.matrix` being incompatible with required-workflow check-run pre-registration) was investigated, found unrelated, and redirected before it produced a wrong fix.
 
