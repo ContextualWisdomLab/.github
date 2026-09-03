@@ -2647,12 +2647,14 @@ consistently at two other head-mismatch points in the same file (`git log -S'hea
 exactly the "UX problem" the backlog item's own framing anticipated — a real fix already landed for it,
 one day after the flagged run, independently of this investigation.
 
-**Could not observe a fresh reproduction — and why that's expected right now, not a gap.** Checked the
-most recent 100 Actions runs in `contextual-orchestrator`: 70 are still `queued`, 3 `pending`, and of
-the 27 `completed`, zero are `Required OpenCode Review` runs (several `CodeQL PR` runs show
-`startup_failure`, and most other named checks show `cancelled` — superseded by a later push before
-they ran). The review workflow isn't failing right now — it mostly isn't *running* yet, for nearly
-every open PR, independent of this fix.
+**Post-fix execution samples could not be verified — no `Required OpenCode Review` runs were available to check, which is not itself evidence either way.** Checked the most recent 100 Actions runs in
+`contextual-orchestrator`: 70 are still `queued`, 3 `pending`, and of the 27 `completed`, zero are
+`Required OpenCode Review` runs (several `CodeQL PR` runs show `startup_failure`, and most other named
+checks show `cancelled` — superseded by a later push before they ran). This shows the review workflow
+mostly isn't *running* right now, for nearly every open PR, independent of this fix — it says nothing
+about whether the fix itself works or the original failure would still reproduce; the code-change
+evidence for that (commit `5c561a6`, above) stands on its own and is not strengthened or weakened by
+this queue observation.
 
 **Correction (2026-09-02, re-verified by a peer session):** the queue depth above is a *transient* load
 spike, not the same multi-hour saturation incident the floating-runner-starvation and
@@ -2877,8 +2879,14 @@ and the free-tier privacy totals. Executed against `#1028`'s own head `aabd69a`:
 was written for. The fix must also admit a non-text-input row whose complete published `pricing` dict
 is zero into `_row_is_free`, or be re-scoped.
 
-**Status: fix implemented and PR opened** —
-[contextual-orchestrator#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028).
+**Status: fix proposed, PR open, not yet merged — and, per the correction directly above, currently
+inert at the PR's own head, not yet the working fix it was written to be.**
+[contextual-orchestrator#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
+adds the exemption described below, but executed against that PR's own head `aabd69a` the exemption
+never fires for any of the 8 models it targets (see the correction paragraph above: all 8 still resolve
+`is_free=False`). Do not treat this as done until the PR either lands the additional `_row_is_free` fix
+the correction calls for, or is re-scoped, and a fresh head-exact test confirms all 8 models actually
+reach `general_free_serving_candidates`.
 Investigation notes on *why NIM is excluded by evidence, not by a hardcoded provider name* (repository
 owner explicitly required checking this, not just asserting it): the existing `_parallel_tool_call_evidence`/
 `discovery_tool_call_tags`/`DISCOVERY_TOOL_CALL_*_TAG` names were found to be **unwired dead code** (
@@ -3059,9 +3067,12 @@ test files and the new statistical contract tests five times each for stability,
 (100%) and the full suite myself (3354 passed, 1 skipped, 1 pre-existing-and-separately-fixed deselect,
 0 failed) rather than trusting the implementing agent's own report.
 
-**Conclusion.** All three pieces of §8 are closed: two required no new code (timeout already removed
-elsewhere; role-effort catalog already existed, correctly gated), one required a real fix now shipped as
-`contextual-orchestrator#1034` (open, pending merge).
+**Conclusion.** Two of §8's three pieces are closed (timeout already removed elsewhere; role-effort
+catalog already existed, correctly gated) and required no new code. The third — Thompson-sampled
+intra-group routing — has its fix written and independently re-verified as described above, but
+`contextual-orchestrator#1034` is still open and not yet merged; §8 as a whole stays open until that PR
+actually lands on `main` and the required behavior is confirmed at the merged head, not just on the PR
+branch.
 
 ## Item 4 fresh evidence: gateway 500 after a 649.5s "connecting" phase with `served_model=unknown` — 2026-09-03
 
