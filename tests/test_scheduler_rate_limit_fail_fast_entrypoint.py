@@ -22,6 +22,34 @@ CORE_PATH = (
 )
 
 
+def _post_approval_arguments() -> list[str]:
+    """Return the exact OpenCode post-publication scheduler signature."""
+
+    return [
+        "--repo",
+        "ContextualWisdomLab/example-service",
+        "--base-branch",
+        "main",
+        "--max-prs",
+        "1",
+        "--project-flow",
+        "github-flow",
+        "--review-workflow",
+        "Required OpenCode Review",
+        "--security-workflow",
+        "Strix Security Scan",
+        "--review-dispatch-limit",
+        "0",
+        "--no-trigger-reviews",
+        "--enable-auto-merge",
+        "--merge-mode",
+        "direct_or_auto",
+        "--no-update-branches",
+        "--pr-number",
+        "42",
+    ]
+
+
 @pytest.fixture(autouse=True)
 def restore_scheduler_api_helpers():
     """Restore core API helpers after each installer-focused regression test."""
@@ -118,29 +146,74 @@ def test_transient_transport_error_keeps_one_short_retry(
     assert responses == []
 
 
-def test_cli_accepts_typed_rate_limit_defer_without_outer_retry(
+def test_opencode_followup_accepts_typed_rate_limit_defer_without_outer_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Return success only for an explicitly recorded primary-rate-limit defer."""
+    """Stop the OpenCode caller's 5, 10, and 15 second retry sleeps."""
 
+    argument_values = _post_approval_arguments()
     summary_path = tmp_path / "step-summary.md"
     sleeps: list[int] = []
 
-    def deferred_main(argument_values: list[str]) -> int:
-        assert argument_values == ["--self-test"]
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
         raise RuntimeError("API rate limit exceeded for installation")
 
     monkeypatch.setattr(scheduler_core, "main", deferred_main)
     monkeypatch.setattr(scheduler_core.time, "sleep", sleeps.append)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
 
-    assert scheduler_facade.run_cli(["--self-test"]) == 0
+    assert scheduler_facade.run_cli(argument_values) == 0
     assert sleeps == []
     summary = summary_path.read_text(encoding="utf-8")
     assert "outcome: `deferred_rate_limit`" in summary
-    assert "retry owner: next bounded heartbeat" in summary
+    assert "retry owner: Required PR Review Merge Scheduler heartbeat" in summary
     assert "runner-held sleep: 0 seconds" in summary
+
+
+def test_org_sweep_rate_limit_remains_nonzero_and_stops_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve #1245's organization-rotation stop signal."""
+
+    argument_values = [
+        "--repo",
+        "ContextualWisdomLab/example-service",
+        "--base-branch",
+        "main",
+        "--max-prs",
+        "8",
+        "--review-dispatch-limit",
+        "3",
+    ]
+
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "Required PR Review Merge Scheduler")
+
+    assert scheduler_facade.run_cli(argument_values) == 1
+
+
+def test_caller_name_alone_cannot_relabel_org_scan_as_accepted_defer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require the exact post-approval argument signature as well as workflow."""
+
+    argument_values = ["--repo", "ContextualWisdomLab/example-service"]
+
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
+
+    assert scheduler_facade.run_cli(argument_values) == 1
 
 
 def test_cli_keeps_non_rate_limit_failure_blocking(
@@ -148,13 +221,16 @@ def test_cli_keeps_non_rate_limit_failure_blocking(
 ) -> None:
     """Do not relabel an unrelated scheduler defect as accepted deferral."""
 
-    def failing_main(argument_values: list[str]) -> int:
-        assert argument_values == []
+    argument_values = _post_approval_arguments()
+
+    def failing_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
         raise RuntimeError("invalid repository payload")
 
     monkeypatch.setattr(scheduler_core, "main", failing_main)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
 
-    assert scheduler_facade.run_cli([]) == 1
+    assert scheduler_facade.run_cli(argument_values) == 1
 
 
 def test_legacy_monkeypatches_are_forwarded_to_the_core_module(
@@ -211,5 +287,6 @@ def test_facade_installs_no_reset_lookup_on_the_production_entrypoint() -> None:
     assert '["gh", "api", "rate_limit"]' not in facade_source
     assert "deferring without runner-held sleep" in facade_source
     assert "scheduler_outcome=deferred_rate_limit" in facade_source
-    assert "retry_owner=next_bounded_heartbeat" in facade_source
+    assert "Required PR Review Merge Scheduler heartbeat" in facade_source
+    assert 'GITHUB_WORKFLOW", "") == "OpenCode Review Dispatch"' in facade_source
     assert "__all__ = tuple(" in facade_source
