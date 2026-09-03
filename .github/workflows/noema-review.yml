@@ -279,45 +279,62 @@ jobs:
         # authenticates") -- defeating the retry entrypoint's exact purpose
         # of unblocking a stuck sibling review stuck behind a genuinely stale
         # run (Noema inference has no wall-clock deadline by design, see this
-        # job's own header comment). Mint a repository-scoped GitHub App
-        # installation token the same way the noema-review job below already
-        # does for its own cross-repo publication calls, narrowed to just the
-        # two permissions this job's API calls use. If the App credential
-        # isn't configured, degrade the same way every other transient
-        # failure in this job already does: warn and skip, never fail the
-        # job over an ancillary cleanup path.
+        # job's own header comment).
+        #
+        # Checked in the SAME priority order as noema-review's own "Select
+        # fail-closed Noema reviewer credential" step below (PAT, then the
+        # GitHub App): a PAT is already a usable token, no minting needed; a
+        # configured App mints a repository-scoped installation token the
+        # same way the noema-review job already does for its own cross-repo
+        # publication calls, narrowed to just the two permissions this job's
+        # API calls use. OIDC (that step's third, lowest-priority fallback)
+        # is deliberately NOT mirrored here -- replicating its token
+        # -exchange call into this separate ancillary job would add real
+        # complexity to a file that has already had heavy adversarial
+        # scrutiny today, for the one credential mode this org has never
+        # actually used in production (confirmed live: every observed run
+        # selects source=github-app). An OIDC-only configuration degrades
+        # the same way an unconfigured one does: warn and skip cross
+        # -repository cancellation (Devin Review, 2026-09-03: "Supported
+        # retries cannot unblock stale reviews" -- accepted its own
+        # suggested fallback of documenting unsupported modes rather than
+        # fully replicating every credential path).
         if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository
         id: cleanup_credential
         env:
+          NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || '' }}
           NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
           NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
         run: |
           set -euo pipefail
-          if [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
-            echo "available=true" >>"$GITHUB_OUTPUT"
+          if [ -n "${NOEMA_REVIEW_TOKEN:-}" ]; then
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
           else
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            echo "::warning::Noema supersede-cleanup has no repository-scoped credential configured for cross-repository target ${TARGET_REPOSITORY}; skipping cross-repository cancellation for this run rather than attempting it with a token that cannot see that repository."
+            echo "source=none" >>"$GITHUB_OUTPUT"
+            echo "::warning::Noema supersede-cleanup has no repository-scoped credential usable for cross-repository target ${TARGET_REPOSITORY} (NOEMA_REVIEW_TOKEN or the NOEMA_GITHUB_APP_* App credential is required; an OIDC-only configuration is not supported for cross-repository retries); skipping cross-repository cancellation for this run."
           fi
 
       - name: Mint repository-scoped token for cross-repository Noema cleanup
-        # continue-on-error is deliberate: cleanup_credential above only
-        # proves the App secrets are CONFIGURED, not that this specific
-        # mint call will succeed -- the App may not be installed on this
-        # particular sibling repository (installation scope is independent
-        # of whether the org-level client-id/private-key secrets exist), or
-        # the exchange may hit a transient API error. Without
-        # continue-on-error, that failure would fail this step outright and
-        # (via the next step's implicit success() gate) skip the cancel
-        # step below and mark this whole job "failure" -- contradicting the
-        # "warn and skip, never fail the job over an ancillary cleanup
-        # path" design this job states everywhere else (Devin Review,
-        # 2026-09-03: this step was the one place that didn't honor it).
-        # steps.cleanup_app_token.outcome (unlike .conclusion, which
-        # continue-on-error masks back to "success") still reports the raw
-        # "failure" result, which the next two steps key off instead of
-        # outputs.token being merely empty.
-        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.available == 'true'
+        # Only for the github-app credential source -- a PAT (source=pat) is
+        # already a usable token and needs no minting. continue-on-error is
+        # deliberate: reaching this step only proves the App secrets are
+        # CONFIGURED, not that this specific mint call will succeed -- the
+        # App may not be installed on this particular sibling repository
+        # (installation scope is independent of whether the org-level
+        # client-id/private-key secrets exist), or the exchange may hit a
+        # transient API error. Without continue-on-error, that failure would
+        # fail this step outright and (via the next step's implicit
+        # success() gate) skip the cancel step below and mark this whole job
+        # "failure" -- contradicting the "warn and skip, never fail the job
+        # over an ancillary cleanup path" design this job states everywhere
+        # else (Devin Review, 2026-09-03: this step was the one place that
+        # didn't honor it). steps.cleanup_app_token.outcome (unlike
+        # .conclusion, which continue-on-error masks back to "success")
+        # still reports the raw "failure" result, which the next two steps
+        # key off instead of outputs.token being merely empty.
+        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.source == 'github-app'
         id: cleanup_app_token
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -330,20 +347,20 @@ jobs:
           permission-pull-requests: read
 
       - name: Warn when cross-repository token minting failed
-        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.available == 'true' && steps.cleanup_app_token.outcome == 'failure'
+        if: env.PR_NUMBER != '' && env.TARGET_REPOSITORY != github.repository && steps.cleanup_credential.outputs.source == 'github-app' && steps.cleanup_app_token.outcome == 'failure'
         run: |
           echo "::warning::Noema supersede-cleanup could not mint a repository-scoped token for cross-repository target ${TARGET_REPOSITORY} (App secrets are configured, but the mint call itself failed -- possibly not installed on that repository); skipping cross-repository cancellation for this run."
 
       - name: Cancel superseded Noema runs after live-head validation
-        # Gated on the mint step's own outcome, not just cleanup_credential's
-        # availability check: a same-repository run never needed a mint at
-        # all (first disjunct), while a cross-repository run must have
-        # actually succeeded at minting a usable token (second disjunct) --
-        # "available" alone would let a mint failure through to here with an
-        # empty GH_TOKEN below.
-        if: env.PR_NUMBER != '' && (env.TARGET_REPOSITORY == github.repository || steps.cleanup_app_token.outcome == 'success')
+        # Gated on the actually-usable credential, not just a credential
+        # being configured: a same-repository run never needed one at all
+        # (first disjunct); a PAT is immediately usable once configured
+        # (second disjunct); a GitHub App must have actually succeeded at
+        # minting a token (third disjunct) -- source=github-app alone would
+        # let a mint failure through to here with an empty GH_TOKEN below.
+        if: env.PR_NUMBER != '' && (env.TARGET_REPOSITORY == github.repository || steps.cleanup_credential.outputs.source == 'pat' || steps.cleanup_app_token.outcome == 'success')
         env:
-          GH_TOKEN: ${{ (env.TARGET_REPOSITORY == github.repository) && github.token || steps.cleanup_app_token.outputs.token }}
+          GH_TOKEN: ${{ (env.TARGET_REPOSITORY == github.repository) && github.token || (steps.cleanup_credential.outputs.source == 'pat') && secrets.NOEMA_REVIEW_TOKEN || steps.cleanup_app_token.outputs.token }}
         run: |
           set -euo pipefail
           declare -A seen=()
@@ -524,21 +541,21 @@ jobs:
         # re-check) needs TARGET_REPOSITORY instead -- that one asks about
         # the PR itself, which lives in the target repository, not this
         # run's own -- so it explicitly overrides GH_TOKEN inline to
-        # CLEANUP_APP_TOKEN (the same cross-repository token minted above
-        # for the cancel step) when one was minted, falling back to the
-        # ambient github.token when TARGET_REPOSITORY equals
-        # CURRENT_REPOSITORY (the dominant same-repository path, where
-        # CLEANUP_APP_TOKEN is never minted and stays empty). Without that
-        # inline override the second call would silently fail to
-        # authenticate on every cross-repository repository_dispatch retry,
-        # falling to the "unknown" branch below and unconditionally
+        # CLEANUP_CROSS_REPO_TOKEN (the same credential resolved above for
+        # the cancel step -- the PAT directly, or the minted App token) when
+        # one is usable, falling back to the ambient github.token when
+        # TARGET_REPOSITORY equals CURRENT_REPOSITORY (the dominant
+        # same-repository path, where CLEANUP_CROSS_REPO_TOKEN stays empty).
+        # Without that inline override the second call would silently fail
+        # to authenticate on every cross-repository repository_dispatch
+        # retry, falling to the "unknown" branch below and unconditionally
         # reporting a false eviction alarm on the routine, common case this
         # step's own comments describe (a newer push legitimately claiming
         # the single pending slot) -- defeating this step's whole
         # three-lens-adversarially-verified disambiguation purpose.
         if: always() && env.PR_NUMBER != ''
         env:
-          CLEANUP_APP_TOKEN: ${{ steps.cleanup_app_token.outputs.token }}
+          CLEANUP_CROSS_REPO_TOKEN: ${{ (steps.cleanup_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN) || steps.cleanup_app_token.outputs.token }}
         run: |
           set -euo pipefail
           if ! jobs_json="$(gh api "repos/${CURRENT_REPOSITORY}/actions/runs/${CURRENT_RUN_ID}/jobs")"; then
@@ -577,7 +594,7 @@ jobs:
           # own head is still the PR's current head, yet its review never
           # ran, which only a genuine eviction (or something equally worth
           # a human's attention) explains.
-          if ! pr_json="$(GH_TOKEN="${CLEANUP_APP_TOKEN:-$GH_TOKEN}" gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '{state: .state, head_sha: .head.sha}' 2>/tmp/noema-eviction-pr-state-error)"; then
+          if ! pr_json="$(GH_TOKEN="${CLEANUP_CROSS_REPO_TOKEN:-$GH_TOKEN}" gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '{state: .state, head_sha: .head.sha}' 2>/tmp/noema-eviction-pr-state-error)"; then
             echo "::warning::Sibling noema-review job for PR #${PR_NUMBER} was cancelled without ever starting, but the PR's live state could not be re-checked before flagging it -- reporting the eviction anyway since it cannot be ruled out as benign." >&2
             sed 's/^/  /' /tmp/noema-eviction-pr-state-error >&2 || true
             pr_state="unknown"
