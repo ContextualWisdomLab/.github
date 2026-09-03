@@ -999,6 +999,8 @@ jobs:
           failures=0
           unavailable=0
           unavailable_repos=()
+          rate_limited=0
+          rate_limited_repos=()
           # These are organization-wide budgets. They must be consumed across
           # the repository loop, not reset for every target repository; resetting
           # them here can enqueue hundreds of long-running review jobs per sweep.
@@ -1100,12 +1102,34 @@ jobs:
               # repository at all — the OpenCode app is not installed there or
               # PR_REVIEW_MERGE_TOKEN does not cover it. The automation can never
               # merge those PRs regardless, so this is a skipped, non-fatal
-              # "unavailable" repository, not a failure the sweep can act on. Any
-              # other non-zero exit is a genuine per-repository failure.
+              # "unavailable" repository, not a failure the sweep can act on.
+              #
+              # "API rate limit exceeded" means the shared GitHub App
+              # installation-token bucket (5,000-12,500 requests/hour, pooled
+              # across at least eight other central workflows that mint tokens
+              # for the same installation) is exhausted for this hourly window.
+              # That is routine cross-workflow contention, not a defect in this
+              # repository, and it self-heals on GitHub's own reset schedule;
+              # treating it as a hard failure previously turned one exhausted
+              # bucket into a permanently red cron run on essentially every
+              # scheduled tick for as long as the contention lasted. Because
+              # the installation bucket is shared by every remaining
+              # repository, the current rotation stops after
+              # recording the first exhausted request instead of repeating the
+              # same bounded retries and queue-hygiene calls for every target.
+              # Deferred work is picked up on a later rotation after reset.
+              #
+              # Any other non-zero exit is a genuine per-repository failure.
               if printf '%s' "$sweep_output" | grep -qF "Resource not accessible by integration"; then
                 echo "::warning::Skipping ${repo_full_name}: the sweep credential lacks access (HTTP 403 Resource not accessible by integration). Install the OpenCode app on this repository or grant PR_REVIEW_MERGE_TOKEN access to include it in the sweep."
                 unavailable=$((unavailable + 1))
                 unavailable_repos+=("$repo_full_name")
+              elif printf '%s' "$sweep_output" | grep -qiF "API rate limit exceeded"; then
+                echo "::warning::Deferring ${repo_full_name} and stopping this rotation: the shared GitHub App installation-token rate limit is exhausted (HTTP 403 API rate limit exceeded). Deferred repositories are retried automatically on the next sweep rotation once the bucket resets."
+                rate_limited=$((rate_limited + 1))
+                rate_limited_repos+=("$repo_full_name")
+                echo "::endgroup::"
+                break
               else
                 echo "::error::Queue sweep failed for ${repo_full_name}; see the decision log above for the concrete per-PR reason."
                 failures=$((failures + 1))
@@ -1280,6 +1304,13 @@ jobs:
 
           if [ "$unavailable" -gt 0 ]; then
             echo "::warning::${unavailable} repository(ies) were skipped as unreachable by the sweep credential (HTTP 403): ${unavailable_repos[*]}. These do not fail the sweep; install the OpenCode app or grant PR_REVIEW_MERGE_TOKEN access to include them."
+          fi
+          if [ "$rate_limited" -gt 0 ]; then
+            # No fail-closed ceiling here, unlike ORG_SWEEP_MAX_UNAVAILABLE below:
+            # one exhausted shared installation-token bucket affects every
+            # remaining repository, so the rotation stops after the first
+            # observed exhaustion instead of multiplying retries and API calls.
+            echo "::warning::The organization sweep stopped after ${rate_limited} observed rate-limit exhaustion(s): ${rate_limited_repos[*]}. Deferred work does not fail this sweep and is retried automatically once the shared bucket resets."
           fi
           # Fail-closed guard: a handful of un-enrolled repositories is expected,
           # but if MORE than ORG_SWEEP_MAX_UNAVAILABLE repositories become
