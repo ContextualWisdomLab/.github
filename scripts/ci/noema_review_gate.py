@@ -1665,7 +1665,16 @@ def call_llm(
         *_pinned_connection_handlers(api_url, pinned_ips), NoRedirectHandler()
     )
     attempt_started = time.monotonic()
-    active_phase = "connecting"
+    # urllib's opener.open() is one blocking call covering DNS/TCP/TLS setup,
+    # sending the request, AND waiting for the upstream response's status
+    # line/headers -- it returns no hook to time those separately. For a
+    # loopback gateway sidecar, connection setup is near-instant, so nearly
+    # all of this phase's observed duration is actually the upstream
+    # provider's own processing/inference time, not network connection time.
+    # Named for what it actually measures, not literally "connecting", so a
+    # multi-hundred-second duration here reads as "the gateway/provider was
+    # slow to respond," not as a network connectivity problem.
+    active_phase = "awaiting_response"
     served_model: str | None = None
     try:
         with opener.open(request) as response:  # nosec B310
@@ -1719,12 +1728,12 @@ def call_llm(
         model_note = served_model or "unknown"
         print(
             f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
-            f"duration={elapsed:.1f}s served_model={model_note}; "
+            f"duration={elapsed:.1f}s requested_model={model} served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
-            f"phase={active_phase}, served_model={model_note}"
+            f"phase={active_phase}, requested_model={model}, served_model={model_note}"
         )
         if isinstance(exc, NoemaModelOutputError):
             raise NoemaModelOutputError(
@@ -1740,7 +1749,7 @@ def call_llm(
     elapsed = time.monotonic() - attempt_started
     print(
         f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
-        f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
+        f"duration={elapsed:.1f}s requested_model={model} served_model={served_model or 'unknown'}; "
         "caller attempts=1."
     )
     return verdict

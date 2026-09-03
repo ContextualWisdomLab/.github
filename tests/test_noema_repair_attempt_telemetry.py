@@ -85,6 +85,38 @@ def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) 
     assert output.count("::notice::Noema gateway attempt") == 1
     assert "phase=validating" in output
     assert "caller attempts=1" in output
+    # The requested gateway alias (orchestrator/free by default) is always
+    # known upfront and reported alongside served_model, even on success.
+    assert "requested_model=orchestrator/free" in output
+    assert "served_model=provider/model" in output
+
+
+def test_transport_failure_reports_requested_model_and_not_literal_connecting(
+    monkeypatch, capsys
+) -> None:
+    """A failure before any response is read must not blame "connecting".
+
+    ``opener.open()`` is one blocking call spanning DNS/TCP/TLS setup, the
+    request, AND the wait for the upstream response -- for a loopback
+    gateway sidecar that connects near-instantly, a slow failure here is
+    almost always the upstream provider being slow to respond, not a
+    network connectivity problem. The phase label must reflect that instead
+    of misleadingly reading "connecting" for a multi-minute stall.
+    """
+    calls, kwargs = _invoke_once(
+        monkeypatch,
+        open_error=lambda request: gate.urllib.error.HTTPError(
+            request.full_url, 500, "Internal Server Error", {}, None
+        ),
+    )
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "phase=awaiting_response" in output
+    assert "phase=connecting" not in output
+    assert "requested_model=orchestrator/free" in output
+    assert "served_model=unknown" in output
 
 
 def test_malformed_output_fails_closed_without_caller_retry(monkeypatch, capsys) -> None:
