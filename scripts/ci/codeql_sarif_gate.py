@@ -2,9 +2,8 @@
 
 Extracted from the duplicated inline Python previously embedded in both the
 ``analyze-head`` and ``analyze-merge`` jobs of ``codeql-pr.yml`` so the same
-severity gate can be reused by the dispatch-based rewrite in
-docs/adr/0025-codeql-required-workflow-dispatch-architecture.md without a
-third copy of this logic.
+severity gate can be reused by the dispatch-based rewrite proposed in
+ContextualWisdomLab/.github#1772 without a third copy of this logic.
 """
 
 from __future__ import annotations
