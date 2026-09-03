@@ -234,9 +234,25 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         "scorecard-pr.yml",
     ):
         workflow = workflow_text(filename)
-        concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-            "permissions:", 1
-        )[0]
+        if filename == "noema-review.yml":
+            # Job-level (on noema-review itself), not workflow-level -- the
+            # cleanup job (cancel-superseded-noema-runs) deliberately has no
+            # concurrency block of its own (Devin Review, item 13
+            # follow-up), so "permissions:" no longer bounds this slice from
+            # below. Bounded to the end of the cancel-in-progress line
+            # itself (not the next "if:") since an unrelated pre-existing
+            # comment about job-level timeout-minutes sits between
+            # cancel-in-progress and the job's "if:" condition.
+            concurrency_start = workflow.index("\n    concurrency:")
+            cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
+            cancel_line_end = workflow.index("\n", cancel_key)
+            concurrency_contract = workflow[
+                concurrency_start + len("\n    concurrency:") : cancel_line_end
+            ]
+        else:
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
 
         assert "concurrency:" in workflow
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
@@ -716,9 +732,20 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    triggers = workflow.split("permissions:", 1)[0]
+    # concurrency is job-level (on noema-review itself), not workflow-level,
+    # so it no longer sits in the same span as the `on:` trigger block.
+    # Bounded to the end of the cancel-in-progress line itself (not the
+    # next "if:") since an unrelated pre-existing comment about job-level
+    # timeout-minutes sits between cancel-in-progress and the job's "if:".
+    concurrency_start = workflow.index("\n    concurrency:")
+    cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
+    cancel_line_end = workflow.index("\n", cancel_key)
+    concurrency_contract = workflow[
+        concurrency_start + len("\n    concurrency:") : cancel_line_end
+    ]
 
-    assert "workflow_run:" not in concurrency_contract
+    assert "workflow_run:" not in triggers
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract

@@ -35,7 +35,11 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         """Require every Noema Review job to use explicit Ubuntu 24.04."""
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        # 3 jobs: cancel-closed-pr-runs, cancel-superseded-noema-runs
+        # (extracted so it is never blocked by noema-review's own
+        # cancel-in-progress: false group -- Devin Review, item 13
+        # follow-up), and noema-review itself.
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
 
 
 if __name__ == "__main__":

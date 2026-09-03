@@ -37,7 +37,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
         workflow_step(
             workflow_text("noema-review.yml"),
             "Cancel queued and running Noema reviews for the closed pull request",
-        ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
+        ).split("        run: |\n", 1)[1].split("\n  cancel-superseded-noema-runs:", 1)[0]
     )
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {

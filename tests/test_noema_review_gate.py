@@ -75,11 +75,10 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        OLDER head must never cancel a genuinely current run -- pinned here by
        the unconditional ``cancel-in-progress: false`` assertions below
        (native protection: the active run is never preempted by anything
-       entering the group, regardless of event type or arrival order,
-       independent of this step) AND by the step-level ``if:`` gate
-       restricting this explicit cancellation entirely to live
+       entering the group, regardless of event type or arrival order) AND by
+       the cleanup job's own ``if:`` gate restricting it entirely to live
        ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
-       execution never even reaches this step.
+       execution never even reaches this job.
     3. A cancellation step whose OWN trigger was confirmed live at the start
        of the job must still never cancel a run dispatched AFTER its own
        dispatch, even though its own multi-pass scan can take long enough in
@@ -92,42 +91,73 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        itself: a transient failure reading it must stop cleanup without
        crashing the step (and thus the whole job) -- proven by
        ``test_superseded_cleanup_survives_a_transient_live_head_lookup_failure``.
+    5. (Devin Review, item 13 follow-up, 2026-09-03) The cleanup logic that
+       actually cancels a superseded active run must live in a job with NO
+       concurrency restriction of its own -- putting it inside a step of the
+       same job that carries the group above would trap it behind that same
+       group: a new push's own cleanup could never run (and so could never
+       free the group for the current head) while an older push's job was
+       still active in it, and Noema inference has no wall-clock deadline by
+       design (docs/product-goal-directive.md #8), so a long-running
+       older-head review could block the current head's review indefinitely.
+       Pinned here by asserting cancel-superseded-noema-runs has no
+       ``concurrency:`` key of its own and noema-review's own permissions no
+       longer need actions: write (that moved to the split-out job).
     """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+    # Bounded to the end of the cancel-in-progress line itself (not the next
+    # "if:") since an unrelated pre-existing comment about job-level
+    # timeout-minutes sits between cancel-in-progress and the job's "if:".
+    concurrency_start = workflow.index("\n    concurrency:")
+    cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
+    cancel_line_end = workflow.index("\n", cancel_key)
+    concurrency = workflow[
+        concurrency_start + len("\n    concurrency:") : cancel_line_end
+    ]
     assert "github.event.workflow_run" not in concurrency
     assert "cancel-in-progress: false" in concurrency
     assert "cancel-in-progress: true" not in concurrency
     assert "Cancel superseded Noema runs after live-head validation" in workflow
-    assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
-        "Cancel superseded Noema runs after live-head validation"
-    )
-    cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
-    job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
-    assert "actions: write" in job_header
-    # Invariant 2 (step-level half): only a live pull_request_target trigger
-    # may even attempt this cancellation -- workflow_run and
-    # repository_dispatch executions (which can legitimately be delayed by
-    # hours) skip this step entirely and rely solely on the unconditional
-    # cancel-in-progress: false concurrency group above, which never
-    # preempts the active run regardless of what triggered the new entrant.
-    assert (
-        "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''"
-        in cleanup
-    )
-    assert 'select(.id < $current)' in cleanup
+
+    cleanup_job = workflow.split("\n  cancel-superseded-noema-runs:", 1)[1].split(
+        "\n  noema-review:", 1
+    )[0]
+    review_job = workflow.split("\n  noema-review:", 1)[1]
+    review_job_header = review_job.split("    steps:", 1)[0]
+
+    # Invariant 5: the cleanup job carries no concurrency key of its own, and
+    # the review job no longer needs (or has) actions: write since it no
+    # longer calls the cancel API directly.
+    assert "concurrency:" not in cleanup_job
+    assert "actions: write" not in review_job_header
+    assert "actions: write" in cleanup_job
+
+    assert "Reject a stale trigger before scanning for superseded runs" in cleanup_job
+    assert "Reject a stale trigger before credential or model setup" in review_job
+    # Invariant 2 (job-level half): only a live pull_request_target trigger on
+    # a same-repository (non-fork) PR may even attempt this cancellation --
+    # workflow_run and repository_dispatch executions (which can legitimately
+    # be delayed by hours) never trigger this job at all and rely solely on
+    # the unconditional cancel-in-progress: false concurrency group on
+    # noema-review, which never preempts the active run regardless of what
+    # triggered the new entrant.
+    assert "github.event_name == 'pull_request_target'" in cleanup_job.split(
+        "runs-on:", 1
+    )[0]
+    assert "github.event.action != 'closed'" in cleanup_job.split("runs-on:", 1)[0]
+    assert 'select(.id < $current)' in cleanup_job
     # The live-head re-check must be error-guarded (an `if !` command
     # substitution), never a bare assignment under set -euo pipefail -- a
     # transient failure here must stop cleanup, not crash the whole job.
-    assert cleanup.count('live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+    assert cleanup_job.count('live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
     assert (
         'if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.head.sha\''
-        in cleanup
+        in cleanup_job
     )
-    assert "could not re-verify the live PR head before cancelling" in cleanup
-    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert 'endswith("@" + $head)' in cleanup
-    assert "| not)" in cleanup
+    assert "could not re-verify the live PR head before cancelling" in cleanup_job
+    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup_job
+    assert 'endswith("@" + $head)' in cleanup_job
+    assert "| not)" in cleanup_job
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():

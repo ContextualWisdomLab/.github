@@ -14,42 +14,6 @@ on:
   repository_dispatch:
     types: [noema-review]
 
-concurrency:
-  # Scoped by PR number only, not head SHA -- and cancel-in-progress is
-  # unconditionally false. An earlier version of this fix added the head
-  # SHA to the group instead (mirroring opencode-review.yml's `#1568` fix)
-  # to stop a delayed/out-of-order synchronize event for an OLDER head from
-  # cancelling the run already active for a NEWER head. That worked, but
-  # traded a rare correctness bug for a much more common capacity cost: a
-  # SHA-scoped group gives every push its own group, so under the org's
-  # saturated Actions ceiling, stale per-push runs are only ever retired by
-  # a separate cleanup job that -- being just another job in this same
-  # workflow file -- shares that same congested admission queue and can
-  # itself sit stuck behind it, letting superseded runs pile up rather than
-  # being promptly evicted (the exact "적체" this org has been fighting).
-  # Setting cancel-in-progress to false instead fixes the original hazard
-  # just as completely, without that cost: the ACTIVE run is never preempted by anything
-  # regardless of event arrival order, so a late old-head event can no
-  # longer kill a valid newer-head run no matter how the group is scoped.
-  # GitHub's own single-pending-slot rule (independent of cancel-in-progress)
-  # still evicts an intermediate queued push for free the instant a newer
-  # one arrives, so rapid pushes still coalesce down to "at most one running
-  # + one pending" without any SHA segment. Whichever instance actually
-  # gets a runner is not trusted blindly either way: "Reject a stale
-  # trigger before credential or model setup" below re-fetches the live PR
-  # head and fails closed if it no longer matches what this run was
-  # triggered with, so a group without SHA never risks reviewing or
-  # reporting against the wrong commit -- it can only ever fail fast and
-  # let the actually-current push's own instance take over.
-  group: >-
-    noema-review-${{
-    github.event.pull_request.base.repo.full_name ||
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.pull_request.number ||
-    github.event.client_payload.pr_number ||
-    github.run_id }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
   pull-requests: read
@@ -208,9 +172,160 @@ jobs:
             pass=$((pass + 1))
           done
 
+  cancel-superseded-noema-runs:
+    # A genuinely separate job with NO concurrency block of its own,
+    # deliberately -- Devin Review caught that the earlier version of this
+    # fix put the equivalent cleanup logic inside a STEP of the noema-review
+    # job below, which now carries its own job-level concurrency group with
+    # cancel-in-progress: false. That trapped the cleanup logic in the exact
+    # group it needed to unblock: a new push's own noema-review job (cleanup
+    # step included) cannot even start while an older push's noema-review
+    # job is still active in that group, and Noema inference deliberately
+    # has no wall-clock deadline (docs/product-goal-directive.md #8), so a
+    # long-running older-head review could block the current head's review
+    # from ever starting. Splitting the cleanup into its own job with no
+    # concurrency restriction closes that: it can run immediately regardless
+    # of what the noema-review job's group is doing, live-reverify the
+    # current head, and cancel a genuinely superseded active run via a
+    # direct API call -- freeing the group for the current push's own
+    # noema-review job. Mirrors strix.yml's cancel-superseded-pr-runs and
+    # opencode-review.yml's cancel-superseded-opencode-review-runs, both of
+    # which already use this exact shape.
+    if: >-
+      github.event_name == 'pull_request_target'
+      && github.event.action != 'closed'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Reject a stale trigger before scanning for superseded runs
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema supersede-cleanup trigger did not provide a canonical lowercase exact head SHA."
+            exit 1
+          fi
+
+      - name: Cancel superseded Noema runs after live-head validation
+        run: |
+          set -euo pipefail
+          declare -A seen=()
+          cancelled=0
+          for pass in 1 2; do
+            for active_status in queued in_progress requested waiting pending; do
+              if ! runs_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100")"; then
+                echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              # See the close-cleanup job's matching comment above cancel_runs's
+              # own selector for the full rationale: display_title only
+              # renders this workflow's PR/head-bearing run-name reliably for
+              # a native trigger, so a sibling-repository required-workflow
+              # run is additionally matched via GitHub's own pull_requests[]
+              # array (populated here because noema-review only ever
+              # processes same-repository, non-fork pull requests), and
+              # `.path` pins workflow identity where `.name` cannot. The
+              # live-head exclusion below is independently reinforced with a
+              # direct `.head_sha` comparison -- the run object's own
+              # head_sha field, unlike display_title, is populated and
+              # accurate regardless of run-name rendering, so it protects the
+              # current run even when its display_title never rendered a
+              # matching "@$head" suffix to exclude by.
+              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
+                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" '
+                  .workflow_runs[]
+                  | select(.id < $current)
+                  | select(.path == ".github/workflows/noema-review.yml")
+                  | select((.name // "") | startswith("Required Noema Review"))
+                  | select(
+                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
+                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                    )
+                  | select(((.display_title // "") | endswith("@" + $head)) | not)
+                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
+                  | .id
+                ' <<<"$runs_json")"; then
+                echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
+                continue
+              fi
+              while IFS= read -r run_id; do
+                [ -n "$run_id" ] || continue
+                [ -z "${seen[$run_id]:-}" ] || continue
+                seen[$run_id]=1
+                # A transient failure here (rate limit, network blip) must
+                # never crash this step under set -e: this is a housekeeping
+                # cleanup, and letting an ancillary API hiccup fail the whole
+                # job would block a perfectly valid, live-head review over
+                # something unrelated to it. Treat "cannot verify" the same
+                # as "verified stale": stop cancelling rather than risk a
+                # wrong cancellation, but let the job continue.
+                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/noema-supersede-live-head-error)"; then
+                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
+                  sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
+                  exit 0
+                fi
+                if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
+                  echo "::notice::Noema cleanup stopped because the PR head advanced."
+                  exit 0
+                fi
+                if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
+                  cancelled=$((cancelled + 1))
+                  echo "Cancelled superseded Noema run ${run_id} for PR #${PR_NUMBER}."
+                else
+                  echo "::warning::Could not cancel superseded Noema run ${run_id}; it may already be terminal."
+                fi
+              done <<<"$run_ids"
+            done
+            echo "Superseded Noema cleanup pass ${pass}/2 complete."
+          done
+          echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
+
   noema-review:
     name: noema-review
     runs-on: ubuntu-24.04
+    # Job-level concurrency, not workflow-level: cancel-superseded-noema-runs
+    # above deliberately has NO concurrency block of its own so it is never
+    # blocked by this group -- see its own comment for why that matters.
+    # Scoped by PR number only, not head SHA -- and cancel-in-progress is
+    # unconditionally false. An earlier version of this fix added the head
+    # SHA to the group instead (mirroring opencode-review.yml's `#1568` fix)
+    # to stop a delayed/out-of-order synchronize event for an OLDER head from
+    # cancelling the run already active for a NEWER head. That worked, but
+    # traded a rare correctness bug for a much more common capacity cost: a
+    # SHA-scoped group gives every push its own group, so under the org's
+    # saturated Actions ceiling, stale per-push runs would only ever be
+    # retired once their own group's job got a runner. Setting
+    # cancel-in-progress to false instead fixes the original hazard just as
+    # completely, without that cost: the ACTIVE run is never preempted by
+    # anything regardless of event arrival order, so a late old-head event
+    # can no longer kill a valid newer-head run no matter how the group is
+    # scoped. GitHub's own single-pending-slot rule (independent of
+    # cancel-in-progress) still evicts an intermediate queued push for free
+    # the instant a newer one arrives, so rapid pushes still coalesce down to
+    # "at most one running + one pending" without any SHA segment. Whichever
+    # instance actually gets a runner is not trusted blindly either way:
+    # "Reject a stale trigger before credential or model setup" below
+    # re-fetches the live PR head and fails closed if it no longer matches
+    # what this run was triggered with.
+    concurrency:
+      group: >-
+        noema-review-${{
+        github.event.pull_request.base.repo.full_name ||
+        github.event.client_payload.target_repository || github.repository }}-${{
+        github.event.pull_request.number ||
+        github.event.client_payload.pr_number ||
+        github.run_id }}
+      cancel-in-progress: false
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own
@@ -235,7 +350,9 @@ jobs:
         && github.event.pull_request.head.repo.full_name == github.repository
       )
     permissions:
-      actions: write
+      # The Actions-cancel write permission moved with the cancellation
+      # logic to cancel-superseded-noema-runs above; this job no longer
+      # calls that API.
       checks: read
       contents: read
       id-token: write
@@ -335,84 +452,6 @@ jobs:
             echo "::error::Noema trigger is stale; expected ${EXPECTED_HEAD_SHA}, observed ${live_head}."
             exit 1
           fi
-
-      - name: Cancel superseded Noema runs after live-head validation
-        if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          declare -A seen=()
-          cancelled=0
-          for pass in 1 2; do
-            for active_status in queued in_progress requested waiting pending; do
-              if ! runs_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100")"; then
-                echo "::warning::Could not inspect ${active_status} Noema runs for superseded heads."
-                continue
-              fi
-              # See the close-cleanup job's matching comment above cancel_runs's
-              # own selector for the full rationale: display_title only
-              # renders this workflow's PR/head-bearing run-name reliably for
-              # a native trigger, so a sibling-repository required-workflow
-              # run is additionally matched via GitHub's own pull_requests[]
-              # array (populated here because noema-review only ever
-              # processes same-repository, non-fork pull requests), and
-              # `.path` pins workflow identity where `.name` cannot. The
-              # live-head exclusion below is independently reinforced with a
-              # direct `.head_sha` comparison -- the run object's own
-              # head_sha field, unlike display_title, is populated and
-              # accurate regardless of run-name rendering, so it protects the
-              # current run even when its display_title never rendered a
-              # matching "@$head" suffix to exclude by.
-              if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
-                --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" '
-                  .workflow_runs[]
-                  | select(.id < $current)
-                  | select(.path == ".github/workflows/noema-review.yml")
-                  | select((.name // "") | startswith("Required Noema Review"))
-                  | select(
-                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
-                    )
-                  | select(((.display_title // "") | endswith("@" + $head)) | not)
-                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
-                  | .id
-                ' <<<"$runs_json")"; then
-                echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
-                continue
-              fi
-              while IFS= read -r run_id; do
-                [ -n "$run_id" ] || continue
-                [ -z "${seen[$run_id]:-}" ] || continue
-                seen[$run_id]=1
-                # A transient failure here (rate limit, network blip) must
-                # never crash this step under set -e: this is a housekeeping
-                # cleanup, and letting an ancillary API hiccup fail the whole
-                # job would block a perfectly valid, live-head review over
-                # something unrelated to it. Treat "cannot verify" the same
-                # as "verified stale": stop cancelling rather than risk a
-                # wrong cancellation, but let the job continue.
-                if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/noema-supersede-live-head-error)"; then
-                  echo "::warning::Noema cleanup could not re-verify the live PR head before cancelling run ${run_id}; stopping cleanup rather than risking a wrong cancellation." >&2
-                  sed 's/^/  /' /tmp/noema-supersede-live-head-error >&2 || true
-                  exit 0
-                fi
-                if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-                  echo "::notice::Noema cleanup stopped because the PR head advanced."
-                  exit 0
-                fi
-                if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null; then
-                  cancelled=$((cancelled + 1))
-                  echo "Cancelled superseded Noema run ${run_id} for PR #${PR_NUMBER}."
-                else
-                  echo "::warning::Could not cancel superseded Noema run ${run_id}; it may already be terminal."
-                fi
-              done <<<"$run_ids"
-            done
-            echo "Superseded Noema cleanup pass ${pass}/2 complete."
-          done
-          echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
 
       - name: Select fail-closed Noema reviewer credential
         if: env.PR_NUMBER != ''
