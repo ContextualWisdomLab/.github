@@ -1,0 +1,214 @@
+name: Agent Review Runtime Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-review-runtime-quality-ci.yml"
+      - ".github/workflows/noema-review.yml"
+      - ".github/actions/noema-review/two_phase.py"
+      - "tests/test_noema_reviewer_token_lifetime.py"
+      - "tests/test_noema_two_phase_handoff.py"
+      - "tests/test_noema_refreshed_app_identity.py"
+      - "tests/test_noema_token_lifetime_stale_run_contract.py"
+      - "docs/doctoring/noema-review-token-lifetime.md"
+      - "docs/product-technical-gap-baseline.md"
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - "scripts/ci/ensure_rust_llvm19.sh"
+      - "tests/test_opencode_rust_coverage_toolchain_contract.py"
+      - "tests/test_pr_review_autofix_nvidia_nim_contract.py"
+      - "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
+      - ".github/workflows/strix.yml"
+      - "docs/doctoring/strix-legal-git-paths.md"
+      - "docs/doctoring/strix-model-behavior-error.md"
+      - "docs/doctoring/strix-quality-timeout-fixtures.md"
+      - "scripts/ci/strix_quick_gate.sh"
+      - "scripts/ci/test_strix_quick_gate.sh"
+      - "tests/test_docs_only_pr_runner_admission.py"
+      - "tests/test_strix_changed_path_policy.py"
+      - "tests/test_strix_model_behavior_error.py"
+      - "tests/test_strix_nvidia_nim_not_found_fallback.py"
+      - "tests/test_strix_workflow_dependency_hashes.py"
+      - "tests/test_strix_quality_timeout_fixture_budget.py"
+      - "tests/test_agent_review_runtime_quality_consolidation.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+      - "CHANGELOG.md"
+
+# PR validation only: a new head cancels only an older run of this workflow
+# for the same repository and pull request.
+concurrency:
+  group: agent-review-runtime-quality-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  agent_review_runtime_quality:
+    name: agent-review-runtime-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Select affected contract suites
+        id: affected_suites
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          noema_suite=false
+          opencode_suite=false
+          strix_suite=false
+
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              .github/workflows/agent-review-runtime-quality-ci.yml|CHANGELOG.md)
+                noema_suite=true
+                opencode_suite=true
+                strix_suite=true
+                ;;
+              .github/workflows/noema-review.yml|\
+              .github/actions/noema-review/two_phase.py|\
+              tests/test_noema_reviewer_token_lifetime.py|\
+              tests/test_noema_two_phase_handoff.py|\
+              tests/test_noema_refreshed_app_identity.py|\
+              tests/test_noema_token_lifetime_stale_run_contract.py|\
+              docs/doctoring/noema-review-token-lifetime.md|\
+              docs/product-technical-gap-baseline.md)
+                noema_suite=true
+                ;;
+              .github/workflows/opencode-review-dispatch.yml|\
+              scripts/ci/ensure_rust_llvm19.sh|\
+              tests/test_opencode_rust_coverage_toolchain_contract.py|\
+              tests/test_pr_review_autofix_nvidia_nim_contract.py|\
+              docs/doctoring/opencode-rust-coverage-runtime-boundary.md)
+                opencode_suite=true
+                ;;
+              .github/workflows/strix.yml|\
+              docs/doctoring/strix-legal-git-paths.md|\
+              docs/doctoring/strix-model-behavior-error.md|\
+              docs/doctoring/strix-quality-timeout-fixtures.md|\
+              scripts/ci/strix_quick_gate.sh|\
+              scripts/ci/test_strix_quick_gate.sh|\
+              tests/test_docs_only_pr_runner_admission.py|\
+              tests/test_strix_changed_path_policy.py|\
+              tests/test_strix_model_behavior_error.py|\
+              tests/test_strix_nvidia_nim_not_found_fallback.py|\
+              tests/test_strix_workflow_dependency_hashes.py|\
+              tests/test_strix_quality_timeout_fixture_budget.py)
+                strix_suite=true
+                ;;
+              requirements-opencode-review-ci-hashes.txt)
+                noema_suite=true
+                opencode_suite=true
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+
+          {
+            echo "noema=$noema_suite"
+            echo "opencode=$opencode_suite"
+            echo "strix=$strix_suite"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Install exact hash-verified base dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/strix-quality-requirements.txt" <<'EOF'
+          coverage==7.15.2 --hash=sha256:b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install \
+            --only-binary=:all: \
+            --require-hashes \
+            -r "${RUNNER_TEMP}/strix-quality-requirements.txt"
+
+      - name: Install exact review dependencies
+        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true'
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify Noema token-lifetime contracts
+        if: steps.affected_suites.outputs.noema == 'true'
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_noema_reviewer_token_lifetime.py \
+            tests/test_noema_two_phase_handoff.py \
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
+          python -m compileall -q \
+            .github/actions/noema-review/two_phase.py \
+            tests/test_noema_reviewer_token_lifetime.py \
+            tests/test_noema_two_phase_handoff.py \
+            tests/test_noema_refreshed_app_identity.py \
+            tests/test_noema_token_lifetime_stale_run_contract.py
+
+      - name: Verify OpenCode Rust coverage toolchain contract
+        if: steps.affected_suites.outputs.opencode == 'true'
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py
+          python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py
+
+      - name: Verify exact-head path policy and syntax
+        if: steps.affected_suites.outputs.strix == 'true'
+        env:
+          STRIX_TEST_PROCESS_TIMEOUT_SECONDS: "3"
+          STRIX_TEST_FAKE_SLEEP_SECONDS: "5"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python -m pytest -q \
+            tests/test_docs_only_pr_runner_admission.py \
+            tests/test_strix_changed_path_policy.py \
+            tests/test_strix_model_behavior_error.py \
+            tests/test_strix_nvidia_nim_not_found_fallback.py \
+            tests/test_strix_workflow_dependency_hashes.py \
+            tests/test_strix_quality_timeout_fixture_budget.py
+          bash scripts/ci/test_strix_quick_gate.sh
+          python -m compileall -q \
+            tests/test_strix_changed_path_policy.py \
+            tests/test_strix_model_behavior_error.py \
+            tests/test_strix_nvidia_nim_not_found_fallback.py \
+            tests/test_strix_workflow_dependency_hashes.py \
+            tests/test_strix_quality_timeout_fixture_budget.py
+          bash -n scripts/ci/strix_quick_gate.sh
+
+      - name: Verify consolidated workflow contract
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_agent_review_runtime_quality_consolidation.py
+          python -m compileall -q tests/test_agent_review_runtime_quality_consolidation.py
+          git diff --check "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
+          git diff --exit-code

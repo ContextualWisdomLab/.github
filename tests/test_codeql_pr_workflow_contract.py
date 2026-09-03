@@ -27,6 +27,18 @@ def test_codeql_pr_workflow_structure() -> None:
 
     assert "name: CodeQL PR" in workflow
     assert "branches: [main, master, develop]" not in workflow
+    # Stronger than the literal-string check above: reject ANY `branches:`
+    # filter on the pull_request trigger, not just the specific old list --
+    # a fixed branch-name list of any shape silently never fires for a
+    # repository whose default branch isn't in that list, leaving its
+    # org-required CodeQL check permanently absent rather than passing or
+    # failing (confirmed live: a repository defaulting to gh-pages received
+    # every other required check but no CodeQL check at all; caught by Devin
+    # Review on .github#1661's gap-baseline entry for backlog item 38).
+    trigger_start = workflow.index("on:\n  pull_request:")
+    trigger_end = workflow.index("\n\n", trigger_start)
+    trigger_lines = workflow[trigger_start:trigger_end].splitlines()
+    assert not any(line.strip().startswith("branches:") for line in trigger_lines)
     assert "Do not restrict the base ref" in workflow
     assert "uses: github/codeql-action" not in workflow
     assert "detect-languages:" in workflow
