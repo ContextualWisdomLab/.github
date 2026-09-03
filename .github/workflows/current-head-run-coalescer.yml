@@ -6,7 +6,10 @@ on:
 
 concurrency:
   group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Do not restore cancel-in-progress: true here. This job is the control-plane
+  # worker that retires redundant runs; cancelling it during a push burst lets
+  # the redundant runs survive and worsens the 60-job ceiling.
+  cancel-in-progress: false
 
 permissions:
   actions: write
