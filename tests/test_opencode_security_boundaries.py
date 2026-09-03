@@ -272,6 +272,7 @@ def test_safe_pytest_package_source_discovery_ignores_symlinked_packages(
     project_dir.mkdir(parents=True)
     package_source = tmp_path / "real-packages" / "example" / "src"
     package_source.mkdir(parents=True)
+    (tmp_path / "linked-repository" / ".git").mkdir()
     (tmp_path / "linked-repository" / "packages").symlink_to(tmp_path / "real-packages")
 
     assert safe_pytest._repository_package_python_paths(project_dir) == []
@@ -406,7 +407,7 @@ def trusted_dispatch_status_artifacts(
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
-    runner_temp.mkdir()
+    runner_temp.mkdir(mode=0o700)
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"\n".join(DISPATCH_SOURCE_LINES) + b"\n")
 
@@ -417,6 +418,9 @@ def trusted_dispatch_status_artifacts(
         json.dumps(
             {
                 "schema": 1,
+                "head_sha": "head",
+                "run_id": "run",
+                "run_attempt": "attempt",
                 "artifacts": {
                     changed_files.name: hashlib.sha256(changed_files.read_bytes()).hexdigest()
                 },
@@ -424,6 +428,8 @@ def trusted_dispatch_status_artifacts(
         ),
         encoding="utf-8",
     )
+    manifest.chmod(0o600)
+    changed_files.chmod(0o600)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))
