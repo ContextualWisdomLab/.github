@@ -43,6 +43,14 @@ def test_sensitive_log_redaction_handles_json_credentials_and_jwts() -> None:
     assert set(json.loads(cleaned)["nested"].values()) == {redactor.REDACTED}
 
 
+def test_sensitive_log_redaction_scrubs_bare_json_scalar_lines() -> None:
+    """A log line that is valid JSON but not an object/array still gets pattern-redacted."""
+    cleaned = redactor.redact_text('"leaked ghp_' + "a" * 20 + ' token"\n')
+
+    assert "ghp_" not in cleaned
+    assert redactor.REDACTED in cleaned
+
+
 def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
     source = (
