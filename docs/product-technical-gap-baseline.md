@@ -2819,8 +2819,10 @@ non-text input modality (e.g. `minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`) �
 `_pricing_is_free()` (`model_discovery.py:800-810`, which already sums *every* key in the row's own
 `pricing` dict, not just prompt/completion) is doing real, necessary work by rejecting those. For the
 remainder, whose entire published `pricing` object really is all-zero, `_row_is_free()` still returns
-`False` — but tracing *why* (`git log -S"_unit_prices_are_free"`, then `git show ba5e00c`, the merged PR
-`#933`) surfaced that this is not a pricing-verification gap at all: commit `ba5e00c` documents a real
+`False` — but this session's trace mis-attributed *why*: `git log -S"_unit_prices_are_free"` actually
+returns `51fc34b` ("fix(discovery): fail closed on ambiguous model pricing metadata", 2026-08-30), not
+`ba5e00c` — see the mechanism correction below. At the time this was written the (wrong) conclusion
+drawn was that this is not a pricing-verification gap at all: commit `ba5e00c` documents a real
 production incident (`ContextualWisdomLab/.github` PR #1198, Strix Security Scan run `33325907333`) where
 a zero-priced-but-vision-capable NVIDIA NIM model (`meta/llama-3.2-90b-vision-instruct`) was admitted to
 the capability-blind `orchestrator/free` pool and broke three independent tool-calling requests with an
@@ -2862,7 +2864,18 @@ publishes any tool-call capability signal at all, per that commit's own root-cau
 the same blanket rule to OpenRouter — which *does* publish a direct, reliable `supported_parameters`
 signal — throws away exactly the "verified characteristic" evidence the directive requires using, and
 today wrongly withholds 8 genuinely free, general-purpose, tool-capable chat models from
-`orchestrator/free`.
+`orchestrator/free`. **Correction to the mechanism (2026-09-03):** these 8 rows are not withheld by
+`#933`'s serving gate at all — they never reach it. OpenRouter's `/v1/models` rows carry no
+`unit_pricing` and no `is_free` key (live-confirmed), so `_unit_prices_are_free`'s
+`return provider_declares_free or not non_text_modalities` branch (`model_discovery.py:813-841`, from
+`51fc34b` "fail closed on ambiguous model pricing metadata", 2026-08-30 — *not* from `ba5e00c`) makes
+`_row_is_free()` return `False`, so `is_free=False` and the rows are absent from
+`free_discovered_models` — the price-based inventory that also feeds `--free-only`, `free_tier_count`
+and the free-tier privacy totals. Executed against `#1028`'s own head `aabd69a`: all 8 give
+`is_free=False`, `free_discovered_models == []`, `general_free_serving_candidates == []` —
+`#1028`'s exemption, which filters `free_discovered_models(discovered)`, is inert for every model it
+was written for. The fix must also admit a non-text-input row whose complete published `pricing` dict
+is zero into `_row_is_free`, or be re-scoped.
 
 **Status: fix implemented and PR opened** —
 [contextual-orchestrator#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028).
@@ -2890,10 +2903,17 @@ inert (fail-closed, not unsafe, but non-functional) through the real `bootstrap_
 path. TDD: 11 new/changed tests, all genuinely RED before the fix (stashed source, `AttributeError`),
 GREEN after. Full suite: 3361 passed, 1 skipped, 0 failed (baseline 3350). `interrogate`: 100%.
 
-Re-open only with evidence that a *text-only* free OpenRouter/Bytez model is being wrongly excluded (that
-would be a genuine regression of `#933`'s own tested contract) or that the tool-call signal itself proves
-unreliable in practice (mirroring how Models.dev's `tool_call` field was already proven unreliable for
-NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRouter's own declared field).
+Re-open on any of: (a) evidence that a *text-only* free OpenRouter/Bytez model is being wrongly excluded
+(that would be a genuine regression of `#933`'s own tested contract); (b) the tool-call signal itself
+proving unreliable in practice (mirroring how Models.dev's `tool_call` field was already proven
+unreliable for NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRouter's own
+declared field); or (c) **the fix failing to actually admit the models it names** — i.e. any live check
+in which a model from the 8-model list above is still absent from `general_free_serving_candidates`
+after the fix, for any reason. (c) is the trigger that fired: the exclusion turned out to happen at
+`_row_is_free`, upstream of the gate `#1028` patches, so `#1028` admits none of the 8. Any future
+"re-verified, still excluded" observation re-opens this entry regardless of which stage causes it —
+absence of the expected admission is itself the evidence, and no narrower cause needs to be proven
+first.
 
 ## Noema single-request model-control ownership — PR #1672 (2026-09-02)
 
