@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import sys
+import zlib
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -451,10 +452,195 @@ def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> No
     assert result == ()
 
 
+def test_evaluate_pull_request_exempts_a_real_documentation_png() -> None:
+    """A screenshot is verified by PNG magic instead of decoded as UTF-8."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/15/files" in url:
+            return [{"filename": "docs/screenshots/dashboard.png", "status": "added"}]
+        assert "/contents/docs/screenshots/dashboard.png" in url
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        return {
+            "type": "file",
+            "encoding": "base64",
+            "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=15,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
+
+
+def test_evaluate_pull_request_rejects_a_fake_documentation_png() -> None:
+    """A PNG suffix without PNG magic remains runtime-content evidence."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/16/files" in url:
+            return [{"filename": "docs/screenshots/fake.png", "status": "added"}]
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=16,
+        head_sha="b" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_rejects_png_with_appended_runtime_text() -> None:
+    """A valid image prefix cannot hide bytes appended after the IEND chunk."""
+
+    image = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/17/files" in url:
+            return [{"filename": "docs/screenshots/forged.png", "status": "added"}]
+        raw = image + b"\ncat /etc/nginx/nginx.conf\n"
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=17,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+
+def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
+    """Every malformed PNG boundary returns false without parsing past bounds."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    signature = policy.PNG_SIGNATURE
+    header = chunk(b"IHDR", b"\0" * 13)
+    assert not policy._is_complete_png(b"not-png")
+    assert not policy._is_complete_png(signature)
+    assert not policy._is_complete_png(
+        signature + (99).to_bytes(4, "big") + b"IHDR" + b"\0" * 4
+    )
+    assert not policy._is_complete_png(signature + header[:-1] + b"\0")
+    assert not policy._is_complete_png(signature + chunk(b"TEXT", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"IEND", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
+
+
+def test_png_semantic_validation_fails_closed() -> None:
+    """CRC-valid chunks still need a valid bounded PNG image stream."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    def png(header: bytes, *chunks: bytes) -> bytes:
+        return policy.PNG_SIGNATURE + chunk(b"IHDR", header) + b"".join(chunks)
+
+    def indexed_png(
+        width: int,
+        height: int,
+        bit_depth: int,
+        palette_entries: int,
+        decoded: bytes,
+        *,
+        interlace: int = 0,
+    ) -> bytes:
+        header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes((bit_depth, 3, 0, 0, interlace))
+        return png(
+            header,
+            chunk(b"PLTE", b"\0\0\0" * palette_entries),
+            chunk(b"IDAT", zlib.compress(decoded)),
+            chunk(b"IEND", b""),
+        )
+
+    rgba = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 0))
+    indexed = (1).to_bytes(4, "big") * 2 + bytes((8, 3, 0, 0, 0))
+    gray = (1).to_bytes(4, "big") * 2 + bytes((8, 0, 0, 0, 0))
+    image = chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0"))
+    end = chunk(b"IEND", b"")
+
+    invalid_headers = (
+        b"\0" * 13,
+        (1).to_bytes(4, "big") * 2 + bytes((4, 2, 0, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 1, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 1, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 2)),
+    )
+    assert all(not policy._is_complete_png(png(header, image, end)) for header in invalid_headers)
+    assert not policy._is_complete_png(png(rgba, chunk(b"IHDR", rgba), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x" * 769), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"1EXt", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"tExt", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"ABCD", b""), image, end))
+    assert policy._is_complete_png(png(rgba, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, image, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(indexed, image, end))
+    indexed_one_bit = (1).to_bytes(4, "big") * 2 + bytes((1, 3, 0, 0, 0))
+    assert not policy._is_complete_png(
+        png(indexed_one_bit, chunk(b"PLTE", b"\0" * 9), chunk(b"IDAT", zlib.compress(b"\0\0")), end)
+    )
+    for filter_type in range(5):
+        second_row = b"\1\0" if filter_type == 0 else b"\1\xff"
+        assert policy._is_complete_png(
+            indexed_png(2, 2, 8, 2, bytes((filter_type, 0, 1, filter_type)) + second_row)
+        )
+    assert not policy._is_complete_png(indexed_png(2, 1, 8, 1, b"\0\0\1"))
+    assert not policy._is_complete_png(indexed_png(2, 2, 8, 2, b"\0\0\1\4\2\xfe"))
+    assert policy._is_complete_png(indexed_png(2, 1, 1, 2, b"\0\x40"))
+    assert not policy._is_complete_png(indexed_png(2, 1, 1, 1, b"\0\x40"))
+    assert policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\0", interlace=1))
+    assert not policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\1", interlace=1))
+    assert not policy._is_complete_png(png(gray, chunk(b"PLTE", b"\0\0\0"), chunk(b"IDAT", zlib.compress(b"\0\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", b"not-zlib"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0") + b"x"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
+    huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    assert not policy._is_complete_png(png(huge, image, end))
+
+    adam7 = (8).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    adam7_scanlines = b"".join(
+        b"\0" + b"\0" * (pass_width * 4)
+        for pass_width, pass_height in ((1, 1), (1, 1), (2, 1), (2, 2), (4, 2), (4, 4), (8, 4))
+        for _ in range(pass_height)
+    )
+    assert policy._is_complete_png(
+        png(adam7, chunk(b"IDAT", zlib.compress(adam7_scanlines)), end)
+    )
+    adam7_one_pixel = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    assert policy._is_complete_png(
+        png(adam7_one_pixel, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0")), end)
+    )
+
+
 def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     """A removed documentation PDF has no head content to fetch at all.
 
-    Regression coverage for Devin Review's finding: _is_binary_documentation_pdf
+    Regression coverage for Devin Review's finding: _is_binary_documentation_asset
     does not itself check status, so without an explicit removed-status guard
     in evaluate_pull_request's own loop, a deleted PDF would try to fetch its
     (nonexistent) head content and fail evidence collection for every such
@@ -832,7 +1018,8 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-    assert policy.NoRedirectHandler().redirect_request(None, None, 302, "Found", {}, "https://evil.example") is None
+    with pytest.raises(HTTPError):
+        policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

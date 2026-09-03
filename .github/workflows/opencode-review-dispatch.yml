@@ -24,16 +24,11 @@ permissions:
   contents: read
 
 jobs:
-  required-workflow-bootstrap:
-    name: required-workflow-bootstrap
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "OpenCode repository-dispatch review run materialized."
-
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: read
@@ -224,6 +219,7 @@ jobs:
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       id-token: write
@@ -371,6 +367,7 @@ jobs:
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
       # identity, secret, or write token is available to untrusted tests.
@@ -2318,9 +2315,8 @@ jobs:
     # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
     # overhead without truncating a late current-head verdict, handoff, merge
     # scheduler follow-up, or bounded failure reason.
-    timeout-minutes: 325
     permissions:
-      actions: read
+      actions: write
       checks: read
       id-token: write
       contents: read
@@ -3999,7 +3995,6 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 205
         continue-on-error: true
         env:
           SHARE: "false"
@@ -4010,14 +4005,7 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Preserve reviews that legitimately need tens of minutes to inspect a
-          # large repository. Changed-file count is not a repository-complexity
-          # proxy, so every cadence class gets 90 minutes per candidate while the
-          # bounded provider-pool watchdog remains the outer guard.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
           # A second pass through the same provider catalog repeats the same
           # quota/format failures and can occupy the required check for hours.
           # Exhaust each distinct candidate once, then publish the bounded
@@ -4026,23 +4014,10 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
-          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
-          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -4065,18 +4040,9 @@ jobs:
           set -euo pipefail
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           set +e
-          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s" \
-            bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
+          bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
           pool_status=$?
           set -e
-          if [ "$pool_status" -eq 124 ] || [ "$pool_status" -eq 137 ] || [ "$pool_status" -eq 143 ]; then
-            printf 'OpenCode model pool exceeded the outer %ss step budget; marking the pool exhausted so current-head evidence fallback can publish a bounded reason instead of blocking the org queue.\n' \
-              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}"
-            {
-              printf 'review_model=\n'
-              printf 'review_status=exhausted\n'
-            } >>"$GITHUB_OUTPUT"
-          fi
           exit "$pool_status"
 
       - name: Exchange OpenCode app token for review writes
@@ -4629,7 +4595,6 @@ jobs:
         # The approval gate normally waits about six minutes, with bounded
         # extensions for image validation or package/GPU builds plus API and
         # publication overhead.
-        timeout-minutes: 36
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -4684,7 +4649,6 @@ jobs:
           # failed-check diagnosis in this publish step is a short best-effort
           # augmentation; current-head logs/SARIF remain the authoritative
           # reason source when the augmentation is unavailable.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
@@ -6038,8 +6002,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" \
-              env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+            if ! env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
               -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
               opencode run "$(cat "$prompt_file")" \
               --pure \
@@ -7554,6 +7517,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Enforce current-head formal OpenCode review receipt
+        id: formal_review_receipt
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
@@ -7577,6 +7541,61 @@ jobs:
             --head-sha "$PR_HEAD_SHA" \
             "${draft_args[@]}"
 
+      - name: Wake exact-head required OpenCode workflow
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+          && github.event.client_payload.required_run_id != ''
+        env:
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            echo "::error::Actions-capable wake credential is unavailable. Native runs use github.token; sibling runs require PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN."
+            exit 1
+          fi
+          [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Required OpenCode run id is missing or non-canonical."
+            exit 1
+          }
+          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
+          # event, central workflow path, and live PR head before rerunning it;
+          # rendered titles and workflow_url differ between native and
+          # organization-required workflow contexts.
+          for attempt in $(seq 1 12); do
+            run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id)
+              | select(.event == "pull_request_target")
+              | select(.path == ".github/workflows/opencode-review.yml")
+              | select(.head_sha == $head)
+              | [(.id // ""), (.status // ""), (.conclusion // "")]
+              | @tsv
+            ')"
+            IFS=$'\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
+              gh api -X POST "repos/${GH_REPOSITORY}/actions/runs/${required_run_id}/rerun-failed-jobs" >/dev/null
+              echo "Re-ran failed jobs for exact-head Required OpenCode Review run ${required_run_id}."
+              exit 0
+            fi
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "success" ]; then
+              echo "Exact-head Required OpenCode Review run ${required_run_id} already succeeded."
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Formal OpenCode receipt exists, but the exact-head required workflow did not reach a rerunnable failed state."
+          exit 1
+
       - name: Publish repository_dispatch OpenCode status
         if: >-
           always()
@@ -7584,14 +7603,14 @@ jobs:
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head

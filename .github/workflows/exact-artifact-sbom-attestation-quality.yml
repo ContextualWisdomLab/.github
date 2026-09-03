@@ -10,8 +10,11 @@ on:
       - "tests/test_exact_artifact_sbom_attestation_contract.py"
       - "tests/test_exact_artifact_sbom_review_regressions.py"
       - "tests/test_verify_exact_artifact_sbom_handoff.py"
+      - "tests/test_exact_artifact_quality_single_runner.py"
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
+      - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.md"
+      - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
   push:
     branches: [main]
     paths:
@@ -21,21 +24,24 @@ on:
       - "tests/test_exact_artifact_sbom_attestation_contract.py"
       - "tests/test_exact_artifact_sbom_review_regressions.py"
       - "tests/test_verify_exact_artifact_sbom_handoff.py"
+      - "tests/test_exact_artifact_quality_single_runner.py"
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
+      - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.md"
+      - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
 
 concurrency:
-  group: exact-artifact-sbom-attestation-quality-${{ github.event.pull_request.number || github.ref }}
+  group: exact-artifact-sbom-attestation-quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  minimum-python-contract:
-    name: Python 3.10 contract
+  exact_artifact_quality:
+    name: Python 3.10 and 3.14 exact artifact contract
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -64,28 +70,8 @@ jobs:
             scripts/ci/verify_exact_artifact_sbom_handoff.py \
             tests/test_exact_artifact_sbom_attestation_contract.py \
             tests/test_exact_artifact_sbom_review_regressions.py \
-            tests/test_verify_exact_artifact_sbom_handoff.py
-
-  exact-contract:
-    name: Python 3.14 exact contract and complete coverage
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout exact contributor head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Verify exact workflow source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -103,17 +89,20 @@ jobs:
           python -m coverage run --branch -m pytest -q \
             tests/test_exact_artifact_sbom_attestation_contract.py \
             tests/test_exact_artifact_sbom_review_regressions.py \
-            tests/test_verify_exact_artifact_sbom_handoff.py
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
           python -m coverage report \
             --include=scripts/ci/verify_exact_artifact_sbom_handoff.py \
             --show-missing \
             --fail-under=100
           python -m interrogate --fail-under=100 scripts/ci/verify_exact_artifact_sbom_handoff.py
 
-      - name: Compile production and contract files
+      - name: Compile production and contract files on Python 3.14
         run: |
           python -m compileall -q \
             scripts/ci/verify_exact_artifact_sbom_handoff.py \
             tests/test_exact_artifact_sbom_attestation_contract.py \
             tests/test_exact_artifact_sbom_review_regressions.py \
-            tests/test_verify_exact_artifact_sbom_handoff.py
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
+          git diff --check
