@@ -69,13 +69,24 @@ item 13 hypothesized is not what happened here. What actually happened, quoted d
   timestamp, **was still `status: queued`, `conclusion: null` when re-checked live on 2026-09-03** — stuck
   queued for **24+ hours with no run at all.**
 - Six separate "PR Governance" workflow runs fired for this one unchanged SHA (five `pull_request_target`
-  events, one `pull_request_review`) — naruon's own `pr-governance.yml` watches `labeled`/`unlabeled`
-  PR-target actions plus completion of four other workflows (`Application CI`, `Bandit Security Scan`,
-  `Build and Publish Docker Images`, `Strix Security Scan`) plus `check_run: completed`, any of which can
-  independently re-trigger it. Whether this specific PR's six firings were legitimate repeated
-  label/status activity or avoidable redundant triggering was **not verified** in this pass — flagged as
-  an open, unconfirmed lead, not a finding, since asserting it without checking the PR's actual event
-  history would repeat exactly the kind of unverified claim this session's own norms exist to catch.
+  events, one `pull_request_review`). Investigated further after a peer session flagged this as a likely
+  redundant-trigger source: `naruon`'s `pr-governance.yml` and `scripts/ci/pr_governance_gate.sh` were
+  fetched and read in full (not assumed). Two corrections to the initial framing: (1) the `governance` job
+  carries a job-level `if:` that restricts its `check_run`-triggered case to CodeRabbit-named checks only
+  — GitHub Actions genuinely cannot filter `check_run` by name at the `on:` trigger level, but the job
+  itself is *skipped* (no runner requested) for every non-CodeRabbit check-run completion, so that specific
+  vector is not the job-slot waste it first appeared to be; (2) the five observed `pull_request_target`
+  firings on one unchanged SHA are near-certainly `labeled`/`unlabeled` (or similar non-`synchronize`)
+  events — `synchronize` is the only `pull_request_target` type tied to a new commit, and the SHA never
+  changed. More importantly, `pr_governance_gate.sh` evaluates **live** state at the current head on every
+  run (required-check states via `gh pr checks`, unresolved review-thread count, CodeRabbit findings via
+  check-runs and commit status) — it is explicitly not a pure function of `(head_sha, base_sha)`, so a
+  same-head debounce ("skip if nothing changed since the last run at this SHA") would be actively wrong: it
+  could leave the gate reporting a stale blocker list from before a required check finished or a review
+  landed, a real correctness regression in merge-gating, not merely a missed optimization. No fix was
+  attempted for this reason — a safe one needs either confirming which specific labels toggled five times
+  on this PR and whether they are governance-irrelevant, or a considered design for distinguishing genuinely
+  new gate-relevant information from a redundant re-trigger. Recorded as still open, not fixed.
 
 This is the same root cause `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` already
 identified (a plan-level concurrent-job ceiling), now corroborated with a concrete, painful, individually
