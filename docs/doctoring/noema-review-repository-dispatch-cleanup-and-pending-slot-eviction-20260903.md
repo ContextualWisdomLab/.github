@@ -299,8 +299,75 @@ eviction-detection fix did not accidentally suppress the *true* positive
 while fixing the false one. See this record's own commit history / the
 `.github#1661` PR discussion for that pass's findings.
 
+## A third attempt to close the identical-head-duplicate gap was reverted, deliberately
+
+Devin's second review pass (after the second adversarial-verification round
+above shipped) re-flagged the exact residual gap that round had already
+named and accepted: a second run for the *identical* head (webhook
+redelivery, or a `repository_dispatch` retry racing a `pull_request_target`
+push for the same head) still isn't distinguished from a genuine eviction, so
+the detector could still alarm on it.
+
+A third fix was drafted: before the final `::error::`, query the five active
+statuses for any *other* run matching this exact workflow path, PR, and
+head, and suppress if one exists (reusing the same selector shape already
+proven in the cancel loop, just inverted to match a head instead of exclude
+one). Before committing it, a **third** 3-lens adversarial verification pass
+was run — and it found two more real problems in this new code, both
+independently confirmed by both lenses:
+
+- **Blocking**: the new count-producing `jq` assignment was, unlike every
+  sibling `jq`/`gh api` call in this same job, *not* guarded with `if !`.
+  Under this step's `set -euo pipefail`, a `jq` failure (e.g. a malformed or
+  gateway-error API response — empirically reproduced) would abort the
+  *entire step* silently, with no `::error::`, no `::warning::`, nothing.
+  Because `cancel-superseded-noema-runs` and `noema-review` are
+  `needs:`-independent sibling jobs in the one workflow file this repo's
+  `CLAUDE.md` documents as injected org-wide as a *required workflow* (whole-
+  run conclusion), an unguarded step failure here would have flipped entire
+  runs to failure and genuinely blocked PRs — the opposite of this step's
+  entire "log annotation only, never fails the job" design intent, and a
+  regression of the exact anti-pattern round 1's adversarial verification had
+  already found and fixed once in this same job (see above).
+- **Moderate, and more interesting**: the new check queried the *other* run's
+  aggregate **run-level** status, not that run's own `noema-review` **job**
+  status specifically. Since the two jobs in this workflow run in parallel
+  with no `needs:` dependency, a workflow run can still show
+  `status: in_progress` (because its own `cancel-superseded-noema-runs` job
+  — itself up to 15 `gh api` calls deep — is still executing) even though
+  that *same run's* `noema-review` job has *already* been evicted too. In
+  the exact double-eviction scenario this fix targeted (two duplicate runs
+  for one head, both evicted), the fix could have found the *other* evicted
+  run, misread its still-in-progress *cleanup* job as coverage, and
+  suppressed a genuine loss of review coverage — a false negative in
+  precisely the case it was built to handle.
+
+Given both findings and the step's own confirmed non-blocking nature (the
+`::error::` here is a log annotation; it does not fail the job or the
+required check), the third fix was reverted rather than patched further.
+Two attempts to fully close this specific edge case (round 2's original
+detection-step design implicitly, and this round-3 attempt explicitly) have
+now each introduced at least one new real bug when reviewed carefully, while
+the underlying cost of leaving the edge case open remains bounded to
+occasional misleading log noise in a genuinely rare scenario. Chasing full
+closure here has a worse complexity-to-value ratio than accepting the
+documented limitation the file already carried after round 2 — which is
+where this file stands again as of this record. If this edge case is ever
+worth closing for real, do it as a deliberate, narrowly-scoped follow-up with
+its own adversarial-verification budget, not as a same-tick reaction to a
+second nitpick on an already-shipped, already-verified fix.
+
 ## Suggested next steps (not yet started)
 
+- Close the identical-head-duplicate gap for real, as its own dedicated pass:
+  the correct design (per the reverted attempt's own false-negative finding)
+  is a **per-job** check on each candidate other run — `GET
+  .../actions/runs/{other_run_id}/jobs`, filter for that run's own
+  `noema-review` job, and only count it as coverage if that job is itself
+  still active or completed *without* the cancelled-and-never-started
+  eviction signature — not a run-level status query. Budget a dedicated
+  adversarial-verification pass for it; do not rush it into the same tick as
+  an unrelated fix again.
 - Design and adversarially verify one of the two full-fix candidates above
   (self-dispatch with a narrowly-justified `contents: write` grant, or a new
   `workflow_dispatch` trigger) before attempting it live on a required,
