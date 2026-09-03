@@ -177,14 +177,21 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
 
 
 def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
-    """`analyze-head` must gate its five expensive steps, not the whole job.
+    """`analyze-head` must gate its steps, not the whole job.
 
     Decisive live evidence (run `33708209086`): a job-level skip on a job
     whose `strategy.matrix` comes from another job's output publishes the
     literal, unexpanded `${{ matrix.language }}` check-run name instead of
     the required `CodeQL compatibility analysis (actions|python)` contexts,
     so those required checks never appear. Gating the steps instead lets the
-    job run (~20s), succeed, and publish the correctly expanded names.
+    job run (~20s), succeed, and publish the correctly expanded names. Since
+    the dispatch+poll rewrite (docs/adr/0025-codeql-required-workflow-dispatch-architecture.md),
+    `analyze-head` has two steps: the dispatch step's `if:` additionally
+    restricts it to the first matrix shard (see
+    tests/test_codeql_pr_workflow_contract.py::test_codeql_pr_dispatches_once_not_once_per_matrix_shard),
+    while the poll step runs unconditionally on `code == 'true'` alone -- both
+    still gate at step level, never at job level. `analyze-merge` no longer
+    exists: it was required nowhere (PR #1766) and was dropped, not migrated.
     """
     workflow = _read("codeql-pr.yml")
 
@@ -193,16 +200,8 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
 
     analyze_head = _top_level_job_block(workflow, "analyze-head")
     assert not re.search(r"(?m)^    if:", analyze_head)
-    assert (
-        analyze_head.count("if: needs.detect-languages.outputs.code == 'true'") == 5
-    )
-
-    analyze_merge = _top_level_job_block(workflow, "analyze-merge")
-    assert (
-        "if: github.event.action != 'closed' && "
-        "github.event.pull_request.merge_commit_sha != '' && "
-        "needs.detect-languages.outputs.code == 'true'"
-    ) in analyze_merge
+    assert analyze_head.count("needs.detect-languages.outputs.code == 'true'") == 2
+    assert "analyze-merge:" not in workflow
 
 
 def test_each_gate_workflow_keeps_an_always_admitted_job():

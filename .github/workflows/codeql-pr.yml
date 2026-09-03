@@ -1,7 +1,14 @@
-# Runs CodeQL on both the PR head and merge preview. Medium+ security results
-# fail locally with rule/path/line/message evidence, while SARIF is preserved
-# as an artifact. This keeps real findings blocking even when GitHub's
-# installation API quota prevents code-scanning uploads.
+# github/codeql-action cannot run inside a required workflow -- GitHub
+# refuses to admit it, 0/43+ across every sampled repository
+# (docs/doctoring/codeql-pr-required-workflow-always-fails.md). This file
+# stays required-workflow-safe by never calling codeql-action itself: it
+# detects languages, dispatches the actual scan via repository_dispatch to
+# codeql-scan-dispatch.yml (which runs natively, unrestricted, in
+# ContextualWisdomLab/.github), and polls for a codeql-dispatch/<language>
+# commit status that handler publishes back onto this PR's head. Design:
+# docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
+# merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
+# dropped, not migrated.
 name: CodeQL PR
 
 on:
@@ -112,217 +119,164 @@ jobs:
   analyze-head:
     name: CodeQL compatibility analysis (${{ matrix.language }})
     needs: detect-languages
+    # No job-level `if:` on purpose: a job-level condition referencing
+    # needs.detect-languages.outputs.* skips this job before its
+    # matrix-derived name is expanded, publishing the literal
+    # `CodeQL compatibility analysis (${{ matrix.language }})` check-run name
+    # instead of one per real language -- decisive live evidence in run
+    # 33708209086, guarded by
+    # tests/test_docs_only_pr_runner_admission.py::test_codeql_pr_gates_analyze_head_at_step_level_not_job_level.
+    # `needs: detect-languages` (only) matches the original, proven-safe
+    # dependency exactly; the only case where it's genuinely skipped is a
+    # closed PR, where this job being implicitly skipped too is fine because
+    # closed PRs need no required check.
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
-      security-events: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
-      - name: Harden the runner (Audit all outbound calls)
-        if: needs.detect-languages.outputs.code == 'true'
-        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout repository
-        if: needs.detect-languages.outputs.code == 'true'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Initialize CodeQL
-        if: needs.detect-languages.outputs.code == 'true'
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-
-      - name: Perform CodeQL Analysis
-        if: needs.detect-languages.outputs.code == 'true'
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
-        with:
-          category: "/language:${{ matrix.language }}"
-          upload: false
-          output: codeql-results-head
-          ref: ${{ format('refs/pull/{0}/head', github.event.pull_request.number) }}
-          sha: ${{ github.event.pull_request.head.sha }}
-
-      - name: Enforce CodeQL Medium+ SARIF gate
-        if: needs.detect-languages.outputs.code == 'true'
-        shell: python3 {0}
+      - name: Request current-head CodeQL scan dispatch
+        # Dispatch+poll live as sequential steps of ONE job (mirroring
+        # opencode-review.yml's opencode-review-target job) specifically so a
+        # dispatch failure fails this job directly -- no separate job means no
+        # needs-based skip to worry about. Since this job matrices over
+        # languages, only the first matrix entry actually dispatches (one
+        # repository_dispatch already carries every language in its payload;
+        # every shard dispatching would fire the same event N times and
+        # trigger N redundant full-matrix scans on the .github side).
+        if: >-
+          needs.detect-languages.outputs.code == 'true' &&
+          matrix.language == fromJSON(needs.detect-languages.outputs.matrix).include[0].language
         env:
-          CODEQL_SARIF_DIR: codeql-results-head
+          GH_TOKEN: ${{ github.token }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MATRIX: ${{ needs.detect-languages.outputs.matrix }}
         run: |
-          import json
-          import os
-          from pathlib import Path
+          set -euo pipefail
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before CodeQL dispatch."
+            exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head CodeQL scan is not requested."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
+            exit 0
+          fi
 
-          root = Path(os.environ["CODEQL_SARIF_DIR"])
-          paths = sorted(root.rglob("*.sarif"))
-          if not paths:
-              raise SystemExit(f"CodeQL produced no SARIF under {root}; inspect the analysis log above.")
+          matrix_languages="$(printf '%s' "$MATRIX" | jq -c '[.include[] | {language, "build-mode"}]')"
 
-          findings = []
-          total_results = 0
-          for path in paths:
-              payload = json.loads(path.read_text(encoding="utf-8"))
-              for run in payload.get("runs") or []:
-                  rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
-                  rules_by_id = {
-                      str(rule.get("id") or ""): rule
-                      for rule in rules
-                      if isinstance(rule, dict)
-                  }
-                  for result in run.get("results") or []:
-                      if not isinstance(result, dict):
-                          continue
-                      total_results += 1
-                      if result.get("suppressions"):
-                          continue
-                      rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
-                      rule_index = result.get("ruleIndex")
-                      if not rule and isinstance(rule_index, int) and 0 <= rule_index < len(rules):
-                          rule = rules[rule_index] if isinstance(rules[rule_index], dict) else {}
-                      result_properties = result.get("properties") or {}
-                      rule_properties = rule.get("properties") or {}
-                      raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
-                      try:
-                          score = float(raw_score)
-                      except (TypeError, ValueError):
-                          score = None
-                      level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
-                      tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
-                      security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
-                      if not ((score is not None and score >= 4.0) or (score is None and security_rule and level in {"error", "warning"})):
-                          continue
-                      physical = (((result.get("locations") or [{}])[0].get("physicalLocation") or {}))
-                      artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
-                      line = (physical.get("region") or {}).get("startLine") or 0
-                      message = str((result.get("message") or {}).get("text") or "no message").replace("\n", " ")
-                      findings.append((str(result.get("ruleId") or rule.get("id") or "unknown"), score, level, artifact, line, message))
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::CodeQL scan dispatch requires GitHub OIDC."
+            exit 1
+          fi
+          separator='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::CodeQL scan dispatch could not obtain its OIDC token."
+            exit 1
+          fi
+          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          if [ -z "$app_token" ]; then
+            echo "::error::CodeQL scan dispatch could not obtain its repository-scoped app token."
+            exit 1
+          fi
+          echo "::add-mask::$app_token"
+          jq -cn \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_base_ref "$PR_BASE_REF" \
+            --arg pr_base_sha "$PR_BASE_SHA" \
+            --arg pr_head_ref "$PR_HEAD_REF" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --argjson matrix "$matrix_languages" \
+            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:$matrix}}' |
+            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
 
-          print(f"CODEQL_SARIF files={len(paths)} results={total_results} medium_plus={len(findings)}")
-          for rule_id, score, level, artifact, line, message in findings:
-              severity = f"security-severity={score:g}" if score is not None else f"level={level}"
-              print(f"CODEQL_FINDING rule={rule_id} {severity} path={artifact} line={line} message={message}")
-          if findings:
-              raise SystemExit(f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s).")
-
-      - name: Preserve CodeQL SARIF evidence
-        if: always() && hashFiles('codeql-results-head/**/*.sarif') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codeql-head-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: codeql-results-head
-          retention-days: 7
-
-  analyze-merge:
-    name: CodeQL merge preview (${{ matrix.language }})
-    needs: detect-languages
-    if: github.event.action != 'closed' && github.event.pull_request.merge_commit_sha != '' && needs.detect-languages.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
-    steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout merge preview
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
-        with:
-          category: "/language:${{ matrix.language }}-merge"
-          upload: false
-          output: codeql-results-merge
-          ref: ${{ format('refs/pull/{0}/merge', github.event.pull_request.number) }}
-          sha: ${{ github.event.pull_request.merge_commit_sha }}
-
-      - name: Enforce CodeQL Medium+ SARIF gate
-        shell: python3 {0}
+      - name: Fail closed without a current-head CodeQL dispatch verdict
+        if: needs.detect-languages.outputs.code == 'true'
         env:
-          CODEQL_SARIF_DIR: codeql-results-merge
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LANGUAGE: ${{ matrix.language }}
         run: |
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["CODEQL_SARIF_DIR"])
-          paths = sorted(root.rglob("*.sarif"))
-          if not paths:
-              raise SystemExit(f"CodeQL produced no SARIF under {root}; inspect the analysis log above.")
-
-          findings = []
-          total_results = 0
-          for path in paths:
-              payload = json.loads(path.read_text(encoding="utf-8"))
-              for run in payload.get("runs") or []:
-                  rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
-                  rules_by_id = {
-                      str(rule.get("id") or ""): rule
-                      for rule in rules
-                      if isinstance(rule, dict)
-                  }
-                  for result in run.get("results") or []:
-                      if not isinstance(result, dict):
-                          continue
-                      total_results += 1
-                      if result.get("suppressions"):
-                          continue
-                      rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
-                      rule_index = result.get("ruleIndex")
-                      if not rule and isinstance(rule_index, int) and 0 <= rule_index < len(rules):
-                          rule = rules[rule_index] if isinstance(rules[rule_index], dict) else {}
-                      result_properties = result.get("properties") or {}
-                      rule_properties = rule.get("properties") or {}
-                      raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
-                      try:
-                          score = float(raw_score)
-                      except (TypeError, ValueError):
-                          score = None
-                      level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
-                      tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
-                      security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
-                      if not ((score is not None and score >= 4.0) or (score is None and security_rule and level in {"error", "warning"})):
-                          continue
-                      physical = (((result.get("locations") or [{}])[0].get("physicalLocation") or {}))
-                      artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
-                      line = (physical.get("region") or {}).get("startLine") or 0
-                      message = str((result.get("message") or {}).get("text") or "no message").replace("\n", " ")
-                      findings.append((str(result.get("ruleId") or rule.get("id") or "unknown"), score, level, artifact, line, message))
-
-          print(f"CODEQL_SARIF files={len(paths)} results={total_results} medium_plus={len(findings)}")
-          for rule_id, score, level, artifact, line, message in findings:
-              severity = f"security-severity={score:g}" if score is not None else f"level={level}"
-              print(f"CODEQL_FINDING rule={rule_id} {severity} path={artifact} line={line} message={message}")
-          if findings:
-              raise SystemExit(f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s).")
-
-      - name: Preserve CodeQL SARIF evidence
-        if: always() && hashFiles('codeql-results-merge/**/*.sarif') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codeql-merge-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: codeql-results-merge
-          retention-days: 7
+          set -euo pipefail
+          poll_interval_seconds=30
+          max_poll_transport_failures=3
+          poll_failures=0
+          # Wall-clock backstop distinct from max_poll_transport_failures:
+          # that counter only bounds *consecutive transport failures*, so a
+          # dispatched scan that never posts a status -- while every
+          # individual `gh api` call keeps succeeding -- would otherwise poll
+          # forever. Mirrors opencode-review.yml's identical 3-hour bound.
+          poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))
+          while :; do
+            if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then
+              echo "::error::No current-head CodeQL dispatch verdict after 180 minutes of polling; failing closed and releasing the runner."
+              exit 1
+            fi
+            if ! live_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+              poll_failures=$((poll_failures + 1))
+              if [ "$poll_failures" -ge "$max_poll_transport_failures" ]; then
+                echo "::error::Live pull request read failed ${poll_failures} consecutive times while polling; failing closed and releasing the runner."
+                exit 1
+              fi
+              echo "::warning::Live pull request read failed while polling (${poll_failures}/${max_poll_transport_failures}); retrying after revalidation delay."
+              sleep "$poll_interval_seconds"
+              continue
+            fi
+            poll_failures=0
+            live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+            live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+            if [ -z "$live_head" ] || [ -z "$live_state" ]; then
+              echo "::error::Could not validate live pull request state while polling for a current-head CodeQL verdict."
+              exit 1
+            fi
+            if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+              echo "::notice::Pull request head moved while waiting for a current-head CodeQL verdict; retiring superseded poll."
+              exit 0
+            fi
+            if [ "$live_state" = "closed" ]; then
+              echo "PR closed while waiting for the current-head CodeQL verdict; the poll is no longer required."
+              exit 0
+            fi
+            if ! statuses="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses")"; then
+              poll_failures=$((poll_failures + 1))
+              if [ "$poll_failures" -ge "$max_poll_transport_failures" ]; then
+                echo "::error::Commit statuses read failed ${poll_failures} consecutive times while polling; failing closed and releasing the runner."
+                exit 1
+              fi
+              echo "::warning::Commit statuses read failed while polling (${poll_failures}/${max_poll_transport_failures}); revalidating live PR state before retry."
+              sleep "$poll_interval_seconds"
+              continue
+            fi
+            poll_failures=0
+            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '[.[] | select(.context == $ctx)] | first // {} | .state // empty')"
+            if [ "$verdict_state" = "success" ] || [ "$verdict_state" = "failure" ] || [ "$verdict_state" = "error" ]; then
+              break
+            fi
+            sleep "$poll_interval_seconds"
+          done
+          if [ "$verdict_state" != "success" ]; then
+            echo "::error::CodeQL dispatch scan for ${LANGUAGE} did not pass (state=${verdict_state}). See the linked dispatch run (codeql-scan-dispatch.yml in ContextualWisdomLab/.github) for SARIF evidence."
+            exit 1
+          fi
+          echo "Current-head CodeQL dispatch verdict for ${LANGUAGE}: success."
