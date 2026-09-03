@@ -4,7 +4,7 @@
 - **Subject:** backlog item 13 states "Strix, OpenCode Review, Noema가 Concurrency에 이슈가 없을 것. 한 PR 안에서
   Push가 발생했을 때 이전 HEAD에 관한 Cancel이 발생할 것" (Strix/OpenCode Review/Noema must have no concurrency
   issues; a push within a PR must cancel the previous HEAD's run), citing
-  `ContextualWisdomLab/naruon` run `33581213829` / job `100095712154` / PR ContextualWisdomLab/naruon#1528 as evidence. The user
+  `ContextualWisdomLab/naruon#1528` (run `33581213829`, job `100095712154`) as evidence. The user
   separately directed: if the org's ~60-concurrent-job ceiling (`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`)
   is blocking work, trace and resolve the workflow issues that create it, authorizing bypass-merge for this
   specific chicken-and-egg case (a queue-congestion fix that would itself be blocked by queue congestion).
@@ -96,7 +96,9 @@ item 13 hypothesized is not what happened here. What actually happened, quoted d
   vector is not the job-slot waste it first appeared to be; (2) the five observed `pull_request_target`
   firings on one unchanged SHA came from non-`synchronize` events — `synchronize` is the only
   `pull_request_target` type tied to a new commit, and the SHA never changed. The specific event types were
-  not verified. More importantly, `pr_governance_gate.sh` evaluates **live** state at the current head on every
+  not verified (an earlier draft attributed them specifically to `labeled`/`unlabeled`, which is one
+  plausible explanation among several non-`synchronize` types and was not confirmed against the PR's actual
+  event history — corrected per Devin Review). More importantly, `pr_governance_gate.sh` evaluates **live** state at the current head on every
   run (required-check states via `gh pr checks`, unresolved review-thread count, CodeRabbit findings via
   check-runs and commit status) — it is explicitly not a pure function of `(head_sha, base_sha)`, so a
   same-head debounce ("skip if nothing changed since the last run at this SHA") would be actively wrong: it
