@@ -138,13 +138,23 @@ Repository-local `codeql.yml` push/default-branch scans, or GitHub's native
 PR merge gates cannot rely on a central required-workflow CodeQL check for the
 platform reason above.
 
-### Repository-local CodeQL inventory (2026-07-04)
+### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
 
-Org audit of default-branch workflow files. Repos without any local CodeQL
-workflow depend entirely on central `codeql-pr.yml` once ruleset `18156473`
-includes that path; they are the most exposed to
-`Code scanning is waiting for results from CodeQL` until the ruleset update
-lands.
+**This entire subsection describes a plan that did not work and is not
+current guidance.** It assumed `codeql-pr.yml` would become a functioning
+central required check once ruleset `18156473` included it; the "Correction
+(2026-09-03)" note under "Code scanning required workflow posture" above
+explains why that assumption was wrong — `codeql-action` cannot run inside a
+required workflow at all, so `codeql-pr.yml` was removed from the ruleset,
+not fixed. "Centralizing through `codeql-pr.yml` fixes every inherited
+repository in one ruleset change" (below) never happened and never could.
+Coverage for repositories without a local CodeQL workflow now comes from
+GitHub's native `code-scanning/default-setup` instead (see the 2026-09-03
+"Evidence from this rollout" entry) — do not read the table below as
+"repositories still needing the ruleset update to land"; treat it only as a
+2026-07-04 point-in-time snapshot of which repositories had a local `codeql.yml`.
+
+Org audit of default-branch workflow files as of 2026-07-04.
 
 | Repository | Default branch | Local CodeQL workflow | PR trigger | merge_commit_sha SARIF |
 | --- | --- | --- | ---: | ---: |
@@ -154,12 +164,14 @@ lands.
 | `pg-erd-cloud` | `main` | `codeql.yml`, `codeql-backfill.yml` | yes (`codeql.yml`) | no |
 | `xtrmLLMBatchPython` | `develop` | `codeql.yml` | yes | no |
 | `naruon` | `develop` | `codeql.yml` | yes (temporary; PR `#916` retires PR trigger) | yes (repo-local interim fix) |
-| all other public non-fork org repos | varies | none observed | — | — |
+| all other public non-fork org repos | varies | none observed as of 2026-07-04 | — | — |
 
-No repository-local PR CodeQL workflow besides `naruon` uploads merge-preview
-SARIF on `merge_commit_sha`. Centralizing through `codeql-pr.yml` fixes every
-inherited repository in one ruleset change; per-repo deletion of PR triggers is
-optional cleanup to avoid duplicate scans.
+No repository-local PR CodeQL workflow besides `naruon` uploaded merge-preview
+SARIF on `merge_commit_sha` as of this 2026-07-04 snapshot. The plan at the
+time was that centralizing through `codeql-pr.yml` would fix every inherited
+repository in one ruleset change; per-repo deletion of PR triggers was
+intended as optional cleanup to avoid duplicate scans. Neither happened —
+see the historical marker above.
 
 ## Scheduler required workflow posture
 
@@ -224,13 +236,14 @@ SARIF/dependency evidence, test evidence, and review marker all bind to
 The active ruleset no longer maintains a repository-name allowlist. Live
 ruleset inspection on 2026-07-02 18:15 KST reports
 `repository_name.include=["~ALL"]`, so all current and future organization
-repositories inherit the seven central required workflows on their default
-branch unless a later ruleset exclusion is added. **The required-workflow
-count has since changed** — see the "Active required workflow paths" list
-under Decision above for the live count (nine as of 2026-09-03); this
-paragraph's "seven" reflects the 2026-07-02 inspection it cites, not the
-current state. The table below is the public
-non-fork inventory snapshot and rollout ledger, not the ruleset target list.
+repositories inherit the central required workflows on their default branch
+unless a later ruleset exclusion is added. The workflow count itself is not
+fixed at the count that inspection observed (seven, at that date) — see the
+"Active required workflow paths" list under Decision above for the current
+live count (nine as of 2026-09-03) and treat that list, not this sentence, as
+the source of truth for how many workflows are currently required. The table
+below is the public non-fork inventory snapshot and rollout ledger, not the
+ruleset target list.
 
 | Repository | Visibility | Default branch | Flow | Open PRs | Local central-workflow copies on default branch | Rollout status |
 | --- | --- | --- | --- | ---: | --- | --- |
