@@ -16,7 +16,7 @@
 
 Fetched `pr-review-merge-scheduler.yml` fresh from `raw.githubusercontent.com` and read its full trigger
 surface, concurrency configuration, and `scan-pr-queue` job's `if:` guard. Cross-referenced against a peer
-session's concrete evidence (PR `naruon#1741`: 90 total workflow runs on that PR's branch, 10 of them
+session's concrete evidence (PR `ContextualWisdomLab/naruon#1741`: 90 total workflow runs on that PR's branch, 10 of them
 "Required PR Review Merge Scheduler"). Traced the `rerun-failed-jobs` mechanism referenced in this file's
 `workflow_run` listener back to its source in `opencode-review-dispatch.yml` to determine whether it is a
 chronic, repeated re-trigger source or a bounded, once-per-cycle event.
@@ -46,7 +46,7 @@ behind `steps.formal_review_receipt.outcome == 'success'` and only fires when th
 `completed`+`failure` — a bounded, once-per-review-cycle continuation of an already-published receipt, not
 a chronic re-fire loop.
 
-**PR `naruon#1741`'s 10 scheduler runs are consistent with this legitimate surface** (push(es) + review
+**PR `ContextualWisdomLab/naruon#1741`'s 10 scheduler runs are consistent with this legitimate surface** (push(es) + review
 submission(s) + OpenCode completing + Strix completing + the two hourly/30-minute heartbeats over the PR's
 open lifetime), not evidence of a bug in this file's trigger design.
 
@@ -58,15 +58,19 @@ genuinely new user-driven event superseding stale prior information. It is expli
 PR-associated `workflow_run` branch (OpenCode/Strix completing), so those queue rather than evict an
 in-progress run. This matches the same correctly-scoped pattern already confirmed for `strix.yml`,
 `opencode-review.yml`, and `noema-review.yml` in `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`
-— **no self-defeating cancellation bug was found in this file.**
+(a separate, not-yet-merged PR as of this writing — see `ContextualWisdomLab/.github#1760`; that doc will
+not exist on this branch until it merges) — **no self-defeating cancellation bug was found in this file.**
 
-A peer session, working the same live-evidence investigation, found and is fixing a real bug in a related
+A peer session, working the same live-evidence investigation, found and fixed a real bug in a related
 file: `current-head-run-coalescer.yml` (the mechanism specifically meant to prune stale-SHA queued runs)
-carries `cancel-in-progress: true` on its own PR-scoped concurrency group — but under today's unusually high
-push volume from four concurrent agent sessions, each new push cancels the coalescer's own prior in-flight
-attempt before it can get a runner, so it never actually executes for a busy PR. That is a genuine
-self-starvation bug, distinct from anything in this file, and is the more direct, evidence-backed
-explanation for the observed churn than this workflow's trigger breadth.
+carried `cancel-in-progress: true` on its own PR-scoped concurrency group — but under today's unusually high
+push volume from four concurrent agent sessions, each new push cancelled the coalescer's own prior in-flight
+attempt before it could get a runner, so it never actually executed for a busy PR. Fixed in
+`ContextualWisdomLab/.github#1661` (commit `c0dc46b`, flipping `cancel-in-progress` to `false` after
+confirming the coalescer's own script re-fetches live state before acting, so a surviving queued instance
+is exactly as safe as a fresh one). That was a genuine self-starvation bug, distinct from anything in this
+file, and is the more direct, evidence-backed explanation for the observed churn than this workflow's
+trigger breadth.
 
 **Conclusion:** forcing a change to this file's trigger surface (removing `workflow_run` listeners, say) on
 the strength of the "fires at every step" observation would have traded real event-reactivity (the
