@@ -1,4 +1,4 @@
-# ADR-0026: Audit all organization-required code-scanning workflows
+# ADR-0027: Audit all organization-required code-scanning workflows
 
 - **Status:** Proposed
 - **Date:** 2026-09-02
@@ -53,6 +53,27 @@ Hosted exact-current-head evidence and independent review remain required before
 ## Consequences and follow-up
 
 A future removal of CodeQL, Scorecard, or OSV from ruleset `18156473` becomes a deterministic governance failure instead of a silent loss of coverage. The rollout document's historical “audit tool coverage” follow-up text must be reconciled with this source repair before merge so the repository has one current statement of policy.
+
+## Update — 2026-09-03: `codeql-pr.yml` removed from the ruleset; the final tuple has nine paths, not ten
+
+The "Decision" and "Test-first evidence" sections above describe this PR's own mid-flight state, when
+`codeql-pr.yml` was still expected to be one of the three newly-required code-scanning workflows. Later
+the same day, ruleset `18156473` was updated to **remove** `.github/workflows/codeql-pr.yml` from its
+required `workflows` list: every ruleset-injected run of that workflow, across all ~71 covered
+repositories, concluded `startup_failure` with zero check runs ever created -- `github/codeql-action/init`
+and `github/codeql-action/analyze` are categorically disallowed inside a ruleset-required workflow, a
+GitHub platform restriction, not a defect in the workflow file's own content. See
+`docs/org-required-workflow-rollout.md`'s "Audit tool coverage" section and the 2026-09-03 12:20 KST
+evidence entry for the full removal record, and `docs/doctoring/codeql-pr-required-workflow-always-fails.md`
+for the platform-restriction root cause.
+
+**The actual, final `REQUIRED_WORKFLOW_PATHS` therefore contains nine paths, not ten** --
+`.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml` are included exactly as
+decided above, but `.github/workflows/codeql-pr.yml` is deliberately excluded and must stay excluded;
+re-adding it to this tuple would silently reintroduce the 100% `startup_failure` regression the removal
+fixed. `tests/test_code_scanning_required_workflow_contract.py::test_ruleset_audit_deliberately_excludes_codeql_pr`
+is the permanent regression guard for this. Left as an "Update" rather than rewriting the sections above,
+so the historical record of what this PR's own RED/GREEN commits contained at each point stays intact.
 
 ## References
 

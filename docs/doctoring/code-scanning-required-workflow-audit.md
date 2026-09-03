@@ -40,7 +40,21 @@ No workflow source is copied into consumers and no branch/PR head becomes produc
 
 ## Documentation reconciliation
 
-The rollout record now distinguishes the historical seven-path incident from the current ten-path exact-inventory audit and documents the live repository exclusions `.github`, `noema`, and `IRT-bibliography-set`. This closes the documentation gate without rewriting the incident chronology; ADR-0026 remains Proposed until ordinary protected integration and exact-head evidence complete.
+The rollout record now distinguishes the historical seven-path incident from the current nine-path exact-inventory audit and documents the live repository exclusions `.github`, `noema`, and `IRT-bibliography-set`. This closes the documentation gate without rewriting the incident chronology; ADR-0027 remains Proposed until ordinary protected integration and exact-head evidence complete.
+
+## Update — 2026-09-03: `codeql-pr.yml` removed after the GREEN commit above landed
+
+The RED/GREEN commits described above are an accurate record of what those specific commits contained at
+the time: a ten-path canonical tuple including `codeql-pr.yml`. Later the same day, ruleset `18156473` had
+`.github/workflows/codeql-pr.yml` removed from its required `workflows` list -- every ruleset-injected run
+of that workflow across all ~71 covered repositories concluded `startup_failure` with zero check runs ever
+created, a GitHub platform restriction (`github/codeql-action/*` cannot run inside a ruleset-required
+workflow), not a defect this audit could have caught or should try to re-require. `REQUIRED_WORKFLOW_PATHS`
+was updated accordingly to nine paths -- `scorecard-pr.yml` and `osv-scanner-pr.yml` stay required exactly
+as this repair decided, but `codeql-pr.yml` is now deliberately excluded, with
+`tests/test_code_scanning_required_workflow_contract.py::test_ruleset_audit_deliberately_excludes_codeql_pr`
+as the permanent regression guard against re-adding it. See ADR-0027's own "Update" section and
+`docs/org-required-workflow-rollout.md`'s "Audit tool coverage" section for the full current-state record.
 
 ## References
 
