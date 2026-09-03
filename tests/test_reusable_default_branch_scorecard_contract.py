@@ -34,7 +34,7 @@ def test_scorecard_analysis_is_reusable_without_losing_branch_history_triggers()
     workflow = _load_workflow()
     trigger_configuration = workflow["on"]
 
-    assert trigger_configuration["workflow_call"] is None
+    assert trigger_configuration["workflow_call"] == ""
     assert trigger_configuration["push"]["branches"] == ["main"]
     assert trigger_configuration["schedule"] == [{"cron": "30 1 * * 6"}]
 
