@@ -4320,3 +4320,42 @@ created, with no `await` between them) before broadcasting.
 bug on the PR" (see `.github#1661`'s two-round Devin Review entry above) — investigating past the one named
 check found a second, independent, genuinely CI-blocking bug on the same PR that a narrower fix would have
 left unresolved for a follow-up round-trip.
+
+## `keyverse#128` follow-up — a required check failure traced to a base-branch bug, fixed at `main` as `keyverse#143` — 2026-09-03
+
+**Trigger.** Autofix flagged `keyverse#128`'s (the session's other primary tracked PR, draft, the ROPC
+standards-compliance work from earlier today) `account-unification-tests` check as failing.
+
+**Root cause, traced to `main` itself, not this draft PR's own diff.** `keyverse#128`'s branch runs
+`services/account_unification/tests/test_hourly_pr_steward.py`, a static contract test asserting on
+`.github/workflows/hourly-pr-steward.yml`'s content. `keyverse#140` (a same-day bypass-merge, "chore(actions):
+remove redundant hourly-pr-steward workflow", rationale: superseded by the org-wide
+`pr-review-merge-scheduler.yml`, which already dispatches in real time on every PR event) deleted that
+workflow file but never removed its own now-orphaned test — `FileNotFoundError` on every subsequent PR's
+required check. Confirmed this is a base-branch bug, not specific to `#128`: `keyverse` main's own most recent
+`account-unification-tests` run is currently `failure` too, and `#128`'s local branch (checked out directly)
+still has the workflow file present, matching its own commit history — the failure only manifests because
+GitHub's `pull_request` checkout tests the ephemeral merge against the *current* base branch (which already
+lacks the file), not the PR's own raw head. First hypothesis (self-caught, corrected before acting):
+briefly suspected a case-sensitivity checkout quirk, ruled out via `git ls-tree` before concluding the real
+cause.
+
+**Fixed at the base, not the symptom.** Branched `fix/remove-stale-hourly-pr-steward-test` off `origin/main`
+(not `#128`'s own branch — the bug and its fix both belong on main so every keyverse PR inherits it, matching
+this session's `newsdom-api#794`/`naruon#1532` precedent from earlier today), deleted the orphaned test file,
+and updated `docs/operations/hourly-product-development.md` (which still described the removed hourly steward
+running on an offset schedule alongside the surviving `hourly-product-development.yml`). Verified: full
+`account_unification` suite (coverage 100%, ruff clean, interrogate 100%, compileall clean) plus the repo-root
+documentation contract test (7 passed) all green. Opened
+[keyverse#143](https://github.com/ContextualWisdomLab/keyverse/pull/143) against `main` — not bypass-merged,
+since the fix is self-contained in its own diff and should pass the normal review+CI flow without needing the
+chicken-and-egg exception. `#128` itself was left untouched (still draft, no active push) — it inherits this
+fix automatically on its next merge from `main`, same as the established base-branch-fix pattern.
+
+**Self-caught process error, corrected immediately.** Ran `git checkout origin/main -- .` intending a
+read-only inspection of one file's content on main; it instead overwrote the entire local working tree
+(git's normal, if easy-to-forget, behavior for `checkout <treeish> -- <pathspec>`). Caught before committing
+anything — `git reset --hard HEAD` in the scratch clone cleanly discarded the accidental overwrite, since
+nothing had been committed and the clone held no unpushed work worth preserving. `git show <treeish>:<path>`
+is the actually-read-only way to inspect a single file's content at another ref without touching the working
+tree; noted for next time this kind of one-file cross-branch check is needed.
