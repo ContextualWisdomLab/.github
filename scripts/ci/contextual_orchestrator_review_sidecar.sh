@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-5f2753ace756ddd81049a5221d55e8977572a416}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-b21645116b352967e50fc497b87eb745b9cc8c61}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -324,7 +324,7 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":16,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
 if ! gateway_http_status="$(
-  curl -sS --max-time 60 \
+  curl -sS --max-time 30 \
     -o "$gateway_preflight_response" \
     -w '%{http_code}' \
     -X POST \

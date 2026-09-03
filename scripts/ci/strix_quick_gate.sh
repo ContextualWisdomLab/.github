@@ -322,8 +322,7 @@ is_vertex_model() {
 
 is_contextual_orchestrator_model() {
 	case "$1" in
-	orchestrator/free | contextual-orchestrator/orchestrator/free | \
-		orchestrator/auto | contextual-orchestrator/orchestrator/auto)
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
 		return 0
 		;;
 	*)
@@ -2562,14 +2561,12 @@ child_model_for_api_base() {
 	local llm_api_base_value="$2"
 
 	# LiteLLM requires an explicit provider prefix even when the gateway is an
-	# OpenAI-compatible local endpoint. Strip only the connector-facing alias so
-	# the selected orchestrator/free or orchestrator/auto virtual pool reaches
-	# contextual-orchestrator unchanged.
+	# OpenAI-compatible local endpoint. Keep the public gateway model name, but
+	# qualify only the child process model so the request still carries
+	# orchestrator/free to contextual-orchestrator.
 	if is_contextual_orchestrator_model "$model" &&
 		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
-		local contextual_orchestrator_model
-		contextual_orchestrator_model="${model#contextual-orchestrator/}"
-		printf 'openai/%s\n' "$contextual_orchestrator_model"
+		printf '%s\n' 'openai/orchestrator/free'
 		return 0
 	fi
 

@@ -65,19 +65,6 @@ def _has_text_output(model: object) -> bool:
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
-def _routable_discovered_models(discovered: list[object] | None) -> list[object]:
-    """Drop evidence-only discovery rows before any live-serving selection.
-
-    Evidence-only rows (e.g. the OpenRouter catalog) exist solely to supply
-    ZDR evidence for other providers' models; contextual_orchestrator's own
-    ``agent_from_discovered()`` refuses to turn one into a serving agent.
-    Filtering here keeps that same invariant in this sidecar's selection path,
-    which builds its catalog independently rather than calling
-    ``agent_from_discovered()`` directly.
-    """
-    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
-
-
 def _route_identity(model: object) -> tuple[str, str]:
     """Return the provider/model identity used to bind price evidence."""
 
@@ -198,7 +185,7 @@ def _preflight_review_agents(
                 {"role": "user", "content": "Reply with just 'OK'."},
             ],
             "temperature": REVIEW_TEMPERATURE,
-            "max_tokens": 16,
+            "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
             "stream": False,
         }
         try:
@@ -398,11 +385,10 @@ def main(argv: list[str] | None = None) -> int:
         discovered, _ = discover_all_models()
     except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
-    routable_discovered = _routable_discovered_models(discovered)
-    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
+    free_models = list(free_discovered_models(discovered)) if discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
-    for model in routable_discovered:
+    for model in discovered or []:
         model_id = getattr(model, "model_id", "")
         if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
             continue
