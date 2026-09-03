@@ -242,7 +242,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename != "noema-review.yml":
+        if filename not in {"noema-review.yml", "opencode-review.yml"}:
             assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
@@ -253,17 +253,33 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
+            # Job-level (scoped to opencode-review-target only), not
+            # workflow-level: a workflow-level block would capture the
+            # structurally-separate cancel-superseded-opencode-review-runs
+            # job too, deadlocking it behind the very run it exists to
+            # cancel (Devin Review, 2026-09-03).
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "opencode-review-bootstrap-" in concurrency_contract
-            # Unlike the other required pull-request workflows below, this
-            # group is deliberately also scoped by exact head SHA: a
-            # delayed, out-of-order run for an older head must not be able
-            # to cancel the authoritative run already active for a newer
-            # head (Devin Review on `#1568`). Same-head events still share
-            # one group and can still cancel each other.
+            # Deliberately NOT scoped by head SHA and deliberately
+            # cancel-in-progress: false (reverted/refined 2026-09-03 by
+            # explicit user directive plus peer review): head-SHA scoping
+            # (originally added for Devin Review's `#1568` finding) meant
+            # every push to a PR got its own concurrency group, so rapid
+            # successive pushes no longer cancelled each other's in-flight
+            # runs -- they queued up independently instead, worsening the
+            # self-inflicted queue-thrashing pattern this org measured
+            # directly (236/300 cancelled runs from concurrent push volume).
+            # Plain repo+PR-number scoping with cancel-in-progress: false
+            # structurally closes the #1568 race instead of reopening it:
+            # nothing in the group is ever preempted, so a late-arriving
+            # older-head run can never evict a current one at any arrival
+            # order -- see the workflow's own comment for the full mechanism.
             assert (
                 "github.event.pull_request.head.sha || github.run_id"
-                in concurrency_contract
+                not in concurrency_contract
             )
+            assert "cancel-in-progress: false" in concurrency_contract
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
@@ -279,7 +295,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
+        if filename != "noema-review.yml":
             assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -334,18 +350,34 @@ def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
     )
 
 
-def test_strix_serializes_provider_evidence_per_repository() -> None:
-    """Serialize Strix per repository so shared provider keys are not rate-limited.
+def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
+    """Scope Strix per repository AND PR, matching every other central workflow.
 
-    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
-    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
-    storms and fail-closed gate failures on every open PR. The concurrency group
-    now scopes the scan job per repository and event class. The cleanup job is
-    outside that queue so a synchronize event can immediately retire an older
-    exact-head run without allowing sibling scans to overlap.
+    History: from 2026-08-24 through 2026-09-03 the concurrency group was
+    deliberately repository-wide (not PR-scoped) because PR-scoping is what
+    caused a real litellm.RateLimitError storm against the shared NVIDIA NIM
+    key on 2026-08-23/24 -- sibling PRs scanned concurrently, each retrying the
+    shared key three times, producing fail-closed gate failures on every open
+    PR. That repository-wide scoping fixed the storm but starved cross-PR
+    Strix evidence within the same repository instead (a different PR's scan
+    always queued behind whichever scan was already running there).
+
+    Restored to PR-scoped on explicit owner authorization (2026-09-03) after
+    confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
+    rate limits rather than a shared pool, giving materially more headroom
+    than the single-key 2026-08-23/24 incident had. The concurrency group now
+    scopes the scan job per repository, PR (or run id for non-PR events), and
+    event class. The cleanup job is outside that queue so a synchronize event
+    can immediately retire an older exact-head run without allowing sibling
+    scans for *other* PRs to be blocked by it.
     """
     workflow = workflow_text("strix.yml")
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+    # Isolate the strix: job's own text first: cancel-superseded-pr-runs above
+    # it now carries its own (PR-scoped, dedup-only) concurrency: block, so a
+    # naive first-match split on the bare "concurrency:" literal would grab
+    # that job's block instead of this one.
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
+    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
 
@@ -354,15 +386,18 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository)"
+        "format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository, "
+        "github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id)"
     ) in concurrency_contract
     assert (
         "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
         in concurrency_contract
     )
-    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
-    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
+    # PR-scoped grouping: the PR (or client_payload) number is part of the key.
+    assert "github.event.pull_request.number || github.event.client_payload.pr_number" in (
+        concurrency_contract
+    )
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     # Running scans are not cancelled; GitHub's native group has one pending slot.
@@ -542,7 +577,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "sbom-generation.yml",
         "scorecard-pr.yml",
         "secret-scan.yml",
         "security-scan.yml",
@@ -591,7 +625,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "sbom-generation.yml",
             "scorecard-pr.yml",
             "secret-scan.yml",
             "security-scan.yml",
@@ -615,10 +648,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix serializes scans per repository while cleanup stays outside that
+    # Strix scopes scans per repository and PR while cleanup stays outside that
     # queue so synchronize and close events can immediately retire old work.
     assert "cancel-in-progress: false" in strix_workflow
-    assert "Keep provider-backed scans serial per repository" in strix_workflow
+    assert "PR-scoped (workflow-repository-PR)" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:

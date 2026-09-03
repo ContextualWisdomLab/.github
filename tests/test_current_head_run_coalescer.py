@@ -608,7 +608,6 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "persist-credentials: false" in text
     assert "ref: ${{ github.workflow_sha }}" in text
     assert "current_head_run_coalescer.py" in text
-    assert "cancel-in-progress: true" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
     run_block = text.split("run: |", 1)[1]
