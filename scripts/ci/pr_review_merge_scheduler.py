@@ -17,9 +17,11 @@ stronger contract test also verifies them in the core implementation:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence
 
 if __package__:
     from . import pr_review_merge_scheduler_core as _scheduler_core
@@ -107,6 +109,45 @@ def install_fail_fast_rate_limit_policy() -> None:
     _scheduler_core.gh_api_json = _fail_fast_gh_api_json
 
 
+def _record_deferred_rate_limit(error_message: str) -> None:
+    """Write a typed deferred receipt without treating it as completed work."""
+
+    receipt = (
+        "scheduler_outcome=deferred_rate_limit; "
+        "retry_owner=next_bounded_heartbeat; "
+        f"reason={error_message}"
+    )
+    print(receipt, file=sys.stderr)
+
+    summary_path_value = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if not summary_path_value:
+        return
+    summary_path = Path(summary_path_value)
+    with summary_path.open("a", encoding="utf-8") as summary_file:
+        summary_file.write("### PR review scheduler deferred\n\n")
+        summary_file.write("- outcome: `deferred_rate_limit`\n")
+        summary_file.write("- retry owner: next bounded heartbeat\n")
+        summary_file.write("- runner-held sleep: 0 seconds\n")
+        summary_file.write(f"- reason: `{error_message}`\n\n")
+
+
+def run_cli(argument_values: Sequence[str]) -> int:
+    """Run the scheduler, accepting primary rate-limit deferral as handled."""
+
+    install_fail_fast_rate_limit_policy()
+    try:
+        return int(_scheduler_core.main(list(argument_values)))
+    except RuntimeError as exc:
+        if _scheduler_core.is_rate_limited_error(exc):
+            _record_deferred_rate_limit(str(exc))
+            # The existing caller retries any non-zero status three times with
+            # runner-held sleeps. A typed defer is an accepted handoff to the
+            # next bounded heartbeat, so return success to stop that outer loop.
+            return 0
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
 class _SchedulerFacade(types.ModuleType):
     """Forward legacy import reads and test monkeypatches to the core module."""
 
@@ -151,9 +192,4 @@ sys.modules[__name__].__class__ = _SchedulerFacade
 
 
 if __name__ == "__main__":  # pragma: no cover
-    install_fail_fast_rate_limit_policy()
-    try:
-        raise SystemExit(_scheduler_core.main(sys.argv[1:]))
-    except RuntimeError as exc:
-        print(str(exc), file=sys.stderr)
-        raise SystemExit(1) from exc
+    raise SystemExit(run_cli(sys.argv[1:]))
