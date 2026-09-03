@@ -4,13 +4,6 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
-concurrency:
-  group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  # Do not restore cancel-in-progress: true here. This job is the control-plane
-  # worker that retires redundant runs; cancelling it during a push burst lets
-  # the redundant runs survive and worsens the 60-job ceiling.
-  cancel-in-progress: false
-
 permissions:
   actions: write
   contents: read
@@ -18,6 +11,41 @@ permissions:
 
 jobs:
   coalesce:
+    # A plain cancel-in-progress:false only protects a RUNNING job; GitHub
+    # concurrency groups still retain just one PENDING (queued) run and
+    # silently replace it whenever another run enters the same group --
+    # regardless of cancel-in-progress (Devin Review on this PR caught that
+    # the first fix here didn't actually cover this). Under near-zero
+    # Actions admission, rapid same-PR pushes were replacing each queued
+    # coalescer instance before it ever got a runner (verified 2026-09-03:
+    # PR #1741's own required-review checks sat stuck queued because the
+    # coalescer never once executed for it). queue: max is the GitHub
+    # Actions feature that actually fixes this -- up to 100 pending runs
+    # are kept and run in order instead of only the latest surviving, so at
+    # least one eventually gets a runner rather than being repeatedly
+    # evicted while still queued (already used the same way by this repo's
+    # own agent-mention-router.yml:29-31). current_head_run_coalescer.py
+    # re-fetches live PR state before cancelling anything and refuses
+    # (CoalescingRefused, a safe no-op) rather than acting whenever the head
+    # it was triggered with no longer matches the live head -- so a stale
+    # queued instance can never wrongly cancel the wrong run, but it also
+    # does not itself do useful cleanup for whatever the live head has since
+    # become; only a queued instance whose own trigger SHA still matches the
+    # live head performs real coalescing. Devin Review (this PR) correctly
+    # found the residual gap this leaves: queue: max's own retention cap is
+    # 100, a GitHub-imposed ceiling this workflow cannot raise, so an
+    # extreme burst exceeding 100 pushes to one PR while runner admission
+    # stays near zero could still evict the current head's own triggering
+    # run before it ever queues, leaving no surviving instance whose
+    # remembered head matches live -- not fixed here (a redesign that lets
+    # a stale instance act on the live head instead of refusing needs its
+    # own careful correctness review of the cancellation-candidate selection
+    # this refusal currently protects); the incident this fix responds to
+    # (PR #1741) involved far fewer than 100 pushes, so this is a real but
+    # substantially narrower residual risk than the bug just closed.
+    concurrency:
+      group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
