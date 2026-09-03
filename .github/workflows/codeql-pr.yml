@@ -296,7 +296,27 @@ jobs:
               continue
             fi
             poll_failures=0
-            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '[.[] | select(.context == $ctx)] | first // {} | .state // empty')"
+            # A commit status is writable by anyone with statuses:write on
+            # this repository, so matching on .context alone would let a
+            # malicious PR forge its own passing "codeql-dispatch/<language>"
+            # status and skip being scanned (ADR 0025, "Poll target cannot be
+            # spoofed by the PR author"). codeql-scan-dispatch.yml mints its
+            # publishing token via the same OIDC audience
+            # (opencode-github-action) opencode-review-dispatch.yml uses, so
+            # the legitimate status always carries that app's bot identity --
+            # mirror opencode-review.yml's opencode-agent/opencode-agent[bot]
+            # creator check rather than trusting the context name alone.
+            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
+              [
+                .[]
+                | select(.context == $ctx)
+                | select(
+                    (.creator.login // "" | ascii_downcase) as $creator
+                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                  )
+              ]
+              | first // {} | .state // empty
+            ')"
             if [ "$verdict_state" = "success" ] || [ "$verdict_state" = "failure" ] || [ "$verdict_state" = "error" ]; then
               break
             fi

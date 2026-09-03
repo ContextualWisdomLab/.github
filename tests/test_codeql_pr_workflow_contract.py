@@ -1,3 +1,5 @@
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -96,6 +98,97 @@ def test_codeql_pr_dispatch_and_poll_run_blocks_are_valid_bash() -> None:
             check=False,
         )
         assert result.returncode == 0, f"{step_name}: {result.stderr}"
+
+
+POLL_STEP_NAME = "Fail closed without a current-head CodeQL dispatch verdict"
+
+
+def _run_poll_step(tmp_path: Path, statuses: list[dict]) -> subprocess.CompletedProcess[str]:
+    """Execute the real poll shell block against a fake `gh api` returning a fixed live PR and status list."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    assert bash is not None and jq is not None, "bash and jq are required to run this test"
+
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow_text, POLL_STEP_NAME)
+
+    head_sha = "b" * 40
+    live_pr = {"head": {"sha": head_sha}, "state": "open"}
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        'case "$2" in\n'
+        "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
+        "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_PULL_JSON": json.dumps(live_pr),
+        "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "GH_TOKEN": "fake-token",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "42",
+        "HEAD_SHA": head_sha,
+        "LANGUAGE": "python",
+        "DISPATCH_OUTCOME": "success",
+    }
+    return subprocess.run(
+        [bash], input=script, text=True, capture_output=True, check=False, env=env, timeout=60
+    )
+
+
+def test_codeql_pr_poll_step_ignores_a_status_forged_by_a_non_opencode_creator(tmp_path: Path) -> None:
+    """A PR-forged 'codeql-dispatch/<language>: success' status must not stand in for the real verdict.
+
+    Only a status published by codeql-scan-dispatch.yml's own app identity
+    (opencode-agent[bot], minted via the same OIDC exchange
+    opencode-review-dispatch.yml uses) may satisfy the poll -- matching the
+    context string alone is not enough, since anyone with statuses:write on
+    the repository can publish an arbitrary context (ADR 0025, "Poll target
+    cannot be spoofed by the PR author"). This proves the forged success is
+    skipped in favor of the legitimate (here, failing) verdict rather than
+    accepted.
+    """
+    result = _run_poll_step(
+        tmp_path,
+        statuses=[
+            {"context": "codeql-dispatch/python", "state": "success", "creator": {"login": "attacker"}},
+            {
+                "context": "codeql-dispatch/python",
+                "state": "failure",
+                "creator": {"login": "opencode-agent[bot]"},
+            },
+        ],
+    )
+    assert result.returncode == 1, result.stderr
+    assert "did not pass (state=failure)" in result.stdout
+
+
+def test_codeql_pr_poll_step_accepts_the_opencode_agent_creator(tmp_path: Path) -> None:
+    """The legitimate handler's own success status is accepted once creator identity matches."""
+    result = _run_poll_step(
+        tmp_path,
+        statuses=[
+            {
+                "context": "codeql-dispatch/python",
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            }
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Current-head CodeQL dispatch verdict for python: success." in result.stdout
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
