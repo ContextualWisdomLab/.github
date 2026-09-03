@@ -152,6 +152,9 @@ def test_workflow_and_doctoring_contracts() -> None:
         ROOT
         / ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
     ).read_text()
+    quality_gate = (
+        ROOT / ".github/workflows/exact-head-coverage-quality-gate.yml"
+    ).read_text()
     doctoring = (
         ROOT / "docs/doctoring/organization-commercial-readiness-loop.md"
     ).read_text()
@@ -167,10 +170,19 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert "COPILOT_GITHUB_TOKEN" not in workflow_source
     assert "github.run_number" in workflow_source
     assert "persist-credentials: false" in workflow_source
-    assert "--branch" in quality and "--fail-under=100" in quality
-    assert "--import-mode=importlib" in quality
+    # Coverage/exact-head mechanics live in the shared reusable gate; the
+    # caller only needs to delegate to it with the right subsystem inputs.
+    assert (
+        "uses: ./.github/workflows/exact-head-coverage-quality-gate.yml" in quality
+    )
+    assert (
+        "coverage_include: scripts/ci/organization_commercial_readiness_loop.py"
+        in quality
+    )
     assert "organization_commercial_readiness_fixtures.py" in quality
-    assert "github.event.pull_request.head.sha" in quality
+    assert "--branch" in quality_gate and "--fail-under=100" in quality_gate
+    assert "--import-mode=importlib" in quality_gate
+    assert "github.event.pull_request.head.sha" in quality_gate
     assert "disabled workflow does not hold a lease" in doctoring
     assert "manual-only, explicitly marked" in doctoring
     assert "does not make every repository directly writable" in doctoring

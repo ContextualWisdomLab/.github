@@ -36,6 +36,13 @@ jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
+    # Bound this job well short of GitHub's 360-minute platform default. Its
+    # only step is a single-repository, status-filtered gh api --paginate
+    # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
+    # or merge -- lighter than pr-review-merge-scheduler.yml's scan-pr-queue
+    # job (PR #1702), which got timeout-minutes: 30 for a comparable
+    # single-repo scan that also dispatches a review and updates a branch.
+    timeout-minutes: 20
     permissions:
       actions: write
       contents: read
@@ -180,6 +187,22 @@ jobs:
   noema-review:
     name: noema-review
     runs-on: ubuntu-24.04
+    # No job-level timeout-minutes here, deliberately. This job's "Prepare
+    # Noema model verdict" step calls two_phase.py's call_llm synchronously
+    # via the contextual-orchestrator gateway and blocks on the model's own
+    # response -- a job-level wall-clock bound here would cap the model's
+    # reasoning/tool-use time directly, which docs/product-goal-directive.md
+    # #8 prohibits ("Model timeout은 application·Agent·Gateway 공통 상한 없이
+    # 기본 null이다"; "OpenCode·Strix·Noema의 모델당 2시간 이상을 수용한다"). An
+    # earlier version of this job set timeout-minutes: 210, reasoning it gave
+    # that step "the same ~180-minute allowance" PR #1707 gave an unrelated
+    # step -- that reasoning was wrong: #1707's poll_deadline_epoch bounds a
+    # step that polls GitHub for whether a *separately triggered* review
+    # process has posted a verdict yet (an async external wait), not a step
+    # that itself runs the model synchronously. Any fixed cap on a job whose
+    # body IS the synchronous model call is exactly the fixed inference-time
+    # cap the policy forbids. See
+    # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
       github.event_name == 'repository_dispatch'
       || (

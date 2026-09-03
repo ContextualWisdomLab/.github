@@ -1,3 +1,21 @@
+### Contextual-orchestrator pin refresh
+
+- Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `464da4715b495b5eaaa593eba3796e2d976ee0c9` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
+
+### Scheduler target admission
+
+- Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
+
+## [Unreleased]
+
+- Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
+## 2026-09-02 — Noema single-request gateway ownership
+
+- Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
+- Hardened serving-model telemetry against control-character/workflow-command injection and lone-surrogate encoding failures, restored actionable exact changed-line diagnostics, and constrained local trailing-comma repair to complete JSON values.
+- Added permanent single-request/no-fixed-timeout regressions and retired obsolete deadline/retry fixtures.
+- Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
+
 # Changelog
 
 All notable changes to the organization automation repository are documented in
@@ -5,6 +23,102 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
+  scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
+  heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
+  `cron: "30 * * * *"` (see `docs/doctoring/actions-queue-saturation-hourly-sweep.md`),
+  and the Python regression `tests/test_actions_queue_saturation_scheduler_cadence.py`
+  was updated to match at the time — but the parallel bash contract in
+  `scripts/ci/test_strix_quick_gate.sh` still asserted the literal old string, so
+  every PR whose required `exact-head-path-policy` check ran this script against a
+  current `main` checkout failed on an assertion the workflow file itself could no
+  longer satisfy, regardless of the PR's own diff. Updated the assertion to the
+  current cron string and corrected an adjacent stale "15-minute organization sweep
+  / 30-minute scheduled scan" description to the current hourly/hourly cadence.
+  Verified: `bash scripts/ci/test_strix_quick_gate.sh` now passes against unmodified
+  `main` (confirmed failing before this fix, on the same clean clone); full suite
+  unaffected (2600+ passed, 100% coverage, 100% docstrings) since this is a
+  bash-only assertion string with no Python-side counterpart to update.
+- **Consolidate the two genuinely duplicate quality-CI callers behind one reusable
+  `workflow_call` gate; leave the other six alone.** An audit of the 8
+  `.github/workflows/*-quality-ci.yml` bootstrap-templated files found only one pair —
+  `javascript-coverage-quality-ci.yml` and
+  `organization-commercial-readiness-loop-quality-ci.yml` — where the shared skeleton
+  (checkout at the exact PR head, an identical pinned six-package mini-requirements
+  heredoc, `coverage run --branch -m pytest --import-mode=importlib`, `coverage report
+  --fail-under=100`, `compileall`, `git diff --exit-code`) was byte-for-byte the same
+  logic with only the timeout, pytest target, and coverage `--include` path varying per
+  subsystem. Extracted that shared shape into a new
+  `.github/workflows/exact-head-coverage-quality-gate.yml` reusable workflow
+  (`workflow_call`-only, four required inputs: `timeout_minutes`, `pytest_target`,
+  `coverage_include`, `compileall_targets`) and turned both callers into thin
+  `uses:`/`with:` wrappers. Verified first that no branch-protection required status
+  check or the org's required-workflow ruleset references either caller's job name
+  (`exact-head-coverage-contract` / `exact-head-policy`) before restructuring, so nothing
+  downstream depends on their exact shape. Updated the three contract tests that pinned
+  the old inline text
+  (`test_organization_commercial_readiness_loop_policy.py`,
+  `test_organization_commercial_readiness_loop_import_contract.py`) to check the
+  coverage/exact-head mechanics against the shared gate file and the subsystem wiring
+  against each caller, and added
+  `tests/test_exact_head_coverage_quality_gate_contract.py` to pin the gate's own
+  `workflow_call` contract and both callers' input wiring. The other 6 files
+  (`agent-mention-router-quality-ci.yml`, `exact-artifact-sbom-attestation-quality.yml`,
+  `noema-token-lifetime-quality-ci.yml`,
+  `opencode-rust-coverage-toolchain-quality-ci.yml`, `strix-changed-path-quality-ci.yml`,
+  `trusted-uv-materializer-quality-ci.yml`) look superficially similar but each encodes a
+  genuinely different policy -- harden-runner presence, a docstring/interrogate gate,
+  exact-head-verification mechanics (or, for noema, no `ref:` pin at all), multi-Python-
+  version matrices with non-shared extra logic (a tomli-fallback exercise, a Python 3.10
+  compile-only contract), or no `coverage --fail-under` step at all (strix delegates to a
+  bash gate script instead) -- so templatizing them would either weaken what they
+  individually enforce or need enough per-caller toggles to defeat the point of sharing.
+  Left untouched, matching the precedent already set for ruling out the agent-mention
+  dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
+  2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
+- **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review. Also ensures every cancellation path (`cancel_stale_pr_runs`, `cancel_stale_opencode_runs`, `_cancel_revalidated_review_run_refs`) treats a run as cancelled only when `force_cancel_workflow_runs` actually reports success, not merely when live revalidation proved it stale -- superseding PR #1712's simpler `force_cancel_workflow_run_refs` wrapper (removed as dead code; its safety guarantee is preserved inline at every call site by this more thorough revalidate-then-cancel design).
+- **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
+  invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
+  every non-draft PR before any eligibility gate, and several other call sites
+  (`active_review_run_refs`, `dispatch_strix_evidence`'s busy check) ask the
+  identical unfiltered `(repo, ("queued", "in_progress"))` question again --
+  all against the one repository a scheduler invocation ever targets, with zero
+  caching anywhere in the file. At the default `MAX_PRS=100` this reissued the
+  same repository-wide, paginated `gh api .../actions/runs` fetch well over a
+  hundred times per run. `active_workflow_runs` now memoizes its result keyed on
+  the full `(repo, statuses, event, created, head_sha)` call shape for one
+  `main()` invocation, with explicit cache invalidation immediately after the
+  four places that mutate GitHub Actions run state
+  (`force_cancel_workflow_runs`, `rerun_actions_job`, `dispatch_opencode_review`,
+  `dispatch_strix_evidence`) so a later read in the same run can never replay a
+  pre-mutation snapshot. The four pre-existing `ThreadPoolExecutor` sites and the
+  correctly-sequential per-PR mutation-budget loop are untouched. See
+  ADR-0022.
+- **Consolidate the 18 per-repository hourly review-repair caller workflows into one file.**
+  At the repository owner's request ("이런 Workflow는 단일 파일로 통합하라"), replaced
+  `accounting-information-platform-`, `afipc-`, `bandscope-`, `clearfolio-`,
+  `contextual-orchestrator-`, `disksage-`, `fast-mlsirm-`, `github-`,
+  `governance-risk-compliance-`, `inkspan-`, `lineageweave-`,
+  `metering-billing-platform-`, `nonnest2-`, `orgmetra-`, `originweave-`,
+  `psychometrics-commons-`, `quarantine-sandbox-`, and
+  `semantic-data-portal-hourly-review-repair.yml` with one file,
+  `.github/workflows/hourly-review-repair.yml`: a single `on.schedule` list (all 17
+  distinct minutes, staggering comments preserved) plus a `github.event.schedule`
+  lookup table that resolves each minute's repository, base branch, and retry floor,
+  fanned out through a `strategy.matrix` job that keeps every repository's own
+  independent, non-cancelling `concurrency.group`. `pr-review-fix-scheduler.yml`,
+  the reusable engine every caller dispatches to, is unchanged. Auditing the 18
+  originals for this consolidation found `fast-mlsirm` and `metering-billing-platform`
+  had independently collided on the same minute (49) and that
+  `clearfolio-hourly-review-repair.yml` was the only one of the 18 missing its
+  job-level `id-token: write` grant; both are called out and the latter closed
+  uniformly across the consolidated matrix. 13 dedicated per-repository test files
+  are replaced by `tests/test_hourly_review_repair_callers.py`, which extracts and
+  executes the lookup script for every schedule against the exact parameters the
+  deleted files used; four other test files that used a since-deleted caller as a
+  representative example were updated in place. See
+  `docs/doctoring/hourly-review-repair-single-file-consolidation.md` and
+  ADR-0021.
 - **Fix stale test assertions and dead-code gaps left by `#1654`, `#1656`, and `#1658`.**
   Reproduced all failures on a fresh unmodified `main` clone before attributing blame.
   `#1654` (introducing `scripts/ci/current_head_run_coalescer.py` and hardening several
