@@ -2995,3 +2995,51 @@ deadline) and #1727 (the follow-on job-level caps). Confirms the Context Map bou
 above: recursive test-time-compute strategy (Fugu/Conductor/TRINITY, role-based effort allocation) is a
 `contextual-orchestrator` routing concern, not a `.github` CI-timeout concern — this repository's part is
 finished at "impose no fixed ceiling," not at building the recursion itself.
+
+## 2026-09-03 product-goal-directive.md §8 (Fugu/Conductor/TRINITY test-time-compute allocation) — all three pieces closed
+
+**Task.** §8 asks for single/multi-agent test-time compute to be allocated (stage/recursion/decomposition/
+approach/role effort) grounded in Fugu (Sakana AI), Conductor (Nielsen et al., ICLR 2026), and TRINITY
+(Xu et al., ICLR 2026) — accuracy-first, tolerating 2+ hours per model for OpenCode/Strix/Noema. Scoped
+this into three concrete pieces before writing any code, per this doc's own house rule against
+implementing without first checking what already exists.
+
+**1. Fixed timeout replacement — not needed, already closed.** See the items 4/39 entry directly above:
+the fixed 900-second Noema repair deadline was removed outright (#1672, #1727), landing exactly on §8's
+own "no fixed ceiling, accommodate 2+ hours" text. No Fugu-style recursive-refinement mechanism needed
+building — there was nothing left bounding it once the fixed cap was gone.
+
+**2. TRINITY-style role-based effort allocation — already implemented, gated, and correctly so.**
+`contextual-orchestrator/contextual_orchestrator/reasoning_effort_profile.py`'s `default_role_effort_catalog()`
+already assigns differentiated reasoning effort by workflow role — `thinker: high, worker: medium,
+verifier: high, synthesizer: medium, judge: high` — a direct match to TRINITY's Thinker/Worker/Verifier
+taxonomy (with Synthesizer/Judge as this system's own superset roles). It ships behind an explicit,
+documented opt-in (`--role-effort-catalog default`, ADR 0021), failing closed unless at least one
+`--agents` entry proves `reasoning_effort_supported`. Verified this is a deliberate production-safety
+gate, not an oversight — its own help text says so directly, and it is a different axis from
+`production_default_change_allowed`'s route/conduct ablation gate (that one governs single-vs-multi-agent
+mode and reasoning-effort defaults measured via `run_equal_budget_ablation`; role-effort-catalog opt-in is
+orthogonal). No code change warranted; this is an operator-deployment decision, out of this doc's scope.
+
+**3. Test-time-compute allocation via exploration — the one real gap, now fixed.**
+`TaskOrchestrator._select_agent` picked `ranked[0]` deterministically from `_ranked_agents`, meaning once
+one member of a model group edged ahead on the posterior-mean point estimate, it absorbed 100% of that
+group's traffic — the single genuine, previously-undocumented gap in this triad, and the one that actually
+required new code. Fixed in `contextual-orchestrator#1034` ("feat(model_group): Thompson-sample
+intra-group live routing"): `ModelGroupRouter.sampled_ranked_member_ids` draws one Thompson sample
+(Thompson, 1933) per member from its own Beta(alpha, beta) posterior instead of comparing the mean,
+wired into live serving only (`_refine_partition`'s call into `_measured_member_order(..., sample=True)`)
+— admin/report reads (`get_model_group`, `member_report`, `snapshot`) keep the deterministic path
+unchanged, a distinction the design phase caught by tracing every caller rather than assuming. Grounded
+further in Chapelle & Li (2011, NeurIPS) and Agrawal & Goyal (2012, COLT) — both actually fetched and read
+during design, not cited from memory — to justify shipping unweighted (no posterior-reshaping damping,
+no observation-count warm-up floor) rather than inventing an untuned magic constant. Independently
+re-verified this session: re-derived the win-probability math by hand (5/6 for the pure-Bernoulli case,
+~99.8% for the codebase's actual latency-weighted fixtures) against a local simulation, ran the affected
+test files and the new statistical contract tests five times each for stability, ran `interrogate`
+(100%) and the full suite myself (3354 passed, 1 skipped, 1 pre-existing-and-separately-fixed deselect,
+0 failed) rather than trusting the implementing agent's own report.
+
+**Conclusion.** All three pieces of §8 are closed: two required no new code (timeout already removed
+elsewhere; role-effort catalog already existed, correctly gated), one required a real fix now shipped as
+`contextual-orchestrator#1034` (open, pending merge).
