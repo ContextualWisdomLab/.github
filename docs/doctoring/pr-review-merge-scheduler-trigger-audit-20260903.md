@@ -10,11 +10,14 @@
 - **Decision record:** none in `docs/adr/` — negative/confirmatory finding for this specific file, cross-
   referenced against a real, separate fix a peer session applied to a different file in the same
   investigation.
-- **PR:** see the PR that carries this commit.
+- **PR:** `ContextualWisdomLab/.github#1763`.
 
 ## Method
 
-Fetched `pr-review-merge-scheduler.yml` fresh from `raw.githubusercontent.com` and read its full trigger
+Fetched `pr-review-merge-scheduler.yml` fresh from `raw.githubusercontent.com` at commit `8c08583`
+(the file's own last-modifying commit on `main` as of this writing; re-verify against a fresh
+`gh api "repos/ContextualWisdomLab/.github/commits?path=.github/workflows/pr-review-merge-scheduler.yml&sha=main"`
+call if the file has changed since) and read its full trigger
 surface, concurrency configuration, and `scan-pr-queue` job's `if:` guard. Cross-referenced against a peer
 session's concrete evidence (PR `ContextualWisdomLab/naruon#1741`: 90 total workflow runs on that PR's branch, 10 of them
 "Required PR Review Merge Scheduler"). Traced the `rerun-failed-jobs` mechanism referenced in this file's
@@ -54,7 +57,14 @@ open lifetime), not evidence of a bug in this file's trigger design.
 
 `cancel-in-progress` in this file is `true` only for `pull_request_target`, `pull_request_review`,
 `repository_dispatch`, and the no-PR-number `workflow_run` branch — every one of which represents a
-genuinely new user-driven event superseding stale prior information. It is explicitly `false` for the
+genuinely new triggering event that supersedes the scheduler's prior, now-stale, in-flight evaluation, for
+branch-specific reasons: a new `pull_request_target` event means a push or review-state change already
+invalidated whatever the prior run was computing; a new `pull_request_review` means an approval/change-request
+just arrived; a new `repository_dispatch` is an explicit, deliberate re-invocation (a manual retry or a
+cross-repo caller); and the no-PR-number `workflow_run` branch fires only for events with no associated PR
+(so there is nothing PR-specific yet to preserve). `workflow_run` itself — CodeRabbit correctly noted — is a
+workflow-completion event, not a direct user action; grouping it under "user-driven" was imprecise. It is
+explicitly `false` for the
 PR-associated `workflow_run` branch (OpenCode/Strix completing), so those queue rather than evict an
 in-progress run. This matches the same correctly-scoped pattern already confirmed for `strix.yml`,
 `opencode-review.yml`, and `noema-review.yml` in `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`
@@ -71,13 +81,20 @@ was itself caught as incomplete by Devin Review: a plain `cancel-in-progress: fa
 *running* job — GitHub concurrency groups still silently evict a *pending* (queued) run the instant another
 run enters the same group, regardless of `cancel-in-progress`, which is exactly the failure mode that had
 been observed (a required-review check sat stuck queued with the coalescer never once executing for it).
-The complete fix (commit `12d5735`) adds `queue: max`, a GitHub Actions concurrency feature that retains up
-to 100 pending runs and runs them in order instead of evicting all but the latest — an already-precedented
-pattern in this repo (`agent-mention-router.yml`) — combined with the coalescer script's own live-state
-re-fetch (confirmed safe for a surviving queued instance to run later, since it never trusts the head SHA it
-was triggered with). That was a genuine, two-round self-starvation bug, distinct from anything in this
-file, and is the more direct, evidence-backed explanation for the observed churn than this workflow's
-trigger breadth.
+The complete fix (commit `12d5735`) adds `queue: max`, a GitHub Actions concurrency feature — an
+already-precedented pattern in this repo (`agent-mention-router.yml`) — that retains up to 100 pending runs
+instead of evicting all but the latest. **Precision on `queue: max`'s own limits (CodeRabbit correctly
+caught the original wording overclaiming this):** the 100-pending-run retention is a hard cap, not
+unlimited — a burst exceeding it can still evict overflow arrivals; and GitHub does not guarantee strict
+FIFO dispatch order for the retained runs (ordering is based on when each run started waiting on the group,
+not when it was originally triggered, and that too is not a hard guarantee). Neither limit changes the
+verdict for the specific incident this fix responds to (PR `#1741`'s push volume was far below the 100-run
+cap), but "runs them in order" should not be read as a general ordering guarantee beyond that — see
+`queue: max`'s own residual-gap note in `current-head-run-coalescer.yml` for the fuller caveat. Combined
+with the coalescer script's own live-state re-fetch (confirmed safe for a surviving queued instance to run
+later, since it never trusts the head SHA it was triggered with), that was a genuine, two-round
+self-starvation bug, distinct from anything in this file, and is the more direct, evidence-backed
+explanation for the observed churn than this workflow's trigger breadth.
 
 **Conclusion:** forcing a change to this file's trigger surface (removing `workflow_run` listeners, say) on
 the strength of the "fires at every step" observation would have traded real event-reactivity (the
