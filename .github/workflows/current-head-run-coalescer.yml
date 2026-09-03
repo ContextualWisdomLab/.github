@@ -6,16 +6,15 @@ on:
 
 concurrency:
   group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  # Do not restore cancel-in-progress: true here. This job is the control-plane
-  # worker that retires redundant runs; cancelling it during a push burst lets
-  # the redundant runs survive and worsens the 60-job ceiling.
+  # The active worker must finish because it retires redundant runs that consume
+  # the shared Actions ceiling. A later synchronize event must not kill it.
   cancel-in-progress: false
-  # GitHub's default `queue: single` replaces an already-pending run when a
-  # later synchronize event enters this group. Under runner starvation that
-  # can prevent every cleanup attempt from reaching a runner. Preserve up to
-  # 100 pending cleanup runs; each invocation re-fetches live PR/run identity
-  # before mutation, so an older trigger remains safe when it eventually runs.
-  queue: max
+  # Keep exactly one pending successor. GitHub replaces that pending run when a
+  # newer event enters the group, so the retained successor always represents
+  # the latest head instead of accumulating up to 100 stale-head invocations.
+  # The script still verifies the event-bound expected head against the live PR
+  # before any mutation and fails closed if the head moved again.
+  queue: single
 
 permissions:
   actions: write
