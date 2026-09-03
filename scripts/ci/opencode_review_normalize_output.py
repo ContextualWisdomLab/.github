@@ -94,6 +94,8 @@ MODEL_FAILURE_APPROVAL_PHRASES = (
     "primary=failed",
     "fallback=failed",
     "catalog_fallback=failed",
+    "model-unavailable evidence fallback",
+    "model-pool outcome: `unknown`",
 )
 
 CHANGED_FILE_EVIDENCE_PATTERN = re.compile(

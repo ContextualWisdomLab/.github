@@ -43,7 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
-## 2026-09-02 - Propagate HTTP Errors for Security Visibility
-**Vulnerability:** Information Obfuscation / Incomplete Error Handling
-**Learning:** In `urllib.request.urlopen` flows, unhandled `urllib.error.HTTPError` responses (such as 413 Payload Too Large or 429 Too Many Requests) can hide the true failure reason or be swallowed as `TimeoutError` down the line. The API body that contains debugging and security contextual errors is lost if not explicitly read via `exc.read()`.
-**Prevention:** Always wrap `opener.open` in a try/except block catching `urllib.error.HTTPError`. explicitly read the response via `exc.read().decode()` and raise a `RuntimeError` incorporating the exact HTTP status code and response payload so it surfaces correctly in CI environments.
+## 2026-09-03 - Align Deterministic Fallback Rejection Logic
+**Vulnerability:** CI Policy Bypass / Missing Gate Alignment
+**Learning:** `opencode_existing_approval_gate.py` and `opencode-review.yml` explicitly reject reviews containing specific deterministic fallback markers like `model-unavailable evidence fallback` or `model-pool outcome: \`unknown\``, ensuring they aren't mistaken for real-model approvals. However, the normalizer `opencode_review_normalize_output.py` lacked these phrases in `MODEL_FAILURE_APPROVAL_PHRASES`. A mismatch here could allow the JSON normalizer to inadvertently accept these fallback phrases as legitimate outcomes while other scripts block them, creating a split-brain logic gap.
+**Prevention:** Always ensure parity across different scripts evaluating review evidence strings. Added the missing fallback phrases to `MODEL_FAILURE_APPROVAL_PHRASES`.
