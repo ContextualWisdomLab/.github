@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -602,7 +603,7 @@ def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
 
 
 def test_opencode_review_concurrency_group_is_scoped_by_repo_and_pr_only() -> None:
-    """The bootstrap group is keyed by repo + PR number only, and never cancels.
+    """The concurrency group is keyed by repo + PR number only, and never cancels.
 
     Devin Review on `#1568` originally found that a delayed, out-of-order run
     for an older head could cancel the authoritative run already active for
@@ -624,10 +625,20 @@ def test_opencode_review_concurrency_group_is_scoped_by_repo_and_pr_only() -> No
     iteration for correctness) is what makes a now-queued older-head run
     self-exit quickly once it finally gets its turn, instead of running to
     completion or publishing stale evidence.
+
+    Also confirms the group is JOB-level (on opencode-review-target only),
+    not workflow-level: a workflow-level block would capture the
+    structurally-separate cancel-superseded-opencode-review-runs job too,
+    deadlocking it behind the very run it's supposed to cancel (Devin
+    Review, 2026-09-03, confirmed independently before this fix landed).
     """
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    concurrency_block = workflow.split("\n\nconcurrency:\n", 1)[1].split(
-        "\n\npermissions:", 1
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    target_job = workflow.split("\n  opencode-review-target:\n", 1)[1].split(
+        "\n  cancel-superseded-opencode-review-runs:", 1
+    )[0]
+    concurrency_block = target_job.split("    concurrency:\n", 1)[1].split(
+        "\n    permissions:", 1
     )[0]
     assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
