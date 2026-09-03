@@ -23,6 +23,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Narrow `inspect_and_review`'s remaining duplicate-verdict race window: it already re-fetches the
+  PR and re-validates `require_expected_head()` after the LLM call before publishing, but never
+  re-checked `existing_noema_review()` at that same point. `noema-review.yml`'s shared concurrency
+  group is the primary defense against two runs racing to review the same head, but GitHub's
+  `cancel-in-progress` is best-effort and does not preempt a run mid-step: a run already past its
+  own pre-model `existing_noema_review()` check when a newer trigger supersedes it could still
+  finish its diff/context/LLM call and post a duplicate review afterward, since an unchanged head
+  SHA does not prove no other process posted a review for that head in the meantime. Added the same
+  `existing_noema_review()` re-check immediately before `submit_review`, narrowing the window from
+  the full diff/context/LLM-call duration down to one GraphQL round trip.
 - **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
   scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
   heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly

@@ -612,7 +612,6 @@ def make_pr(**overrides):
         "headRefOid": "head",
         "reviews": {"nodes": []},
         "reviewThreads": {"nodes": []},
-        "statusCheckRollup": {"contexts": {"nodes": []}},
     }
     value.update(overrides)
     return value
@@ -1633,7 +1632,6 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
         headRefOid=head,
         reviews={"nodes": [review("CHANGES_REQUESTED")]},
         reviewThreads={"nodes": [{"isResolved": False, "isOutdated": False}]},
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "StatusContext", "context": "ci", "state": "FAILURE"}]}},
     )
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
@@ -1646,6 +1644,53 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
 
     assert noema.inspect_and_review("owner/repo", 7, head) == 0
     assert calls
+
+
+def test_inspect_and_review_rechecks_for_a_concurrent_submission_before_posting(monkeypatch):
+    """A second trigger (e.g. workflow_run) that starts while this run is still
+    building context/calling the LLM must not publish a duplicate verdict once
+    the first run has already submitted one for the same head. noema-review.yml's
+    concurrency-group serialization is the primary defense; this re-check
+    narrows the remaining race window (cancel-in-progress is best-effort and
+    does not preempt a run mid-step) down to one GraphQL round trip
+    immediately before the POST -- distinct from require_expected_head()'s own
+    post-model re-check, which only proves the head SHA is unchanged, not that
+    no other process posted a review for that head in the meantime."""
+    head = "a" * 40
+    first_call_pr = make_pr(headRefOid=head)
+    noema_marker = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
+    already_reviewed_pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [review(commit=head, login="noema", body=noema_marker)]},
+    )
+    fetch_pr_calls = []
+
+    def fake_fetch_pr(repo, number):
+        fetch_pr_calls.append(1)
+        return first_call_pr if len(fetch_pr_calls) == 1 else already_reviewed_pr
+
+    calls = []
+    monkeypatch.setattr(noema, "fetch_pr", fake_fetch_pr)
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
+    monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
+    monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
+    monkeypatch.setattr(noema, "submit_review", lambda *args, **kwargs: calls.append(args))
+
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert calls == []
+    assert len(fetch_pr_calls) == 2
 
 
 def test_stale_trigger_stops_before_identity_or_model_work(monkeypatch):

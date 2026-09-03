@@ -1678,6 +1678,19 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     except RuntimeError:
         print("Pull request closed or its head changed during review; stale verdict was not published.")
         return 0
+    # Re-check for a concurrent Noema submission immediately before posting.
+    # noema-review.yml's concurrency group (shared across pull_request_target,
+    # workflow_run, and repository_dispatch triggers) is the primary defense
+    # against two runs racing to review the same head, but GitHub's
+    # cancel-in-progress is best-effort and does not preempt a run mid-step:
+    # a run already past the pre-model existing_noema_review() check when a
+    # newer trigger supersedes it can still finish its own diff/context/LLM
+    # call and post afterward. require_expected_head() alone does not catch
+    # this -- it only proves the head SHA is unchanged, not that no other
+    # process posted a review for that same head in the meantime.
+    if existing_noema_review(current_pr, actor):
+        print("Current head already has a Noema review as of just before submission; not posting a duplicate.")
+        return 0
     submit_review(repo, number, current_pr, actor, verdict)
     return 0
 
