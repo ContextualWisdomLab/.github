@@ -6,6 +6,16 @@ on:
   schedule:
     - cron: "30 1 * * 6"
 
+# A burst of merges to main previously spawned one full, uncancelled
+# Scorecard run per push even though only the latest commit's score is ever
+# useful -- pure Actions-job waste under the org's shared concurrency
+# ceiling. github.ref is the same value (refs/heads/main) for both the push
+# and schedule triggers, so this also lets a weekly scheduled run supersede
+# a stale queued push run and vice versa.
+concurrency:
+  group: scorecard-analysis-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 jobs:
