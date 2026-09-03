@@ -272,6 +272,14 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             )[0]
             assert "github.event.action == 'synchronize'" in concurrency_contract
             assert "github.event.action == 'closed'" in concurrency_contract
+            # Exact head SHA (not just PR number), mirroring opencode-review.yml's
+            # own #1568 fix: without this, a delayed/out-of-order synchronize
+            # for an older head shares its group with -- and can cancel -- the
+            # run already active for a newer head (item 13 audit,
+            # docs/doctoring/item13-stale-head-cancellation-audit-20260903.md).
+            group_only = concurrency_contract.split("cancel-in-progress:", 1)[0]
+            assert "github.event.pull_request.head.sha" in group_only
+            assert "github.event.client_payload.pr_head_sha" in group_only
         else:
             if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
                 assert "github.event_name == 'pull_request'" in concurrency_contract

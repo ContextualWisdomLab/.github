@@ -15,12 +15,28 @@ on:
     types: [noema-review]
 
 concurrency:
+  # Scoped by exact head SHA (not just PR number), mirroring
+  # opencode-review.yml's own fix for the identical hazard (Devin Review on
+  # `#1568`): without the SHA component, a delayed/out-of-order synchronize
+  # event for an OLDER head shares its group with the run already active
+  # for a NEWER head -- GitHub cancels whichever run is currently active in
+  # a group when a new one starts, with no notion of "older"/"newer", so
+  # the stale event's mere arrival kills the current head's still-valid,
+  # in-flight review before that review's own "reject a stale trigger"
+  # step ever gets a chance to run. Adding the SHA makes that structurally
+  # impossible: different heads of the same PR are never in the same
+  # group. Same-head events (a duplicate synchronize redelivery) still
+  # share one group, so cancel-in-progress below still evicts a genuine
+  # duplicate.
   group: >-
     noema-review-${{
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number ||
     github.event.client_payload.pr_number ||
+    github.run_id }}-${{
+    github.event.pull_request.head.sha ||
+    github.event.client_payload.pr_head_sha ||
     github.run_id }}
   cancel-in-progress: >-
     ${{ github.event_name == 'pull_request_target' &&
