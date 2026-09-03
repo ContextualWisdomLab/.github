@@ -2628,6 +2628,90 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
 
+## Item 4 fresh evidence: gateway 500 after a 649.5s "connecting" phase with `served_model=unknown` — 2026-09-03
+
+**Status:** A live, current instance of item 4's still-open telemetry complaint, distinct from the already-resolved html4tree/900-second caller-repair-deadline case above (that mechanism was removed by PR #1672). Recorded here from a fresh, exact job log. Two distinct defects were found in the one error line below, both root-caused and both with a fix proposed but not yet merged: a caller-owned phase-mislabeling bug (this repository's own `scripts/ci/noema_review_gate.py`, see below) and a gateway-owned attribution gap (`contextual-orchestrator`'s `_invoke` failover loop, relayed to and fixed by the peer session with deep context in that repo, see below).
+
+**Evidence, pulled directly from the run.** `ContextualWisdomLab/fast-mlsirm#1518`, "Required Noema Review" run [`33646974279`](https://github.com/ContextualWisdomLab/fast-mlsirm/actions/runs/33646974279/job/100304078562), job `100304078562`, step "Prepare Noema model verdict," `head_sha` `b8e72773c34cd2f383bf44f492e52bf61736c680`. The sidecar's own **preflight** probe (`02:41:24Z`) reports rich per-route detail for the `orchestrator/free` pool — 12 candidates probed, 5 ready, 7 rejected, each with an explicit `agent_id`/`model`/`provider`/`error_type` (`TimeoutError` or `HTTPError` with an `http_status`). The **real** verdict call that follows (`two_phase.py`'s actual `chat/completions` request, started `02:41:29Z`) then produces zero log output for **10 minutes 54 seconds**, until:
+
+```text
+##[error]Noema gateway transport failed: HTTPError: HTTP Error 500: Internal Server Error; caller attempts=1, duration=649.5s, phase=connecting, served_model=unknown
+##[warning]Noema gateway attempt outcome=failed phase=connecting duration=649.5s served_model=unknown; caller attempts=1 (gateway owns repair/failover).
+```
+
+**Why this matters, precisely.** `phase=connecting` for 649.5 seconds against a `127.0.0.1:18080` sidecar (same runner, not a remote network hop) is not a plausible literal TCP-connect duration.
+
+**Correction (Devin Review on this PR): the phase-labeling defect is caller-owned, not gateway-owned.** The first draft of this entry attributed the mislabeling to `contextual-orchestrator`'s `provider_transport.py`. Read directly, `scripts/ci/noema_review_gate.py`'s `call_llm` — in **this** repository — sets `active_phase = "connecting"` immediately before `opener.open(request)` (`:1479`) and does not advance it to `"reading"` until *after* `opener.open()` returns (`:1483`). `urllib.request`'s `opener.open()` covers the entire request lifecycle up to receiving response headers — connect, send, and the full server-side processing wait — so any time the local gateway spends actually working on the request is reported as "connecting" by this caller's own telemetry, regardless of what the gateway itself does internally. This is this repository's own defect to fix (advance `active_phase` past a distinct "sending"/"awaiting response" step before blocking on `opener.open()`, or otherwise stop conflating connection setup with the full wait), not `contextual-orchestrator`'s.
+
+`served_model=unknown` on the one call that actually matters (the real verdict request, not the preflight) is a separate, still-gateway-owned gap: the exact remaining work this section's own prior paragraph already named ("Telemetry and runbooks must report the command class and phase separately") — the preflight moments earlier proves the sidecar *can* report per-route model/provider/error_type detail; the real call's failure path evidently does not carry that same attribution back to the caller, and the caller cannot recover an attribution the gateway never sent.
+
+**Update: the caller-owned phase-labeling defect has a proposed fix, not yet merged (Devin Review: verified `bebd7c7` is unreachable from `main` — it lives only on the still-open `ContextualWisdomLab/.github#1661`; `scripts/ci/noema_review_gate.py` on `main` still emits `active_phase = "connecting"` with no `requested_model`, confirmed by re-fetching the live file — an earlier draft of this record incorrectly marked the fix as landed).** A peer session, working from this record's evidence trail, root-caused it and opened `ContextualWisdomLab/.github#1661`: `bebd7c7` renames `active_phase`'s "connecting" label to `awaiting_response` (since `urllib`'s `opener.open()` is one blocking call spanning connect, send, *and* the full wait for the upstream response — there is no hook to time those phases separately with this API, so a loopback sidecar's near-instant connection setup means nearly the entire duration was actually upstream processing time, mislabeled as a connectivity stall) and adds `requested_model` (the gateway alias from `payload["model"]`, always known upfront) to both the success and failure telemetry lines. A new regression test confirms the renamed phase actually appears — and the old "connecting" does not — for the exact failure shape this incident hit (an `HTTPError` raised during `opener.open()`, before any response exists); confirmed failing against the pre-fix phase name before committing. Full suite (2,660 tests) passed as of that PR's branch. This does not fix the underlying 649-second provider stall itself — that remains a real, separate, unresolved question — and until `#1661` merges, `main` still logs the ambiguous "connecting" label.
+
+**Formerly open, gateway-owned — now fixed, PR open.** The missing model/provider attribution on the real-call failure path (`served_model=unknown` where preflight proves the sidecar can report this detail) is root-caused and fixed: `ContextualWisdomLab/contextual-orchestrator#1037` (branch `fix/invoke-failover-attempt-telemetry`, based on `main` @ `f4e5fc67`, open, not yet merged). Root cause: `TaskOrchestrator._invoke`'s failover loop (`contextual_orchestrator/orchestrator.py:7660-7893`) tracked only the single most recent candidate's failure (`last_upstream_error`/`last_provider_response_error`, overwritten on every new candidate), discarding every earlier candidate's `agent_id`/`model`/`provider_name`/failure reason the moment the loop moved on — so a fully-exhausted pool's raised exception could only ever describe the last agent tried, exactly matching the `served_model=unknown` symptom above. Fix: `ProviderUpstreamError.detail` now conditionally surfaces `attempts` (one record per candidate: `agent_id`/`model`/`provider`/`error_code`/`provider_status`/`retryable`/`retry_attempt`, reusing the existing `_record_tool_fallback` shape — never raw exception text) and `stop_reason`, populated at all 3 of `_invoke`'s existing "candidate exhausted" exit points; `server.py`'s error-message helper surfaces the count/reason; a second, compounding bug (the 413 `request_too_large` handler silently dropping `exc.detail` via a missing 4th `_send_error` argument) was fixed alongside it since it shares the same attribution-loss shape. RED-then-GREEN on 3 new tests, regression guards (`test_detail_and_transport_are_preserved_for_callers`, `test_invoke_preserves_final_classified_failure_across_candidates`, `test_all_agents_failing_raises_after_trying_every_candidate`) confirmed unmodified, full suite green. Zero line-range overlap with the concurrently-active PR #1032 (confirmed via diff comparison — #1032 touches `_orchestrated_provider_completion`'s schema-repair accounting; this touches `_invoke`'s failover loop, a different code path), branched from `main` directly rather than stacked. `.github`-side follow-up still needed once both #1661 and #1037 land: `scripts/ci/noema_review_gate.py`'s `call_llm` catches `urllib.error.HTTPError` without calling `exc.read()`, so it cannot see the response body CO now sends on failure, and `_extract_served_model` only reads a top-level `data.get("model")` while CO nests everything under `error.detail`/`error_detail` — the caller needs its own small patch to actually surface what the gateway now provides.
+
+## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — existing-repo gap closed, future-repo gap open
+
+**Problem.** Every ruleset-injected `codeql-pr.yml` run in every repository covered by org ruleset `18156473` (confirmed: bandscope, naruon, aFIPC, pg-erd-cloud, xtrmLLMBatchPython, wardnet, spanning 2026-09-02T20:12:52Z through 2026-09-03T03:15:43Z) concluded `startup_failure` with **zero check runs created** — while every other required workflow in the same PRs at the same time enqueued normally. Example: [wardnet run 33710719228](https://github.com/ContextualWisdomLab/wardnet/actions/runs/33710719228).
+
+**Root cause.** Not a workflow-YAML defect, and not the job-output-derived `strategy.matrix` a prior hypothesis in this session pursued and disproved before shipping a wasted fix. GitHub categorically disallows `github/codeql-action/*` inside a ruleset-required workflow — confirmed via the run's own browser-rendered error annotation, which the REST API does not surface (`gh api .../jobs` returns an empty `jobs` array with no diagnostic text for this failure class; a real gap in what this org's tooling can see through the API alone, worth remembering the next time a `startup_failure` needs live diagnosis).
+
+**Fix, applied and independently verified.** `codeql-pr.yml` removed from ruleset `18156473`'s required-workflow list (9 entries remain: `close-empty-pr.yml` through `osv-scanner-pr.yml`; confirmed live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`). GitHub's native code-scanning default setup enabled on all 23 ruleset-covered repositories that had zero real CodeQL coverage from any source — ground-truth checked via `code-scanning/default-setup` state and actual analyses, not by grepping for a workflow file name (some repos run CodeQL from oddly-named files, which a filename-only sweep would miss): CalendarWeave, ConceptWeave, DiagramWeave, ELUNVERA, EmbedRelay, LineageWeave, Orgmetra, OriginWeave, PolicyWeave, TEPP, accounting-information-platform, context-graph-contracts, disksage, enterprise-architecture-core, j-planner, 4 `learning-*` repos, life-os, pingora-gateway, quarantine-sandbox-runtime, supply-chain-control-plane. Independently spot-checked 3 of the 23 (ConceptWeave, pingora-gateway, quarantine-sandbox-runtime): all `state: "configured"`. `.github` itself is unaffected either way (excluded from ruleset `18156473`; its own native `codeql-pr.yml` runs were never in the failing population).
+
+**Devin Review caught the original write-up overclaimed "resolved," and a first correction attempt still
+had the arithmetic wrong** (labeled a group of 7 repositories as 4, and folded two separate result buckets
+into one total — caught again, corrected here with the counts double-checked against the raw sweep output
+before writing them down). A full org-wide sweep (all 74 `ContextualWisdomLab` repositories, checked live
+via `code-scanning/default-setup` state plus a per-repository `.github/workflows` listing to catch
+repo-local CodeQL files the default-setup API can't see) found two separate buckets of repositories beyond
+the original 23 (46 repos were already correctly `configured`; `46 + 24 + 4 = 74` checks out): **24
+repositories reported `not-configured`**, and **4 separate repositories 403'd** with "Code Security must be
+enabled" (Advanced Security itself is off for those 4). Of the 24 `not-configured`: 1 is `.github` itself
+(excluded from this sweep's remediation — it uses its own native, non-ruleset-injected `codeql-pr.yml`,
+already separately verified as unaffected), **7** already had a working repo-local `codeql.yml`
+(`keyverse`, `newsdom-api`, `bandscope` — already tracked in `docs/org-required-workflow-rollout.md`'s
+inventory table — plus `OmniRoute`, `litellm-patched-proxy`, `mightyETL`, `pg-erd-cloud`, correctly not
+needing default setup, which GitHub refuses to enable alongside a custom scanning workflow), leaving **16**
+genuinely gapped (`1 + 7 + 16 = 24`). The 4 that 403'd are private repos where Advanced Security itself is
+off (`IRT-bibliography-set`, `xtrm-lead-pi-outbound`, `ccube-jco-potential-customer`, `trivy-sarif-repro` —
+the last is archived) — **left un-actioned here**, since turning on GHAS for a private repository is a
+billing decision (per-active-committer cost), not a mechanical fix, and needs the user's own call rather
+than being enabled unilaterally. The 16 genuinely gapped repositories (`kaefa`, `aFIPC`,
+`linux-cluster-ops`, `argos`, `contextual-orchestrator`, `inkspan`, `g7`, `saju-caldav`, `9drive`,
+`macos_utility_packs`, `graphify`, `four-pillars`, `mhtml-etl-gateway`, `psychometrics-commons`,
+`metering-billing-platform`, `governance-risk-compliance`) had genuinely zero coverage of any kind —
+including `contextual-orchestrator` itself, this ecosystem's central LLM gateway. Default setup enabled on
+all 16 directly via `PATCH /repos/{owner}/{repo}/code-scanning/default-setup`, each with GitHub's own
+API-reported supported-language list for that repo (the endpoint rejects `javascript`/`typescript`/`rust`
+as discrete values — only the combined `javascript-typescript` is valid, and Rust has no default-setup
+language support at all yet, so `contextual-orchestrator` and `psychometrics-commons` get every other
+detected language covered but not their Rust code specifically, a real, separate, currently-unclosed gap
+worth its own follow-up once/if CodeQL's default setup adds Rust). Verified each landed (`state: "configured"`)
+and a real scan run was queued (`run_id` returned) for all 16.
+
+**Future repositories: Devin's concern is real, and this sweep does not close it.** Checked whether the
+org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended", confirmed live via
+`gh api orgs/ContextualWisdomLab/code-security/configurations/defaults` — note the plain configuration-list
+endpoint misleadingly shows `default_for_new_repos: null` for the same configuration; the dedicated
+`/defaults` endpoint is the one that's actually authoritative) is the reason future repos would stay
+covered. It is not reliable: of the 16 gapped repositories above, 4 are forks (`argos`, `g7`, `9drive`,
+`graphify` — GitHub does not apply org default security configurations to forks, expected, not a bug) and 2
+predate the configuration entirely (`kaefa`, `aFIPC`, created 2017). But **11 are plain, non-fork
+repositories created between 2026-05-09 and 2026-08-18** — `linux-cluster-ops`, `contextual-orchestrator`,
+`keyverse`, `inkspan`, `saju-caldav`, `macos_utility_packs`, `four-pillars`, `mhtml-etl-gateway`,
+`psychometrics-commons`, `metering-billing-platform`, `governance-risk-compliance` — every one of them well
+after this configuration's own `updated_at` of 2025-03-04, and none of them ever received it. Only 3
+repositories org-wide (`noema`, `feelanet-adfs`, `pg-llm-batch`) actually show configuration `17` attached
+via `orgs/{org}/code-security/configurations/17/repositories`, out of 74 total. This is the same
+"silently-inactive required check" pattern this document has recorded before, now confirmed in a new
+domain (org-level security-configuration application, not required-workflow ruleset activation): the
+setting exists, looks fully configured, and simply does not fire for most new repositories. **Not fixed
+here.** The two real options — a periodic reconciliation sweep that catches repos the org policy missed
+(in direct tension with this backlog's own item 15, which asks to remove scheduled sweep workflows for
+rate-limit reasons), or escalating the unreliable `default_for_new_repos` behavior to GitHub support — are a
+product/operational decision this record surfaces rather than makes.
+
+**Cross-reference.** This is a fresh instance of the "silently-inactive required check" pattern this document has recorded before — a required check that looks fully configured but fails (or, in the earlier instances, silently never fires) under a narrower activation condition than the surrounding docs assumed.
+
 ## Backlog item 13 (Strix/OpenCode/Noema stale-head cancellation) — own hypothesis refuted, but a real bug was found in the process — 2026-09-03
 
 **Status:** Investigated with a 9-agent workflow (4 independent file audits + 1 direct-evidence pull against the item's own cited example + 4 adversarial re-verification passes) plus a 4-agent follow-up (2 investigate + 2 adversarial verify) triggered by Devin Review findings, per `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`. Item 13 asks that Strix/OpenCode Review/Noema reliably cancel a PR's previous-head run when a new push supersedes it, citing `ContextualWisdomLab/naruon#1528` (run `33581213829`) as evidence of a gap.
@@ -2640,7 +2724,18 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 ## `codeql-pr.yml` required-workflow hard limit closed org-wide — 2026-09-03
 
-**Status:** Closed. Ruleset fix live (admin:org); documented in `.github#1767`; coverage gap independently closed same day.
+**Superseded/extended by "Item 41" above (Devin Review: this and that entry recorded the same closure with
+different scope and counts, a real duplication risk for future operational drift — consolidating here
+rather than deleting either, since each has content the other lacks).** This entry is the original,
+narrower finding (23 gapped repositories, ruleset fix, `ContextualWisdomLab/.github#1767`) from earlier the same day. "Item 41"
+above is the same finding re-verified with a full 74-repository sweep (not the ~71-repository ruleset-only
+scope this entry used) that found 16 *more* gapped repositories this entry's narrower sweep missed,
+including `contextual-orchestrator`, plus the still-open future-repository gap this entry does not address.
+**Treat "Item 41" above as the current, complete record; this entry's specific repository list and `#1767`
+citation remain historically accurate for the narrower 23-repository fix, but "Status: Closed" below applies
+only to that narrower scope, not to the fuller picture "Item 41" documents.**
+
+**Status:** Closed for its own 23-repository scope (superseded above). Ruleset fix live (admin:org); documented in `ContextualWisdomLab/.github#1767`; coverage gap independently closed same day.
 
 **Root cause.** Ruleset `18156473` ("CWL Central required workflows") dispatched `.github/workflows/codeql-pr.yml` into every one of the ~71 covered repositories as a required workflow. Every such dispatch concluded `startup_failure` with zero check runs created — a 100% failure rate, not intermittent. The REST API surfaces no reason; the web UI's run-page annotation does: `github/codeql-action/init` and `github/codeql-action/analyze` are categorically disallowed inside a required workflow (confirmed against GitHub's own stated rationale — CodeQL needs repository-level configuration that the cross-repo required-workflow dispatch context cannot provide). No edit to `codeql-pr.yml`'s own content (matrix shape, permissions, `if:` gating) can fix this; it is a platform constraint, not a configuration defect. Two sessions converged on this independently the same day via the browser UI (the API alone hides it); a third session's initial hypothesis (a job-output-derived `strategy.matrix` being incompatible with required-workflow check-run pre-registration) was investigated, found unrelated, and redirected before it produced a wrong fix.
 
@@ -2650,4 +2745,4 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Context Map / responsibility boundary.** `.github` owns which checks are *required*, not how each repository's own CodeQL analysis is *produced* — that responsibility already varies per repository (local workflow vs. native default-setup) and this fix does not centralize it further. A future central-CodeQL redesign, if wanted, should follow the same thin-required-entrypoint-dispatches-to-a-`.github`-native-workflow pattern `strix.yml`/`opencode-review.yml` already use, per the accompanying doctoring note.
 
-**Evidence / acceptance.** Live-verified: ruleset `18156473`'s `workflows` rule no longer lists `codeql-pr.yml` (`gh api orgs/ContextualWisdomLab/rulesets/18156473`); all 23 repositories return `state: configured` (some still finishing their one-time setup run, queued behind ordinary Actions capacity, not a recurring cost). Full mechanism writeup: `docs/doctoring/codeql-pr-required-workflow-always-fails.md` (branch `claude/fix-codeql-required-workflow-restriction`, `.github#1767`). Do not re-add any workflow using `github/codeql-action` to a required-workflows ruleset entry in this or any GitHub organization — the restriction is platform-level, not something this org's configuration can work around.
+**Evidence / acceptance.** Live-verified: ruleset `18156473`'s `workflows` rule no longer lists `codeql-pr.yml` (`gh api orgs/ContextualWisdomLab/rulesets/18156473`); all 23 repositories return `state: configured` (some still finishing their one-time setup run, queued behind ordinary Actions capacity, not a recurring cost). Full mechanism writeup: `docs/doctoring/codeql-pr-required-workflow-always-fails.md` (branch `claude/fix-codeql-required-workflow-restriction`, `ContextualWisdomLab/.github#1767`). Do not re-add any workflow using `github/codeql-action` to a required-workflows ruleset entry in this or any GitHub organization — the restriction is platform-level, not something this org's configuration can work around.
