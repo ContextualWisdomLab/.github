@@ -3921,3 +3921,44 @@ only to that narrower scope, not to the fuller picture "Item 41" documents.**
 **Context Map / responsibility boundary.** `.github` owns which checks are *required*, not how each repository's own CodeQL analysis is *produced* — that responsibility already varies per repository (local workflow vs. native default-setup) and this fix does not centralize it further. A future central-CodeQL redesign, if wanted, should follow the same thin-required-entrypoint-dispatches-to-a-`.github`-native-workflow pattern `strix.yml`/`opencode-review.yml` already use, per the accompanying doctoring note.
 
 **Evidence / acceptance.** Live-verified: ruleset `18156473`'s `workflows` rule no longer lists `codeql-pr.yml` (`gh api orgs/ContextualWisdomLab/rulesets/18156473`); all 23 repositories return `state: configured` (some still finishing their one-time setup run, queued behind ordinary Actions capacity, not a recurring cost). Full mechanism writeup: `docs/doctoring/codeql-pr-required-workflow-always-fails.md` (branch `claude/fix-codeql-required-workflow-restriction`, `ContextualWisdomLab/.github#1767`). Do not re-add any workflow using `github/codeql-action` to a required-workflows ruleset entry in this or any GitHub organization — the restriction is platform-level, not something this org's configuration can work around.
+
+## Item 23 (Noema review-gate failure retrospective) — 17 incidents re-aggregated into 5 root-cause shapes, improvement plan produced — 2026-09-03
+
+**Status:** Retrospective complete; underlying fixes not yet implemented (deliberately deferred, see below).
+Full record: `docs/doctoring/noema-review-failure-retrospective-and-improvement-plan-20260903.md`.
+
+**What was done.** Re-read all 7 `noema-review-gate` incident sections already in this document (all dated
+2026-08-31), all 6 pre-existing Noema-specific `docs/doctoring/` records, and all 5 GitHub issues whose
+title names a Noema review-gate failure mode (`.github#1611`, `#1613`, `#1637` open; `#1596`, `#1614`
+closed) — full text of each, not just titles or headers. Grouped the resulting 17 incidents by root-cause
+mechanism rather than by date, since several incidents on the same date share one underlying defect.
+
+**Finding: 5 root-cause shapes, one of which is the clear highest-leverage fix.** (1) *Crash-before-repair-boundary*
+— 4 incidents where code parsing/decoding an untrusted gateway response ran before `call_llm`'s one
+repair-retry boundary, so each new response shape (malformed JSON, non-UTF-8 bytes, truncation, and a
+still-open budget-exhaustion variant) crashed the check instead of reaching the safety net one layer over.
+(2) *A fix for one bug introduces a different bug* — 2 incidents, including a fail-closed crash fix that
+itself leaked LLM output to a public Actions log via an insufficient regex scrubber. (3) *Race-condition
+"is this head still live" guards, independently reimplemented in 5 places, each with its own distinct bug*
+— the stale-trigger guard, the close-cleanup job, the repair-retry path, the live-head re-check added to fix
+repair-retry, and a structurally identical guard in `opencode-review.yml`'s verdict poller. This is the
+single most concrete, actionable finding in the whole retrospective: one shared, well-tested
+`assert_head_is_live()` primitive replacing all 5 hand-written copies would mean a 6th version of this same
+bug has nowhere left to reoccur. (4) *Infrastructure/lifecycle*, not code-logic — 3 incidents (App token
+outliving a long review, this document's own item-13 concurrency-group finding, a stale pinned upstream
+commit). (5) *Still open, not yet resolved* — `.github#1611`/`#1613`/`#1637` describe overlapping symptoms
+of the same underlying gap and are recommended to be fixed as one coordinated PR rather than three
+independent patches, to avoid a third instance of shape (2).
+
+**Not implemented here, deliberately.** All four concrete improvement-plan items in the doctoring
+record — a unified response-parsing helper, the unified live-head-guard primitive, one coordinated fix for
+the three open issues, and a semgrep rule to catch the two recurring anti-patterns before review finds them
+again — are changes to live, security-critical CI logic (`scripts/ci/noema_review_gate.py`,
+`noema-review.yml`, `opencode-review.yml`). Consistent with this document's standing practice (see the
+item-13 entry above), a documentation-only PR does not bundle a live-workflow-logic change; each belongs in
+its own PR with dedicated regression tests reproducing the specific incident it targets.
+
+**Cross-reference.** The live-head-guard duplication (shape 3) is a fresh instance of the pattern already on
+record as `docs/doctoring` and this document's "silently-inactive required check" / duplicated-ad-hoc-guard
+family — the same lesson (one shared, correctly-implemented primitive beats N independent reimplementations)
+recurring in a new subsystem.
