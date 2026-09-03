@@ -32,6 +32,15 @@ GH_COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_TRANSIENT_BACKOFF_MULTIPLIER = 4
 NOEMA_REVIEW_AUTHOR = "cwl-noema-review[bot]"
 NOEMA_REVIEW_MARKER = "<!-- noema-review-gate "
+NOEMA_MARKER_HEAD_RE = re.compile(r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->")
+# Must stay byte-for-byte identical to NOEMA_REVIEW_FOOTER_MARKER in
+# noema_review_gate.py's submit_review(). See _isolate_trusted_footer() for
+# why this positional bound exists.
+NOEMA_REVIEW_FOOTER_MARKER = "<!-- noema-review-gate-footer -->"
+# Matches only the literal footer bullet submit_review() writes
+# ("- Head SHA: `<sha>`", one full line via re.MULTILINE, nothing else). This
+# is deliberately *not* the sole defense — see _isolate_trusted_footer().
+NOEMA_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 TERMINAL_NOEMA_STATES = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
 
 
@@ -93,6 +102,67 @@ def fetch_reviews(
     return flatten_reviews(document)
 
 
+def _isolate_trusted_footer(body: str) -> str:
+    """Return the machine-emitted footer span of a Noema review body.
+
+    submit_review() writes its fixed-format footer (the ``Result`` /
+    ``Head SHA`` / ``Reviewer credential`` / ``Actor`` bullets) in one
+    specific position: after ``NOEMA_REVIEW_FOOTER_MARKER`` and before the
+    closing ``<!-- noema-review-gate head_sha=... -->`` comment. Everything
+    else in the body — the summary and findings the LLM itself generates —
+    is unsanitized and can in principle contain a line that merely
+    *resembles* a footer bullet (a standalone ``- Head SHA: `<sha>``` line
+    included in prose, for instance, which an earlier version of this
+    extraction only excluded when it did not fall on its own line, and did
+    not exclude at all before that). Locating the footer by *position*
+    between the two trusted, machine-emitted delimiters — rather than by
+    scanning the whole body for a content pattern the LLM's own output could
+    reproduce, deliberately or by coincidence — removes that class of
+    collision entirely: LLM text can never land inside a span bounded on
+    both sides by markers only ``submit_review()`` emits.
+
+    Returns an empty string when the footer marker cannot be found (for
+    example, a review body posted before this marker existed), which causes
+    the caller's exact-one-match check to fail closed rather than fall back
+    to scanning untrusted text.
+    """
+    before_end_marker = body.rsplit(NOEMA_REVIEW_MARKER, 1)[0]
+    parts = before_end_marker.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def _isolate_trusted_marker_tail(body: str) -> str:
+    """Return the machine-emitted tail of a Noema review body, footer onward.
+
+    ``submit_review()``'s ``"\\n".join([...])`` writes ``NOEMA_REVIEW_FOOTER_MARKER``
+    immediately before its fixed-format footer bullets, and the closing
+    ``<!-- noema-review-gate head_sha=... decision=... -->`` comment is
+    unconditionally the *last* element of that join — nothing follows it.
+    So, just like the span ``_isolate_trusted_footer()`` extracts, everything
+    from the footer marker to the end of the body is exclusively
+    machine-emitted text the LLM's own summary/findings prose can never
+    reach.
+
+    ``noema_review_state()`` used to run ``NOEMA_MARKER_HEAD_RE`` over the
+    raw, unsanitized ``body`` to find the closing marker — the marker-side
+    counterpart of the body-side gap ``_isolate_trusted_footer()`` was added
+    to close. An LLM can, in principle, generate a complete,
+    correctly-formatted ``<!-- noema-review-gate head_sha=... decision=...
+    -->``-shaped string of its own (for instance while discussing this exact
+    review format) anywhere in its free-form prose *before* the real footer.
+    Searching this trusted tail instead removes that string from
+    consideration entirely, the same way position-anchoring already does for
+    the body-side bullet.
+
+    Returns an empty string when the footer marker cannot be found (for
+    example, a review body posted before this marker existed), which causes
+    the caller's exact-one-match check to fail closed, matching
+    ``_isolate_trusted_footer()``'s own behavior.
+    """
+    parts = body.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
 def noema_review_state(reviews: list[dict[str, Any]], head_sha: str) -> str | None:
     """Return Noema's latest terminal verdict for the exact current head."""
     for review in reversed(reviews):
@@ -102,6 +172,15 @@ def noema_review_state(reviews: list[dict[str, Any]], head_sha: str) -> str | No
         if author != NOEMA_REVIEW_AUTHOR:
             continue
         if NOEMA_REVIEW_MARKER not in str(review.get("body") or ""):
+            continue
+        body = str(review.get("body") or "")
+        marker_tail = _isolate_trusted_marker_tail(body)
+        marker_heads = NOEMA_MARKER_HEAD_RE.findall(marker_tail)
+        footer_text = _isolate_trusted_footer(body)
+        body_heads = NOEMA_BODY_HEAD_RE.findall(footer_text)
+        if len(marker_heads) != 1 or len(body_heads) != 1:
+            continue
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
             continue
         state = str(review.get("state") or "").upper()
         if state in TERMINAL_NOEMA_STATES:

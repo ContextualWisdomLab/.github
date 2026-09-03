@@ -1,12 +1,32 @@
 # Hourly NVIDIA NIM Review-Autofix Boundary
 
+## Status (2026-08-31 correction)
+
+This record's original "Provider contract" and "Credential boundary" sections described the
+write-capable autofix worker binding NVIDIA NIM directly (`NVIDIA_API_KEY: ${{
+secrets.NVIDIA_NIM_API_KEY }}`, hard-coded model `mistralai/mistral-small-4-119b-2603`). That
+architecture is superseded: per
+[ADR-0003](../adr/0003-contextual-orchestrator-vendored-free-zdr.md) (accepted 2026-08-27, amended
+2026-08-30) and the org's 2026-08-18 gateway decision, the worker now provisions the vendored
+`contextual-orchestrator` review sidecar
+(`scripts/ci/contextual_orchestrator_review_sidecar.sh`) and routes through the fail-closed
+zero-cost virtual model id `contextual-orchestrator/orchestrator/free`, which auto-discovers
+upstream models across all five KV-registered provider credentials rather than binding any one of
+them directly. `NVIDIA_NIM_API_KEY` (and its `_SUB` sibling) is now one of five provider secrets
+feeding that discovery, not a dedicated per-step model binding. The two sections below are
+corrected to match the current `.github/workflows/pr-review-autofix.yml`, pinned by
+`tests/test_pr_review_autofix_nvidia_nim_contract.py::test_scheduled_autofix_routes_through_contextual_orchestrator`.
+Every other section of this record — write-scope snapshotting, the sealed allowlist, `.git`
+denial, hook suppression, and the explicit push destination — is a provider-independent control
+and remains current.
+
 ## Decision
 
 Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; a lone `--require-hashes` line is not lock evidence.
 
-The write-capable scheduled pull-request autofix agent uses OpenCode with the
-NVIDIA NIM API and the organization Actions secret `NVIDIA_NIM_API_KEY`. The
-independent read-only review agent remains unchanged and continues to use its
+The write-capable scheduled pull-request autofix agent uses OpenCode, routed through the vendored
+`contextual-orchestrator` gateway (see "Status" above), rather than a directly bound provider
+credential. The independent read-only review agent remains unchanged and continues to use its
 existing credential and model-pool contract.
 
 This separation is intentional. Review and repair have different privileges:
@@ -60,21 +80,22 @@ open state, same-repository branch, base ref and SHA, and head ref and SHA.
 
 ## Provider contract
 
-The pinned OpenCode runtime enables only `nvidia-nim` through the
-OpenAI-compatible adapter and NVIDIA hosted endpoint:
+The pinned OpenCode runtime enables only `contextual-orchestrator` through the
+OpenAI-compatible adapter, pointed at the vendored sidecar's loopback gateway:
 
 ```text
-https://integrate.api.nvidia.com/v1
+{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}
 ```
 
-The primary repair model is `mistralai/mistral-small-4-119b-2603`. The
-`ci-autofix` agent and its model configuration both request high reasoning
-through OpenCode's provider-option contract (`reasoningEffort: "high"`). NVIDIA's
-Mistral Small 4 NIM API documents the corresponding request behavior as
-`reasoning_effort: "high"`, which enables the model's reasoning mode. The small
-model used for bounded helper work remains `nvidia/nemotron-3-nano-30b-a3b` and
-is not a fallback provider. GitHub Models configuration, identifiers, base URLs,
-and model-auth fallbacks are absent from the scheduled autofix execution path.
+Both `model` and `small_model` request the fail-closed zero-cost virtual model id
+`contextual-orchestrator/orchestrator/free`. The `ci-autofix` agent and its model configuration
+both request high reasoning through OpenCode's provider-option contract
+(`reasoningEffort: "high"`). The sidecar's own `discover_all_models()` auto-discovers upstream
+models across all five KV-registered provider credentials (Bytez, NVIDIA NIM ×2, OpenRouter,
+OpenAI) and ranks them free-first, cost-evidence-ranked, ZDR-prioritized (ADR-0003); the worker
+never pins one hard-coded upstream model id directly, so no single upstream provider's outage can
+take down scheduled repair. GitHub Models configuration, identifiers, base URLs, and model-auth
+fallbacks remain absent from the scheduled autofix execution path.
 
 The high-reasoning setting is deliberate for write-capable review repair. This
 workflow optimizes correctness, evidence quality, and controllability rather than
@@ -84,17 +105,23 @@ writer role and remains subject to exact-head regression evidence.
 
 ## Credential boundary
 
-The organization secret is bound as:
+The five organization provider secrets are bound only in the sidecar-provisioning step:
 
 ```yaml
-NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-It is present only on the two steps that execute OpenCode: ordinary
-review-feedback repair and merge-conflict repair. Metadata collection,
-checkout, context preparation, validation, commit, and push do not receive the
-NVIDIA credential. A missing key is a fatal configuration error rather than a
-signal to choose another provider.
+None of the five appear anywhere in the workflow after that step. The sidecar registers them into
+its own process-local KV and exposes only a loopback gateway URL and a short-lived bearer token
+(`CONTEXTUAL_ORCHESTRATOR_BASE_URL`, `CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE`) to the two steps that
+execute OpenCode: ordinary review-feedback repair and merge-conflict repair. Metadata collection,
+checkout, context preparation, validation, commit, and push do not receive any of the five provider
+secrets or the gateway token. A missing gateway environment variable is a fatal configuration error
+rather than a signal to choose another provider.
 
 The ordinary model execution step does not bind a GitHub write token. Its later
 commit-and-push step may mutate only with `PR_REVIEW_MERGE_TOKEN`,
@@ -113,11 +140,11 @@ env -u GITHUB_TOKEN -u GH_TOKEN \
   -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL
 ```
 
-The child receives the NVIDIA model credential and non-secret execution
-controls, but cannot call GitHub APIs or mint an Actions OIDC token. GitHub
-credentials remain available only to reviewed shell logic before or after the
-child process. The key is never written to repository files, generated prompts,
-command arguments, or ordinary logs.
+The child receives the gateway URL/token and non-secret execution controls, but cannot call GitHub
+APIs or mint an Actions OIDC token, and never receives any of the five upstream provider secrets
+directly. GitHub credentials remain available only to reviewed shell logic before or after the
+child process. No provider key is ever written to repository files, generated prompts, command
+arguments, or ordinary logs.
 
 ## OpenCode repair sandbox
 
@@ -276,9 +303,11 @@ quality, security, review, and protection gate again.
 Automated tests prove:
 
 1. the caller retains its approved one-hour cadence;
-2. OpenCode enables only NVIDIA NIM, uses the exact Mistral Small 4 writer with
-   high reasoning, and receives the model key only in its two execution steps;
-3. missing model credentials fail closed and model children receive no GitHub or
+2. OpenCode enables only `contextual-orchestrator`, routes through the
+   `contextual-orchestrator/orchestrator/free` virtual model id with high reasoning, and the
+   sidecar's five provider secrets never appear outside the sidecar-provisioning step (see
+   "Status" above);
+3. missing gateway configuration fails closed and model children receive no GitHub or
    OIDC write credential;
 4. mutation-capable ordinary and conflict paths accept only established explicit
    secrets or the exchanged OpenCode app token, never `github.token`, and fail
@@ -303,7 +332,7 @@ Automated tests prove:
 
 ## Scheduling and activation
 
-The NVIDIA worker does not create a second repair scheduler. It is consumed by
+The gateway-routed worker does not create a second repair scheduler. It is consumed by
 the hourly central review-fix scheduler and product caller. Scheduled workflows
 run only from the protected default branch, so feature-branch checks do not make
 the heartbeat active. Activation requires protected integration and accepted-main
@@ -311,18 +340,20 @@ verification.
 
 ## Rollback
 
-Rollback must revert the NVIDIA transport, ordinary and conflict repair scope
-contracts, review-derived control-plane path exclusion, `.git` denial, ignored-path
-inventory, hook suppression, explicit push destination, tests, operator guidance,
+Rollback must revert the gateway transport (`contextual_orchestrator_review_sidecar.sh`
+provisioning and the `contextual-orchestrator/orchestrator/free` model binding), ordinary and
+conflict repair scope contracts, review-derived control-plane path exclusion, `.git` denial,
+ignored-path inventory, hook suppression, explicit push destination, tests, operator guidance,
 doctoring, and changelog as one reviewed change. A partial rollback that restores
 review-thread authority over `.github/` or `scripts/ci/`, ordinary diff-only
 validation, model-mutable Git metadata, repository hooks, GitHub-token model
 authentication, or a mutable helper checkout is unsafe.
 
-If NVIDIA NIM is unavailable, scheduled repair must fail closed while read-only
-review, required checks, manual maintenance, and protected merge policy remain
-available. Rollback is not permission to bypass independent approval or release
-gates.
+If the contextual-orchestrator gateway sidecar cannot be provisioned (missing
+`CONTEXTUAL_ORCHESTRATOR_BASE_URL`/`CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE`, or discovery finds zero
+eligible free-tier routes across all five provider credentials), scheduled repair must fail closed
+while read-only review, required checks, manual maintenance, and protected merge policy remain
+available. Rollback is not permission to bypass independent approval or release gates.
 
 ## References
 
@@ -341,17 +372,6 @@ https://docs.github.com/en/enterprise-cloud@latest/actions/reference/workflows-a
 
 GitHub, Inc. (n.d.-b). *Secrets reference*. GitHub Docs. Retrieved August 7,
 2026, from https://docs.github.com/en/actions/reference/security/secrets
-
-NVIDIA Corporation. (n.d.-a). *LLM APIs*. NVIDIA API Catalog. Retrieved August
-7, 2026, from https://docs.api.nvidia.com/nim/reference/llm-apis
-
-NVIDIA Corporation. (2026). *Query the Mistral-Small-4-119B-2603 API*. NVIDIA
-NIM for Vision Language Models. Retrieved August 8, 2026, from
-https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/mistral-small-4-119b-2603/api.html
-
-NVIDIA Corporation. (n.d.-c). *NVIDIA / nemotron-3-nano-30b-a3b*. NVIDIA API
-Catalog. Retrieved August 7, 2026, from
-https://docs.api.nvidia.com/nim/re/reference/nvidia-nemotron-3-nano-30b-a3b
 
 OpenCode. (2026a). *Permissions*. https://opencode.ai/docs/permissions
 
