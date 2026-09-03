@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -33,6 +34,19 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+
+
+@pytest.fixture(autouse=True)
+def reset_active_workflow_runs_cache():
+    """Isolate ``active_workflow_runs``'s cache so tests never see a sibling's data.
+
+    Different tests reuse the same ``owner/repo`` cache key with different
+    fake GitHub responses; without this the module-global cache from one test
+    would leak into the next.
+    """
+    sched.reset_active_workflow_runs_cache()
+    yield
+    sched.reset_active_workflow_runs_cache()
 
 
 def fake_github_token(prefix, body):
@@ -1325,6 +1339,54 @@ def test_enrich_rest_mergeable_states_uses_bounded_executor_for_multiple_prs(mon
     assert prs[-1]["restMergeableState"] == f"owner/repo:{sched.REST_MERGEABLE_STATE_WORKERS + 2}"
 
 
+def test_enrich_rest_mergeable_states_skips_draft_prs_entirely(monkeypatch):
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("draft PRs must not trigger a REST mergeability fetch")
+
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", fail_fetch)
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", fail_fetch)
+
+    draft_prs = [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+    sched.enrich_rest_mergeable_states("owner/repo", draft_prs)
+
+    assert draft_prs == [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
+
+
+def test_enrich_rest_mergeable_states_enriches_only_non_draft_prs_in_mixed_batch(monkeypatch):
+    seen_workers = []
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            seen_workers.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def map(self, func, items):
+            return [func(item) for item in items]
+
+    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
+    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
+
+    prs = [
+        {"number": 1, "isDraft": True},
+        {"number": 2, "isDraft": False},
+        {"number": 3},
+    ]
+    sched.enrich_rest_mergeable_states("owner/repo", prs)
+
+    assert "restMergeableState" not in prs[0]
+    assert prs[1]["restMergeableState"] == "owner/repo:2"
+    assert prs[2]["restMergeableState"] == "owner/repo:3"
+    # Two non-draft PRs share the bounded executor; the draft PR is excluded
+    # from the max_workers computation too.
+    assert seen_workers == [2]
+
+
 def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_threads(monkeypatch):
     seen_workers = []
 
@@ -1362,6 +1424,7 @@ def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_thre
 
 
 def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monkeypatch):
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
     seen_workers = []
 
     class FakeExecutor:
@@ -1438,6 +1501,59 @@ def test_force_cancel_multiple_runs_reports_only_failures(monkeypatch):
     }
 
 
+def test_cancel_revalidated_review_run_refs_preserves_failed_cancellation(monkeypatch):
+    """Keep a review ref busy when GitHub rejects its destructive cancellation.
+
+    Discovered mid-flight during PR #1669's development (the naruon headRefOid
+    incident fix) and intentionally scoped out of that PR; landing fresh here per
+    docs/doctoring/scheduler-stale-headrefoid-cancellation.md. The live-revalidating
+    ``_cancel_revalidated_review_run_refs`` (used by both ``dispatch_opencode_review``
+    and ``dispatch_strix_evidence``) must not report a ref as cancelled when the
+    underlying ``force_cancel_workflow_runs`` call itself was rejected by GitHub,
+    even though the ref was independently proven still-stale by live revalidation.
+    """
+    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    preserved, cancelled = sched._cancel_revalidated_review_run_refs(
+        "owner/repo", "OpenCode Review", make_pr(), stale_refs
+    )
+
+    assert ("owner/repo", "101") in preserved
+    assert ("owner/repo", "101") not in cancelled
+    assert ("owner/repo", "202") in cancelled
+
+
+def test_cancel_stale_opencode_runs_preserves_failed_cancellation(monkeypatch):
+    """Keep a stale review active when GitHub rejects its cancellation."""
+    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda _repo, _workflow, _pr: ([], stale_refs),
+    )
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    run_ids = sched.cancel_stale_opencode_runs(
+        "owner/repo", "OpenCode Review", make_pr(), dry_run=False
+    )
+
+    assert run_ids == ["202"]
+
+
 def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatch):
     calls = []
     monkeypatch.setattr(sched, "stale_opencode_run_ids", lambda *args: calls.append(args) or ["1"])
@@ -1486,6 +1602,10 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.matching_actions_job_id(check_jobs, sched.is_strix_context) == "22"
     no_job_url = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
     assert sched.matching_actions_job_id(no_job_url, sched.is_opencode_context) is None
+
+    assert sched.matching_actions_run_id(check_jobs, sched.is_opencode_context) == 1
+    assert sched.matching_actions_run_id(check_jobs, sched.is_strix_context) == 2
+    assert sched.matching_actions_run_id(no_job_url, sched.is_opencode_context) is None
 
     assert sched.parse_github_datetime(None) is None
     assert sched.parse_github_datetime("not-a-date") is None
@@ -1696,6 +1816,185 @@ def test_context_review_and_check_helpers(monkeypatch):
     assert sched.is_opencode_review(opencode_review())
     assert sched.is_opencode_review(opencode_review(login="opencode-agent[bot]"))
     assert not sched.is_opencode_review(opencode_review(login="human"))
+
+
+def test_matching_actions_run_id_selects_by_recency_not_list_position():
+    """Devin Review finding on PR #1507 ("Older review run remains blocking").
+
+    Two same-purpose OpenCode check runs are present, listed *older-first*
+    -- the opposite of the ordering the previous ``reversed(...)``-plus-
+    first-match implementation silently depended on. The genuinely newer
+    run (a later ``checkSuite.createdAt``) must still win, proving
+    selection is driven by ``check_run_recency_key``, not by position in
+    ``context_nodes``.
+    """
+    older_first = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-25T07:05:00Z",
+                        "detailsUrl": "https://github.com/owner/repo/actions/runs/501/job/1",
+                        "checkSuite": {
+                            "createdAt": "2026-06-25T07:00:00Z",
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
+                        },
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-06-25T08:05:00Z",
+                        "detailsUrl": "https://github.com/owner/repo/actions/runs/502/job/2",
+                        "checkSuite": {
+                            "createdAt": "2026-06-25T08:00:00Z",
+                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
+                        },
+                    },
+                ]
+            }
+        }
+    )
+    assert sched.matching_actions_run_id(older_first, sched.is_opencode_check_run) == 502
+
+    newer_first = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": list(reversed(older_first["statusCheckRollup"]["contexts"]["nodes"]))}
+        }
+    )
+    assert sched.matching_actions_run_id(newer_first, sched.is_opencode_check_run) == 502
+
+
+def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatch):
+    """Devin Review finding on PR #1507 ("Large check rollups never wake").
+
+    ``matching_actions_run_id`` only sees the first 100 GraphQL rollup
+    contexts. When the required run falls outside that page (simulated
+    here by an empty rollup), ``discover_opencode_required_run_id`` must
+    still find it through a REST lookup scoped server-side to the exact
+    event, workflow path, and head SHA -- never an unfiltered history walk
+    -- and must ignore a same-head run for a different workflow path and a
+    same-path run for a different head.
+    """
+    head_sha = "a" * 40
+    other_head = "b" * 40
+    calls = []
+
+    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+        calls.append((repo, tuple(statuses), event, created, head_sha))
+        return [
+            {
+                "id": 601,
+                "path": ".github/workflows/strix.yml",
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T07:00:00Z",
+            },
+            {
+                "id": 602,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": other_head,
+                "run_started_at": "2026-06-25T07:00:00Z",
+            },
+            {
+                "id": 603,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T06:00:00Z",
+            },
+            {
+                "id": 604,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T09:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 604
+    assert len(calls) == 1
+    repo, statuses, event, created, called_head = calls[0]
+    assert repo == "owner/repo"
+    assert set(statuses) == {"queued", "in_progress", "completed"}
+    assert event == "pull_request_target"
+    assert called_head == head_sha
+
+    assert sched.discover_opencode_required_run_id("owner/repo", "not-a-sha") is None
+    assert len(calls) == 1
+
+
+def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkeypatch):
+    """Cover the recency comparison's edge cases the happy path above does not.
+
+    A matching row with no ``id`` must be skipped entirely (never crash on
+    ``int(None)``); a matching row with no timestamp may still become the
+    first candidate; and a later matching row with an *older* timestamp
+    than the current best must not displace it.
+    """
+    head_sha = "a" * 40
+
+    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+        return [
+            # No timestamp at all: still becomes the first candidate.
+            {"id": 801, "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH, "head_sha": head_sha},
+            # A real timestamp: newer than "no timestamp", becomes the new best.
+            {
+                "id": 802,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-02-01T00:00:00Z",
+            },
+            # Matches path/head but has no id: must be skipped, not crash.
+            {
+                "id": None,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-03-01T00:00:00Z",
+            },
+            # Older than the current best (802): must not displace it.
+            {
+                "id": 803,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "head_sha": head_sha,
+                "run_started_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+
+    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 802
+
+
+def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
+    """Scheduler dispatch uses the bounded fallback only when the rollup misses."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    calls = []
+    monkeypatch.setattr(
+        sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], [])
+    )
+    monkeypatch.setattr(
+        sched,
+        "discover_opencode_required_run_id",
+        lambda repo, head_sha: calls.append((repo, head_sha)) or 999,
+    )
+    dispatch_calls = []
+    monkeypatch.setattr(
+        sched, "run_github_dispatch", lambda args, stdin=None: dispatch_calls.append(stdin)
+    )
+
+    head_sha = "a" * 40
+    pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+
+    assert result == "dispatched"
+    assert calls == [("owner/repo", head_sha)]
+    assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
 
 
 def test_central_progress_ignores_required_workflow_checkrun_placeholder(
@@ -3928,7 +4227,11 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     assert calls[3][-1] == f"expected_head_sha={head_sha}"
     assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8] == [
+    # dispatch_strix_evidence's busy_refs check re-reads the exact same
+    # (repo, ("queued", "in_progress")) shape calls[4:6] already fetched;
+    # active_workflow_runs's per-invocation cache serves it without a
+    # third/fourth GET, so its dispatch POST lands right after calls[4:6].
+    assert calls[6] == [
         "gh",
         "api",
         "-X",
@@ -3937,9 +4240,20 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         "--input",
         "-",
     ]
-    assert calls[9][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[10][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[11] == [
+    # That dispatch invalidates the cache (it just queued a new run), so
+    # dispatch_opencode_review's own active_opencode_run_refs check below
+    # re-fetches fresh instead of reusing calls[4:6]'s now-stale snapshot.
+    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    # calls[9:12]: the bounded discover_opencode_required_run_id fallback
+    # (matching_actions_run_id found nothing in this PR's empty rollup).
+    for offset, status in enumerate(("queued", "in_progress", "completed")):
+        discover_call = calls[9 + offset]
+        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert f"status={status}" in discover_call
+        assert "event=pull_request_target" in discover_call
+        assert f"head_sha={head_sha}" in discover_call
+    assert calls[12] == [
         "gh",
         "api",
         "-X",
@@ -4183,7 +4497,11 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
     assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0] == [
+    # dispatch_strix_evidence's busy_refs check re-reads the exact same
+    # (repo, ("queued", "in_progress")) shape calls[1:3] already fetched;
+    # active_workflow_runs's per-invocation cache serves it without a
+    # third/fourth GET, so its dispatch POST lands right after calls[1:3].
+    assert calls[3][0] == [
         "gh",
         "api",
         "-X",
@@ -4192,9 +4510,22 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
-    assert calls[6][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[7][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8][0] == [
+    # That dispatch invalidates the cache (it just queued a new run), so
+    # dispatch_opencode_review's own active_opencode_run_refs check below
+    # re-fetches fresh instead of reusing calls[1:3]'s now-stale snapshot.
+    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+    # calls[6:9]: the bounded discover_opencode_required_run_id fallback
+    # (matching_actions_run_id found nothing in the empty rollup), scoped to
+    # the exact head SHA across the three statuses that can hold the
+    # required run.
+    for offset, status in enumerate(("queued", "in_progress", "completed")):
+        discover_call = calls[6 + offset][0]
+        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert f"status={status}" in discover_call
+        assert "event=pull_request_target" in discover_call
+        assert f"head_sha={'a' * 40}" in discover_call
+    assert calls[9][0] == [
         "gh",
         "api",
         "-X",
@@ -4223,7 +4554,20 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
 
-    pr = make_pr(baseRefName="develop", baseRefOid=base_sha, headRefOid=head_sha)
+    pr = make_pr(
+        baseRefName="develop",
+        baseRefOid=base_sha,
+        headRefOid=head_sha,
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    opencode_check(
+                        details_url="https://github.com/owner/repo/actions/runs/42/job/101"
+                    )
+                ]
+            }
+        },
+    )
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -4270,6 +4614,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             "pr_base_sha": base_sha,
             "pr_head_ref": "feature",
             "pr_head_sha": head_sha,
+            "required_run_id": 42,
         },
     }
 
@@ -4445,6 +4790,7 @@ def test_active_workflow_runs_reads_every_paginated_page(monkeypatch):
 
 
 def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
     calls = []
     head_sha = "a" * 40
     base_sha = "b" * 40
@@ -4511,6 +4857,92 @@ def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatc
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert not any("9004/force-cancel" in " ".join(call) for call in calls)
     assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
+
+
+def test_complete_paginated_pr_contexts_finds_required_run_after_first_100(monkeypatch):
+    """Load later GraphQL pages before required-run selection."""
+    required = opencode_check(details_url="https://github.com/owner/repo/actions/runs/142/job/2")
+    required["checkSuite"]["createdAt"] = "2026-08-31T02:00:00Z"
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [{"__typename": "StatusContext", "context": f"check-{i}"} for i in range(100)],
+                "pageInfo": {"hasNextPage": True, "endCursor": "page-2"},
+            }
+        }
+    )
+    monkeypatch.setattr(
+        sched,
+        "gh_graphql",
+        lambda *args, **kwargs: {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [required],
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    sched.complete_paginated_pr_contexts("owner/repo", pr)
+    assert len(sched.context_nodes(pr)) == 101
+    assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 142
+
+
+def test_complete_paginated_pr_contexts_rejects_missing_cursor():
+    """Fail closed when GitHub advertises a page without a cursor."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {"nodes": [], "pageInfo": {"hasNextPage": True}}
+        }
+    )
+    with pytest.raises(RuntimeError, match="did not provide an end cursor"):
+        sched.complete_paginated_pr_contexts("owner/repo", pr)
+
+
+def test_complete_paginated_pr_contexts_bounds_repeated_pages(monkeypatch):
+    """Fail closed when GitHub never terminates status-context pagination."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [],
+                "pageInfo": {"hasNextPage": True, "endCursor": "loop"},
+            }
+        }
+    )
+    calls = []
+
+    def repeated_page(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [],
+                                "pageInfo": {
+                                    "hasNextPage": True,
+                                    "endCursor": "loop",
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr(sched, "gh_graphql", repeated_page)
+    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 1)
+    with pytest.raises(RuntimeError, match="exceeded its safety bound"):
+        sched.complete_paginated_pr_contexts("owner/repo", pr)
+    assert len(calls) == 1
+    assert calls[0][1]["cursor"] == "loop"
 
 
 @pytest.mark.parametrize(
@@ -4745,7 +5177,123 @@ def test_active_workflow_runs_omits_filters_by_default(monkeypatch):
     assert not any(str(arg).startswith("created=") for arg in args)
 
 
+def test_active_workflow_runs_caches_repeated_identical_calls(monkeypatch):
+    """A repeated identical call is served from cache with the identical result.
+
+    This is the scan-pr-queue win: every non-draft PR unconditionally asks
+    for the same (repo, ("queued", "in_progress")) shape via
+    ``cancel_stale_pr_runs``, and review dispatch re-asks the same shape
+    again -- all against the one repository a scheduler invocation ever
+    targets. Only the first call should reach the (faked) GitHub API; every
+    later call with the same arguments must return the same data without a
+    new call.
+    """
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": [{"id": 1}, {"id": 2}]}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    first = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    for _ in range(50):
+        repeated = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+        assert repeated == first
+
+    # 2 calls total: one per status in the first, cache-populating call --
+    # not 2 * 51 for 51 identical requests.
+    assert len(calls) == 2
+
+
+def test_active_workflow_runs_cache_is_faster_than_repeated_fetches(monkeypatch):
+    """Caching turns N redundant slow fetches into 1: wall clock reflects that."""
+    delay = 0.02
+    call_count = 0
+
+    def slow_fake_run(args, stdin=None):
+        del args, stdin
+        nonlocal call_count
+        call_count += 1
+        time.sleep(delay)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", slow_fake_run)
+
+    repeats = 20
+    start = time.monotonic()
+    for _ in range(repeats):
+        sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    elapsed = time.monotonic() - start
+
+    # Uncached, 20 repeats * 2 statuses * 0.02s would take >= 0.8s; cached,
+    # only the first call's 2 statuses ever sleep. Generous bound keeps this
+    # robust on a loaded CI runner while still catching a caching regression.
+    assert call_count == 2
+    assert elapsed < delay * 2 * repeats / 2
+
+
+def test_active_workflow_runs_cache_keys_on_full_call_shape(monkeypatch):
+    """Distinct repo/statuses/event/created/head_sha never share a cache entry."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    sched.active_workflow_runs("owner/repo", ("queued",))
+    sched.active_workflow_runs("owner/other-repo", ("queued",))
+    sched.active_workflow_runs("owner/repo", ("in_progress",))
+    sched.active_workflow_runs("owner/repo", ("queued",), event="repository_dispatch")
+    sched.active_workflow_runs("owner/repo", ("queued",), head_sha="a" * 40)
+    sched.active_workflow_runs("owner/repo", ("queued",))  # repeat of the first: cache hit
+
+    assert len(calls) == 5
+
+
+def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monkeypatch):
+    """A cancellation must not be masked by a stale pre-cancellation cache entry.
+
+    ``dispatch_strix_evidence``'s busy_refs check runs right after
+    ``force_cancel_workflow_run_refs`` cancels stale runs for the same
+    repository; if the cache were not invalidated, that check could see a
+    run this very call just cancelled and wrongly report the repository
+    busy, or a later PR's cancel_stale_pr_runs could miss a run it should
+    force-cancel because a same-shape read from before an earlier
+    cancellation was replayed instead of re-fetched.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    responses = [
+        json.dumps([{"workflow_runs": [{"id": 9001}]}]),  # queued, before cancel
+        json.dumps([{"workflow_runs": []}]),  # in_progress, before cancel
+        "",  # the force-cancel POST itself
+        json.dumps([{"workflow_runs": []}]),  # queued, after cancel: must re-fetch
+        json.dumps([{"workflow_runs": []}]),  # in_progress, after cancel
+    ]
+
+    def fake_run(args, stdin=None):
+        del args, stdin
+        return responses.pop(0)
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    before = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    assert before == [{"id": 9001}]
+
+    sched.force_cancel_workflow_runs("owner/repo", ["9001"])
+
+    after = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
+    assert after == []
+    assert responses == []  # every canned response was consumed: no call was skipped or reused
+
+
 def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
     calls = []
     head_sha = "a" * 40
     stale_sha = "c" * 40
@@ -4973,6 +5521,7 @@ def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
 
 
 def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(monkeypatch):
+    monkeypatch.setattr(sched, "_direct_pr_run_still_superseded", lambda *_args: True)
     calls = []
     head_sha = "a" * 40
     stale_same_pr = {
@@ -5035,6 +5584,23 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
     assert not any("9002/force-cancel" in " ".join(call) for call in calls)
     assert not any("9003/force-cancel" in " ".join(call) for call in calls)
     assert any("status=in_progress" in " ".join(call) for call in calls)
+
+
+def test_cancel_stale_pr_runs_preserves_failed_cancellation(monkeypatch):
+    """Do not report a stale run cancelled when GitHub rejected the API call."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda _repo, _pr: ["101", "202"])
+    monkeypatch.setattr(sched, "_direct_pr_run_still_superseded", lambda *_args: True)
+
+    def cancel(_repo, run_ids):
+        run_id = str(run_ids[0])
+        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+
+    run_ids = sched.cancel_stale_pr_runs("owner/repo", make_pr(), dry_run=False)
+
+    assert run_ids == ["202"]
 
 
 def test_mutations_refuse_local_credentials(monkeypatch):
@@ -6556,6 +7122,7 @@ def test_draft_pr_review_only_dispatch_retries_a_failed_required_check_with_no_v
 
 
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
+    monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
     runs = [
         {"name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
         {"name": "OpenCode Review", "id": 11, "head_sha": "head", "pull_requests": [{"number": 1}]},
@@ -6570,6 +7137,7 @@ def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch
 
 
 def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr(monkeypatch):
+    monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
     runs = [
         {"name": "Other", "id": 20, "head_sha": "old", "pull_requests": [{"number": 1}]},
         {"name": "OpenCode Review", "id": 21, "head_sha": "head", "pull_requests": [{"number": 2}]},
@@ -8470,3 +9038,512 @@ def test_inspect_pr_dry_run_skips_merge_revalidation_refetch(monkeypatch):
     assert direct_decision.action == "merge"
     assert auto_decision.action == "auto_merge"
     assert fetch_calls == []
+
+
+
+def test_pr1669_malformed_snapshot_head_never_classifies_direct_run_stale(monkeypatch):
+    """Malformed snapshot head authority cannot classify a valid active run stale."""
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *_args, **_kwargs: [
+            {"id": 33581213829, "head_sha": "a" * 40, "pull_requests": [{"number": 1528}]}
+        ],
+    )
+    assert sched.stale_pr_run_ids(
+        "ContextualWisdomLab/naruon",
+        make_pr(number=1528, headRefOid="malformed-but-truthy"),
+    ) == []
+
+
+def test_pr1669_malformed_snapshot_head_never_classifies_review_run_stale(monkeypatch):
+    """Malformed snapshot head authority cannot classify central review runs stale."""
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *_args, **_kwargs: [
+            {
+                "id": 33581213829,
+                "event": "pull_request",
+                "name": "OpenCode Review",
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 1528}],
+            }
+        ],
+    )
+    assert sched.active_review_run_refs(
+        "ContextualWisdomLab/naruon",
+        "OpenCode Review",
+        make_pr(number=1528, headRefOid="malformed-but-truthy"),
+        run_title="Required OpenCode Review",
+        workflow_aliases=frozenset(sched.OPENCODE_WORKFLOW_NAMES),
+    ) == ([], [])
+
+
+def test_pr1669_snapshot_race_preserves_new_current_head(monkeypatch):
+    """A push after classification cannot make the new current-head run cancellable."""
+    old_head, new_head = "a" * 40, "b" * 40
+    candidate = {
+        "id": 77,
+        "event": "pull_request",
+        "status": "queued",
+        "head_sha": new_head,
+        "pull_requests": [{"number": 7}],
+    }
+    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda *_args, **_kwargs: ["77"])
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    calls = []
+
+    def fake_api(path):
+        calls.append(path)
+        if path.endswith("/actions/runs/77"):
+            return candidate
+        return {"state": "open", "draft": False, "head": {"sha": new_head}}
+
+    cancelled = []
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda *_args: cancelled.append(_args),
+    )
+    assert sched.cancel_stale_pr_runs(
+        "owner/repo", make_pr(number=7, headRefOid=old_head), dry_run=False
+    ) == []
+    assert cancelled == []
+    assert calls[-1] == "repos/owner/repo/pulls/7"
+
+
+@pytest.mark.parametrize(
+    "live_pr",
+    [
+        None,
+        {"state": "closed", "draft": False, "head": {"sha": "b" * 40}},
+        {"state": "open", "draft": None, "head": {"sha": "b" * 40}},
+        {"state": "open", "draft": False, "head": {"sha": "bad"}},
+    ],
+)
+def test_pr1669_fresh_open_pr_fails_closed_without_open_exact_head(monkeypatch, live_pr):
+    """Only an open PR with explicit draft state and valid SHA grants stale-run cancellation authority."""
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: live_pr)
+    with pytest.raises(ValueError):
+        sched._fresh_open_pr_for_cancellation("owner/repo", 7)
+
+
+@pytest.mark.parametrize("payload", [None, {"status": "completed"}])
+def test_pr1669_fresh_active_run_requires_active_mapping(monkeypatch, payload):
+    """Only a freshly active run mapping can authorize destructive cancellation."""
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: payload)
+    with pytest.raises(ValueError, match="is not active"):
+        sched._fresh_active_run_for_cancellation("owner/repo", "94")
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        {
+            "event": "repository_dispatch",
+            "status": "queued",
+            "head_sha": "a" * 40,
+            "pull_requests": [{"number": 7}],
+        },
+        {
+            "event": "pull_request",
+            "status": "queued",
+            "head_sha": "a" * 40,
+            "pull_requests": [{"number": 8}],
+        },
+    ],
+)
+def test_pr1669_direct_revalidation_rejects_changed_run_identity(monkeypatch, run):
+    """A direct candidate must remain a direct run attached to the target PR."""
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda path: run
+        if "/actions/runs/" in path
+        else {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    assert sched._direct_pr_run_still_superseded("owner/repo", 7, "93") is False
+
+
+def test_pr1669_direct_revalidation_allows_genuine_supersession(monkeypatch):
+    """A genuinely older direct PR run remains cancellable after fresh reads."""
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda path: {
+            "event": "pull_request",
+            "status": "in_progress",
+            "head_sha": "a" * 40,
+            "pull_requests": [{"number": 7}],
+        }
+        if "/actions/runs/" in path
+        else {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    assert sched._direct_pr_run_still_superseded("owner/repo", 7, "98") is True
+
+
+def test_pr1669_review_target_rejects_untrusted_dispatch_title():
+    """A central dispatch without exact target identity has no cancellation authority."""
+    with pytest.raises(ValueError, match="trusted target identity"):
+        sched._review_run_target_head(
+            {"event": "repository_dispatch", "display_title": "unrelated"},
+            "owner/repo",
+            "OpenCode Review",
+            7,
+        )
+
+
+def test_pr1669_review_target_rejects_changed_direct_pr_association():
+    """A direct review run must remain attached to the target pull request."""
+    with pytest.raises(ValueError, match="target pull request"):
+        sched._review_run_target_head(
+            {
+                "event": "pull_request",
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 8}],
+            },
+            "owner/repo",
+            "OpenCode Review",
+            7,
+        )
+
+
+def test_pr1669_review_target_accepts_direct_and_trusted_dispatch_identity():
+    """Direct and trusted central review identities expose validated target heads."""
+    assert sched._review_run_target_head(
+        {
+            "event": "pull_request",
+            "head_sha": "a" * 40,
+            "pull_requests": [{"number": 7}],
+        },
+        "owner/repo",
+        "OpenCode Review",
+        7,
+    ) == "a" * 40
+    assert sched._review_run_target_head(
+        {
+            "event": "repository_dispatch",
+            "display_title": f"Required OpenCode Review owner/repo#7@{'a' * 40}",
+        },
+        "owner/repo",
+        "OpenCode Review",
+        7,
+    ) == "a" * 40
+
+
+def test_pr1669_review_revalidation_handles_stale_and_current_heads(monkeypatch):
+    """Fresh review authority distinguishes genuine supersession from the current head."""
+    run = {
+        "event": "repository_dispatch",
+        "status": "in_progress",
+        "display_title": f"Required OpenCode Review owner/repo#7@{'a' * 40}",
+    }
+    live_head = {"value": "b" * 40}
+
+    def fake_api(path):
+        if "/actions/runs/" in path:
+            return run
+        return {"state": "open", "draft": False, "head": {"sha": live_head["value"]}}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    assert sched._review_run_still_superseded(
+        "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "95"
+    ) is True
+    live_head["value"] = "a" * 40
+    assert sched._review_run_still_superseded(
+        "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "95"
+    ) is False
+
+
+def test_pr1669_single_direct_candidate_cancels_only_when_revalidated_stale(monkeypatch):
+    """The direct single-candidate path preserves current and cancels proven stale runs."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda *_args, **_kwargs: ["97"])
+    stale = {"value": False}
+    monkeypatch.setattr(sched, "_direct_pr_run_still_superseded", lambda *_args: stale["value"])
+    cancelled = []
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, run_ids))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+    pr = make_pr(number=7)
+    assert sched.cancel_stale_pr_runs("owner/repo", pr, dry_run=False) == []
+    stale["value"] = True
+    assert sched.cancel_stale_pr_runs("owner/repo", pr, dry_run=False) == ["97"]
+    assert cancelled == [("owner/repo", ["97"])]
+
+
+def test_pr1669_single_review_candidate_cancels_only_when_revalidated_stale(monkeypatch):
+    """The review single-candidate path preserves current and cancels proven stale runs."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda *_args, **_kwargs: ([], [("ContextualWisdomLab/.github", "96")]),
+    )
+    stale = {"value": False}
+    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: stale["value"])
+    cancelled = []
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, run_ids))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+    pr = make_pr(number=7)
+    assert sched.cancel_stale_opencode_runs(
+        "owner/repo", "OpenCode Review", pr, dry_run=False
+    ) == []
+    stale["value"] = True
+    assert sched.cancel_stale_opencode_runs(
+        "owner/repo", "OpenCode Review", pr, dry_run=False
+    ) == ["96"]
+    assert cancelled == [("ContextualWisdomLab/.github", ["96"])]
+
+
+
+def test_pr1669_opencode_dispatch_preserves_candidate_that_is_current_after_revalidation(monkeypatch):
+    """OpenCode dispatch must preserve a candidate that became the live current-head run."""
+    pr = make_pr(number=7, headRefOid="b" * 40)
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda *_args, **_kwargs: ([], [("ContextualWisdomLab/.github", "96")]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "_review_run_still_superseded",
+        lambda *_args: False,
+        raising=False,
+    )
+    direct_cancellations = []
+    batch_cancellations = []
+    dispatches = []
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda repo, run_ids: direct_cancellations.append((repo, list(run_ids))),
+    )
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_run_refs",
+        lambda refs: batch_cancellations.append(list(refs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sched,
+        "validated_pr_dispatch_fields",
+        lambda _pr: ("main", "c" * 40, "b" * 40),
+    )
+    monkeypatch.setattr(sched, "validate_git_ref", lambda value: value)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: [])
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *args, **kwargs: dispatches.append((args, kwargs)))
+
+    assert sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False) == "already_running"
+    assert direct_cancellations == []
+    assert batch_cancellations == []
+    assert dispatches == []
+
+
+def test_pr1669_strix_dispatch_preserves_candidate_that_is_current_after_revalidation(monkeypatch):
+    """Strix dispatch must preserve a candidate that became the live current-head run."""
+    pr = make_pr(number=7, headRefOid="b" * 40)
+    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_review_run_refs",
+        lambda *_args, **_kwargs: ([], [("ContextualWisdomLab/.github", "97")]),
+    )
+    monkeypatch.setattr(
+        sched,
+        "_review_run_still_superseded",
+        lambda *_args: False,
+        raising=False,
+    )
+    direct_cancellations = []
+    batch_cancellations = []
+    dispatches = []
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_runs",
+        lambda repo, run_ids: direct_cancellations.append((repo, list(run_ids))),
+    )
+    monkeypatch.setattr(
+        sched,
+        "force_cancel_workflow_run_refs",
+        lambda refs: batch_cancellations.append(list(refs)),
+        raising=False,
+    )
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(
+        sched,
+        "validated_pr_dispatch_fields",
+        lambda _pr: ("main", "c" * 40, "b" * 40),
+    )
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *args, **kwargs: dispatches.append((args, kwargs)))
+
+    assert sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False) == "already_running"
+    assert direct_cancellations == []
+    assert batch_cancellations == []
+    assert dispatches == []
+
+
+
+def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
+    """Direct cancellation must preserve the candidate when fresh authority cannot be read."""
+    def fail_api(_path):
+        raise RuntimeError("simulated live-authority outage")
+
+    monkeypatch.setattr(sched, "gh_api_json", fail_api)
+    assert sched._direct_pr_run_still_superseded("owner/repo", 7, "94") is False
+    assert "Preserving workflow run 94 in owner/repo" in capsys.readouterr().out
+
+
+def test_pr1669_review_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
+    """Review cancellation must preserve the candidate when fresh authority cannot be read."""
+    def fail_api(_path):
+        raise RuntimeError("simulated live-authority outage")
+
+    monkeypatch.setattr(sched, "gh_api_json", fail_api)
+    assert sched._review_run_still_superseded(
+        "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "95"
+    ) is False
+    assert "Preserving review run ContextualWisdomLab/.github#95" in capsys.readouterr().out
+
+
+def test_pr1669_revalidated_review_refs_cover_empty_and_parallel_mixed_candidates(monkeypatch):
+    """The review helper preserves uncertain refs and cancels only concurrently proven stale refs."""
+    pr = make_pr(number=7, headRefOid="b" * 40)
+    assert sched._cancel_revalidated_review_run_refs(
+        "owner/repo", "OpenCode Review", pr, []
+    ) == ([], [])
+
+    stale = {"96": True, "97": False}
+    monkeypatch.setattr(
+        sched,
+        "_review_run_still_superseded",
+        lambda _repo, _workflow, _number, _run_repo, run_id: stale[run_id],
+    )
+    cancelled = []
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, list(run_ids)))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+    preserved, cancelled_refs = sched._cancel_revalidated_review_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        pr,
+        [
+            ("ContextualWisdomLab/.github", "96"),
+            ("ContextualWisdomLab/.github", "97"),
+        ],
+    )
+    assert preserved == [("ContextualWisdomLab/.github", "97")]
+    assert cancelled_refs == [("ContextualWisdomLab/.github", "96")]
+    assert cancelled == [("ContextualWisdomLab/.github", ["96"])]
+
+
+def test_pr1669_parallel_direct_candidates_preserve_live_and_cancel_only_stale(monkeypatch):
+    """Parallel direct-run cleanup must keep a revalidated current-head candidate."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda *_args, **_kwargs: ["94", "95"])
+    monkeypatch.setattr(
+        sched,
+        "_direct_pr_run_still_superseded",
+        lambda _repo, _number, run_id: run_id == "94",
+    )
+    cancelled = []
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, list(run_ids)))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+    assert sched.cancel_stale_pr_runs("owner/repo", make_pr(number=7), dry_run=False) == ["94"]
+    assert cancelled == [("owner/repo", ["94"])]
+
+
+def test_pr1669_parallel_opencode_candidates_preserve_live_and_cancel_only_stale(monkeypatch):
+    """Parallel OpenCode cleanup must keep a revalidated current-head review candidate."""
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "active_opencode_run_refs",
+        lambda *_args, **_kwargs: (
+            [],
+            [
+                ("ContextualWisdomLab/.github", "96"),
+                ("ContextualWisdomLab/.github", "97"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        sched,
+        "_review_run_still_superseded",
+        lambda _repo, _workflow, _number, _run_repo, run_id: run_id == "96",
+    )
+    cancelled = []
+
+    def cancel(repo, run_ids):
+        cancelled.append((repo, list(run_ids)))
+        return {}
+
+    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
+    assert sched.cancel_stale_opencode_runs(
+        "owner/repo", "OpenCode Review", make_pr(number=7), dry_run=False
+    ) == ["96"]
+    assert cancelled == [("ContextualWisdomLab/.github", ["96"])]
+
+
+def test_pr1669_opencode_open_draft_old_head_remains_cancellable(monkeypatch):
+    """An old OpenCode run on an open draft must not block current-head review-only dispatch."""
+    old_head = "a" * 40
+    live_head = "b" * 40
+    run = {
+        "event": "repository_dispatch",
+        "status": "in_progress",
+        "display_title": f"Required OpenCode Review owner/repo#7@{old_head}",
+    }
+
+    def fake_api(path):
+        if "/actions/runs/" in path:
+            return run
+        return {"state": "open", "draft": True, "head": {"sha": live_head}}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    assert sched._review_run_still_superseded(
+        "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "96"
+    ) is True
+
+
+def test_pr1669_strix_open_draft_old_head_remains_cancellable(monkeypatch):
+    """An old Strix run on an open draft must not block current-head review-only dispatch."""
+    old_head = "a" * 40
+    live_head = "b" * 40
+    run = {
+        "event": "repository_dispatch",
+        "status": "queued",
+        "display_title": f"Strix Security Scan owner/repo#7@{old_head}",
+    }
+
+    def fake_api(path):
+        if "/actions/runs/" in path:
+            return run
+        return {"state": "open", "draft": True, "head": {"sha": live_head}}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    assert sched._review_run_still_superseded(
+        "owner/repo", "Strix Security Scan", 7, "ContextualWisdomLab/.github", "97"
+    ) is True
