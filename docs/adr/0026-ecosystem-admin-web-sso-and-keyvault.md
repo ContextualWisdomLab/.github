@@ -1,4 +1,4 @@
-# ADR-0021: Ecosystem admin-web architecture — Keyverse SSO and Keyvault
+# ADR-0026: Ecosystem admin-web architecture — Keyverse SSO and Keyvault
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
