@@ -23,6 +23,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Catch scheduler target-list drift before it silently fails an hourly heartbeat.** `hourly-review-repair.yml`'s per-cron `target_repository` matrix and the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`) are two independently hand-maintained lists with no structural link -- three repositories (`governance-risk-compliance`, `nonnest2`, `quarantine-sandbox-runtime`) were added to the hourly matrix without a corresponding variable update, so their hourly heartbeat failed closed with "target repository is not allowlisted" until each was found and fixed the same day. Added `scripts/ci/opencode_repository_dispatch_targets.json`, a hand-maintained mirror of the variable's live value, and a new contract test (`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller target is present in it, so a future PR that repeats the omission fails at review time instead of at the next silent hourly failure. See `docs/doctoring/scheduler-target-list-drift-20260902.md`.
 - **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
   scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
   heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
