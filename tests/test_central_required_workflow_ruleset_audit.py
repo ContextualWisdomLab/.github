@@ -512,6 +512,55 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
     assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
 
 
+def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
+    """Devin finding: 'Private repositories disappear from audit'.
+
+    ORG_WIDE_CREDENTIAL_AVAILABLE only proves *some* org-scoped secret
+    exists, not that the specific credential used (PR_REVIEW_MERGE_TOKEN
+    when present) can see the full organization. A fine-grained token with
+    an incomplete repository allowlist does not 403 on the enumeration
+    call -- it silently returns a smaller repository list. This pins the
+    real post-enumeration completeness check: known-private, non-archived
+    sentinel repositories must all appear in the enumerated list, or the
+    step fails loudly instead of silently auditing a partial organization.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+
+    codeql_step = workflow.split('- name: "Audit organization CodeQL coverage"\n', 1)
+    if len(codeql_step) == 1:
+        codeql_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)
+    assert len(codeql_step) == 2, "CodeQL coverage step not found in workflow"
+    step_body = codeql_step[1]
+
+    assert 'PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(' in step_body
+    assert '"xtrmLLMBatchPython"' in step_body
+    assert '"linux-cluster-ops"' in step_body
+    assert '"gyeot"' in step_body
+    assert (
+        'jq -e --arg name "$sentinel" \'any(.[]; .name == $name)\' "$repositories_json"'
+        in step_body
+    )
+    assert 'missing_sentinels=()' in step_body
+    assert (
+        'if [ "${#missing_sentinels[@]}" -gt 0 ]; then\n'
+        '            echo "::error::CodeQL coverage audit\'s organization '
+        'repository enumeration is missing known-private sentinel '
+        "repository(ies): ${missing_sentinels[*]}."
+    ) in step_body
+    # The sentinel check must run against the same repositories_json used to
+    # drive the per-repository coverage loop below it, and must exit before
+    # that loop starts on a partial list.
+    sentinel_check_index = step_body.index("PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(")
+    coverage_loop_index = step_body.index("printf '[]\\n' >\"$coverage_json\"")
+    assert sentinel_check_index < coverage_loop_index
+    exit_index = step_body.index(
+        "exit 1", step_body.index("missing_sentinels[@]")
+    )
+    assert exit_index < coverage_loop_index
+
+
 def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results() -> None:
     workflow = (REPO_ROOT / ".github/workflows/sast-semgrep.yml").read_text(
         encoding="utf-8"

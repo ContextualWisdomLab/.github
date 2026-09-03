@@ -22,9 +22,22 @@ import sys
 from typing import Any, TextIO
 
 
-# GitHub's default CodeQL schedule is weekly; 35 days (5 weeks) gives one full
-# missed-run cycle of slack before an analysis is treated as stale, so a
-# single skipped scheduled run does not itself trip the audit.
+# Live-verified (2026-09-03) via `gh api
+# repos/ContextualWisdomLab/wardnet/code-scanning/default-setup --jq
+# '.schedule'` -> "weekly": GitHub's native code-scanning/default-setup --
+# the mechanism most organization repositories rely on for CodeQL coverage,
+# as opposed to a locally-triggered push/pull_request workflow, which would
+# produce analysis records far more often than weekly and never approach
+# this threshold in practice -- runs on a 7-day cadence. A repository
+# relying on default-setup will therefore realistically go up to ~7 days
+# between analyses in the normal case.
+#
+# 35 days is deliberately 5x that observed 7-day interval: a safety margin
+# against a single missed or delayed scheduled run (a holiday, a GitHub
+# platform incident, or this organization's own well-documented Actions
+# queue congestion under hosted-runner saturation -- see
+# docs/doctoring/actions-queue-saturation-hourly-sweep.md, a real, observed
+# risk here, not hypothetical), not an unexplained rule of thumb.
 CODEQL_ANALYSIS_FRESHNESS_DAYS = 35
 
 
