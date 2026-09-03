@@ -1,4 +1,4 @@
-# Loop-brief items 15-18: verified already resolved, no further change needed
+# Loop-brief items 4, 15-18, 39: verified already resolved, no further change needed
 
 ## Context
 
@@ -7,6 +7,41 @@ workflow-consolidation and telemetry items were complete, since the queue felt
 like it was growing rather than shrinking. This records what was checked and
 why each item needed no further code change as of this branch's base commit
 (`4f95abc`).
+
+## Items 4 / 39 — opaque 900-second Noema "Repair" timeout, no telemetry on why
+
+Reproduced from the linked evidence:
+`ContextualWisdomLab/html4tree` run `33560972491`, job `100033086428`
+("Required Noema Review ...#595"), step 13 "Prepare Noema model verdict"
+failed with `NoemaRepairDeadlineExceeded: Noema repair exceeded 900-second
+absolute wall-clock deadline` on 2026-09-02T02:28 UTC — no further specifics,
+matching the complaint exactly. The item-39 example
+(`contextual-orchestrator` run `33580381913`, PR #1008) is the same class of
+failure, same day.
+
+Already fixed on this branch's base, same day: PR (`a28fc2f`,
+"fix(noema): remove caller repair deadline and duplicate model call") found
+the 900-second bound had "no owner-specified or measured basis" and, deeper,
+that Noema was duplicating a repair/failover responsibility
+`contextual-orchestrator` already owns — turning one gateway failure into two
+expensive calls. The fix: Noema now sends exactly one structured-output
+request to the gateway, with no caller-side deadline, retry, or temperature;
+every gateway call now emits a passive Actions annotation carrying attempt
+count, elapsed duration, active phase, and a sanitized serving-model
+identifier (see `docs/doctoring/noema-repair-attempt-telemetry.md`, PR
+`86ef3e7` for the doc's own later clarification pass). A permanent contract
+test (`tests/test_noema_repair_has_no_fixed_wall_clock_deadline.py`) forbids
+`NOEMA_REPAIR_DEADLINE_SECONDS`, `NoemaRepairDeadlineExceeded`,
+`signal.setitimer`, and a caller-authored retry/temperature from ever
+reappearing; ran it plus `tests/test_noema_repair_attempt_telemetry.py`
+locally (25 passed) to confirm it holds on this branch.
+
+The item-39 PR (`contextual-orchestrator#1008`, head `f35ee58d`) is still
+`mergeable_state: blocked`, but its Noema check now shows a fresh attempt
+queued at `2026-09-02T19:32:21Z` — after the fix merged — sitting `queued`
+with no conclusion yet. That is the already-documented org-wide Actions
+job-queue ceiling (#1754), not a recurrence of the repair-deadline bug; no
+separate action taken here.
 
 ## Item 15 — remove `org-queue-sweep` if plain GitHub Actions syntax can do it
 
