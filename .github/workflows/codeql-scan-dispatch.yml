@@ -1,0 +1,450 @@
+# Runs github/codeql-action outside any required-workflow context. GitHub
+# categorically refuses to admit init/analyze inside a required workflow
+# (docs/doctoring/codeql-pr-required-workflow-always-fails.md); this file is
+# the native execution half of the dispatch+poll design proposed in
+# ContextualWisdomLab/.github#1772.
+#
+# NOT YET WIRED UP: codeql-pr.yml does not dispatch here yet (that rewrite is
+# a separate, still-pending follow-up so it can get independent review). Do
+# not add workflow_dispatch here to allow manual testing:
+# test_no_central_workflow_exposes_branch_selected_manual_dispatch (in
+# tests/test_required_workflow_queue_contract.py) forbids it on every central
+# workflow, because workflow_dispatch runs the workflow file as it exists on
+# whatever ref the caller selects rather than pinning to the default branch,
+# defeating the trusted-source-ref pinning this design otherwise depends on.
+# Exercise this handler end-to-end by POSTing a real repository_dispatch
+# event instead -- that always runs the default-branch version.
+name: CodeQL Scan Dispatch
+run-name: >-
+  CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
+  github.repository }}#${{
+  github.event.client_payload.pr_number || 'event' }}@${{
+  github.event.client_payload.pr_head_sha || github.sha }}
+
+on:
+  repository_dispatch:
+    types: [codeql-scan]
+
+concurrency:
+  group: >-
+    codeql-scan-dispatch-${{
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-dispatch:
+    name: validate-dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      target_repository: ${{ steps.validate.outputs.target_repository }}
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+      base_ref: ${{ steps.validate.outputs.base_ref }}
+      base_sha: ${{ steps.validate.outputs.base_sha }}
+      head_ref: ${{ steps.validate.outputs.head_ref }}
+      head_sha: ${{ steps.validate.outputs.head_sha }}
+      matrix: ${{ steps.validate.outputs.matrix }}
+    steps:
+      - name: Exchange OpenCode app token for target repository metadata reads
+        id: metadata_read_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Bind workflow inputs to live organization pull request metadata
+        id: validate
+        env:
+          GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          # A rerun retains github.actor from the original dispatch; authorize
+          # the identity that initiated the current run or rerun instead.
+          # Reuses the same actor identity check as opencode-review-dispatch.yml
+          # (both mint their dispatching token via the same exchange endpoint),
+          # but deliberately does NOT reuse its OPENCODE_REPOSITORY_DISPATCH_TARGETS
+          # allowlist: that list scopes a deliberately gradual OpenCode review
+          # rollout to ~12 repos, whereas ruleset 18156473 (confirmed live via
+          # `gh api orgs/ContextualWisdomLab/rulesets/18156473`) covers
+          # ~ALL org repos except noema/.github/IRT-bibliography-set. Central
+          # CodeQL is meant to run for every one of those repos, not a curated
+          # subset -- reusing the narrower list would silently break CodeQL
+          # dispatch for every repo not already on the OpenCode rollout list.
+          # The org-membership regex below is the actual scope boundary here.
+          DISPATCH_ACTOR: ${{ github.triggering_actor }}
+          DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
+          ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
+          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
+            [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
+            [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+            printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
+            exit 1
+          fi
+          printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
+
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
+            exit 1
+          fi
+
+          matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
+          if [ -z "$matrix_json" ] ||
+            [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length > 0')" != "true" ] ||
+            [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ]; then
+            printf '::error::CodeQL scan dispatch matrix was missing, empty, or contained an entry without a valid language/build-mode. matrix=%s\n' "${SUPPLIED_MATRIX:-<empty>}"
+            exit 1
+          fi
+
+          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
+          live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_request_json")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$pull_request_json")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
+          live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+
+          if [ "$live_state" != "open" ] ||
+            [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_head_repository" != "$TARGET_REPOSITORY" ] ||
+            ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ -z "$live_base_ref" ] ||
+            [ -z "$live_head_ref" ]; then
+            printf '::error::PR metadata validation rejected closed, missing, cross-fork, or malformed live metadata. target=%s#%s state=%s base_repo=%s head_repo=%s base=%s head=%s\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${live_state:-<missing>}" "${live_base_repository:-<missing>}" "${live_head_repository:-<missing>}" "${live_base_sha:-<missing>}" "${live_head_sha:-<missing>}"
+            exit 1
+          fi
+
+          mismatches=()
+          [ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")
+          [ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")
+          [ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")
+          [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
+          if [ "${#mismatches[@]}" -gt 0 ]; then
+            printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
+            exit 1
+          fi
+
+          {
+            printf 'target_repository=%s\n' "$TARGET_REPOSITORY"
+            printf 'pr_number=%s\n' "$PR_NUMBER"
+            printf 'base_ref=%s\n' "$live_base_ref"
+            printf 'base_sha=%s\n' "$live_base_sha"
+            printf 'head_ref=%s\n' "$live_head_ref"
+            printf 'head_sha=%s\n' "$live_head_sha"
+            echo "matrix<<EOF"
+            printf '%s\n' "$matrix_json"
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
+
+  scan:
+    name: CodeQL dispatch scan (${{ matrix.language }})
+    needs: validate-dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: read
+      id-token: write
+      statuses: write # Required for downscoped OIDC status publication.
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate-dispatch.outputs.matrix) }}
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Exchange OpenCode app token for target repository content reads
+        id: target_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Re-validate live pull request metadata before privileged scan
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          EXPECTED_BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
+          EXPECTED_BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
+          EXPECTED_HEAD_REF: ${{ needs.validate-dispatch.outputs.head_ref }}
+          EXPECTED_HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$pull_request_json")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
+          live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          if [ "$live_state" != "open" ] ||
+            [ "$live_base_ref" != "$EXPECTED_BASE_REF" ] ||
+            [ "$live_base_sha" != "$EXPECTED_BASE_SHA" ] ||
+            [ "$live_head_ref" != "$EXPECTED_HEAD_REF" ] ||
+            [ "$live_head_sha" != "$EXPECTED_HEAD_SHA" ]; then
+            printf '::error::CodeQL scan dispatch metadata changed between validation and scan for %s#%s; retiring this superseded run.\n' "$TARGET_REPOSITORY" "$PR_NUMBER"
+            exit 1
+          fi
+
+      - name: Fetch the pinned CodeQL SARIF gate script
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/codeql_sarif_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$RUNNER_TEMP/codeql_sarif_gate.py"
+          python3 -c "import ast; ast.parse(open('$RUNNER_TEMP/codeql_sarif_gate.py').read())"
+
+      - name: Materialize pull request head for CodeQL scan
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$TARGET_REPOSITORY.git"
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          git checkout --detach --quiet "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: false
+          output: codeql-results-dispatch
+          ref: ${{ needs.validate-dispatch.outputs.head_ref }}
+          sha: ${{ needs.validate-dispatch.outputs.head_sha }}
+
+      - name: Enforce CodeQL Medium+ SARIF gate
+        id: gate
+        run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
+
+      - name: Preserve CodeQL SARIF evidence
+        if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeql-dispatch-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: codeql-results-dispatch
+          retention-days: 7
+
+      - name: Publish CodeQL dispatch status
+        if: always()
+        env:
+          TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
+          PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+          LANGUAGE: ${{ matrix.language }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          set -euo pipefail
+          case "$GATE_OUTCOME" in
+            success)
+              state="success"
+              description="CodeQL dispatch scan passed (no unsuppressed Medium+ findings)"
+              ;;
+            failure)
+              state="failure"
+              description="CodeQL dispatch scan found unsuppressed Medium+ findings"
+              ;;
+            *)
+              state="error"
+              description="CodeQL dispatch scan did not produce a verdict (${GATE_OUTCOME:-unknown})"
+              ;;
+          esac
+
+          post_status() {
+            token_label="$1"
+            token="$2"
+            if [ -z "$token" ]; then
+              return 1
+            fi
+            status_response="$(mktemp)"
+            status_error="$(mktemp)"
+            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state="$state" \
+              -f context="codeql-dispatch/${LANGUAGE}" \
+              -f description="$description" \
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              >"$status_response" 2>"$status_error"; then
+              rm -f "$status_response" "$status_error"
+              echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
+              return 0
+            fi
+            error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
+            rm -f "$status_response" "$status_error"
+            if [ -n "$error_summary" ]; then
+              echo "::notice::CodeQL dispatch status publish using ${token_label} did not succeed: ${error_summary}"
+            else
+              echo "::notice::CodeQL dispatch status publish using ${token_label} did not succeed."
+            fi
+            return 1
+          }
+
+          if post_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_status "pr-review-merge-token" "$PR_REVIEW_MERGE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_status "opencode-approve-token" "$OPENCODE_APPROVE_STATUS_TOKEN"; then
+            exit 0
+          fi
+          if post_status "github-token" "$GITHUB_STATUS_READ_TOKEN"; then
+            exit 0
+          fi
+
+          echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the poller in codeql-pr.yml will time out and fail closed instead of reading a stale or missing verdict."
+          exit 1
