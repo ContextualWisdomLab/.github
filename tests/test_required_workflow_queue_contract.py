@@ -253,6 +253,13 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
+            # Job-level (scoped to opencode-review-target only), not
+            # workflow-level: a workflow-level block would capture the
+            # structurally-separate cancel-superseded-opencode-review-runs
+            # job too, deadlocking it behind the very run it exists to
+            # cancel (Devin Review, 2026-09-03).
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "opencode-review-bootstrap-" in concurrency_contract
             # Deliberately NOT scoped by head SHA and deliberately
             # cancel-in-progress: false (reverted/refined 2026-09-03 by
