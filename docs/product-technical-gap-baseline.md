@@ -2614,7 +2614,7 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
-## 2026-09-02 backlog item 30: OpenCode Agent "head moved" failure — already fixed, not reproducible on current main
+## 2026-09-02 backlog item 30: OpenCode Agent "head moved" failure — already fixed on main, post-fix reproduction unverified
 
 **Task.** A peer session flagged backlog item 30 — a run link
 (`contextual-orchestrator/actions/runs/33548447878/job/100066104033#step:2:1`) reported as evidence
@@ -3023,7 +3023,7 @@ above: recursive test-time-compute strategy (Fugu/Conductor/TRINITY, role-based 
 `contextual-orchestrator` routing concern, not a `.github` CI-timeout concern — this repository's part is
 finished at "impose no fixed ceiling," not at building the recursion itself.
 
-## 2026-09-03 product-goal-directive.md §8 (Fugu/Conductor/TRINITY test-time-compute allocation) — all three pieces closed
+## 2026-09-03 product-goal-directive.md §8 (Fugu/Conductor/TRINITY test-time-compute allocation) — two of three pieces closed, stays open pending #1034
 
 **Task.** §8 asks for single/multi-agent test-time compute to be allocated (stage/recursion/decomposition/
 approach/role effort) grounded in Fugu (Sakana AI), Conductor (Nielsen et al., ICLR 2026), and TRINITY
