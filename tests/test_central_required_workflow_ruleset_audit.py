@@ -18,6 +18,8 @@ def ruleset_payload() -> dict:
         "security-scan.yml",
         "strix.yml",
         "sast-semgrep.yml",
+        "osv-scanner-pr.yml",
+        "scorecard-pr.yml",
     )
     return {
         "id": 18156473,
@@ -147,7 +149,7 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 7 central required workflows"
+        "PASS: ruleset 18156473 enforces 9 central required workflows"
         in capsys.readouterr().out
     )
 
@@ -505,6 +507,80 @@ def test_missing_noema_workflow_reports_exact_drift() -> None:
     assert "missing central required workflow .github/workflows/noema-review.yml" in errors
 
 
+def test_missing_osv_scanner_workflow_reports_exact_drift() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        workflow
+        for workflow in workflow_rule["parameters"]["workflows"]
+        if workflow["path"] != ".github/workflows/osv-scanner-pr.yml"
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "missing central required workflow .github/workflows/osv-scanner-pr.yml" in errors
+
+
+def test_missing_scorecard_workflow_reports_exact_drift() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        workflow
+        for workflow in workflow_rule["parameters"]["workflows"]
+        if workflow["path"] != ".github/workflows/scorecard-pr.yml"
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "missing central required workflow .github/workflows/scorecard-pr.yml" in errors
+
+
+def test_readded_codeql_workflow_alongside_full_set_reports_unexpected_entry() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/codeql-pr.yml",
+            "ref": "refs/heads/main",
+        }
+    )
+
+    errors = audit.audit_ruleset(payload)
+
+    assert (
+        "unexpected workflow present in required set: .github/workflows/codeql-pr.yml"
+        in errors
+    )
+
+
+def test_unrelated_extra_workflow_reports_unexpected_entry_sorted() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/zzz-unrelated.yml",
+            "ref": "refs/heads/main",
+        }
+    )
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/aaa-unrelated.yml",
+            "ref": "refs/heads/main",
+        }
+    )
+
+    errors = audit.audit_ruleset(payload)
+
+    unexpected_errors = [error for error in errors if "unexpected workflow present" in error]
+    assert unexpected_errors == [
+        "unexpected workflow present in required set: .github/workflows/aaa-unrelated.yml",
+        "unexpected workflow present in required set: .github/workflows/zzz-unrelated.yml",
+    ]
+
+
 def test_wrong_workflow_ref_reports_exact_drift() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
@@ -561,6 +637,8 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "missing central required workflow .github/workflows/security-scan.yml",
         "missing central required workflow .github/workflows/strix.yml",
         "missing central required workflow .github/workflows/sast-semgrep.yml",
+        "missing central required workflow .github/workflows/osv-scanner-pr.yml",
+        "missing central required workflow .github/workflows/scorecard-pr.yml",
         "expected one pull_request rule, found 0",
         "default-branch deletion protection is missing",
         "default-branch non-fast-forward protection is missing",
@@ -585,7 +663,7 @@ def test_audit_handles_duplicate_workflows_and_unsatisfiable_review_parameters()
 
     errors = audit.audit_ruleset(payload)
 
-    assert "central required workflow .github/workflows/sast-semgrep.yml is configured 2 times" in errors
+    assert "central required workflow .github/workflows/scorecard-pr.yml is configured 2 times" in errors
     assert "central solo-maintainer ruleset must not require approving reviews" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "central solo-maintainer ruleset must not require last-push approval" in errors
@@ -644,6 +722,104 @@ def test_scheduled_audit_and_rollout_document_semgrep_and_noema_requirements() -
     assert 'ref_name.exclude=["~DEFAULT_BRANCH"]' in rollout
     assert "- `.github/workflows/noema-review.yml`" in rollout
     assert "- `.github/workflows/sast-semgrep.yml`" in rollout
+
+
+def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_guard() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Audit organization CodeQL coverage" in workflow
+    assert (
+        "ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' "
+        "|| secrets.OPENCODE_APPROVE_TOKEN != '' }}"
+    ) in workflow
+    assert 'if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then' in workflow
+    assert (
+        "::error::CodeQL coverage audit requires an org-scoped credential "
+        "(PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) to reliably enumerate "
+        "private organization repositories"
+    ) in workflow
+    assert (
+        'if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then\n'
+        '            echo "::error::CodeQL coverage audit requires an '
+        "org-scoped credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) "
+        "to reliably enumerate private organization repositories; the "
+        "repository-scoped github.token fallback cannot see them, which would "
+        'silently narrow this audit to a subset of the organization."\n'
+        "            exit 1\n"
+        "          fi"
+    ) in workflow
+    assert (
+        'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" --jq .state'
+        in workflow
+    )
+    assert (
+        'if [ "$archived" != "true" ]; then\n'
+        '              default_setup_state_json="$RUNNER_TEMP/codeql-default-setup-'
+        '${repository//[^A-Za-z0-9_.-]/_}.json"'
+    ) in workflow
+    assert (
+        "repos/${ORG_LOGIN}/${repository}/code-scanning/analyses?tool_name="
+        "CodeQL&per_page=1"
+    ) in workflow
+    assert "--jq '.[0] | if . then {created_at, error} else null end'" in workflow
+    assert "latest_codeql_analysis=null" in workflow
+    assert (
+        'if [ "$archived" != "true" ]; then\n'
+        '              analysis_json="$RUNNER_TEMP/codeql-analysis-'
+        '${repository//[^A-Za-z0-9_.-]/_}.json"'
+    ) in workflow
+    assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
+
+
+def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
+    """Devin finding: 'Private repositories disappear from audit'.
+
+    ORG_WIDE_CREDENTIAL_AVAILABLE only proves *some* org-scoped secret
+    exists, not that the specific credential used (PR_REVIEW_MERGE_TOKEN
+    when present) can see the full organization. A fine-grained token with
+    an incomplete repository allowlist does not 403 on the enumeration
+    call -- it silently returns a smaller repository list. This pins the
+    real post-enumeration completeness check: known-private, non-archived
+    sentinel repositories must all appear in the enumerated list, or the
+    step fails loudly instead of silently auditing a partial organization.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+
+    codeql_step = workflow.split('- name: "Audit organization CodeQL coverage"\n', 1)
+    if len(codeql_step) == 1:
+        codeql_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)
+    assert len(codeql_step) == 2, "CodeQL coverage step not found in workflow"
+    step_body = codeql_step[1]
+
+    assert 'PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(' in step_body
+    assert '"xtrmLLMBatchPython"' in step_body
+    assert '"linux-cluster-ops"' in step_body
+    assert '"gyeot"' in step_body
+    assert (
+        'jq -e --arg name "$sentinel" \'any(.[]; .name == $name)\' "$repositories_json"'
+        in step_body
+    )
+    assert 'missing_sentinels=()' in step_body
+    assert (
+        'if [ "${#missing_sentinels[@]}" -gt 0 ]; then\n'
+        '            echo "::error::CodeQL coverage audit\'s organization '
+        'repository enumeration is missing known-private sentinel '
+        "repository(ies): ${missing_sentinels[*]}."
+    ) in step_body
+    # The sentinel check must run against the same repositories_json used to
+    # drive the per-repository coverage loop below it, and must exit before
+    # that loop starts on a partial list.
+    sentinel_check_index = step_body.index("PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(")
+    coverage_loop_index = step_body.index("printf '[]\\n' >\"$coverage_json\"")
+    assert sentinel_check_index < coverage_loop_index
+    exit_index = step_body.index(
+        "exit 1", step_body.index("missing_sentinels[@]")
+    )
+    assert exit_index < coverage_loop_index
 
 
 def test_central_semgrep_filters_source_suppressions_and_gates_on_sarif_results() -> None:

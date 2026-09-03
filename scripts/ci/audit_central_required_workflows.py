@@ -33,6 +33,8 @@ REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/security-scan.yml",
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
+    ".github/workflows/osv-scanner-pr.yml",
+    ".github/workflows/scorecard-pr.yml",
 )
 CENTRAL_ALLOWED_RULE_TYPES = {
     "workflows",
@@ -214,6 +216,10 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
                 f"central required workflow {path} must use source repository "
                 f"{SOURCE_REPOSITORY_ID} at {SOURCE_REF}"
             )
+
+    unexpected_paths = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
+    for path in unexpected_paths:
+        errors.append(f"unexpected workflow present in required set: {path}")
 
     review_rules = _typed_rules(payload, "pull_request")
     if len(review_rules) != 1:

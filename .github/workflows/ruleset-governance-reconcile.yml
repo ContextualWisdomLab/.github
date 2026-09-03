@@ -41,7 +41,6 @@ on:
       - "tests/test_solo_maintainer_ruleset_policy.py"
       - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
       - ".github/workflows/ruleset-governance-reconcile.yml"
-  workflow_dispatch:
   schedule:
     - cron: "31 * * * *"
 

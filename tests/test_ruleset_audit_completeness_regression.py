@@ -101,6 +101,28 @@ def test_repository_ruleset_rejects_undeclared_rule_types() -> None:
     assert "repository ruleset has forbidden rule types: ['creation']" in audit.audit_repository_ruleset(payload)
 
 
+def test_central_ruleset_rejects_malformed_and_typeless_rule_entries() -> None:
+    """A non-dict or type-less rule entry must not silently pass rule-type validation."""
+    payload = _central_payload()
+    payload["rules"].extend(["not-a-rule", {"type": ""}])
+
+    assert (
+        "central ruleset has forbidden rule types: ['<malformed>', '<missing>']"
+        in audit.audit_ruleset(payload)
+    )
+
+
+def test_repository_ruleset_rejects_malformed_and_typeless_rule_entries() -> None:
+    """A non-dict or type-less rule entry must not silently pass rule-type validation."""
+    payload = _repository_payload()
+    payload["rules"].extend([123, {"type": None}])
+
+    assert (
+        "repository ruleset has forbidden rule types: ['<malformed>', '<missing>']"
+        in audit.audit_repository_ruleset(payload)
+    )
+
+
 def test_live_audit_collects_all_available_ruleset_drift_before_failing() -> None:
     """One ruleset failure must not suppress other already-fetched audit results."""
     workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(encoding="utf-8")
