@@ -2414,59 +2414,57 @@ def test_changed_line_manifest_compacts_exact_coordinates():
     assert noema.changed_line_manifest([]) == "[]"
 
 
-def test_call_llm_grounds_initial_and_repair_requests_in_authoritative_manifest(monkeypatch):
-    """Reproduce BandScope's third-item miss and prove the retry gets exact coordinates."""
+def test_call_llm_grounds_its_single_request_in_authoritative_manifest(monkeypatch):
+    """Guard the BandScope #1122 root cause: the model's one request must carry
+    every changed-side coordinate, not just the raw diff and a schema example.
+
+    Noema is single-request only (contextual-orchestrator owns repair/failover,
+    see "Noema single-request gateway ownership" in CHANGELOG.md), so unlike an
+    earlier draft of this fix there is no local repair retry to also ground --
+    proving fail-closed rejection of an invented coordinate is already covered
+    generically by validate_substantive_verdict's own direct tests above; this
+    test only needs to prove the manifest reaches the one request Noema sends.
+    """
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
     diff = _coordinate_grounding_diff()
-    valid_reviewed_lines = [
-        {"path": "a.py", "line": 2, "side": "RIGHT", "analysis": "Replacement keeps the value explicit."},
-        {"path": "a.py", "line": 3, "side": "RIGHT", "analysis": "The inserted line is independently reviewed."},
-    ]
-    probes = [
-        {
-            "path": "a.py",
-            "line": 2,
-            "side": "RIGHT",
-            "hypothesis": "The replacement can erase the expected value.",
-            "attack_or_counterexample": "Trace the changed assignment through its caller.",
-            "evidence": "The caller still receives the explicit replacement value.",
-            "outcome": "falsified",
-        },
-        {
-            "path": "a.py",
-            "line": 3,
-            "side": "RIGHT",
-            "hypothesis": "The inserted line can change ordering semantics.",
-            "attack_or_counterexample": "Compare execution order before and after the insertion.",
-            "evidence": "The insertion runs in the intended sequence.",
-            "outcome": "falsified",
-        },
-    ]
-    invalid = {
+    valid = {
         "decision": "approve",
-        "summary": "First attempt uses an invented third coordinate.",
+        "summary": "Both changed lines are independently reviewed.",
         "reviewed_lines": [
-            *valid_reviewed_lines,
-            {"path": "a.py", "line": 99, "side": "RIGHT", "analysis": "Invented coordinate."},
+            {"path": "a.py", "line": 2, "side": "RIGHT", "analysis": "Replacement keeps the value explicit."},
+            {"path": "a.py", "line": 3, "side": "RIGHT", "analysis": "The inserted line is independently reviewed."},
         ],
         "adversarial_validation": {
             "status": "passed",
             "residual_risk": "The fixture does not execute product code.",
-            "probes": probes,
+            "probes": [
+                {
+                    "path": "a.py",
+                    "line": 2,
+                    "side": "RIGHT",
+                    "hypothesis": "The replacement can erase the expected value.",
+                    "attack_or_counterexample": "Trace the changed assignment through its caller.",
+                    "evidence": "The caller still receives the explicit replacement value.",
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "a.py",
+                    "line": 3,
+                    "side": "RIGHT",
+                    "hypothesis": "The inserted line can change ordering semantics.",
+                    "attack_or_counterexample": "Compare execution order before and after the insertion.",
+                    "evidence": "The insertion runs in the intended sequence.",
+                    "outcome": "falsified",
+                },
+            ],
         },
         "findings": [],
     }
-    corrected = {
-        **invalid,
-        "summary": "Repair uses only authoritative coordinates.",
-        "reviewed_lines": valid_reviewed_lines,
-    }
-    contents = iter((json.dumps(invalid), json.dumps(corrected)))
     requests = []
 
     class Response:
-        """Return successive OpenAI-compatible response envelopes."""
+        """Return one OpenAI-compatible response envelope."""
 
         def __enter__(self):
             return self
@@ -2476,11 +2474,11 @@ def test_call_llm_grounds_initial_and_repair_requests_in_authoritative_manifest(
 
         def read(self):
             return json.dumps(
-                {"choices": [{"message": {"content": next(contents)}}]}
+                {"choices": [{"message": {"content": json.dumps(valid)}}]}
             ).encode()
 
     def open_response(_opener, request, **_kwargs):
-        """Capture both request payloads while serving deterministic responses."""
+        """Capture the single request payload while serving the deterministic response."""
         requests.append(request)
         return Response()
 
@@ -2498,16 +2496,11 @@ def test_call_llm_grounds_initial_and_repair_requests_in_authoritative_manifest(
     )
 
     assert verdict["decision"] == "approve"
-    assert len(requests) == 2
-    prompts = [
-        json.loads(request.data)["messages"][1]["content"] for request in requests
-    ]
+    assert len(requests) == 1
+    prompt = json.loads(requests[0].data)["messages"][1]["content"]
     expected_manifest = noema.changed_line_manifest(
         sorted(noema.changed_diff_locations(diff))
     )
-    for prompt in prompts:
-        assert "Authoritative exact changed-side coordinate manifest" in prompt
-        assert expected_manifest in prompt
-        assert "sole coordinate authority" in prompt
-    assert "Noema reviewed line 3 is not an exact changed-side line" in prompts[1]
-    assert "using only exact changed-side locations from the authoritative coordinate manifest" in prompts[1]
+    assert "Authoritative exact changed-side coordinate manifest" in prompt
+    assert expected_manifest in prompt
+    assert "sole coordinate authority" in prompt
