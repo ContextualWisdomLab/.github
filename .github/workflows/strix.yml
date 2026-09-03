@@ -166,16 +166,12 @@ jobs:
 
   strix:
     if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
-    # Large, actively-growing repositories (e.g. contextual-orchestrator) can
-    # legitimately require well over two hours to scan -- this org's own
-    # standing operating directive accepts that central OpenCode/Strix/Noema
-    # scans may take more than two hours per model (docs/product-goal-directive.md).
-    # The scanner gets a 150-minute process budget and a 155-minute total
-    # retry budget; the 170-minute step and 200-minute job leave deterministic
-    # time to preserve partial reports and publish a concrete failure reason.
-    # Hitting any cap is fail-closed and never turns an incomplete scan into
-    # an approval.
-    timeout-minutes: 200
+    # Large repositories can require a legitimate full-hour review. The scanner
+    # gets a 90-minute process budget and a 95-minute total retry budget; the
+    # 100-minute step and 120-minute job leave deterministic time to preserve
+    # partial reports and publish a concrete failure reason. Hitting any cap is
+    # fail-closed and never turns an incomplete scan into an approval.
+    timeout-minutes: 120
     runs-on: ubuntu-latest
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -729,7 +725,7 @@ jobs:
 
       - name: Run Strix (quick)
         if: steps.gate.outputs.enabled == 'true'
-        timeout-minutes: 170
+        timeout-minutes: 100
         # Security invariant for pull_request_target: execute only from the
         # trusted base checkout. The gate copies PR-head blobs into an isolated
         # temporary scope with execute bits stripped, then scans that scope as
@@ -771,11 +767,11 @@ jobs:
           IS_PR_EVIDENCE_RUN: ${{ (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '') && 'true' || 'false' }}
         run: |
           budget_suffix="TIME""OUT"
-          process_budget_seconds="9000"
+          process_budget_seconds="5400"
           export "LLM_${budget_suffix}=900"
           export "STRIX_MEMORY_COMPRESSOR_${budget_suffix}=300"
           export "STRIX_PROCESS_${budget_suffix}_SECONDS=$process_budget_seconds"
-          export "STRIX_TOTAL_${budget_suffix}_SECONDS=9300"
+          export "STRIX_TOTAL_${budget_suffix}_SECONDS=5700"
 
           # Recognized signals that the LLM backend was unavailable / starved.
           # Defined before the gate loop so the bounded retry decision below
@@ -802,14 +798,14 @@ jobs:
           # provider failures do not fail the required check on the first
           # attempt. Genuine findings, configuration failures, and unexpected
           # exit codes never retry; the deadline keeps every path inside the
-          # deterministic 200-minute job budget, and all-terminal outcomes
+          # deterministic 120-minute job budget, and all-terminal outcomes
           # remain fail-closed.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           : > "$strix_run_log"
           strix_terminal_log="$strix_run_log"
           strix_rc=0
           strix_gate_attempt=1
-          strix_gate_deadline=$(( SECONDS + 9600 ))
+          strix_gate_deadline=$(( SECONDS + 6000 ))
           # Reserve the scanner process budget, not the gate's total wrapper
           # budget.  The latter includes setup/cleanup overhead already spent
           # by the current attempt and can make every retry impossible.

@@ -15,8 +15,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.ci import contextual_orchestrator_review_policy as policy
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
 _SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
@@ -268,118 +266,6 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
             {"role": "user", "content": "Reply with just 'OK'."},
         ]
         assert "tools" not in payload
-
-
-def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A ReviewPreflightError's report must reach the job log, not just the artifact.
-
-    Regression coverage for the gap that made the launcher's own internal
-    preflight (distinct from the sidecar script's external curl-based gateway
-    preflight) fail with only "review sidecar preflight failed" visible and
-    the real per-route rejection reasons hidden behind
-    omitted_unstructured_lines in the sanitized stream.
-    """
-    namespace = _load_launcher()
-    log_preflight_rejections = namespace.get("_log_preflight_rejections")
-    assert callable(log_preflight_rejections)
-
-    secret = "sk-secret-must-not-enter-evidence"
-    report = {
-        "routes": [
-            {
-                "agent_id": "nim_nano_free",
-                "provider": "nvidia_nim",
-                "model": "nvidia/nemotron-3-nano-30b-a3b",
-                "status": "rejected",
-                "error_type": "ProviderUpstreamError",
-                "http_status": 429,
-            },
-            {
-                "agent_id": "or_ds_r1",
-                "provider": "openrouter",
-                "model": "deepseek/deepseek-r1:free",
-                "status": "rejected",
-                "error_type": f"RuntimeError {secret}",
-            },
-            {
-                "agent_id": "ready_one",
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "status": "ready",
-            },
-        ],
-    }
-    log_preflight_rejections(report)
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert secret not in captured.err
-    assert (
-        "preflight_route_rejected provider=nvidia_nim "
-        "error_type=ProviderUpstreamError http_status=429"
-    ) in captured.err
-    # The openrouter route's error_type ("RuntimeError <secret>") is not a
-    # Python identifier, so _log_preflight_rejections' own isidentifier()
-    # guard replaces it with the bounded placeholder "UnknownError" rather
-    # than printing it as-is -- this helper is itself the bound that keeps
-    # an unexpected, non-identifier error_type (and anything embedded in it,
-    # such as the secret above) out of the job log.
-    assert "preflight_route_rejected provider=openrouter error_type=UnknownError" in captured.err
-    assert "RuntimeError" not in captured.err
-    assert "ready_one" not in captured.err
-
-
-def test_log_preflight_rejections_covers_nested_primary_attempt(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A fallback-pool failure must also surface the primary pool's rejections."""
-    namespace = _load_launcher()
-    log_preflight_rejections = namespace.get("_log_preflight_rejections")
-    assert callable(log_preflight_rejections)
-
-    report = {
-        "routes": [
-            {
-                "provider": "openai",
-                "status": "rejected",
-                "error_type": "ProviderUpstreamError",
-                "http_status": 503,
-            },
-        ],
-        "primary_attempt": {
-            "routes": [
-                {
-                    "provider": "bytez",
-                    "status": "rejected",
-                    "error_type": "InvalidChatResponse",
-                },
-            ],
-        },
-    }
-    log_preflight_rejections(report)
-    captured = capsys.readouterr()
-    assert "preflight_route_rejected provider=bytez error_type=InvalidChatResponse" in captured.err
-    assert (
-        "preflight_route_rejected provider=openai error_type=ProviderUpstreamError http_status=503"
-        in captured.err
-    )
-
-
-def test_log_preflight_rejections_ignores_malformed_report(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A report missing the expected shape must not raise or print anything."""
-    namespace = _load_launcher()
-    log_preflight_rejections = namespace.get("_log_preflight_rejections")
-    assert callable(log_preflight_rejections)
-
-    log_preflight_rejections({})
-    log_preflight_rejections({"routes": "not-a-list"})
-    log_preflight_rejections({"routes": ["not-a-dict"]})
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
 
 
 def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -> None:
@@ -1454,57 +1340,6 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
 
 
-def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The per-account cap falls back to ``policy.DEFAULT_ACCOUNT_CAP``, not the total budget.
-
-    Regression for a real, observed failure mode
-    (ContextualWisdomLab/.github#1415, reported as "빈 깡통 경로 너무 많다"): a
-    sibling helper (``_catalog_family_cap()``) fell back to
-    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the *total* preflight budget --
-    instead of the intended per-account cap whenever its env var was unset.
-    That silently disabled per-account diversification: in a live production
-    run, two NVIDIA NIM credentials sharing one rate-limited upstream jointly
-    consumed all 12 preflight slots, of which 10 (83%) were then rejected via
-    429/404/timeout. This module's own equivalent helper must never resolve
-    to the same value as the total-routes budget when given the real
-    ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly smaller.
-    """
-    namespace = _load_launcher()
-    monkeypatch.delenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", raising=False)
-    cap = namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP)
-    assert cap == policy.DEFAULT_ACCOUNT_CAP
-    assert cap != namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-    assert cap < namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-
-
-def test_catalog_account_cap_honors_an_explicit_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still takes effect."""
-    namespace = _load_launcher()
-    monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
-    assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
-
-
-def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:
-    """``main()`` must wire the cap default from ``policy.DEFAULT_ACCOUNT_CAP``.
-
-    A hand-typed literal (or, worse, a total-routes-scale constant) can
-    silently drift out of sync with ``policy.DEFAULT_ACCOUNT_CAP`` with no
-    test catching it -- the exact drift that produced
-    ContextualWisdomLab/.github#1415's real preflight-budget waste. This
-    source-level contract test pins both ``build_zdr_prioritized_catalog``
-    call sites in ``main()`` to the single source of truth and forbids the
-    total-routes constant from ever reappearing as the account-cap fallback.
-    """
-    source = _LAUNCHER.read_text(encoding="utf-8")
-    assert source.count("account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP)") == 2
-    assert "ORCHESTRATOR_CATALOG_FAMILY_CAP" not in source
-    assert 'os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")' not in source
-
-
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
     """Privacy admission precedes the free-first tier decision."""
     namespace = _load_launcher()
@@ -1531,44 +1366,16 @@ def test_discovery_counts_survive_stage_specific_policy_reports() -> None:
     namespace = _load_launcher()
     base = {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     rows = [
-        {"cost_evidence": "free", "provider": "nvidia_nim"},
-        {"cost_evidence": "priced", "provider": "openai"},
-        {"cost_evidence": "priced", "provider": "openai"},
-        {"cost_evidence": "unknown", "provider": "bytez"},
+        {"cost_evidence": "free"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "priced"},
+        {"cost_evidence": "unknown"},
     ]
-    enriched = namespace["_with_discovery_counts"](
-        base, rows, provider_account=policy.provider_account
-    )
+    enriched = namespace["_with_discovery_counts"](base, rows)
     assert base == {"selected_count": 1, "selected": [{"model": "priced/model"}]}
     assert [enriched[key] for key in (
         "total_routes", "total_free_routes", "total_priced_routes", "total_unknown_routes"
     )] == [4, 1, 2, 1]
-    assert enriched["free_account_diversity"] == 1
-
-
-def test_discovery_counts_recompute_diversity_from_full_discovery_not_the_stage() -> None:
-    """A stage report's own narrower free-route set must not be trusted.
-
-    Regression for a real bug: the ``auto``-pool primary stage only sees
-    ZDR-admitted free rows, and the priced-fallback stage sees no free rows
-    at all, so either stage's internally computed ``free_account_diversity``
-    (whatever ``build_zdr_prioritized_catalog`` returned from its own
-    narrower input) would undercount or read zero even when the full
-    discovery has multiple credential accounts with free routes.
-    """
-    namespace = _load_launcher()
-    stage_report_from_priced_only_rows = {"free_account_diversity": 0}
-    full_discovery_rows = [
-        {"cost_evidence": "free", "provider": "nvidia_nim"},
-        {"cost_evidence": "free", "provider": "openrouter"},
-        {"cost_evidence": "priced", "provider": "openai"},
-    ]
-    enriched = namespace["_with_discovery_counts"](
-        stage_report_from_priced_only_rows,
-        full_discovery_rows,
-        provider_account=policy.provider_account,
-    )
-    assert enriched["free_account_diversity"] == 2
 
 
 def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> None:
@@ -1635,30 +1442,6 @@ def test_sidecar_preserves_diagnostics_and_probes_the_real_gateway() -> None:
     assert '> "$sidecar_stdout" 2> "$sidecar_stderr" &' not in sidecar
 
 
-def test_gateway_preflight_rejection_prints_bounded_evidence_to_the_job_log() -> None:
-    """A rejected gateway preflight must surface error_code/http_status directly.
-
-    Before this, the bounded ``error_code``/``http_status`` pair was written
-    only into the ``CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE`` artifact
-    file, invisible in the job log a CI operator reads first -- exactly the
-    gap that made a real "every free route rejected" failure look identical
-    to an opaque "gateway preflight returned HTTP 502" in normal CI output.
-    """
-    sidecar = _SIDECAR.read_text(encoding="utf-8")
-
-    assert (
-        'print(f"[contextual-orchestrator-sidecar] gateway preflight rejected: '
-        'error_code={code} http_status={status}")'
-    ) in sidecar
-    # This print is not routed through the sanitizer, so its inputs must stay
-    # bounded: code is regex-validated and status is a plain int, never raw
-    # provider response text.
-    assert (
-        'if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):'
-        in sidecar
-    )
-
-
 def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     """Provider bodies, exception messages, URLs, and secrets never reach artifacts."""
     namespace = _load_sanitizer()
@@ -1688,13 +1471,6 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line(
         "provider_discovery_failed provider=bytez code=http_status_401"
     ) == "provider_discovery_failed provider=bytez code=http_status_401"
-    assert sanitize_line(
-        "preflight_route_rejected provider=nvidia_nim error_type=ProviderUpstreamError "
-        "http_status=429 upstream body sk-secret"
-    ) == "preflight_route_rejected provider=nvidia_nim error_type=ProviderUpstreamError http_status=429"
-    assert sanitize_line(
-        "preflight_route_rejected provider=bytez error_type=InvalidChatResponse"
-    ) == "preflight_route_rejected provider=bytez error_type=InvalidChatResponse"
     assert sanitize_line("provider response sk-secret") is None
 
 

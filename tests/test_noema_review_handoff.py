@@ -111,11 +111,6 @@ def test_noema_state_ignores_reviews_for_other_heads():
     assert handoff.noema_review_state([reviews[0]], HEAD) is None
 
 
-def test_noema_state_skips_newer_nonterminal_review():
-    pending = noema_review("PENDING", HEAD)
-    assert handoff.noema_review_state([noema_review("APPROVED", HEAD), pending], HEAD) == "APPROVED"
-
-
 def test_noema_state_ignores_forged_marker_from_other_actor():
     forged = noema_review()
     forged["user"] = {"login": "untrusted-reviewer"}
@@ -124,22 +119,6 @@ def test_noema_state_ignores_forged_marker_from_other_actor():
 
     assert handoff.noema_review_state([forged], HEAD) is None
     assert handoff.noema_review_state([unmarked], HEAD) is None
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        f"<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{OTHER_HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={OTHER_HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-        f"- Head SHA: `{HEAD}`\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->\n<!-- noema-review-gate head_sha={HEAD} decision=approved -->",
-    ],
-)
-def test_noema_state_rejects_missing_stale_or_duplicate_head_bindings(body):
-    value = noema_review()
-    value["body"] = body
-    assert handoff.noema_review_state([value], HEAD) is None
 
 
 def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):

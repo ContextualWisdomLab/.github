@@ -20,10 +20,12 @@ on:
 concurrency:
   group: >-
     noema-review-${{
-    github.event.pull_request.base.repo.full_name ||
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
-    github.event.client_payload.pr_number ||
+    github.event_name == 'pull_request_target' && github.event.pull_request.base.repo.full_name ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository ||
+    github.repository }}-${{ github.event_name }}-${{
+    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
+    github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number ||
     github.run_id }}
   cancel-in-progress: true
 
@@ -304,8 +306,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
-          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
-          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -325,6 +325,6 @@ jobs:
           export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
-          python3 -m scripts.ci.noema_review_gate \
+          python3 scripts/ci/noema_review_gate.py \
             --repo "$TARGET_REPOSITORY" \
             --pr-number "$PR_NUMBER"

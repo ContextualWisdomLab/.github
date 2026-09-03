@@ -76,52 +76,12 @@ def run_json(args: list[str]) -> Any:
     return json.loads(run(["gh", *args]) or "null")
 
 
-RATE_LIMIT_ERROR_MARKERS = ("api rate limit exceeded", "secondary rate limit")
-ISSUE_COMMENTS_RETRY_ATTEMPTS = 2
-ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS = 15
-
-
-def is_rate_limit_error(exc: BaseException) -> bool:
-    """Return whether an exception's message names a GitHub API rate limit."""
-    message = str(exc).lower()
-    return any(marker in message for marker in RATE_LIMIT_ERROR_MARKERS)
-
-
 def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
-    """Return issue comments for a PR, retrying transient rate-limit errors.
-
-    The shared OpenCode app installation's API budget is contended by many
-    concurrent org-wide scheduled workflows, so a rate-limit error here is
-    often transient. Retry it with a short linear backoff up to
-    ISSUE_COMMENTS_RETRY_ATTEMPTS times before propagating; any other error,
-    or a rate-limit error past the retry budget, propagates immediately.
-    ``per_page=100`` bounds the paginated request count for PRs with a long
-    review-comment history. ``-X GET`` is explicit and required: ``gh api``
-    defaults to POST once any ``-f``/``-F`` field is present unless
-    ``-X``/``--method`` overrides it, and a POST against this endpoint with
-    no ``body`` field fails every call outright.
-    """
-    attempt = 0
-    while True:
-        try:
-            pages = run_json(
-                [
-                    "api",
-                    f"repos/{repo}/issues/{number}/comments",
-                    "--paginate",
-                    "--slurp",
-                    "-X",
-                    "GET",
-                    "-f",
-                    "per_page=100",
-                ]
-            )
-            return [comment for page in pages for comment in page]
-        except RuntimeError as exc:
-            if attempt >= ISSUE_COMMENTS_RETRY_ATTEMPTS or not is_rate_limit_error(exc):
-                raise
-            attempt += 1
-            time.sleep(ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS * attempt)
+    """Return issue comments for a PR."""
+    pages = run_json(
+        ["api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--slurp"]
+    )
+    return [comment for page in pages for comment in page]
 
 
 def recent_fix_marker_exists(
@@ -424,20 +384,12 @@ def process_queue(args: argparse.Namespace) -> int:
             prs_needing_comments.append(pr)
 
     comments_by_pr: dict[int, list[dict[str, Any]]] = {}
-    comment_fetch_errors: dict[int, str] = {}
     if len(prs_needing_comments) <= 1:
         for pr in prs_needing_comments:
             pr_number = int(pr["number"])
-            try:
-                comments_by_pr[pr_number] = issue_comments(args.repo, pr_number)
-            except Exception as exc:
-                comment_fetch_errors[pr_number] = str(exc)
+            comments_by_pr[pr_number] = issue_comments(args.repo, pr_number)
     else:
-        # Bounded well below GitHub's per-installation rate-limit budget: this
-        # scheduler is one of many concurrent org-wide callers sharing the
-        # same OpenCode app installation, so a wide burst of simultaneous
-        # comment fetches here can exhaust that shared budget on its own.
-        max_workers = min(4, len(prs_needing_comments))
+        max_workers = min(10, len(prs_needing_comments))
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers
         ) as executor:
@@ -448,17 +400,16 @@ def process_queue(args: argparse.Namespace) -> int:
                 """Fetch one PR's issue comments for parallel queue inspection."""
                 return pr_number, issue_comments(args.repo, pr_number)
 
-            futures = {
-                executor.submit(fetch_comments, int(pr["number"])): int(pr["number"])
+            futures = [
+                executor.submit(fetch_comments, int(pr["number"]))
                 for pr in prs_needing_comments
-            }
+            ]
             for future in concurrent.futures.as_completed(futures):
-                pr_number = futures[future]
                 try:
-                    _, comments = future.result()
+                    pr_number, comments = future.result()
                     comments_by_pr[pr_number] = comments
-                except Exception as exc:
-                    comment_fetch_errors[pr_number] = str(exc)
+                except Exception:
+                    pass
 
     for pr in prs:
         inspected += 1
@@ -471,24 +422,8 @@ def process_queue(args: argparse.Namespace) -> int:
                 }
             )
             continue
-        pr_number = int(pr["number"])
-        if pr_number in comment_fetch_errors:
-            decisions.append(
-                {
-                    "pr": pr["number"],
-                    "action": "wait",
-                    "reasons": [
-                        "issue comment fetch failed; deferring to next scheduled "
-                        f"pass: {comment_fetch_errors[pr_number]}"
-                    ],
-                }
-            )
-            print(
-                f"PR #{pr['number']}: wait: issue comment fetch failed; "
-                "deferring to next scheduled pass"
-            )
-            continue
         try:
+            pr_number = int(pr["number"])
             action, reasons = inspect_pr(
                 args.repo,
                 pr,

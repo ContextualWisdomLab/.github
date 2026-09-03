@@ -24,7 +24,6 @@ def test_noema_public_dns_result_reaches_valid_model_response(
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://review.example.invalid/v1/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
     monkeypatch.setattr(
         noema.socket,
         "getaddrinfo",
@@ -79,10 +78,7 @@ def test_noema_handoff_returns_current_terminal_state() -> None:
         {
             "commit_id": head,
             "user": {"login": handoff.NOEMA_REVIEW_AUTHOR},
-            "body": (
-                f"- Head SHA: `{head}`\n"
-                f"<!-- noema-review-gate head_sha={head} decision=approve -->"
-            ),
+            "body": handoff.NOEMA_REVIEW_MARKER,
             "state": "approved",
         }
     ]

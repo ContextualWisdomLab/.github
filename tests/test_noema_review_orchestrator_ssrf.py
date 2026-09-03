@@ -120,7 +120,6 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_MODEL", "orchestrator/free")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:18080/v1/chat/completions")
-    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
 
     seen = {}
 

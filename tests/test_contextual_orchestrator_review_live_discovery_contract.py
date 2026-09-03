@@ -91,7 +91,7 @@ def test_auto_pool_excludes_unknown_cost_and_remains_provider_diverse() -> None:
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_live_discovery_report()),
         limit=6,
-        account_cap=2,
+        family_cap=2,
         zdr_endpoints=PRICED_ZDR_FEED,
         pool="auto",
     )
