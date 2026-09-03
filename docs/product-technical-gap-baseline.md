@@ -4127,3 +4127,64 @@ applied for `.github`'s own hardening work; also the second real, independent CI
 directly above) — both genuine bugs, neither a false alarm, consistent with this session's practice of
 verifying every Autofix finding against the actual job log before acting rather than assuming either "real
 bug" or "noise" by default.
+
+## `.github#1661` — Devin Review's cross-repository cleanup finding, fixed through 3 rounds of adversarial verification — 2026-09-03
+
+**Trigger.** Devin Review posted 4 comments on `.github#1661`. One (a summary comment, no inline thread) needed
+no action. Of the three inline findings, one was a genuine, fixable bug; the other two were already-documented,
+already-adversarially-reviewed, deliberately accepted limitations from earlier passes this same day. Each got
+a `gh api` reply explaining what was done (or why not) and the thread was resolved via GraphQL
+`resolveReviewThread` — replying alone does not resolve a thread; the mutation is a separate call keyed by the
+thread's `id` (found via `reviewThreads(first: 100) { nodes { id comments(first: 1) { nodes { databaseId } } } }`,
+matched against each comment's REST `id`).
+
+**Comment 2 (BUG, real, fixed).** "Sibling retry cleanup never authenticates": the `cancel-superseded-noema-runs`
+job's `repository_dispatch` coverage (added earlier this session) calls `TARGET_REPOSITORY`'s Actions/PR APIs,
+but a `repository_dispatch` retry is sent to `.github` itself (the documented "Default-branch-only retry
+entrypoint"), so the run executes in `.github`'s own context and `github.token` is scoped only to `.github` —
+every cross-repo `gh api` call in the cancel loop silently fails, and superseded sibling runs keep consuming
+runners indefinitely (Noema inference has no wall-clock deadline by design). Confirmed real: the dominant path
+(`pull_request_target` via the required-workflow ruleset, which runs the job IN the target repo's own context)
+is unaffected, but the manual retry entrypoint — the one this session used earlier today for `naruon#1539`'s
+stuck strix check — was silently non-functional for its own stated purpose whenever the retry named a sibling.
+
+**Fix, and what 3 rounds of adversarial verification caught along the way.** Round 1: mint a repository-scoped
+GitHub App installation token (mirroring `noema-review`'s own existing cross-repo publication mechanism) scoped
+to `actions:write` + `pull-requests:read` on just the target repo, used only when `TARGET_REPOSITORY != github.repository`.
+Also fixed an adjacent, independently-found bug while reading this code: the eviction-detection step's own
+run-lookup queried `TARGET_REPOSITORY` for a run ID (`CURRENT_RUN_ID` = `github.run_id`) that only ever belongs
+to `github.repository` — always wrong whenever the two diverge, regardless of token scope. A first 3-lens
+adversarial pass (GHA semantics / security-least-privilege / logic-edge-cases, each independently verified)
+found round 1 clean on the credential-minting mechanism itself but caught two real bugs in its integration:
+the mint step lacked `continue-on-error`, so a real mint failure (App not installed on a sibling repo, rotated
+key — not just "unconfigured") hard-failed the whole ancillary job instead of degrading gracefully like every
+other call in it, contradicting this job's own stated "warn and skip, never fail over an ancillary cleanup
+path" design; and the eviction-detection step's *second* cross-repo call (the PR live-head re-check) was never
+wired to the new token at all. Round 2 fixed both — but its own fix for the second issue used one step-level
+`GH_TOKEN` override for the whole step, which a follow-up targeted verification pass caught as wrong: that
+step makes *two* calls needing *two different* repository scopes (one against `CURRENT_REPOSITORY`, one against
+`TARGET_REPOSITORY`), so a single blanket token broke the first call for exactly the case meant to fix the
+second. Round 3 replaced the blanket override with a per-call token (`CLEANUP_APP_TOKEN` as a step-level env
+alias, applied inline via `GH_TOKEN="${CLEANUP_APP_TOKEN:-$GH_TOKEN}"` only on the one call that needs it),
+manually traced through all three reachable scenarios (same-repo / cross-repo-mint-succeeds / cross-repo-mint-
+fails-or-unconfigured), and a final targeted verification pass confirmed all three correct with zero findings.
+Full suite (2760 tests after merging 8 unrelated upstream commits) passes throughout; pushed as `b310f52`.
+
+**Comments 3 and 4 (already-accepted limitations, not re-touched).** Comment 3 ("eviction detection has a
+blind window": checks once, then exits) and Comment 4 (`noema_review_gate.py`'s transport-phase telemetry is
+an estimate, not a measurement, for ambiguous `urlopen` failures) both restate gaps this session's own earlier
+work today already found, adversarially reviewed across 3 rounds each, and explicitly accepted as documented
+limitations — Comment 3 matches the identical-head-duplicate gap recorded in
+`docs/doctoring/noema-review-repository-dispatch-cleanup-and-pending-slot-eviction-20260903.md` (a 4th attempt
+to close it introduced two new real bugs and was reverted rather than shipped); Comment 4 matches the
+`urlopen`-single-blocking-call ambiguity recorded in this document's "Items 4/39 resolved" section (commits
+bebd7c7/e7b29f2/5c9d30e). Replied to both with the specific prior-work citations and resolved without further
+code changes — re-litigating an already-adversarially-settled tradeoff on every fresh review pass would never
+converge.
+
+**Cross-reference.** `contextual-orchestrator`'s own gateway reliability surfaced fresh evidence in parallel
+today (`naruon#1539` noema-review: 1332.6s stall → HTTP 502; `mightyETL#330` noema-review: 2161.9s stall → HTTP
+502; both `phase=connecting` due to stale `TRUSTED_SOURCE_REF` SHA-pinning predating today's bebd7c7/e7b29f2/
+5c9d30e phase-labeling fixes, not a regression) — handed off to the "Contextual-orchestrator 통합 개선 (host 2)"
+peer session rather than investigated here, since neither PR had anything in its own diff to fix (the failure
+is entirely upstream) and this session was mid-way through the adversarial-verification work above.
