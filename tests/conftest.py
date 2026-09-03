@@ -11,12 +11,14 @@ from scripts.ci import materialize_base_python_requirements as materializer
 
 @pytest.fixture(autouse=True)
 def clear_trusted_uv_process_caches() -> Iterator[None]:
-    """Isolate process-global trusted uv caches even when a test fails early."""
-    materializer._install_trusted_uv.cache_clear()
-    materializer._install_trusted_uv_url_opener.cache_clear()
+    """Isolate the original process-global trusted uv caches across monkeypatches."""
+    install_cache_clear = materializer._install_trusted_uv.cache_clear
+    opener_cache_clear = materializer._install_trusted_uv_url_opener.cache_clear
+    install_cache_clear()
+    opener_cache_clear()
     yield
-    materializer._install_trusted_uv.cache_clear()
-    materializer._install_trusted_uv_url_opener.cache_clear()
+    install_cache_clear()
+    opener_cache_clear()
 
 
 class FakeHttpResponse:

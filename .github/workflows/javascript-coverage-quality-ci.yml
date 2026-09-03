@@ -1,0 +1,30 @@
+name: JavaScript Coverage Gate Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/javascript-coverage-quality-ci.yml'
+      - '.github/workflows/exact-head-coverage-quality-gate.yml'
+      - 'scripts/ci/javascript_coverage_gate.py'
+      - 'tests/test_javascript_coverage_gate.py'
+      - 'tests/test_javascript_coverage_storybook_boundary.py'
+      - 'tests/test_exact_head_coverage_quality_gate_contract.py'
+permissions:
+  contents: read
+
+concurrency:
+  group: javascript-coverage-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head-coverage-contract:
+    uses: ./.github/workflows/exact-head-coverage-quality-gate.yml
+    with:
+      timeout_minutes: 15
+      pytest_target: tests
+      coverage_include: scripts/ci/javascript_coverage_gate.py
+      compileall_targets: >-
+        scripts/ci/javascript_coverage_gate.py
+        tests/test_javascript_coverage_gate.py
+        tests/test_javascript_coverage_storybook_boundary.py

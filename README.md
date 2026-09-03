@@ -91,9 +91,11 @@ workflows into siblings.
    Do not add local copies of OpenCode, Strix, Noema, or the merge scheduler.
 3. On each default-branch pull request, GitHub creates the required checks in
    the sibling context. Review judgment stays with OpenCode (and the
-   independent Noema reviewer). Mechanical branch update and merge stay with
-   GitHub Actions in that sibling context, using the configured central
-   mutation credential.
+   independent Noema reviewer). Stacked pull requests targeting feature
+   branches do not receive injected required checks; the central organization
+   sweep dispatches their OpenCode review through its separate bounded stacked
+   review budget. Mechanical branch update and merge stay with GitHub Actions
+   in that sibling context, using the configured central mutation credential.
 4. Optional: call a reusable workflow instead of copying it.
 
 ```yaml

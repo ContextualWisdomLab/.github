@@ -22,7 +22,7 @@ WRAPPER_CLIENT_PAYLOAD_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 WRAPPER_PAYLOAD_KEY_RE = re.compile(r"^\s+([A-Za-z_][A-Za-z0-9_]*):", re.MULTILINE)
-REQUIRED_IDENTITY_KEYS = frozenset(
+FIRST_HOP_IDENTITY_KEYS = frozenset(
     {
         "target_repository",
         "pr_number",
@@ -30,11 +30,18 @@ REQUIRED_IDENTITY_KEYS = frozenset(
         "source_comment_id",
     }
 )
-OPENCODE_FORWARD_SAFETY_KEYS = frozenset(
+SECOND_HOP_EXPECTED_KEYS = frozenset(
     {
+        "target_repository",
+        "pr_number",
+        "pr_head_sha",
+        "pr_base_sha",
+        "base_branch",
         "enable_auto_merge",
         "update_branches",
         "merge_mode",
+        "trigger_reviews",
+        "agent_invocation_key",
     }
 )
 
@@ -98,8 +105,8 @@ def test_mention_router_payloads_stay_within_github_key_limit() -> None:
 
     assert len(noema) <= limit
     assert len(opencode) <= limit
-    assert REQUIRED_IDENTITY_KEYS <= noema.keys()
-    assert REQUIRED_IDENTITY_KEYS <= opencode.keys()
+    assert FIRST_HOP_IDENTITY_KEYS <= noema.keys()
+    assert FIRST_HOP_IDENTITY_KEYS <= opencode.keys()
     assert {
         "trigger_reviews",
         "review_dispatch_limit",
@@ -117,16 +124,17 @@ def test_wrapper_forwarders_stay_within_github_key_limit() -> None:
     noema_keys = _wrapper_forward_payload_keys(
         NOEMA_WORKFLOW.read_text(encoding="utf-8")
     )
-    opencode_keys = _wrapper_forward_payload_keys(
-        OPENCODE_WORKFLOW.read_text(encoding="utf-8")
-    )
+    opencode_workflow = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    opencode_keys = _wrapper_forward_payload_keys(opencode_workflow)
 
     assert len(noema_keys) <= limit
-    assert len(opencode_keys) <= limit
-    assert REQUIRED_IDENTITY_KEYS <= set(noema_keys)
-    assert REQUIRED_IDENTITY_KEYS <= set(opencode_keys)
-    assert OPENCODE_FORWARD_SAFETY_KEYS <= set(opencode_keys)
-    assert "trigger_reviews" not in opencode_keys
+    assert len(opencode_keys) == limit
+    assert FIRST_HOP_IDENTITY_KEYS <= set(noema_keys)
+    assert set(opencode_keys) == SECOND_HOP_EXPECTED_KEYS
+    assert re.search(
+        r"^\s+trigger_reviews:\s+true,$", opencode_workflow, re.MULTILINE
+    )
+    assert "source_comment_id" not in opencode_keys
     assert "review_dispatch_limit" not in opencode_keys
     assert "requested_agent" not in opencode_keys
     assert "requested_by" not in opencode_keys

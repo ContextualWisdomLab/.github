@@ -8,7 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission, ecosystem UML, cross-cutting
 disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap), the live
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
-truth), and operate the Project per [`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
+truth), the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md)
+(not merge authorization; Figma File ID for this repo is N/A), and operate the Project per
+[`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md). The standing
+autonomous operating directive for the continuous PR review→fix→merge→develop loop across the
+ecosystem — the full text a `/goal` session's length-capped pointer refers to — is
+[`docs/product-goal-directive.md`](docs/product-goal-directive.md); read it in full before running or
+configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
@@ -25,9 +31,11 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
    An organization required-workflow ruleset (`CWL Central required workflows`, id `18156473`) runs
    Strix, OpenCode Review, and the PR Review Merge Scheduler from this repo in each target
    repository's context. Repository-local copies of these workflows are drift sources, not
-   repo-specific contracts. See `README.md` (operator overview),
-   `docs/pr-review-and-merge-procedure.md` (bot/agent procedure), and
-   `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo DX/UX transfer decisions).
+   repo-specific contracts. Central Semgrep binds one job-level `SEMGREP_IMAGE`
+   digest for log evidence, `docker manifest inspect`, and `docker run`. See
+   `README.md` (policy summary), `docs/pr-review-and-merge-procedure.md`
+   (bot/agent procedure), and `PR_GOVERNANCE_AUDIT.md` (live audit + per-repo
+   DX/UX transfer decisions).
 3. **Infrastructure as code** — `infra/cloudflare/` manages the org's DNS zones and Cloudflare Pages
    hosting declaratively (`zones.json` + `reconcile.sh`, curl + jq only; dry-run by default, writes
    only on explicit manual `mode = apply`).
@@ -37,7 +45,10 @@ This is the ContextualWisdomLab **organization-wide `.github` special repository
 **OpenCode judges PRs; GitHub Actions performs mechanical updates and merges.** OpenCode approval is
 evidence-gated (changed files, CodeGraph evidence, Change Flow DAG, test/coverage/docstring evidence,
 an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/sandboxed_web_e2e.py`,
-split `Developer experience:` / `User experience:` sections). The scheduler updates a PR branch only
+split `Developer experience:` / `User experience:` sections). Deterministic
+code may repair only trusted `path:line` bindings on LLM probes that already
+carry an independent proof and source-line digest; it never invents observed
+results. The scheduler updates a PR branch only
 when the latest review is approved, no current-head check has failed, and GitHub reports the PR as
 behind. The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
 PRs repair guidance. A separate edit-capable autofix flow
@@ -118,11 +129,17 @@ repeatable compile command.
   without running the test suite will break CI.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
-- **Product hourly callers** stay thin. Do not hard-code OriginWeave, naruon, or Keyverse
+- **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
 - **pip-audit** of hashed locks goes through `scripts/ci/pip_audit_requirements.py`.
   Do not call `pip-audit -r` on a complete lock (that re-resolves and can false-fail).
+- **Central review routes through the vendored contextual-orchestrator gateway.**
+  `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
+  (the five provider secrets flow into its KV; the writer runs
+  `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
+  exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
@@ -133,6 +150,15 @@ repeatable compile command.
   breakout. Do not reintroduce bash fast-path extraction.
 - **Cloudflare changes are dry-run by default**; nothing is deleted unless `prune = true` is set
   explicitly. PRs never see the Cloudflare API token.
+- **Required workflows ignore `on:` filters.** Org ruleset `18156473` runs the central workflow file
+  in each target repository's context and discards its `paths`, `paths-ignore`, `branches`, and
+  `types` there (confirmed live: `bandscope` has no local `codeql-pr.yml`/`strix.yml`/
+  `security-scan.yml`, yet ruleset-injected runs of all three exist). `.github` is excluded from
+  that ruleset and instead uses classic branch protection with 14 named required contexts, where a
+  path-filtered workflow leaves its context Pending forever. Never add a trigger-level filter to a
+  required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
+  job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
+  `docs/doctoring/required-workflow-path-filter-boundary.md`.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and

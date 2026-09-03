@@ -43,12 +43,6 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   detect-python:
     name: Detect Python
     if: github.event.action != 'closed'
@@ -66,14 +60,14 @@ jobs:
         run: |
           set -euo pipefail
           has_python=false
-          if find . -type f -name '*.py' -not -path './.git/*' | head -1 | grep -q .; then
+          if find . -type f -name '*.py' -not -path './.git/*' -print -quit | grep -q .; then
             has_python=true
           fi
           has_manifest=false
           if find . -type f \
               \( -name 'requirements*.txt' -o -name 'pyproject.toml' \
                  -o -name 'pylock.*.toml' \) \
-              -not -path './.git/*' | head -1 | grep -q .; then
+              -not -path './.git/*' -print -quit | grep -q .; then
             has_manifest=true
           fi
           echo "has_python=${has_python}" >> "$GITHUB_OUTPUT"
@@ -191,7 +185,7 @@ jobs:
         if: always() && hashFiles('bandit-results.sarif') != ''
         # The explicit gate below still fails on every Medium+ Bandit result.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: bandit-results.sarif
           category: bandit

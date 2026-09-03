@@ -165,6 +165,61 @@ def test_failed_same_directory_group_still_skips_partial_candidates(tmp_path) ->
     assert stderr.getvalue().count("httpx>=0.27") == 2
 
 
+def test_does_not_combine_multiple_independent_root_environments(tmp_path) -> None:
+    """Independent root locks must not become one conflicting recovery closure."""
+    for index, source in enumerate(
+        (
+            "requirements-opencode-review-ci.txt",
+            "requirements-security-ci.txt",
+            "requirements-security-tools.txt",
+            "requirements.lock",
+        )
+    ):
+        write_candidate(
+            tmp_path,
+            generated_file=f"requirements-{index:03d}.txt",
+            source=source,
+        )
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        """Make two environments complete and two independently incomplete."""
+        commands.append(command)
+        requirements = [
+            command[index + 1]
+            for index, argument in enumerate(command)
+            if argument == "-r"
+        ]
+        if len(requirements) != 1:
+            raise AssertionError("independent root environments were combined")
+        if "--dry-run" in command and requirements[0].endswith(
+            ("requirements-001.txt", "requirements-002.txt")
+        ):
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=(
+                    "ERROR: In --require-hashes mode, all requirements must have "
+                    "their versions pinned with ==: pip"
+                ),
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert len(commands) == 6
+    assert "candidates=4 installed=2 skipped=2" in stdout.getvalue()
+    assert stderr.getvalue().count("pip") == 2
+
+
 @pytest.mark.parametrize(
     "failure_output",
     [
