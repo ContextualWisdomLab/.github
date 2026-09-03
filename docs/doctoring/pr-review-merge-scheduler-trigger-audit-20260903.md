@@ -62,13 +62,20 @@ in-progress run. This matches the same correctly-scoped pattern already confirme
 not exist on this branch until it merges) — **no self-defeating cancellation bug was found in this file.**
 
 A peer session, working the same live-evidence investigation, found and fixed a real bug in a related
-file: `current-head-run-coalescer.yml` (the mechanism specifically meant to prune stale-SHA queued runs)
-carried `cancel-in-progress: true` on its own PR-scoped concurrency group — but under today's unusually high
-push volume from four concurrent agent sessions, each new push cancelled the coalescer's own prior in-flight
-attempt before it could get a runner, so it never actually executed for a busy PR. Fixed in
-`ContextualWisdomLab/.github#1661` (commit `c0dc46b`, flipping `cancel-in-progress` to `false` after
-confirming the coalescer's own script re-fetches live state before acting, so a surviving queued instance
-is exactly as safe as a fresh one). That was a genuine self-starvation bug, distinct from anything in this
+file, in two rounds (`ContextualWisdomLab/.github#1661`): `current-head-run-coalescer.yml` (the mechanism
+specifically meant to prune stale-SHA queued runs) carried `cancel-in-progress: true` on its own PR-scoped
+concurrency group — but under today's unusually high push volume from four concurrent agent sessions, each
+new push cancelled the coalescer's own prior in-flight attempt before it could get a runner, so it never
+actually executed for a busy PR. The first fix (commit `c0dc46b`, flipping `cancel-in-progress` to `false`)
+was itself caught as incomplete by Devin Review: a plain `cancel-in-progress: false` only protects a
+*running* job — GitHub concurrency groups still silently evict a *pending* (queued) run the instant another
+run enters the same group, regardless of `cancel-in-progress`, which is exactly the failure mode that had
+been observed (a required-review check sat stuck queued with the coalescer never once executing for it).
+The complete fix (commit `12d5735`) adds `queue: max`, a GitHub Actions concurrency feature that retains up
+to 100 pending runs and runs them in order instead of evicting all but the latest — an already-precedented
+pattern in this repo (`agent-mention-router.yml`) — combined with the coalescer script's own live-state
+re-fetch (confirmed safe for a surviving queued instance to run later, since it never trusts the head SHA it
+was triggered with). That was a genuine, two-round self-starvation bug, distinct from anything in this
 file, and is the more direct, evidence-backed explanation for the observed churn than this workflow's
 trigger breadth.
 
