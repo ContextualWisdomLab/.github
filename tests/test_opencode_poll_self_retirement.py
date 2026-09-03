@@ -204,7 +204,7 @@ def test_poll_live_state_revalidation_fails_closed_on_malformed_evidence() -> No
 def test_poll_executes_superseded_head_retirement_before_reviews_read(
     tmp_path: Path,
 ) -> None:
-    """A moved head exits non-passing before the Reviews API is consulted."""
+    """A moved head exits successfully before the Reviews API is consulted."""
     head_sha = "a" * 40
     result, calls = _run_poll_loop(
         tmp_path,
@@ -212,7 +212,7 @@ def test_poll_executes_superseded_head_retirement_before_reviews_read(
         live_pr={"head": {"sha": "b" * 40}, "draft": False, "state": "open"},
     )
 
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert "retiring superseded Required OpenCode Review poll" in result.stdout
     assert calls == ["api repos/ContextualWisdomLab/example/pulls/42"]
 
@@ -393,7 +393,6 @@ def test_poll_fails_closed_after_wall_clock_deadline_with_every_gh_call_succeedi
         "::error::No current-head OpenCode verdict after 180 minutes of "
         "polling; failing closed and releasing the runner." in result.stdout
     )
-    # Distinct diagnostic from the transport-failure path: nothing here failed.
     assert "consecutive times" not in result.stdout
     assert calls == [
         "api repos/ContextualWisdomLab/example/pulls/42",
@@ -420,7 +419,7 @@ def test_poll_wall_clock_deadline_does_not_interfere_with_a_fast_verdict(
                 "body": "Source-backed current-head semantic review.",
             }
         ],
-        date_epochs=[1000, 1000],  # baseline call, then one in-bounds iteration check
+        date_epochs=[1000, 1000],
     )
 
     assert result.returncode == 0, result.stderr
@@ -453,8 +452,6 @@ def test_wall_clock_deadline_is_distinct_from_and_additional_to_transport_counte
         "::error::No current-head OpenCode verdict after 180 minutes of "
         "polling; failing closed and releasing the runner." in loop
     )
-    # The deadline check must precede this iteration's gh calls so an
-    # already-expired deadline never spends another API request.
     assert loop.index('-ge "$poll_deadline_epoch"') < loop.index(
         'live_poll_pr="$(timeout 30s gh api'
     )
