@@ -126,13 +126,41 @@ slice per repo — not three parallel half-built admin webs.
   and forcing one would have meant fabricating state or shipping a
   console with nothing real to show.
 
+## Update — 2026-09-03: `contextual-orchestrator#1010` closed, not merged
+
+Decision item 6 above named `contextual-orchestrator#1010` (per-model LLM
+timeout admin surface) as this iteration's first implemented slice. That PR
+was subsequently **closed unmerged by the repo owner the same day** (2026-09-02,
+`closed_at` 05:10:46Z — after this ADR PR was opened at 03:40:12Z), on a
+categorical objection independent of this ADR's design: "the current manual
+timeout-setting semantics must not become production authority," plus four
+distinct unresolved correctness findings in the PR's live-enforcement wiring
+(local queue path ignores the override, passthrough/tool requests bypass it,
+failed persistence can leave the live timeout mutated, and admin-refresh races
+can misreport/stale audit state). A subsequent repair-policy recheck (recorded
+on the PR and in `docs/product-technical-gap-baseline.md`) confirmed this
+closure is valid under the org's repair-not-close policy's "explicit user
+instruction" ground, and that the PR's delta is preserved (not orphaned) on
+its own closed branch for selective future reuse once a research-/standard-backed
+timeout allocator exists to host it — not revived as-is.
+
+**This ADR's own architecture decisions (1–5) are unaffected** — they concern
+the SSO/Keyvault/ABAC-RBAC/credential-store shape, not the timeout-surface
+implementation. Only decision item 6's specific claim that the timeout slice
+was "implemented" is now stale. `keyverse#129` (Keyvault, this iteration's
+second slice) is unaffected by this and remains open. Left as an update rather
+than rewriting the original decision record, so the historical reasoning
+trail (what was true when each decision was made) stays intact.
+
 ## References
 
 - `contextual-orchestrator` planning ADR 0033 (admin console UI tooling
   boundary), 0036 (superseded React/Storybook proposal), 0042 (per-model
   timeout admin surface — this iteration's `contextual-orchestrator`
-  slice).
+  slice, subsequently closed unmerged; see Update above).
 - `keyverse` ADR-0014 (Keyvault bounded context), ADR-0015 (service
   authorization plane), ADR-0016 (login credential store).
+- `docs/product-technical-gap-baseline.md`, 2026-09-02 entry (repair-policy
+  recheck of `contextual-orchestrator#1010`'s closure).
 - `docs/product-goal-directive.md` §8 (LLM/orchestration; the per-model
-  timeout admin requirement this ADR's first slice closes).
+  timeout admin requirement this ADR's first slice attempted to close).
