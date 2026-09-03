@@ -608,8 +608,30 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "persist-credentials: false" in text
     assert "ref: ${{ github.workflow_sha }}" in text
     assert "current_head_run_coalescer.py" in text
-    assert "cancel-in-progress: false" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
     run_block = text.split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block
+
+
+def test_workflow_survives_repeated_pushes_before_any_run_starts() -> None:
+    """A plain cancel-in-progress:false does not stop GitHub from silently
+    replacing an already-queued (not yet started) run of this job with a
+    newer one from the same group -- only queue: max keeps every pending
+    instance instead of dropping all but the latest, so under rapid same-PR
+    pushes at least one coalescer invocation is guaranteed to eventually get
+    a runner rather than being evicted while still queued every time.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job_text = text.split("jobs:", 1)[1]
+    concurrency_block = job_text.split("concurrency:", 1)[1].split("runs-on:", 1)[0]
+
+    assert (
+        "group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}"
+        in concurrency_block
+    )
+    assert "queue: max" in concurrency_block
+    # cancel-in-progress:true here would kill an in-progress coalescer mid
+    # run; cancel-in-progress:false alone (without queue: max) is exactly
+    # the insufficient fix this test guards against regressing to.
+    assert "cancel-in-progress" not in concurrency_block
