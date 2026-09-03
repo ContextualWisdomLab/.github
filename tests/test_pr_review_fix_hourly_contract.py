@@ -293,13 +293,23 @@ def test_contract_workflow_tracks_its_own_test_tooling_lock() -> None:
 
 
 def test_contract_workflow_verifies_its_pinned_requirements_are_locked() -> None:
-    """A bumped exact pin without a regenerated lock must fail closed.
+    r"""A bumped exact pin without a regenerated lock must fail closed.
 
     Devin Review (`ContextualWisdomLab/.github#1661`) caught that this job
     installed only the existing hash lock with no check that it actually
     reflects `requirements-opencode-review-ci.txt`'s own pins -- a version
     bump committed without re-running the lock's own compile script would
     silently test against the stale, unreflected old version.
+
+    A later Devin Review pass on the same PR caught two problems with that
+    first check itself: a plain substring `grep -qF` could match a longer
+    package name that happens to contain a shorter pinned one (e.g. a
+    hypothetical `pytest==9.1.1` pin spuriously "found" inside an unrelated
+    `not-pytest==9.1.1 \` lock entry), and it did not strip an inline
+    `# comment` or `; marker` (both valid pip requirements-file syntax)
+    before matching. Fixed with an exact whole-line match (`-x`) against the
+    lock's literal `name==version \` rendering, after stripping any trailing
+    comment/marker from the source line first.
     """
     text = _read(_CONTRACT_WORKFLOW)
 
@@ -307,7 +317,9 @@ def test_contract_workflow_verifies_its_pinned_requirements_are_locked() -> None
         "Verify exact-pinned test-tooling requirements are reflected in the hash lock"
         in text
     )
-    assert 'grep -qF -- "${line} " requirements-opencode-review-ci-hashes.txt' in text
+    assert 'grep -qxF -- "${pin} \\\\" requirements-opencode-review-ci-hashes.txt' in text
+    assert 'pin="${line%%#*}"' in text
+    assert 'pin="${pin%%;*}"' in text
 
 
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:

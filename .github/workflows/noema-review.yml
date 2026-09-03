@@ -191,10 +191,28 @@ jobs:
     # noema-review job. Mirrors strix.yml's cancel-superseded-pr-runs and
     # opencode-review.yml's cancel-superseded-opencode-review-runs, both of
     # which already use this exact shape.
+    #
+    # Also runs for repository_dispatch (Devin Review, keyverse#128-adjacent
+    # finding on this same PR): the noema-review job's concurrency group is
+    # scoped by target-repo + PR number regardless of which of the two
+    # trigger types produced it, so a pull_request_target push and a
+    # repository_dispatch retry for the SAME PR share one group. Before this
+    # fix, this cleanup job's `if:` only matched pull_request_target, so a
+    # repository_dispatch retry had no path to ever cancel a genuinely stale
+    # active run blocking it -- it would sit pending indefinitely behind an
+    # old-head review that (by design) has no wall-clock deadline.
+    # repository_dispatch needs no extra trust check here the way
+    # pull_request_target's `head.repo.full_name` check does: only a
+    # principal with this repository's write access can send it at all
+    # (GitHub's own authorization boundary for the dispatches endpoint), the
+    # same trust level noema-review's own `if:` already extends it below.
     if: >-
-      github.event_name == 'pull_request_target'
-      && github.event.action != 'closed'
-      && github.event.pull_request.head.repo.full_name == github.repository
+      (
+        github.event_name == 'pull_request_target'
+        && github.event.action != 'closed'
+        && github.event.pull_request.head.repo.full_name == github.repository
+      )
+      || github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -203,24 +221,64 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
-      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # Same fallback chain as noema-review's own env block below, so both
+      # jobs agree on target/PR/head for either trigger type.
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
+      - name: Skip dispatch events without a resolvable PR number
+        if: env.PR_NUMBER == ''
+        run: |
+          echo "::warning::Noema supersede-cleanup received a repository_dispatch event with no client_payload.pr_number; skipping cleanup for this run."
+
       - name: Reject a stale trigger before scanning for superseded runs
+        if: env.PR_NUMBER != ''
         run: |
           set -euo pipefail
+          # TARGET_REPOSITORY now reaches this job from repository_dispatch's
+          # sender-controlled client_payload.target_repository too (this same
+          # diff extended this job to that trigger). The noema-review job
+          # below (see its own reviewer-credential-selection step further
+          # down this file) validates this exact format before using
+          # TARGET_REPOSITORY for anything (Devin Review,
+          # completeness-vs-original-findings lens, 2026-09-03); apply the
+          # identical check here for consistency, even though actual
+          # exploitability is already bounded by GITHUB_TOKEN's own
+          # repo-scoping (an arbitrary repos/<string>/... path would simply
+          # fail to authenticate cross-repo).
+          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Noema supersede-cleanup target repository must belong to ContextualWisdomLab; observed ${TARGET_REPOSITORY:-<empty>}."
+            exit 1
+          fi
           if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Noema supersede-cleanup trigger did not provide a canonical lowercase exact head SHA."
             exit 1
           fi
 
       - name: Cancel superseded Noema runs after live-head validation
+        if: env.PR_NUMBER != ''
         run: |
           set -euo pipefail
           declare -A seen=()
           cancelled=0
+          # Two passes, not one: the five status queries below are five
+          # separate, unsynchronized API calls, so a run's status can change
+          # between them within a single pass (e.g. a run this pass already
+          # scanned as "queued" transitions to "in_progress" moments later,
+          # or a genuinely stale run only becomes visible in a status bucket
+          # this pass already queried, before this pass finishes). The
+          # second pass re-scans all five statuses to catch anything that
+          # changed during the first pass's own execution window; `seen`
+          # keeps it idempotent against runs the first pass already
+          # cancelled. This does mean every invocation issues up to 10
+          # `gh api --paginate` calls (Devin Review, 2026-09-03) -- flagged
+          # as a cost concern, not a correctness one; not reduced to a
+          # single pass in this change since removing it without concretely
+          # verifying the TOCTOU window it guards against cannot recur risks
+          # reintroducing exactly the race pass 2 was presumably added to
+          # close (no commit message documents the original intent).
           for pass in 1 2; do
             for active_status in queued in_progress requested waiting pending; do
               if ! runs_json="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs?status=${active_status}&per_page=100")"; then
@@ -289,6 +347,88 @@ jobs:
             echo "Superseded Noema cleanup pass ${pass}/2 complete."
           done
           echo "Cancelled ${cancelled} superseded Noema run(s) after live-head validation."
+
+      - name: Detect a current-push review evicted from its pending slot
+        # GitHub's own single-pending-slot rule for this group (independent
+        # of cancel-in-progress, see noema-review's own comment below) keeps
+        # at most one running plus one pending job -- and evicts whichever
+        # job is currently pending the instant a NEW trigger requests the
+        # slot. That is safe when arrival order matches push order (the
+        # newest push simply displaces an older, no-longer-relevant pending
+        # one), but webhook delivery is not guaranteed FIFO: a delayed,
+        # out-of-order trigger for an OLDER head can itself arrive after
+        # this exact push's own job started pending, evicting THIS push's
+        # job instead. An evicted job never executes a single step --
+        # including noema-review's own "Reject a stale trigger" check below
+        # -- so nothing else in this workflow observes it, and the PR's
+        # current head can silently end up with no in-flight or completed
+        # Noema review at all.
+        #
+        # This step makes that failure mode loud rather than fixing it
+        # outright: full automated recovery needs either granting this
+        # pull_request_target-triggered job `contents: write` to
+        # self-dispatch a retry (docs/CWL-MASTER-CONTEXT.md's binding
+        # conventions caution against widening a pull_request_target job's
+        # permissions), or adding a new `workflow_dispatch` trigger (usable
+        # with the `actions: write` already held here) plus matching
+        # if:/env changes in at least three more places in this file.
+        # Neither has been designed and adversarially verified yet, so this
+        # pass only detects and flags the gap; see docs/doctoring/ for the
+        # tracked follow-up design record.
+        #
+        # A cancelled sibling conclusion is NOT, on its own, proof of this
+        # eviction -- 3-lens adversarial verification of this same step
+        # (2026-09-03) independently converged on the same gap: cancelled is
+        # also produced by two routine, non-buggy paths in this same file --
+        # a LATER run's own cancel-superseded-noema-runs cancelling THIS
+        # run's noema-review job because a newer push legitimately supersedes
+        # it (the everyday multi-push case), and cancel-closed-pr-runs
+        # cancelling this run because the PR simply closed. Both leave
+        # conclusion "cancelled" exactly like a real eviction, but neither
+        # needs an alert. Disambiguated below on two signals the Jobs API
+        # already returns: `started_at` (a job cancelled while genuinely
+        # ACTIVE -- the routine-supersession case -- has one; a job evicted
+        # from the pending slot before ever running does not), and a live
+        # re-check of whether the PR is still open (a closed PR needs no
+        # review regardless of why its run was cancelled).
+        # `if: always()` so a run that exits early above (the cancel loop's
+        # own defensive `exit 0`s) still gets checked; every gh api/jq call
+        # below degrades to a warning on failure, never fails the job.
+        if: always() && env.PR_NUMBER != ''
+        run: |
+          set -euo pipefail
+          if ! jobs_json="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${CURRENT_RUN_ID}/jobs")"; then
+            echo "::warning::Could not inspect this run's own jobs to check for a pending-slot eviction of the sibling noema-review job."
+            exit 0
+          fi
+          if ! sibling_json="$(jq -c '[.jobs[] | select(.name == "noema-review")] | first // empty' <<<"$jobs_json")"; then
+            echo "::warning::Could not parse this run's job list to check for a pending-slot eviction."
+            exit 0
+          fi
+          if [ -z "$sibling_json" ]; then
+            echo "::warning::No 'noema-review' job entry found in this run's own job list; cannot check for a pending-slot eviction."
+            exit 0
+          fi
+          sibling_conclusion="$(jq -r '.conclusion // "pending"' <<<"$sibling_json")"
+          sibling_started_at="$(jq -r '.started_at // ""' <<<"$sibling_json")"
+          if [ "$sibling_conclusion" != "cancelled" ]; then
+            echo "Sibling noema-review job for PR #${PR_NUMBER} resolved as '${sibling_conclusion}'; no eviction detected."
+            exit 0
+          fi
+          if [ -n "$sibling_started_at" ]; then
+            echo "Sibling noema-review job for PR #${PR_NUMBER} was cancelled after it had already started (started_at=${sibling_started_at}) -- a routine supersession by a newer push or a PR-close cancel, not a pending-slot eviction (an evicted job never starts). Nothing to flag."
+            exit 0
+          fi
+          if ! pr_state="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/tmp/noema-eviction-pr-state-error)"; then
+            echo "::warning::Sibling noema-review job for PR #${PR_NUMBER} was cancelled without ever starting, but the PR's live state could not be re-checked before flagging it -- reporting the eviction anyway since it cannot be ruled out as benign." >&2
+            sed 's/^/  /' /tmp/noema-eviction-pr-state-error >&2 || true
+            pr_state="unknown"
+          fi
+          if [ "$pr_state" = "closed" ]; then
+            echo "Sibling noema-review job for PR #${PR_NUMBER} was cancelled without ever starting, but the PR is now closed -- no review is needed regardless of why the run was cancelled. Nothing to flag."
+            exit 0
+          fi
+          echo "::error::This push's own noema-review job was cancelled without ever starting (no started_at), and PR #${PR_NUMBER} is still ${pr_state} -- most likely evicted from the concurrency group's single pending slot by a later-arriving, out-of-order trigger for a different head, not a genuine supersession this job's own cancel loop above performed (that loop only cancels ACTIVE runs it live-reverified as stale). The current head may now have no in-flight or completed Noema review. Manually re-trigger (mention the review agent, or push an empty commit) if the required check stays stuck."
 
   noema-review:
     name: noema-review
