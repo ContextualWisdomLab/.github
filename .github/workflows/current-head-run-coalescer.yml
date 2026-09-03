@@ -10,6 +10,12 @@ concurrency:
   # worker that retires redundant runs; cancelling it during a push burst lets
   # the redundant runs survive and worsens the 60-job ceiling.
   cancel-in-progress: false
+  # GitHub's default `queue: single` replaces an already-pending run when a
+  # later synchronize event enters this group. Under runner starvation that
+  # can prevent every cleanup attempt from reaching a runner. Preserve up to
+  # 100 pending cleanup runs; each invocation re-fetches live PR/run identity
+  # before mutation, so an older trigger remains safe when it eventually runs.
+  queue: max
 
 permissions:
   actions: write
