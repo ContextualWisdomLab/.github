@@ -219,6 +219,10 @@ import sys
 from pathlib import Path
 
 
+# ⚡ Bolt: 반복문/자주 호출되는 함수 내에서 동일한 정규식 패턴을 지속적으로 생성하는 것을 방지하여 캐시 조회 오버헤드 감소 및 성능 향상
+HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
 source_root = Path(sys.argv[1]).resolve()
 control_file = Path(sys.argv[2])
 control = json.loads(control_file.read_text(encoding="utf-8"))
@@ -265,9 +269,9 @@ def changed_new_lines(path_value: str) -> frozenset[int]:
         return frozenset()
 
     line_numbers: set[int] = set()
-    hunk_header = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
     for raw_line in completed.stdout.splitlines():
-        match = hunk_header.match(raw_line)
+        match = HUNK_HEADER_RE.match(raw_line)
         if not match:
             continue
         start = int(match.group(1))

@@ -338,6 +338,44 @@ def test_fetch_open_prs_zero_limit_skips_graphql(monkeypatch):
     assert calls == [("owner/repo", [])]
 
 
+def test_rotating_pr_window_is_bounded_and_wraps_over_actual_results():
+    """A deterministic offset rotates bounded windows without empty tail slots."""
+    prs = [{"number": number} for number in range(1, 121)]
+
+    assert sched.rotating_pr_window(prs, offset=0, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=50, window_size=50) == prs[50:100]
+    assert sched.rotating_pr_window(prs, offset=100, window_size=50) == prs[100:120]
+    assert sched.rotating_pr_window(prs, offset=150, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=0, window_size=None) == prs
+
+
+def test_rest_fallback_hydrates_only_the_selected_rotating_window(monkeypatch):
+    """REST discovery may reach 120 PRs but hydrates no more than 50 of them."""
+    pages = {
+        1: [{"number": number} for number in range(1, 101)],
+        2: [{"number": number} for number in range(101, 121)],
+    }
+    hydrated = []
+
+    def fake_api(path):
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+
+    def fake_rest_pr_node(repo, pr):
+        hydrated.append(pr["number"])
+        return {"number": pr["number"]}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(sched, "rest_pr_node", fake_rest_pr_node)
+
+    result = sched.fetch_open_prs_rest(
+        "owner/repo", 120, offset=50, window_size=50
+    )
+
+    assert [pr["number"] for pr in result] == list(range(51, 101))
+    assert sorted(hydrated) == list(range(51, 101))
+
+
 def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
     seen = []
 
@@ -894,6 +932,176 @@ def test_gh_graphql_does_not_retry_non_transient_errors(monkeypatch):
     assert len(calls) == 1
 
 
+def test_is_rate_limited_error_matches_only_the_shared_installation_signature():
+    assert sched.is_rate_limited_error(
+        RuntimeError(
+            "Command failed (1): gh api graphql\n"
+            "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
+        )
+    )
+    # GitHub's own casing varies by surface; the check must not be case-sensitive.
+    assert sched.is_rate_limited_error(RuntimeError("gh: api rate limit EXCEEDED for installation ID 1"))
+    assert not sched.is_rate_limited_error(RuntimeError("Resource not accessible by integration"))
+    assert not sched.is_rate_limited_error(RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 502"))
+    assert not sched.is_rate_limited_error(
+        RuntimeError("gh: You have exceeded a secondary rate limit. Please wait a few minutes.")
+    )
+
+
+def test_rate_limit_retry_delay_seconds_uses_the_reported_reset_time(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        return json.dumps({"resources": {"core": {"remaining": 0, "reset": 1_000_050}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 1) == 55
+    assert calls == [["gh", "api", "rate_limit"]]
+
+
+def test_rate_limit_retry_delay_seconds_caps_a_long_reset_wait(monkeypatch):
+    def fake_run(args, stdin=None):
+        return json.dumps({"resources": {"graphql": {"remaining": 0, "reset": 1_010_000}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
+
+    assert sched.rate_limit_retry_delay_seconds("graphql", 1) == sched.GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS
+
+
+def test_rate_limit_retry_delay_seconds_falls_back_when_bucket_is_not_empty(monkeypatch):
+    def fake_run(args, stdin=None):
+        return json.dumps({"resources": {"core": {"remaining": 42, "reset": 1_000_050}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 2) == 2
+
+
+def test_rate_limit_retry_delay_seconds_falls_back_when_reset_is_missing(monkeypatch):
+    def fake_run(args, stdin=None):
+        return json.dumps({"resources": {"core": {"remaining": 0}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 3) == 4
+
+
+def test_rate_limit_retry_delay_seconds_falls_back_when_reset_is_in_the_past(monkeypatch):
+    def fake_run(args, stdin=None):
+        return json.dumps({"resources": {"core": {"remaining": 0, "reset": 999_990}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 1) == 1
+
+
+def test_rate_limit_retry_delay_seconds_falls_back_on_malformed_payload(monkeypatch):
+    def fake_run(args, stdin=None):
+        return json.dumps([])
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 2) == 2
+
+
+def test_rate_limit_retry_delay_seconds_falls_back_when_lookup_fails(monkeypatch):
+    def fake_run(args, stdin=None):
+        raise RuntimeError("Command failed (1): gh api rate_limit\nHTTP 500")
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    assert sched.rate_limit_retry_delay_seconds("core", 7) == sched.GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS
+
+
+def test_gh_graphql_retries_rate_limited_errors_using_the_reset_time(monkeypatch):
+    calls = []
+    sleeps = []
+    reset_epoch = 1_700_000_100
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if len(args) >= 3 and args[2] == "graphql":
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Command failed (1): gh api graphql\n"
+                    "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
+                )
+            return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
+        assert args == ["gh", "api", "rate_limit"]
+        return json.dumps({"resources": {"graphql": {"remaining": 0, "reset": reset_epoch}}})
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "time", lambda: reset_epoch - 10)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
+
+    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
+    assert sleeps == [15]
+
+
+def test_gh_api_json_retries_rate_limited_errors_then_succeeds(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if args == ["gh", "api", "repos/owner/repo/pulls/1"]:
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Command failed (1): gh api repos/owner/repo/pulls/1\n"
+                    "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
+                )
+            return '{"number": 1}'
+        assert args == ["gh", "api", "rate_limit"]
+        # The reset lookup itself failing must not be fatal: the retry falls
+        # back to capped exponential backoff instead of raising.
+        raise RuntimeError("Command failed (1): gh api rate_limit\nHTTP 500")
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert sched.gh_api_json("repos/owner/repo/pulls/1") == {"number": 1}
+    assert sleeps == [1]
+
+
+def test_gh_api_json_retries_transient_errors(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("Command failed (1): gh api repos/owner/repo/pulls/1\ngh: HTTP 502")
+        return '{"number": 1}'
+
+    monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert sched.gh_api_json("repos/owner/repo/pulls/1") == {"number": 1}
+    assert sleeps == [1]
+
+
+def test_gh_api_json_does_not_retry_non_transient_errors(monkeypatch):
+    calls = []
+
+    def fake_run(args, stdin=None):
+        calls.append(args)
+        raise RuntimeError("Command failed (1): gh api repos/owner/repo/pulls/1\ngh: HTTP 404")
+
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        sched.gh_api_json("repos/owner/repo/pulls/1")
+    assert calls == [["gh", "api", "repos/owner/repo/pulls/1"]]
+
+
 def test_rest_mergeable_state_helpers(monkeypatch):
     calls = []
 
@@ -1217,7 +1425,7 @@ def test_fetch_open_prs_rest_paginates_and_fetch_open_prs_falls_back(monkeypatch
         raise RuntimeError("gh: Resource not accessible by integration")
 
     monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     assert sched.fetch_open_prs("owner/repo", 5) == [{"repo": "owner/repo", "max": 5}]
 
 
@@ -1248,7 +1456,7 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
         raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
@@ -8456,6 +8664,38 @@ def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
     assert payload["counts"] == {"action_error": 1, "wait": 1}
     assert payload["decisions"][0]["contract_decision"] == "WAIT"
     assert payload["decisions"][1]["contract_decision"] == "WAIT"
+
+
+def test_main_stops_scan_and_propagates_on_mid_scan_rate_limit(monkeypatch, capsys):
+    """A rate limit raised from inside inspect_pr() (not the pre-loop fetch)
+    must stop the sweep and exit non-zero, exactly like the pre-loop path.
+
+    Folding it into an ordinary action_error decision and continuing the
+    loop -- the pre-existing behavior for every other RuntimeError, see
+    test_main_keeps_scanning_after_action_error -- would keep spending the
+    same exhausted shared-installation bucket on every remaining PR, and a
+    zero exit code would never reach pr-review-merge-scheduler.yml's
+    "API rate limit exceeded" skip-and-defer branch, which greps sweep_rc
+    != 0.
+    """
+    prs = [make_pr(number=1), make_pr(number=2)]
+    seen = []
+
+    def fake_inspect(repo, pr, **kwargs):
+        seen.append(pr["number"])
+        raise RuntimeError("gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)")
+
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
+    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
+
+    with pytest.raises(RuntimeError, match="API rate limit exceeded"):
+        sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"])
+
+    assert seen == [1]
+    output = capsys.readouterr().out
+    assert "PR #1: action_error: gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)" in output
+    payload = json.loads(output.strip().splitlines()[-1])
+    assert payload["counts"] == {"action_error": 1}
 
 
 def test_scrub_sensitive_data_and_run_error():

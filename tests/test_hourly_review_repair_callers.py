@@ -18,6 +18,7 @@ import pytest
 
 _CALLER = Path(".github/workflows/hourly-review-repair.yml")
 _REUSABLE_SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
+_DISPATCH_TARGETS_MIRROR = Path("scripts/ci/opencode_repository_dispatch_targets.json")
 
 _FORMER_CALLERS = (
     "accounting-information-platform-hourly-review-repair.yml",
@@ -43,9 +44,11 @@ _FORMER_CALLERS = (
 # schedule -> exact list of {name, target_repository, base_branch,
 # retry_hours, concurrency_group} the resolve-target lookup must produce,
 # reproducing every field the 18 deleted files passed to
-# pr-review-fix-scheduler.yml. max_prs ("50") and max_dispatches ("1") were
-# uniform across all 18 originals and are asserted separately as static
-# `with:` values rather than carried per-target.
+# pr-review-fix-scheduler.yml. max_dispatches ("1") was uniform across all 18
+# originals (every original also passed max_prs "50", but that shared bound
+# was raised to "200" here -- see test_max_prs_and_max_dispatches_stay_uniform_static_values)
+# and both are asserted separately as static `with:` values rather than
+# carried per-target.
 _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     "2 * * * *": [
         {
@@ -316,12 +319,23 @@ def test_resolve_target_lookup_fails_closed_on_an_unknown_schedule(
     assert output_file.read_text() == ""
 
 
-def test_max_prs_and_max_dispatches_stay_uniform_static_values() -> None:
-    """The two fields that never varied across the 18 originals stay static."""
+def test_scan_and_dispatch_bounds_stay_uniform_static_values() -> None:
+    """Discovery stays broad while each deterministic scan remains bounded.
+
+    ``max_prs`` was uniformly ``"50"`` across all 18 original per-repository
+    files (the reusable scheduler's own default), which was already known to
+    be too low for a queue the size BandScope reached (see the now-obsolete
+    #1397, whose target file this consolidation deleted before its fix
+    landed on main). This raises the shared bound to ``"200"``; it remains a
+    single static value, not a per-target one, because there is still no
+    evidence any target needs a *different* bound from any other.
+    """
     text = _read(_CALLER)
 
-    assert 'max_prs: "50"' in text
+    assert 'max_prs: "200"' in text
     assert 'max_dispatches: "1"' in text
+    assert 'scan_window_size: "50"' in text
+    assert "rotation_seed: ${{ format('{0}', github.run_number) }}" in text
     # They are static `with:` values, not carried through the per-target
     # lookup table (they never varied, so there is nothing to look up).
     assert '"max_prs"' not in text
@@ -431,3 +445,46 @@ def test_resolve_unreviewed_conflicts_is_explicit_and_matches_the_default() -> N
         1
     ].split("retry_hours:", maxsplit=1)[0]
     assert "default: true" in policy_block
+
+
+def test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror() -> None:
+    """Every hourly-caller repository must also be a registered dispatch target.
+
+    `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` validate
+    every dispatch's target repository against the live
+    ``OPENCODE_REPOSITORY_DISPATCH_TARGETS`` repository variable (
+    ``ALLOWED_TARGET_REPOSITORIES``); ``hourly-review-repair.yml``'s own
+    per-cron ``target_repository`` matrix is a second, independently
+    hand-maintained list with no structural link to the variable. Three
+    repositories (governance-risk-compliance, then nonnest2 and
+    quarantine-sandbox-runtime, all discovered 2026-09-02) were added to the
+    hourly matrix without a corresponding update to the variable, so every
+    one of their hourly heartbeats failed closed with "target repository is
+    not allowlisted" until caught -- see
+    ``docs/doctoring/scheduler-target-list-drift-20260902.md``. This test
+    cannot see the live variable's actual value (no API commits it to
+    source control), so it checks the hourly matrix against
+    ``scripts/ci/opencode_repository_dispatch_targets.json``, a
+    hand-maintained mirror of that variable's contents -- catching the
+    "added to the workflow matrix, forgot the mirror (and, by the update
+    discipline the mirror's own header documents, forgot the live
+    variable)" mistake at PR-review time instead of at the next silent
+    hourly failure.
+    """
+    mirror = json.loads(_DISPATCH_TARGETS_MIRROR.read_text(encoding="utf-8"))
+    mirrored_targets = set(mirror["targets"])
+
+    hourly_caller_targets = {
+        target["target_repository"]
+        for targets in _EXPECTED_TARGETS.values()
+        for target in targets
+    }
+
+    missing = hourly_caller_targets - mirrored_targets
+    assert not missing, (
+        "hourly-review-repair.yml dispatches to a repository absent from "
+        f"{_DISPATCH_TARGETS_MIRROR}: {sorted(missing)}. Add it to the mirror's "
+        "\"targets\" list AND run `gh variable set OPENCODE_REPOSITORY_DISPATCH_TARGETS "
+        "--repo ContextualWisdomLab/.github` with the updated value in the same PR, "
+        "or the next hourly heartbeat for this repository will fail closed."
+    )

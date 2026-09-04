@@ -12,25 +12,29 @@ import pytest
 from scripts.ci import pr_review_autofix_context as context
 
 
-WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+WORKFLOW = Path(".github/workflows/agent-review-runtime-quality-ci.yml")
 
 
 def test_context_helper_is_part_of_the_focused_exact_head_quality_gate() -> None:
     """Require trigger, full-suite, coverage, docstring, and compile evidence."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert workflow.count("- scripts/ci/pr_review_autofix_context.py") == 2
-    assert workflow.count("- tests/test_pr_review_fix_scheduler.py") == 2
-    assert workflow.count("- tests/test_hourly_autofix_context_quality_gate.py") == 2
+    assert workflow.count("scripts/ci/pr_review_autofix_context.py") >= 3
+    assert workflow.count("tests/test_pr_review_fix_scheduler.py") >= 3
+    assert workflow.count("tests/test_hourly_autofix_context_quality_gate.py") >= 3
     assert (
-        workflow.count("- tests/test_pr_review_autofix_writer_security_contract.py")
-        == 2
+        workflow.count("tests/test_pr_review_autofix_writer_security_contract.py")
+        >= 3
     )
-    pytest_start = workflow.index("python -m pytest -q")
-    coverage_start = workflow.index(
+    suite = workflow.split(
+        "- name: Verify scheduler and contextual-orchestrator review-repair contracts",
+        maxsplit=1,
+    )[1].split("- name: Verify consolidated workflow contract", maxsplit=1)[0]
+    pytest_start = suite.index("python -m pytest -q")
+    coverage_start = suite.index(
         "--cov=scripts.ci.pr_review_conflict_scope", pytest_start
     )
-    pytest_targets = workflow[pytest_start:coverage_start]
+    pytest_targets = suite[pytest_start:coverage_start]
     assert "tests/" not in pytest_targets
     assert (
         "python -m pytest -q \\\n"
