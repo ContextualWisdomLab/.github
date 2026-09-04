@@ -306,13 +306,11 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
 
     def test_workflow_gateway_base_is_the_only_http_exception(self) -> None:
-        """Both gateway pools accept only the pinned process-local HTTP base."""
+        """The free gateway pool accepts only the pinned process-local HTTP base."""
 
         for model in (
             "orchestrator/free",
             "contextual-orchestrator/orchestrator/free",
-            "orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto",
         ):
             with self.subTest(model=model):
                 rc, api_base = _resolve_api_base(
@@ -324,6 +322,16 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
 
         rc, _ = _resolve_api_base(
             {"LLM_API_BASE_FILE": "http://127.0.0.1:18081/v1"},
+            "orchestrator/free",
+        )
+        self.assertEqual(rc, 2)
+
+        # 2026-08-30: orchestrator/auto is no longer a recognized Strix gateway
+        # model (owner decision superseding ADR-0003's auto default) -- the
+        # gate must now reject it rather than resolve it, the same as any
+        # other unrecognized virtual pool.
+        rc, _ = _resolve_api_base(
+            {"LLM_API_BASE_FILE": "http://127.0.0.1:18080/v1"},
             "orchestrator/auto",
         )
         self.assertEqual(rc, 2)
@@ -335,13 +343,11 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         self.assertEqual(rc, 2)
 
     def test_gateway_child_model_preserves_selected_virtual_pool(self) -> None:
-        """LiteLLM qualification must not rewrite auto back to free."""
+        """LiteLLM qualification must not rewrite the selected free pool."""
 
         expected_child_models = {
             "orchestrator/free": "openai/orchestrator/free",
             "contextual-orchestrator/orchestrator/free": "openai/orchestrator/free",
-            "orchestrator/auto": "openai/orchestrator/auto",
-            "contextual-orchestrator/orchestrator/auto": "openai/orchestrator/auto",
         }
         for model, expected_child_model in expected_child_models.items():
             with self.subTest(model=model):
@@ -358,6 +364,27 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         job = workflow.split("  publish-manual-pr-evidence-status:", 1)[1]
         self.assertIn("      statuses: write", job.split("    steps:", 1)[0])
+
+    def test_manual_status_job_has_a_bounded_runtime(self) -> None:
+        """A hung OIDC exchange or status POST must not inherit the 360-minute default."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  publish-manual-pr-evidence-status:", 1)[1]
+        before_steps = job.split("    steps:", 1)[0]
+        match = re.search(r"^    timeout-minutes: (\d+)$", before_steps, flags=re.MULTILINE)
+        self.assertIsNotNone(match, "publish-manual-pr-evidence-status must declare a job-level timeout-minutes")
+        timeout = int(match.group(1))
+        self.assertTrue(1 <= timeout <= 15)
+
+    def test_cancel_superseded_pr_runs_job_has_a_bounded_runtime(self) -> None:
+        """A hung gh-api call in the cleanup loop must not occupy a runner for six hours."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split("\n  strix:", 1)[0]
+        match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
+        self.assertIsNotNone(match, "cancel-superseded-pr-runs must declare a job-level timeout-minutes")
+        timeout = int(match.group(1))
+        self.assertTrue(1 <= timeout <= 20)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ ATTEMPT_LOGS_DIR="$STRIX_RUNTIME_DIR/gate-attempts"
 STRIX_SCAN_WORKING_DIR="$STRIX_RUNTIME_DIR/scan-cwd"
 STRIX_SCAN_OUTPUT_DIR="$STRIX_SCAN_WORKING_DIR/strix_runs"
 STRIX_REPORTS_DIR="$ACTIVE_REPORTS_DIR"
-STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-1200}"
+STRIX_PROCESS_TIMEOUT_SECONDS="${STRIX_PROCESS_TIMEOUT_SECONDS:-0}"
 STRIX_TOTAL_TIMEOUT_SECONDS="${STRIX_TOTAL_TIMEOUT_SECONDS:-0}"
 STRIX_DISABLE_PR_SCOPING="${STRIX_DISABLE_PR_SCOPING:-1}"
 # shellcheck disable=SC2034  # consumed by sourced normalize_model helper
@@ -322,8 +322,7 @@ is_vertex_model() {
 
 is_contextual_orchestrator_model() {
 	case "$1" in
-	orchestrator/free | contextual-orchestrator/orchestrator/free | \
-		orchestrator/auto | contextual-orchestrator/orchestrator/auto)
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
 		return 0
 		;;
 	*)
@@ -1677,7 +1676,7 @@ PY
 			scripts/ci/strix_quick_gate.sh | scripts/ci/test_strix_quick_gate.sh)
 				include_strix_model_utils=1
 				;;
-			fuzz/fuzz_opencode_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
+			fuzz/fuzz_opencode_review_normalize_output.py | scripts/ci/opencode_review_normalize_output.py | tests/test_opencode_review_normalize_output.py)
 				include_opencode_normalizer=1
 				;;
 			esac
@@ -2563,8 +2562,8 @@ child_model_for_api_base() {
 
 	# LiteLLM requires an explicit provider prefix even when the gateway is an
 	# OpenAI-compatible local endpoint. Strip only the connector-facing alias so
-	# the selected orchestrator/free or orchestrator/auto virtual pool reaches
-	# contextual-orchestrator unchanged.
+	# the selected orchestrator/free virtual pool reaches contextual-orchestrator
+	# unchanged.
 	if is_contextual_orchestrator_model "$model" &&
 		is_contextual_orchestrator_api_base "$llm_api_base_value"; then
 		local contextual_orchestrator_model
@@ -2957,10 +2956,34 @@ is_llm_api_connection_error() {
 		return 0
 	fi
 
-	if grep -Eiq 'litellm(\.exceptions)?\.InternalServerError' "$STRIX_LOG" &&
-		grep -Eiq 'OpenAIException' "$STRIX_LOG" &&
-		grep -Eiq 'Connection error' "$STRIX_LOG" &&
-		grep -Eiq '(openai|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
+	local internal_server_error_blocks
+	internal_server_error_blocks=$(awk '
+		{
+			if (remaining > 0) {
+				block = block " " $0
+				remaining--
+				if (remaining == 0) print block
+			} else if ($0 ~ /litellm(\.exceptions)?\.InternalServerError/) {
+				# Strix prints provider context immediately before some generic
+				# LiteLLM internal-server errors. Keep that context bounded too.
+				block = previous_two " " previous_one " " $0
+				remaining = 5
+			}
+			previous_two = previous_one
+			previous_one = $0
+		}
+		END { if (remaining > 0) print block }
+	' "$STRIX_LOG")
+
+	# Match against the already-fully-captured awk output rather than a live
+	# pipe: piping straight into `grep -q` lets grep close its end of the
+	# pipe as soon as it finds a match while awk may still be writing later
+	# blocks from a large log. Under `set -o pipefail` the SIGPIPE that awk
+	# then receives can make the pipeline report failure even though a real
+	# match was found earlier in the stream, silently suppressing a retry
+	# that should have fired. Command substitution has no live reader to
+	# close early, so awk always runs to completion.
+	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' <<<"$internal_server_error_blocks"; then
 		return 0
 	fi
 
@@ -2977,12 +3000,18 @@ is_llm_service_unavailable_error() {
 	# OpenRouter's dynamic free route can wrap one upstream 502 over several
 	# terminal lines. Join only the bounded LiteLLM error block so unrelated
 	# target-app output elsewhere in the log cannot assemble a retry signature.
-	if awk '
+	# Capture awk's output first (see is_llm_api_connection_error above for
+	# why) so a large log with many matching blocks cannot make `grep -q`'s
+	# early pipe close SIGPIPE the still-writing awk producer under
+	# `set -o pipefail`, which would otherwise report failure despite a real
+	# match.
+	local openrouter_error_blocks
+	openrouter_error_blocks=$(awk '
 		/litellm(\.exceptions)?\.APIError/ { block = $0; remaining = 5; next }
 		remaining > 0 { block = block " " $0; remaining--; if (remaining == 0) print block }
 		END { if (remaining > 0) print block }
-	' "$STRIX_LOG" |
-		grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"'; then
+	' "$STRIX_LOG")
+	if grep -Eiq 'litellm(\.exceptions)?\.APIError.*OpenrouterException.*"code"[[:space:]]*:[[:space:]]*502.*"metadata"[[:space:]]*:[[:space:]]*\{[^}]*"provider_name"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$openrouter_error_blocks"; then
 		return 0
 	fi
 

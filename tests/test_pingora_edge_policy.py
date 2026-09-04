@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import inspect
+import re
 import sys
+import zlib
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -61,6 +64,7 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
     assert policy.scan_content("tests/fixtures/negative_fixture.rs", sample) == ()
     assert policy.scan_content("deploy/fixtures/runtime.yaml", sample)
@@ -72,10 +76,72 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     )
 
 
+def test_this_test_files_own_content_is_exempt() -> None:
+    """This file's own fixture strings (denied Nginx forms) must never self-trip.
+
+    Regression coverage for a real required-workflow-bootstrap failure: a
+    diff to this file that happens to add a line matching a CONTENT_RULES
+    pattern (e.g. a new test fixture containing "/etc/nginx/") triggers
+    _needs_content_scan's "nginx" in the patch heuristic, which then scans
+    this file's *entire* current content -- full of intentional denied
+    forms by design -- unless this exact path is self-exempted the same way
+    scripts/ci/pingora_edge_policy.py already is.
+    """
+
+    own_content = Path(__file__).read_text(encoding="utf-8")
+    assert policy.scan_content("tests/test_pingora_edge_policy.py", own_content) == ()
+
+
 def test_nested_documentation_path_allows_prose_samples() -> None:
     """Documentation directories remain exempt when nested below a package."""
 
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
+
+
+def test_needs_content_scan_exempts_documentation_pdfs() -> None:
+    """A cited research-paper PDF under docs/ never reaches content scanning.
+
+    Binary files never carry a GitHub diff `patch`, so without this exemption
+    `_needs_content_scan` falls through to its `not patch_available` branch and
+    always returns True for a PDF -- and any such file over the Contents API's
+    1 MiB base64 ceiling then fails closed in `_load_file_content` for a
+    reason unrelated to the Nginx runtime policy this module enforces (see
+    this org's "attach the relevant paper PDF under docs/papers/" convention).
+    """
+
+    changed = policy.ChangedFile
+    assert not policy._needs_content_scan(
+        changed("docs/papers/helm-holistic-evaluation-2211.09110.pdf", "added", "", patch_available=False)
+    )
+    assert not policy._needs_content_scan(
+        changed("docs/papers/README.md", "modified", "", patch_available=False)
+    )
+    # A PDF outside a recognized documentation directory is not exempted --
+    # only prose/paper locations are trusted to be inert.
+    assert policy._needs_content_scan(
+        changed("scripts/ci/payload.pdf", "added", "", patch_available=False)
+    )
+
+
+def test_needs_content_scan_still_inspects_a_textual_pdf_with_a_patch() -> None:
+    """A '.pdf'-suffixed file GitHub *can* diff is not the binary case exempted.
+
+    GitHub never returns a diff `patch` for a true binary file, so
+    `patch_available=True` here means this file is textual despite its
+    suffix -- exactly the case that could smuggle an active Nginx runtime
+    artifact under a docs/ path if the PDF exemption were suffix-only rather
+    than gated on patch availability.
+    """
+
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(
+        changed(
+            "docs/papers/not-really-a-pdf.pdf",
+            "added",
+            "+load_module modules/ngx_http_nginx_module.so;",
+            patch_available=True,
+        )
+    )
 
 
 @pytest.mark.parametrize("directory", ["testing", "contests", "assert", "my_tests"])
@@ -232,6 +298,306 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
+def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
+    """A genuinely oversized documentation PDF still cannot be verified by content.
+
+    GitHub's real Contents API response for a file whose blob exceeds the
+    inline-content ceiling reports ``encoding: "none"`` with an accurate
+    ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
+    an oversized declared size) -- this is that real shape, not a synthetic
+    one, per Devin Review's finding that the earlier version of this test
+    used a response shape GitHub never actually returns. This is the one
+    case that still falls back to the path+suffix convention -- the real
+    research-paper-citation use case this whole exemption exists for.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [
+                {"filename": "docs/papers/big-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/big-paper.pdf" in url
+        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=11,
+        head_sha="c" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
+    """A patchless '.pdf' file that fetches as real content is still scanned.
+
+    Regression coverage for Devin Review's second finding: a missing diff
+    patch is not proof of binary content by itself (GitHub also omits one
+    for a textual diff over its own rendering limit, well under this
+    module's MAX_FILE_BYTES fetch ceiling), so a file this small must be
+    verified by its real magic bytes, not trusted on patch-absence alone.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/12/files" in url:
+            return [
+                {"filename": "docs/papers/not-really-a-pdf.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/not-really-a-pdf.pdf" in url
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=12,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> None:
+    """A genuine, fetchable PDF (verified by its magic bytes) is exempt too."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/13/files" in url:
+            return [
+                {"filename": "docs/papers/small-paper.pdf", "status": "added"},
+            ]
+        assert "/contents/docs/papers/small-paper.pdf" in url
+        return encoded_file("%PDF-1.7\nupstream nginx { server 127.0.0.1:9; }\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=13,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
+def test_evaluate_pull_request_exempts_a_real_documentation_png() -> None:
+    """A screenshot is verified by PNG magic instead of decoded as UTF-8."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/15/files" in url:
+            return [{"filename": "docs/screenshots/dashboard.png", "status": "added"}]
+        assert "/contents/docs/screenshots/dashboard.png" in url
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        return {
+            "type": "file",
+            "encoding": "base64",
+            "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=15,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
+
+
+def test_evaluate_pull_request_rejects_a_fake_documentation_png() -> None:
+    """A PNG suffix without PNG magic remains runtime-content evidence."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/16/files" in url:
+            return [{"filename": "docs/screenshots/fake.png", "status": "added"}]
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=16,
+        head_sha="b" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+def test_evaluate_pull_request_rejects_png_with_appended_runtime_text() -> None:
+    """A valid image prefix cannot hide bytes appended after the IEND chunk."""
+
+    image = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/17/files" in url:
+            return [{"filename": "docs/screenshots/forged.png", "status": "added"}]
+        raw = image + b"\ncat /etc/nginx/nginx.conf\n"
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=17,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+
+def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
+    """Every malformed PNG boundary returns false without parsing past bounds."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    signature = policy.PNG_SIGNATURE
+    header = chunk(b"IHDR", b"\0" * 13)
+    assert not policy._is_complete_png(b"not-png")
+    assert not policy._is_complete_png(signature)
+    assert not policy._is_complete_png(
+        signature + (99).to_bytes(4, "big") + b"IHDR" + b"\0" * 4
+    )
+    assert not policy._is_complete_png(signature + header[:-1] + b"\0")
+    assert not policy._is_complete_png(signature + chunk(b"TEXT", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"IEND", b""))
+    assert not policy._is_complete_png(signature + header + chunk(b"TEXT", b""))
+
+
+def test_png_semantic_validation_fails_closed() -> None:
+    """CRC-valid chunks still need a valid bounded PNG image stream."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        payload = kind + data
+        return len(data).to_bytes(4, "big") + payload + zlib.crc32(payload).to_bytes(4, "big")
+
+    def png(header: bytes, *chunks: bytes) -> bytes:
+        return policy.PNG_SIGNATURE + chunk(b"IHDR", header) + b"".join(chunks)
+
+    def indexed_png(
+        width: int,
+        height: int,
+        bit_depth: int,
+        palette_entries: int,
+        decoded: bytes,
+        *,
+        interlace: int = 0,
+    ) -> bytes:
+        header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes((bit_depth, 3, 0, 0, interlace))
+        return png(
+            header,
+            chunk(b"PLTE", b"\0\0\0" * palette_entries),
+            chunk(b"IDAT", zlib.compress(decoded)),
+            chunk(b"IEND", b""),
+        )
+
+    rgba = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 0))
+    indexed = (1).to_bytes(4, "big") * 2 + bytes((8, 3, 0, 0, 0))
+    gray = (1).to_bytes(4, "big") * 2 + bytes((8, 0, 0, 0, 0))
+    image = chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0"))
+    end = chunk(b"IEND", b"")
+
+    invalid_headers = (
+        b"\0" * 13,
+        (1).to_bytes(4, "big") * 2 + bytes((4, 2, 0, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 1, 0, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 1, 0)),
+        (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 2)),
+    )
+    assert all(not policy._is_complete_png(png(header, image, end)) for header in invalid_headers)
+    assert not policy._is_complete_png(png(rgba, chunk(b"IHDR", rgba), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x" * 769), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"PLTE", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"1EXt", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"tExt", b""), image, end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"ABCD", b""), image, end))
+    assert policy._is_complete_png(png(rgba, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(rgba, image, chunk(b"tEXt", b"x"), image, end))
+    assert not policy._is_complete_png(png(indexed, image, end))
+    indexed_one_bit = (1).to_bytes(4, "big") * 2 + bytes((1, 3, 0, 0, 0))
+    assert not policy._is_complete_png(
+        png(indexed_one_bit, chunk(b"PLTE", b"\0" * 9), chunk(b"IDAT", zlib.compress(b"\0\0")), end)
+    )
+    for filter_type in range(5):
+        second_row = b"\1\0" if filter_type == 0 else b"\1\xff"
+        assert policy._is_complete_png(
+            indexed_png(2, 2, 8, 2, bytes((filter_type, 0, 1, filter_type)) + second_row)
+        )
+    assert not policy._is_complete_png(indexed_png(2, 1, 8, 1, b"\0\0\1"))
+    assert not policy._is_complete_png(indexed_png(2, 2, 8, 2, b"\0\0\1\4\2\xfe"))
+    assert policy._is_complete_png(indexed_png(2, 1, 1, 2, b"\0\x40"))
+    assert not policy._is_complete_png(indexed_png(2, 1, 1, 1, b"\0\x40"))
+    assert policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\0", interlace=1))
+    assert not policy._is_complete_png(indexed_png(1, 1, 8, 1, b"\0\1", interlace=1))
+    assert not policy._is_complete_png(png(gray, chunk(b"PLTE", b"\0\0\0"), chunk(b"IDAT", zlib.compress(b"\0\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", b"not-zlib"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0")), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0") + b"x"), end))
+    assert not policy._is_complete_png(png(rgba, chunk(b"IDAT", zlib.compress(b"\5\0\0\0\0")), end))
+    huge = (policy.MAX_RESPONSE_BYTES).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    assert not policy._is_complete_png(png(huge, image, end))
+
+    adam7 = (8).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    adam7_scanlines = b"".join(
+        b"\0" + b"\0" * (pass_width * 4)
+        for pass_width, pass_height in ((1, 1), (1, 1), (2, 1), (2, 2), (4, 2), (4, 4), (8, 4))
+        for _ in range(pass_height)
+    )
+    assert policy._is_complete_png(
+        png(adam7, chunk(b"IDAT", zlib.compress(adam7_scanlines)), end)
+    )
+    adam7_one_pixel = (1).to_bytes(4, "big") * 2 + bytes((8, 6, 0, 0, 1))
+    assert policy._is_complete_png(
+        png(adam7_one_pixel, chunk(b"IDAT", zlib.compress(b"\0\0\0\0\0")), end)
+    )
+
+
+def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
+    """A removed documentation PDF has no head content to fetch at all.
+
+    Regression coverage for Devin Review's finding: _is_binary_documentation_asset
+    does not itself check status, so without an explicit removed-status guard
+    in evaluate_pull_request's own loop, a deleted PDF would try to fetch its
+    (nonexistent) head content and fail evidence collection for every such
+    deletion.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/14/files" in url:
+            return [
+                {"filename": "docs/papers/removed-paper.pdf", "status": "removed"},
+            ]
+        raise AssertionError(f"must not fetch content for a removed file: {url}")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=14,
+        head_sha="f" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+
+
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
     """Closed-event cleanup remains a no-op for the required-workflow context."""
 
@@ -313,12 +679,48 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     assert calls[-1].endswith("page=31")
 
 
+def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
+    """Pin the arithmetic invariant that makes the loop's trailing raise dead code.
+
+    ``_load_changed_files`` raises inside its item loop the moment
+    ``len(files) > 3_000`` (checked after every appended item, not only at
+    page boundaries) and returns early the moment one page has fewer than
+    100 items -- so the ``# pragma: no cover``-marked ``raise`` after the
+    ``for page in range(...)`` loop can only execute if every one of that
+    many pages returns at least 100 items while the cumulative total never
+    exceeds 3,000. That requires ``page_count * per_page <= 3_000``, which
+    the real page count (31) and per_page (100) violate (3,100 > 3,000) --
+    the in-loop raise always fires first. This test reads those literals
+    from the actual source rather than duplicating them, so it fails loudly
+    if a future edit to any of the three breaks the inequality -- exactly
+    when the trailing raise becomes reachable again and needs a real
+    covering test instead of the pragma.
+    """
+    source = inspect.getsource(policy._load_changed_files)
+    start, stop = (int(n) for n in re.search(r"range\((\d+),\s*(\d+)\)", source).groups())
+    page_count = len(range(start, stop))
+    per_page = int(re.search(r"per_page=(\d+)", source).group(1))
+    cap = int(re.search(r"len\(files\) > (\d[\d_]*)", source).group(1).replace("_", ""))
+    assert page_count * per_page > cap, (
+        "the trailing pagination raise in _load_changed_files is no longer "
+        "provably unreachable; remove its '# pragma: no cover' and add a "
+        "test that actually covers it"
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
         ([], "not an object"),
         ({"type": "symlink", "encoding": "base64", "size": 0, "content": ""}, "not a regular"),
+        ({"type": "file", "encoding": "base64", "size": -1, "content": ""}, "malformed size"),
         ({"type": "file", "encoding": "base64", "size": policy.MAX_FILE_BYTES + 1, "content": ""}, "size contract"),
+        # GitHub's real response shape for a file whose blob exceeds the
+        # inline-content ceiling: no content at all, encoding "none".
+        ({"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1}, "size contract"),
+        ({"type": "file", "encoding": "none", "size": 1}, "no inline content"),
+        ({"type": "file", "encoding": "none", "size": "not-an-int"}, "no inline content"),
+        ({"type": "file", "encoding": "utf-8", "size": 1, "content": "x"}, "not a regular base64 file"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": "!"}, "invalid base64"),
         ({"type": "file", "encoding": "base64", "size": 2, "content": base64.b64encode(b"x").decode()}, "size mismatch"),
         ({"type": "file", "encoding": "base64", "size": 1, "content": base64.b64encode(b"\xff").decode()}, "not valid UTF-8"),
@@ -424,7 +826,8 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-    assert policy.NoRedirectHandler().redirect_request(None, None, 302, "Found", {}, "https://evil.example") is None
+    with pytest.raises(HTTPError):
+        policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

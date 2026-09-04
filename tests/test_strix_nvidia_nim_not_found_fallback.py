@@ -190,7 +190,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
-        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/auto", workflow)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", workflow)
         self.assertIn("provider_mode=contextual_orchestrator", workflow)
         self.assertIn("STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator", workflow)
         self.assertNotIn("Resolve live NVIDIA NIM Strix models", workflow)
@@ -201,7 +201,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("STRIX_MODEL_REQUESTED", workflow)
-        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/auto.", workflow)
+        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/free.", workflow)
         self.assertIn("STRIX_FALLBACK_MODELS: \"\"", workflow)
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:

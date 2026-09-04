@@ -10,7 +10,11 @@ disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap)
 [GitHub Project #1](https://github.com/orgs/ContextualWisdomLab/projects/1) (work/roadmap source of
 truth), the live gap snapshot [`docs/product-technical-gap-baseline.md`](docs/product-technical-gap-baseline.md)
 (not merge authorization; Figma File ID for this repo is N/A), and operate the Project per
-[`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md).
+[`docs/agent-github-project-protocol.md`](docs/agent-github-project-protocol.md). The standing
+autonomous operating directive for the continuous PR review→fix→merge→develop loop across the
+ecosystem — the full text a `/goal` session's length-capped pointer refers to — is
+[`docs/product-goal-directive.md`](docs/product-goal-directive.md); read it in full before running or
+configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
@@ -144,6 +148,15 @@ repeatable compile command.
   breakout. Do not reintroduce bash fast-path extraction.
 - **Cloudflare changes are dry-run by default**; nothing is deleted unless `prune = true` is set
   explicitly. PRs never see the Cloudflare API token.
+- **Required workflows ignore `on:` filters.** Org ruleset `18156473` runs the central workflow file
+  in each target repository's context and discards its `paths`, `paths-ignore`, `branches`, and
+  `types` there (confirmed live: `bandscope` has no local `codeql-pr.yml`/`strix.yml`/
+  `security-scan.yml`, yet ruleset-injected runs of all three exist). `.github` is excluded from
+  that ruleset and instead uses classic branch protection with 14 named required contexts, where a
+  path-filtered workflow leaves its context Pending forever. Never add a trigger-level filter to a
+  required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
+  job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
+  `docs/doctoring/required-workflow-path-filter-boundary.md`.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and

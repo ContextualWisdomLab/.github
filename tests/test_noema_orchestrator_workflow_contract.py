@@ -3,12 +3,142 @@
 from __future__ import annotations
 
 import os
+import json
+import re
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
+
+
+def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles(
+    tmp_path: Path,
+) -> None:
+    """Execute cleanup against a shared-head-SHA fixture and cancel only the closed PR.
+
+    Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
+    (unrelated, open) both have runs on the same head commit; only #7's
+    matches the PR-scoped selector cancel_runs applies, and a `completed`
+    PR #7 run must not be re-cancelled. Runs #104/#105 additionally cover
+    Devin Review's "Sibling Noema runs evade cancellation" finding on PR
+    #1507: a required-workflow-ruleset run materialized in a sibling
+    repository whose `display_title` never rendered this workflow's PR/head
+    run-name (a plain PR title instead) must still be matched through
+    GitHub's own `pull_requests[]` array, and only for the closing PR. The
+    fake `gh` below filters its fixture by the `status=` query parameter,
+    mirroring GitHub's own server-side status filtering, because the
+    workflow's cancel_runs deliberately relies on that filtering (see the
+    run block's own comment) rather than fetching everything and filtering
+    client-side.
+    """
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Cancel queued and running Noema reviews for the closed pull request",
+        ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
+    )
+    workflow_path = ".github/workflows/noema-review.yml"
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 101,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "requested",
+            },
+            {
+                "id": 102,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "queued",
+            },
+            {
+                "id": 103,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "status": "completed",
+            },
+            {
+                "id": 104,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "Fix an unrelated example bug",
+                "head_sha": "a" * 40,
+                "status": "queued",
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 105,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": "A different pull request's title",
+                "head_sha": "a" * 40,
+                "status": "queued",
+                "pull_requests": [{"number": 8}],
+            },
+        ]
+    }
+    runs_file = tmp_path / "runs.json"
+    runs_file.write_text(json.dumps(runs), encoding="utf-8")
+    calls_file = tmp_path / "calls.txt"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"--paginate"* ]]; then
+  [[ "$*" != *"/actions/workflows/"* ]] || exit 99
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
+  url="$3"
+  status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
+  jq --arg status "$status" '{workflow_runs: [.workflow_runs[] | select(.status == $status)]}' \\
+    "$FAKE_RUNS_FILE"
+else
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
+            "CLOSED_PR_NUMBER": "7",
+            "CURRENT_RUN_ID": "999",
+            "FAKE_RUNS_FILE": str(runs_file),
+            "FAKE_CALLS_FILE": str(calls_file),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = calls_file.read_text(encoding="utf-8")
+    # Repository-scoped, status-server-filtered -- never the workflow-file-
+    # scoped endpoint, which does not resolve for sibling-repository runs.
+    assert "actions/runs?status=" in calls
+    assert "/actions/workflows/" not in calls
+    assert "/actions/runs/101/cancel" in calls
+    assert "/actions/runs/102/cancel" not in calls
+    assert "/actions/runs/103/cancel" not in calls
+    # Devin Review finding on PR #1507 ("Sibling Noema runs evade
+    # cancellation"): a required-workflow-ruleset run materialized in a
+    # sibling repository (#104) never renders this workflow's run-name into
+    # display_title, so it must still be matched via GitHub's own
+    # pull_requests[] array; a same-shaped run for an unrelated PR (#105)
+    # must not.
+    assert "/actions/runs/104/cancel" in calls
+    assert "/actions/runs/105/cancel" not in calls
 
 
 def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
@@ -43,6 +173,13 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
+    prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
+    assert '.github/actions/noema-review/two_phase.py' in prepare
+    assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert '.github/actions/noema-review/two_phase.py' in publish
+    assert '--publish-verdict-file "$verdict_file"' in publish
+    assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
         in workflow
@@ -52,6 +189,102 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+
+
+def _expected_head_from_workflow_run_event(event: dict) -> str:
+    """Mirror EXPECTED_HEAD's ``||`` fallback chain for a ``workflow_run`` event.
+
+    Reproduces GitHub Actions' short-circuit-on-falsy ``||`` semantics over
+    the same dotted paths ``noema-review.yml``'s ``EXPECTED_HEAD`` env var
+    reads, so a test can prove — with concrete, distinct base vs. PR-head SHA
+    values — which commit the expression actually resolves to, without
+    needing a live Actions runner to evaluate ``${{ }}`` syntax.
+    """
+    client_payload = event.get("client_payload") or {}
+    pull_request = event.get("pull_request") or {}
+    workflow_run = event.get("workflow_run") or {}
+    pull_requests = workflow_run.get("pull_requests") or []
+    workflow_run_pr_head = (
+        (pull_requests[0].get("head") or {}).get("sha") if pull_requests else None
+    )
+    return (
+        client_payload.get("pr_head_sha")
+        or (pull_request.get("head") or {}).get("sha")
+        or workflow_run_pr_head
+        or ""
+    )
+
+
+def test_standalone_noema_expected_head_uses_trusted_trigger_context() -> None:
+    """Standalone Noema binds review work to the PR or dispatch head."""
+    workflow = workflow_text("noema-review.yml")
+    assert (
+        "EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || "
+        "github.event.client_payload.pr_head_sha || '' }}"
+    ) in workflow
+    assert "github.event.workflow_run" not in workflow
+
+
+def test_workflow_run_expected_head_fails_closed_when_pull_requests_is_empty() -> None:
+    """The retired workflow_run trigger cannot fabricate Noema review context."""
+    assert "workflow_run:" not in workflow_text("noema-review.yml")
+    workflow_run_event = {"workflow_run": {"head_sha": "c" * 40, "pull_requests": []}}
+    assert _expected_head_from_workflow_run_event(workflow_run_event) == ""
+
+
+def _run_stale_trigger_step(
+    tmp_path: Path, *, expected_head: str, live_head: str
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Reject a stale trigger" step's bash with a fake `gh` on PATH."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    step_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Reject a stale trigger before credential or model setup",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        f"#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s' '{live_head}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "PR_NUMBER": "7",
+        "EXPECTED_HEAD_SHA": expected_head,
+        "GH_TOKEN": "synthetic-token",
+    }
+    return subprocess.run(  # noqa: S603, S607
+        [bash_executable, "-c", step_script],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_stale_trigger_step_rejects_noncanonical_uppercase_head(
+    tmp_path: Path,
+) -> None:
+    """Reject caller-controlled uppercase SHA before any model work."""
+    sha = "a" * 40
+    result = _run_stale_trigger_step(tmp_path, expected_head=sha.upper(), live_head=sha)
+    assert result.returncode == 1
+    assert "canonical lowercase exact head SHA" in result.stdout
+
+
+def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
+    tmp_path: Path,
+) -> None:
+    """A canonical but genuinely different trigger head is still rejected."""
+    result = _run_stale_trigger_step(
+        tmp_path, expected_head="a" * 40, live_head="b" * 40
+    )
+    assert result.returncode == 1
+    assert "Noema trigger is stale" in result.stdout
 
 
 def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
@@ -87,7 +320,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
         env={
             **os.environ,
             "GITHUB_OUTPUT": str(strix_output),
-            "STRIX_MODEL": "contextual-orchestrator/orchestrator/auto",
+            "STRIX_MODEL": "contextual-orchestrator/orchestrator/free",
             "STRIX_MODEL_REQUESTED": "",
         },
         capture_output=True,
@@ -96,12 +329,12 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     )
     assert strix.returncode == 0, strix.stderr
     assert {
-        "strix_model=contextual-orchestrator/orchestrator/auto",
+        "strix_model=contextual-orchestrator/orchestrator/free",
         "enabled=true",
         "provider_mode=contextual_orchestrator",
     } <= set(strix_output.read_text().splitlines())
     assert (
-        "STRIX_MODEL: contextual-orchestrator/orchestrator/auto"
+        "STRIX_MODEL: contextual-orchestrator/orchestrator/free"
         in workflow_text("strix.yml")
     )
     assert (
@@ -112,7 +345,7 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     noema_script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Run Noema LLM review and submit verdict",
+            "Prepare Noema model verdict",
         ).split("        run: |\n", 1)[1]
     )
     noema_env = {
@@ -136,3 +369,59 @@ def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> 
     )
     assert noema.returncode == 1
     assert "sidecar must be provisioned before Noema LLM review" in noema.stdout
+
+
+def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
+    """cancel-closed-pr-runs must not fall back to GitHub's 360-minute default.
+
+    Its only step is a single-repository, status-filtered gh api --paginate
+    list-and-cancel sweep (up to 3 passes x 5 statuses) with no branch update
+    or merge -- comparable to, or lighter than, pr-review-merge-scheduler.yml's
+    scan-pr-queue job, which PR #1702 bounded to timeout-minutes: 30 for a
+    single-repository scan that also dispatches a review and updates a branch.
+    """
+    workflow = workflow_text("noema-review.yml")
+    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split("\n  noema-review:\n", 1)[0]
+
+    match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
+    assert match is not None, "cancel-closed-pr-runs must declare a job-level timeout-minutes"
+    timeout = int(match.group(1))
+    assert 1 <= timeout <= 30
+    assert timeout < 360
+
+
+def test_noema_review_job_has_no_job_level_timeout() -> None:
+    """noema-review must not carry a job-level timeout-minutes.
+
+    Its "Prepare Noema model verdict" step calls two_phase.py's call_llm
+    synchronously via the contextual-orchestrator gateway and blocks on the
+    model's own response -- a job-level wall-clock bound here directly caps
+    the model's reasoning/tool-use time once elapsed, which
+    docs/product-goal-directive.md #8 prohibits ("Model timeout은
+    application·Agent·Gateway 공통 상한 없이 기본 null이다"). An earlier
+    version of this job set timeout-minutes: 210, reasoning it gave that
+    step "the same ~180-minute allowance" opencode-review.yml's
+    poll_deadline_epoch gives an unrelated step -- that reasoning was
+    itself the mistake: poll_deadline_epoch bounds a step that polls GitHub
+    for whether a *separately triggered* review process has posted a
+    verdict yet (an async external wait), not a step that itself runs the
+    model synchronously. Any fixed cap on a job whose body IS the
+    synchronous model call is exactly the forbidden inference-time cap. See
+    docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
+    """
+    workflow = workflow_text("noema-review.yml")
+    job = workflow.split("  noema-review:\n", 1)[1]
+
+    match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
+    assert match is None, (
+        "noema-review must not declare a job-level timeout-minutes -- its "
+        "body is a synchronous model call, so any job-level bound caps "
+        "model inference time, which this org's model-timeout policy forbids"
+    )
+
+    assert (
+        "모델당 두 시간 이상 걸릴 수 있음을 수용한다"
+        in (Path(__file__).resolve().parents[1] / "docs" / "product-goal-directive.md").read_text(
+            encoding="utf-8"
+        )
+    ), "the two-hour-per-model allowance this bound relies on must still be documented"
