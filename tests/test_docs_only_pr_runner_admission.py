@@ -91,13 +91,22 @@ def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
-        )
-        normalized_blocks.add(normalized)
+        normalized_lines = []
+        skip_indent = None
+        for line in block.splitlines():
+            indent = len(line) - len(line.lstrip(" "))
+            if skip_indent is not None and line.strip() and indent > skip_indent:
+                continue
+            skip_indent = None
+            if line.strip().startswith("if:"):
+                skip_indent = indent
+                continue
+            normalized_lines.append(line)
+        normalized_blocks.add("\n".join(normalized_lines))
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
-        "from the single 'if:' line"
+        "from the 'if:' condition (which may itself span multiple lines, e.g. "
+        "a YAML block scalar)"
     )
 
 
