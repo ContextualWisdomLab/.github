@@ -3,7 +3,6 @@
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -1126,24 +1125,11 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     assert "No open PRs (including stacked or non-default-base PRs)" in workflow
     # Every repository failure must leave a concrete logged reason.
     assert "see the decision log above for the concrete per-PR reason" in workflow
-    # Queue hygiene: previous-head runs are cancelled immediately, while the
-    # legacy age guard cannot cancel a valid current-head PR run.
-    assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
-    assert "/actions/runs?status=${active_status}&per_page=100" in workflow
-    assert "for active_status in queued in_progress" in workflow
-    assert '"pull_request" or .event == "pull_request_target"' in workflow
-    assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
-    assert ".head_sha != $current_default_sha" in workflow
-    assert "classified as not matching an open PR or default-branch Current HEAD" in workflow
-    assert '.current_head // "closed-or-no-open-pr"' in workflow
-    assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
-    assert "select($current_pr_heads[$head_key] == null)" in workflow
-    revalidate_script = (
-        REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
-    ).read_text(encoding="utf-8")
-    assert "Could not cancel ${cancellation_mode} run" in revalidate_script
-    assert "No run will be cancelled from incomplete evidence" in workflow
-    assert "queue_hygiene_ready=false" in workflow
+    # Queue cancellation belongs to native per-PR concurrency and the local
+    # exact-head coalescer, not this cross-repository recovery walk.
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" not in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" not in workflow
+    assert "revalidate_queue_cancellation.sh" not in workflow
     # Organization sweep budgets must be consumed across the repository loop;
     # resetting the configured limit for every target can flood Actions with
     # long-running review dispatches.
@@ -1168,42 +1154,6 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     assert "--project-flow" in workflow
     assert 'main|master) project_flow="github-flow"' in workflow
     assert 'develop) project_flow="git-flow"' in workflow
-
-
-def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
-    """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    jq_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "closed-or-no-open-pr" in line and "jq -r" in line
-    )
-    jq_filter = shlex.split(jq_line)[2]
-    payload = [
-        {
-            "id": 42,
-            "name": "Required OpenCode Review",
-            "status": "in_progress",
-            "event": "pull_request_target",
-            "head_branch": "old-head",
-            "run_head": "deadbeef",
-            "current_head": None,
-        }
-    ]
-
-    result = subprocess.run(
-        [jq, "-r", jq_filter],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "classified_head=closed-or-no-open-pr" in result.stdout
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
@@ -1574,34 +1524,6 @@ def test_stacked_budget_is_not_declared_as_an_unused_workflow_call_input() -> No
 
     assert "stacked_review_dispatch_limit" not in workflow_call
     assert "inputs.stacked_review_dispatch_limit" not in workflow
-
-
-def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
-    """An inaccessible Actions page must not add a secondary jq null error."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    aggregation_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "done | jq -sc" in line and "workflow_runs" in line
-    )
-    jq_filter = shlex.split(aggregation_line)[4]
-    payload = (
-        '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
-    )
-
-    result = subprocess.run(
-        [jq, "-sc", jq_filter],
-        input=payload,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == []
 
 
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
