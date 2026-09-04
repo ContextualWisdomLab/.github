@@ -100,7 +100,7 @@ if [[ "$*" == *"--paginate"* ]]; then
   status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
   jq --arg status "$status" '{workflow_runs: [.workflow_runs[] | select(.status == $status)]}' \\
     "$FAKE_RUNS_FILE"
-elif [[ "$*" == *"/pulls/"* ]]; then
+elif [[ "$*" == "api repos/ContextualWisdomLab/demo/pulls/7" ]]; then
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
   printf '{"state": "closed", "draft": false, "head": {"sha": "%s"}}\n' "$(printf 'a%.0s' {1..40})"
 else
@@ -249,8 +249,17 @@ def _run_stale_trigger_step(
         ).split("        run: |\n", 1)[1]
     )
     fake_gh = tmp_path / "gh"
+    calls_file = tmp_path / "calls.txt"
     fake_gh.write_text(
-        f"#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s' '{live_head}'\n",
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf '%s\\n' \"$*\" >>'{calls_file}'\n"
+        "if [[ \"$*\" == 'api repos/ContextualWisdomLab/example/pulls/7 --jq .head.sha' ]]; then\n"
+        f"  printf '%s' '{live_head}'\n"
+        "else\n"
+        "  echo 'unexpected gh invocation' >&2\n"
+        "  exit 1\n"
+        "fi\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)

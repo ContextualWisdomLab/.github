@@ -97,12 +97,13 @@ def _strip_if_condition(block: str) -> str:
     kept: list[str] = []
     skip_indent: int | None = None
     for line in block.splitlines():
-        indent = len(line) - len(line.lstrip(" "))
-        if skip_indent is not None and line.strip() and indent > skip_indent:
-            continue
-        skip_indent = None
+        if skip_indent is not None:
+            indent = len(line) - len(line.lstrip(" "))
+            if not line.strip() or indent > skip_indent:
+                continue
+            skip_indent = None
         if line.strip().startswith("if:"):
-            skip_indent = indent
+            skip_indent = len(line) - len(line.lstrip(" "))
             continue
         kept.append(line)
     return "\n".join(kept)
@@ -119,6 +120,32 @@ def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
         "from the 'if:' condition"
+    )
+
+
+def test_strip_if_condition_keeps_skipping_across_a_blank_continuation_line():
+    """A blank line inside a folded/literal `if:` scalar must not end the skip.
+
+    YAML's `if: >-`/`if: |` block scalars can carry a blank line as part of
+    the same condition; a blank line is not itself an "if:"-less, less-
+    indented line that should end the skip, and one falsely resetting
+    `skip_indent` would leave that scalar's later indented lines in the
+    normalized output, making an otherwise byte-identical body compare as
+    drifted.
+    """
+    block = (
+        "    steps:\n"
+        "      - name: example\n"
+        "        if: >-\n"
+        "          first line ||\n"
+        "\n"
+        "          second line after a blank\n"
+        "        runs-on: ubuntu-24.04\n"
+    )
+    assert _strip_if_condition(block) == (
+        "    steps:\n"
+        "      - name: example\n"
+        "        runs-on: ubuntu-24.04"
     )
 
 

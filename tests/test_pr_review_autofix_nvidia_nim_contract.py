@@ -25,8 +25,8 @@ def _workflow_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_review_fix_caller_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair caller on the approved hourly cadence."""
+def test_review_fix_caller_runs_once_each_day() -> None:
+    """Keep the actionable-review repair caller on the approved daily cadence."""
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
     assert 'cron: "23 7 * * *"' in caller
     assert 'cron: "23 */2 * * *"' not in caller
