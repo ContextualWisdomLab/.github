@@ -14,17 +14,6 @@ on:
   repository_dispatch:
     types: [noema-review]
 
-concurrency:
-  # Workflow-level admission retires an older queued head without waiting for
-  # the model job or its API cleanup job to receive a runner.
-  group: >-
-    required-noema-review-${{
-    github.event.pull_request.base.repo.full_name ||
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: read
@@ -229,6 +218,17 @@ jobs:
     name: noema-review
     needs: [admit-current-head]
     runs-on: ubuntu-24.04
+    # Only an exact live head reaches this group. Keeping concurrency at the
+    # job level prevents a delayed stale event from cancelling the current
+    # workflow before admit-current-head can reject it.
+    concurrency:
+      group: >-
+        required-noema-review-${{
+        github.event.pull_request.base.repo.full_name ||
+        github.event.client_payload.target_repository || github.repository }}-${{
+        github.event.pull_request.number ||
+        github.event.client_payload.pr_number || github.run_id }}
+      cancel-in-progress: true
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own

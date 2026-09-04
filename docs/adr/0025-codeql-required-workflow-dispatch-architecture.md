@@ -75,9 +75,8 @@ check. Both should coexist.
 Follow the same required-workflow-entrypoint-dispatches-to-native-execution
 pattern already proven by `strix.yml` (`repository_dispatch` +
 `Fetch pull request head for trusted scan` + `Publish same-head manual Strix
-status`) and `opencode-review.yml` (`Request current-head OpenCode review
-execution` dispatch + `Fail closed without a current-head OpenCode verdict`
-bounded poll). Concretely:
+status`) and OpenCode's runner-release plus exact run/job wake-up contract.
+Concretely:
 
 ```
 codeql-pr.yml (required workflow, runs in target repo context)
@@ -95,21 +94,16 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 state first (open, not draft-exempt in the
                                 same way OpenCode's dispatch step already
                                 does) before dispatching.
-  analyze-head (matrix)     -- RENAMED INTERNALLY, SAME REQUIRED-CHECK NAME:
+  analyze-head (matrix)     -- SAME REQUIRED-CHECK NAME:
                                 "CodeQL compatibility analysis (${{ matrix.language }})".
-                                needs: [detect-languages, dispatch-analysis].
-                                No codeql-action reference. Polls (bounded
-                                wall-clock deadline + transport-failure
-                                tolerance, identical shape to opencode-review.yml's
-                                poll loop) for a commit status posted by the
-                                dispatch handler at context
-                                "codeql-dispatch/${{ matrix.language }}" on
-                                the live PR head SHA, re-validating live PR
-                                head/state each iteration exactly like
-                                opencode-review.yml's poll does (a superseded
-                                head must retire this poll, not report a
-                                stale result). Reflects the polled
-                                conclusion as this job's own exit code.
+                                No codeql-action reference. On attempt one it
+                                dispatches its exact run id, job id, language,
+                                and head, then fails intentionally to release
+                                the runner. The trusted handler publishes the
+                                terminal status and reruns only that failed
+                                job. On attempt two the shard reads the
+                                authenticated current-head status once and
+                                reflects it as this job's own exit code.
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -149,6 +143,12 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 .github-side run for audit trail (mirrors
                                 strix.yml's "Preserve CodeQL SARIF evidence"
                                 / artifact retention today).
+                              -- Re-fetch the open PR, exact required workflow
+                                run, and exact failed language job;
+                                require matching path/head/run/job/name before
+                                calling the single-job rerun endpoint. Missing,
+                                stale, closed, or mismatched identity fails
+                                closed and leaves the required job failed.
 ```
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
@@ -168,7 +168,7 @@ blocker for this one.
   PR from the API and refuse to scan or publish anything if the dispatched
   `pr_head_sha` no longer matches the live head, exactly like `strix.yml`'s
   existing `Validate repository dispatch against live pull request metadata`
-  step and `opencode-review.yml`'s poll-time revalidation. A forged or stale
+  step and the exact-job wake-time revalidation. A forged or stale
   dispatch must never be able to make an unrelated head appear scanned.
 - **Cross-repository checkout trust boundary:** the scan step checks out
   arbitrary target-repository PR-head content into `.github`'s own runner.
@@ -183,11 +183,11 @@ blocker for this one.
   on the *target* repository only, following the same per-repository
   app-token minting `strix.yml` already performs — never a token with
   broader org access.
-- **Poll target cannot be spoofed by the PR author:** a commit status is
+- **Verdict target cannot be spoofed by the PR author:** a commit status is
   writable by anyone with `statuses:write` on the repository (including,
   depending on token scoping, a workflow running with the default
   `GITHUB_TOKEN` in some configurations) — confirm during implementation
-  that the polling job in `codeql-pr.yml` verifies the status update's
+  that the rerun job in `codeql-pr.yml` verifies the status update's
   `creator`/`avatar_url`/app identity matches the expected dispatch-handler
   app, not merely the context name, so a malicious PR cannot forge its own
   passing status. `strix.yml`'s manual-status-publish step already documents
@@ -219,10 +219,8 @@ blocker for this one.
   requirement on `scripts/ci/`) to the org's central CI surface — more
   surface area to maintain, offset by removing ~70 lines of duplicated
   inline Python between `analyze-head`/`analyze-merge` today.
-  the `pr_review_merge_scheduler.py`-scale poll/dispatch pattern is already
-  proven at scale (Strix, OpenCode, Noema all use it today) and this is the
-  fourth application of the same design, not a new pattern to validate from
-  scratch.
+  exact run/job wake-up follows the OpenCode runner-release pattern while
+  avoiding one occupied runner per language for the scan's full duration.
 - Re-admitting `codeql-pr.yml` to ruleset `18156473` must happen only after
   this design is implemented, tested, and its `detect-languages`/
   `dispatch-analysis`/`analyze-head` jobs are confirmed free of any
@@ -236,7 +234,7 @@ blocker for this one.
 1. Implement `scripts/ci/codeql_sarif_gate.py` + its test, extracted from
    the current inline gate in `codeql-pr.yml`.
 2. Implement `codeql-scan-dispatch.yml` per the design above.
-3. Rewrite `codeql-pr.yml`'s `analyze-head` job into the dispatch+poll shape;
+3. Rewrite `codeql-pr.yml`'s `analyze-head` job into the dispatch+exact-job-wake shape;
    delete `analyze-merge` (tracked as future work, not silently lost — this
    ADR is the record).
 4. Add a permanent contract test asserting no `codeql-action` reference

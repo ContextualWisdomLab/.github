@@ -45,6 +45,20 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
+    """Keep each run bounded without treating immutable cache snapshots as locks."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert "actions/cache/restore" not in workflow
+    assert "actions/cache/save" not in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,7 +268,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert re.search(r"(?m)^concurrency:", workflow)
+        if filename != "noema-review.yml":
+            assert re.search(r"(?m)^concurrency:", workflow)
         assert "cancel-in-progress: true" in concurrency_contract
         if filename == "security-scan.yml":
             assert (
@@ -265,6 +280,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "required-opencode-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
             assert "required-noema-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
@@ -685,8 +702,8 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
     noema_job = workflow.split("\n  noema-review:\n", 1)[1]
-    concurrency_contract = workflow.split("\nconcurrency:\n", 1)[1].split(
-        "\npermissions:\n", 1
+    concurrency_contract = noema_job.split("    concurrency:\n", 1)[1].split(
+        "    permissions:\n", 1
     )[0]
 
     assert "workflow_run:" not in concurrency_contract
@@ -698,7 +715,10 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
         "cancel-in-progress:", 1
     )[0]
     assert "cancel-in-progress: true" in concurrency_contract
-    assert "    concurrency:" not in noema_job.split("    permissions:", 1)[0]
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert workflow.index("  admit-current-head:") < workflow.index(
+        "    concurrency:", workflow.index("  noema-review:")
+    )
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
@@ -1016,8 +1036,8 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
-def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
-    """Guard the org-wide approved-PR fallback sweep contract.
+def test_org_queue_sweep_is_explicit_bounded_recovery_only() -> None:
+    """Guard the explicit org-wide approved-PR fallback sweep contract.
 
     Target repositories only receive scheduler runs on PR events, so a PR that
     becomes mergeable after its last event sits approved-but-unmerged forever.
@@ -1025,33 +1045,20 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. Native events
-    handle the normal path; the daily sweep recovers missed events. Its cron has a
-    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
-    job has enough runtime headroom to finish a complete organization walk.
+    handle the normal path; only an explicit bounded dispatch may start the
+    expensive organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "17 3 * * *"' in workflow
+    assert '- cron: "17 3 * * *"' not in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '17 3 * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
-    assert (
-        "github.event_name == 'schedule' && format('schedule-{0}', "
-        "github.event.schedule)"
-    ) in workflow
     org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
         "    permissions:", 1
     )[0]
     assert "timeout-minutes: 60" in org_sweep_header
-    for setting in (
-        "ORG_SWEEP_TRIGGER_REVIEWS",
-        "ORG_SWEEP_ENABLE_AUTO_MERGE",
-        "ORG_SWEEP_UPDATE_BRANCHES",
-    ):
-        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
-    # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '17 3 * * *'" in workflow
+    # The single-repository scan must not double-run on explicit sweep dispatch.
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (

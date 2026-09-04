@@ -70,19 +70,9 @@ on:
         default: ""
         type: string
   schedule:
-    # Daily missed-event recovery for this repository. org-queue-sweep below
-    # explicitly excludes ContextualWisdomLab/.github from its target list
-    # (a PR in THIS repository, including one editing the governance
-    # workflows themselves, is never covered by the org-wide sweep), so this
-    # remains the bounded fallback for a genuinely missed native event. GitHub
-    # auto-merge handles required-check completion without another workflow run.
-    # Offset from the organization sweep so recovery jobs do not collide.
+    # Daily missed-event recovery for this repository. Native PR/review events
+    # own the normal path; auto-merge handles required-check completion.
     - cron: "47 3 * * *"
-    # Daily organization-wide missed-event recovery. Native PR, review, and
-    # protected-branch push events handle the normal path; GitHub auto-merge
-    # handles required-check completion. This lower-frequency sweep only
-    # recovers delivery gaps and stacked PRs without required workflows.
-    - cron: "17 3 * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -112,16 +102,12 @@ jobs:
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
-    # The org-sweep cron and org_sweep dispatches are handled by org-queue-sweep
-    # below; skipping them here avoids a duplicate same-repository scan.
+    # Explicit org_sweep dispatches are handled by org-queue-sweep below;
+    # skipping them here avoids a duplicate same-repository scan.
     if: >-
       (
         github.event_name != 'pull_request_target' ||
         github.event.action != 'closed'
-      ) &&
-      (
-        github.event_name != 'schedule' ||
-        github.event.schedule != '17 3 * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -151,6 +137,7 @@ jobs:
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
@@ -474,7 +461,7 @@ jobs:
           done
 
           if [ "$opencode_state" != "success" ]; then
-            printf '::warning::Post-approval direct-merge follow-up skipped because the approved OpenCode publication run did not complete successfully. PR=%s head=%s state=%s reason=%s. The scheduled organization sweep remains authoritative.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$opencode_state" "$opencode_reason"
+            printf '::warning::Post-approval direct-merge follow-up skipped because the approved OpenCode publication run did not complete successfully. PR=%s head=%s state=%s reason=%s. Native events and the explicit org-sweep recovery remain authoritative.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$opencode_state" "$opencode_reason"
             echo "proceed=false" >>"$GITHUB_OUTPUT"
           fi
 
@@ -536,6 +523,9 @@ jobs:
             --project-flow "$project_flow"
             --review-workflow "Required OpenCode Review"
             --review-dispatch-limit "$review_dispatch_limit"
+            --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
+            --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+            --admission-sequence "$GITHUB_RUN_ID"
             --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
           )
@@ -579,8 +569,7 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '17 3 * * *') ||
-        (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
+        github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true
       )
     runs-on: ubuntu-24.04
     # The complete organization walk exceeded the legacy 30-minute boundary in
@@ -608,6 +597,7 @@ jobs:
       # #1823 moved ordinary PR OpenCode dispatch into the required workflow.
       # Keep only the separate stacked-PR fallback budget enabled by default.
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
@@ -1035,6 +1025,9 @@ jobs:
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$review_dispatch_limit"
+              --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
+              --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+              --admission-sequence "$GITHUB_RUN_ID"
               --stacked-review-dispatch-limit "$stacked_review_dispatch_limit"
               --branch-update-limit "$branch_update_limit"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
