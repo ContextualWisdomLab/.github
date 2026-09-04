@@ -62,6 +62,7 @@ def test_quality_gate_close_event_retires_prior_pr_run_without_runner() -> None:
     assert "    types: [opened, synchronize, reopened, closed]\n" in pull_request_trigger
     assert (
         "  group: contextual-orchestrator-review-repair-quality-"
+        "${{ github.repository }}-"
         "${{ github.event.pull_request.number || github.ref }}\n"
     ) in quality
     assert "  cancel-in-progress: true\n" in quality
@@ -69,6 +70,17 @@ def test_quality_gate_close_event_retires_prior_pr_run_without_runner() -> None:
         "    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}\n"
         in contract_job
     )
+
+
+def test_quality_gate_push_runs_only_on_the_default_branch() -> None:
+    """PR branch pushes rely on pull_request; push validates merged main."""
+    quality = _read(QUALITY)
+    push_trigger = quality.split("  push:\n", maxsplit=1)[1].split(
+        "\nconcurrency:\n", maxsplit=1
+    )[0]
+
+    assert push_trigger.startswith("    branches: [main]\n")
+    assert push_trigger.count("branches:") == 1
 
 
 def test_review_repair_quality_workflow_has_truthful_identity() -> None:

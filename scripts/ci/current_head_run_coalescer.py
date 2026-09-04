@@ -508,15 +508,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the coalescer and fail closed on malformed or unavailable evidence."""
+    """Run the coalescer, treating a live-state refusal as the documented safe no-op.
+
+    `CoalescingRefused` raised by `coalesce()`'s own top-level live-PR-state check
+    (before any per-candidate cancellation is attempted) means this invocation's
+    remembered head no longer matches the live head -- the same "safe no-op" the
+    per-candidate loop inside `coalesce()` already treats as non-fatal, and the
+    production workflow's own comment documents as the intended behavior for a
+    superseded queued instance. Any other exception (malformed repository/PR
+    identity, an unavailable GitHub API) still fails closed.
+    """
     args = parse_args(argv)
-    coalesce(
-        args.repo,
-        args.pr_number,
-        args.expected_head_repo,
-        args.expected_head_ref,
-        args.expected_head,
-    )
+    try:
+        coalesce(
+            args.repo,
+            args.pr_number,
+            args.expected_head_repo,
+            args.expected_head_ref,
+            args.expected_head,
+        )
+    except CoalescingRefused as exc:
+        print(f"No coalescing performed: {exc}")
     return 0
 
 
