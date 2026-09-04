@@ -120,6 +120,15 @@ on:
     # -- semantic-data-portal (formerly semantic-data-portal-hourly-review-repair.yml)
     - cron: "59 * * * *"
 
+# Coalesce admissions before resolve-target needs a runner.
+# GitHub keeps at most one running and one pending workflow per group by default.
+# A newer
+# pending heartbeat replaces the older pending heartbeat; cancel-in-progress
+# stays false, so it does not cancel the running repository scan.
+concurrency:
+  group: hourly-review-repair-${{ github.event.schedule }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -237,8 +246,18 @@ jobs:
     with:
       target_repository: ${{ matrix.target_repository }}
       base_branch: ${{ matrix.base_branch }}
-      max_prs: "50"
+      # The reusable scheduler's own default (also "50") is too low for a
+      # queue this size: this repository alone (one of the 20 targets below)
+      # had 117 open PRs as of 2026-09-03, and BandScope independently hit
+      # 136 (see the now-superseded #1397, whose fix predates this file and
+      # never reached main before its target file was consolidated away).
+      # An oldest-first scan capped at 50 never reaches a repository's newer
+      # non-draft work once its queue exceeds that bound. 200 mirrors #1397's
+      # own chosen bound.
+      max_prs: "200"
       max_dispatches: "1"
+      scan_window_size: "50"
+      rotation_seed: ${{ format('{0}', github.run_number) }}
       retry_hours: ${{ matrix.retry_hours }}
       # Explicit for every target: the reusable workflow's own default is
       # already `true`, so this is behaviorally identical to the 17 original
