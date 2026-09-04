@@ -71,6 +71,17 @@ def test_quality_gate_close_event_retires_prior_pr_run_without_runner() -> None:
     )
 
 
+def test_quality_gate_push_runs_only_on_the_default_branch() -> None:
+    """PR branch pushes rely on pull_request; push validates merged main."""
+    quality = _read(QUALITY)
+    push_trigger = quality.split("  push:\n", maxsplit=1)[1].split(
+        "\nconcurrency:\n", maxsplit=1
+    )[0]
+
+    assert push_trigger.startswith("    branches: [main]\n")
+    assert push_trigger.count("branches:") == 1
+
+
 def test_review_repair_quality_workflow_has_truthful_identity() -> None:
     """Keep the stable workflow ID while retiring its direct-NIM identity."""
     assert QUALITY.is_file()
