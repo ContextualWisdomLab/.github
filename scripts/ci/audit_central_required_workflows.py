@@ -47,6 +47,29 @@ def _typed_rules(payload: dict[str, Any], rule_type: str) -> list[dict[str, Any]
     ]
 
 
+def audit_review_protection(payload: dict[str, Any]) -> list[str]:
+    """Return P0 drift in the pull-request approval boundary."""
+    review_rules = _typed_rules(payload, "pull_request")
+    if len(review_rules) != 1:
+        return [f"expected one pull_request rule, found {len(review_rules)}"]
+
+    parameters = review_rules[0].get("parameters")
+    parameters = parameters if isinstance(parameters, dict) else {}
+    errors: list[str] = []
+    if parameters.get("required_approving_review_count") != 2:
+        errors.append("exactly two approving reviews are not required")
+    if parameters.get("dismiss_stale_reviews_on_push") is not True:
+        errors.append("stale-review dismissal on push is disabled")
+    if parameters.get("require_last_push_approval") is not True:
+        errors.append("last-push approval protection is disabled")
+    if parameters.get("required_review_thread_resolution") is not True:
+        errors.append("review-thread resolution protection is disabled")
+    allowed_methods = set(parameters.get("allowed_merge_methods") or [])
+    if not {"merge", "squash"}.issubset(allowed_methods):
+        errors.append("merge and squash are not both allowed merge methods")
+    return errors
+
+
 def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     """Return explicit drift reasons for a live organization ruleset payload."""
     errors: list[str] = []
@@ -156,24 +179,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     for path in unexpected_paths:
         errors.append(f"unexpected workflow present in required set: {path}")
 
-    review_rules = _typed_rules(payload, "pull_request")
-    if len(review_rules) != 1:
-        errors.append(f"expected one pull_request rule, found {len(review_rules)}")
-    else:
-        parameters = review_rules[0].get("parameters")
-        parameters = parameters if isinstance(parameters, dict) else {}
-        approving_reviews = parameters.get("required_approving_review_count")
-        if approving_reviews != 2:
-            errors.append("exactly two approving reviews are not required")
-        if parameters.get("dismiss_stale_reviews_on_push") is not True:
-            errors.append("stale-review dismissal on push is disabled")
-        if parameters.get("require_last_push_approval") is not True:
-            errors.append("last-push approval protection is disabled")
-        if parameters.get("required_review_thread_resolution") is not True:
-            errors.append("review-thread resolution protection is disabled")
-        allowed_methods = set(parameters.get("allowed_merge_methods") or [])
-        if not {"merge", "squash"}.issubset(allowed_methods):
-            errors.append("merge and squash are not both allowed merge methods")
+    errors.extend(audit_review_protection(payload))
 
     if not _typed_rules(payload, "deletion"):
         errors.append("default-branch deletion protection is missing")
@@ -258,6 +264,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the optional ruleset JSON path."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stacked", action="store_true")
+    parser.add_argument("--review-protection-only", action="store_true")
     parser.add_argument("ruleset_json", nargs="?", type=Path)
     return parser.parse_args(argv)
 
@@ -271,7 +278,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: unable to load ruleset JSON: {exc}", file=sys.stderr)
         return 2
 
-    auditor = audit_stacked_ruleset if args.stacked else audit_ruleset
+    if args.stacked and args.review_protection_only:
+        print("ERROR: --stacked and --review-protection-only are mutually exclusive", file=sys.stderr)
+        return 2
+    auditor = (
+        audit_stacked_ruleset
+        if args.stacked
+        else audit_review_protection
+        if args.review_protection_only
+        else audit_ruleset
+    )
     ruleset_id = STACKED_RULESET_ID if args.stacked else RULESET_ID
     workflow_count = 1 if args.stacked else len(REQUIRED_WORKFLOW_PATHS)
     errors = auditor(payload)
@@ -284,7 +300,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if args.stacked:
+    if args.review_protection_only:
+        print(f"PASS: ruleset {ruleset_id} enforces the pull-request protection boundary")
+    elif args.stacked:
         print(
             f"PASS: ruleset {ruleset_id} audits {workflow_count} "
             "central required workflows in evaluate mode"
