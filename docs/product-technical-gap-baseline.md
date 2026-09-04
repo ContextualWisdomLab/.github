@@ -5036,6 +5036,34 @@ doctoring doc's 2026-09-03 follow-up section for the full before/after and updat
 A comment was left on `#1397` pointing at the replacement fix rather than closing it (closure is a merge-only
 action per this repo's governance model).
 
+## `opencode-review-dispatch.yml` still requesting the starved floating image — 2026-09-04
+
+**Status:** Fixed. The 2026-09-01 floating-image entry above closed the three required-check gates
+(`strix.yml`, `opencode-review.yml`, `noema-review.yml`) but explicitly flagged "any remaining unpinned
+central workflows" as an open follow-up. `opencode-review-dispatch.yml` — the workflow the required
+`opencode-review` check's own `repository_dispatch` lands on to actually run the OpenCode CLI and post the
+exact-head verdict — still requested `ubuntu-latest` on all 4 jobs. Confirmed live on
+`contextual-orchestrator#1017`: its dispatch run (`33916313804`) sat `queued` with no runner ever assigned
+from creation, and a 30-run sample of recent `opencode-review-dispatch.yml` runs org-wide showed 14 still
+`queued` (several 10+ hours old) and 0 clean successes in the sample. Pinned all 4 occurrences to
+`ubuntu-24.04` and extended `tests/test_required_review_runner_image_contract.py` with a fourth case.
+
+**Residual.** The rest of `.github/workflows/` still has unpinned `ubuntu-latest` jobs (`pr-review-autofix.yml`,
+`pr-review-fix-scheduler.yml`, `hourly-review-repair.yml`, `codeql-pr.yml`, `codeql-scan-dispatch.yml`, and
+others) — this fix deliberately stayed scoped to the one file with direct, confirmed live evidence of
+starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
+if queuing symptoms recur on them specifically.
+
+**Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
+"Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
+repository), but this test still asserts the old single hourly `cron: "23 * * * *"`. Same bug class as the
+`test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
+behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
+intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+
+**Update 2026-09-05, resolved on `.github#1661`:** the residual noted just above -- `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour` asserting the old single hourly cron against the redesigned staggered-daily schedule -- was fixed on this branch (the test is now `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, asserting the actual `"23 7 * * *"` daily slot and the absence of the old `"23 * * * *"` hourly one).
+
 ## `.github#1661`: a multi-day merge to a fast-moving `main`, a self-caught deletion mistake, and closing the 7th finding (coverage/docstring gates) to 100% — 2026-09-02..09-05
 
 Over several `/loop` ticks spanning three days, `.github#1661`'s branch
