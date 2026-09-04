@@ -560,10 +560,10 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 		record_failure "opencode required workflow bootstrap condition detection must survive a job block larger than the pipe buffer"
 	fi
 	rm -f "$large_bootstrap_fixture"
-	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
+	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.target_repository' "opencode review scopes concurrency by the live validated target repository"
+	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.pr_number || github.run_id' "opencode review scopes concurrency by the live validated PR with a non-PR fallback"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)" "opencode review retains a manual PR fallback group when no head SHA is provided"
+	assert_file_contains "$workflow_file" 'opencode-review-${{' "opencode review uses the workflow-repository-PR group prefix"
 	assert_file_contains "$workflow_file" 'cancel-in-progress: true' "opencode review cancels stale in-progress review attempts when a newer PR event arrives"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "opencode pull_request coverage execution materializes the exact base/head merge tree"
 	assert_file_contains "$workflow_file" "stale OpenCode run: event head=" "opencode review side effects are skipped for stale heads"
