@@ -1611,6 +1611,37 @@ def test_call_llm_http_error_malformed_or_oversized_model_is_unknown(
     assert body.decode("utf-8", errors="ignore") not in output
 
 
+def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
+    monkeypatch, capsys
+):
+    """A truncated gateway error body cannot bypass the stable transport boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    class BrokenBody:
+        def read(self, _limit):
+            raise noema.http.client.IncompleteRead(b'{"error":')
+
+        def close(self):
+            return None
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, BrokenBody()
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError, match="served_model=unknown"):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    assert "phase=response_error" in output
+    assert "served_model=unknown" in output
+    assert '{"error":' not in output
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()

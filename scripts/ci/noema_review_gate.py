@@ -1328,7 +1328,7 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
     """
     try:
         raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
-    except (AttributeError, OSError, ValueError):
+    except (AttributeError, OSError, ValueError, http.client.HTTPException):
         return {}
     if len(raw_bytes) > MAX_HTTP_ERROR_BODY_BYTES:
         return {}
