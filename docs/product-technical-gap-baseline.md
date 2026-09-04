@@ -4532,3 +4532,37 @@ required-workflow rulesets: the run's workflow definition lives in the central `
 three exist" pattern already in this repo's own CLAUDE.md. Workaround: use the raw `gh api` REST endpoints
 (`.../actions/jobs/<id>/logs` for logs, `.../actions/runs/<id>/rerun-failed-jobs` POST for reruns) directly
 instead of the `gh run` subcommands whenever the target run belongs to a ruleset-injected required workflow.
+
+## `bandscope#1141` — a stale `noema-review` failure from a bug already fixed on `main`, retried — 2026-09-04
+
+**Trigger.** While actively searching for CI-independent work during the ongoing org-wide queue congestion
+(per this tick's own standing instruction to keep looking rather than idle), swept the org's ~30 open
+Dependabot PRs for anything genuinely stuck on a real failure rather than just queue depth. Most were still
+plainly `QUEUED` like everything else, but `bandscope#1141` (`build(deps): bump github/codeql-action/analyze
+from 4.37.0 to 4.37.9`, a one-line workflow version bump) had already run far enough to show
+`mergeStateStatus: BEHIND` with a completed, *failed* `noema-review` check — a real result, not queue noise.
+
+**Root-caused as already fixed, not a fresh bug.** The job's log: `Noema bounded repair transport was
+exhausted; initial failure: Noema adversarial validation requires at least 2 concrete probe(s); repair
+failure: NoemaRepairDeadlineExceeded: Noema repair exceeded 900-second absolute wall-clock deadline`. Read
+`scripts/ci/noema_review_gate.py` in this repo directly: `_required_probe_count` returns 2 for any diff
+touching a workflow/executable/test file (a `.yml` action-version bump qualifies), and a comment there
+already documents this exact failure shape from a prior real incident
+(`ConceptWeave` run `33527145686`) plus the schema-level `minItems` floor added to catch it earlier and
+cheaper. `git log -L` on that function showed the job ran with genuinely stale code: `noema-review` started
+at `2026-09-02T13:52:40Z` and failed at `14:28:38Z`, but commit `a28fc2f` ("fix(noema): remove caller repair
+deadline and duplicate model call" — the exact 900-second caller-side repair deadline this job hit) landed
+at `2026-09-02T14:25:37Z`, i.e. *while the job was still running*. Since `noema-review` is a
+`pull_request_target` central required workflow that runs `.github`'s current `main` scripts against the PR
+head, a fresh run now uses the already-fixed code.
+
+**Retried, not re-implemented.** `gh api -X POST repos/ContextualWisdomLab/bandscope/actions/runs/33589770307/
+rerun-failed-jobs` (the same technique and the same `gh run rerun` 404 workaround as the `newsdom-api#784`
+entry above); confirmed `run_attempt` incremented to 2, `status: queued` (naturally still gated by the same
+org-wide capacity ceiling). Also noted, but deliberately did not chase further: the same PR's `strix` check
+shows `CANCELLED` from a run that both started and completed within 34 seconds two days ago (`2026-09-02T04:10:18Z`–`04:10:52Z`,
+log blob already expired) — consistent with the already-tracked, deliberately-deferred
+"Strix concurrency starvation" gap (`project_strix_concurrency_starvation_unfixed`), and confirmed via
+`gh api repos/.../branches/main/protection/required_status_checks` that `strix` is not in this repo's
+required-check list, so it isn't actually blocking this PR's mergeability — out of scope for a proportionate
+triage pass.
