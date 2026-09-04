@@ -24,16 +24,11 @@ permissions:
   contents: read
 
 jobs:
-  required-workflow-bootstrap:
-    name: required-workflow-bootstrap
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "OpenCode repository-dispatch review run materialized."
-
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     permissions:
       contents: read
       pull-requests: read
@@ -224,6 +219,7 @@ jobs:
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     permissions:
       contents: read
       id-token: write
@@ -371,6 +367,7 @@ jobs:
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
       # identity, secret, or write token is available to untrusted tests.
@@ -629,10 +626,52 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
-            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
-              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
-              --base-sha "$PR_BASE_SHA" \
-              --output-dir "$coverage_build_dir/base-python-requirements"
+            python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
+            if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
+              --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
+              >"$python_change_files"; then
+              echo "::error::Could not classify exact current-head changed files for Python coverage." \
+                >&2
+              exit 1
+            fi
+            python_coverage_required=0
+            while IFS= read -r -d '' changed_path; do
+              changed_basename="${changed_path##*/}"
+              case "$changed_basename" in
+                *.py|pyproject.toml|uv.lock|poetry.lock|Pipfile|Pipfile.lock|\
+                setup.py|setup.cfg|tox.ini|pytest.ini|.pytest.ini|\
+                requirements.lock|requirements*.txt|requirements*.in|\
+                environment.yml|environment.yaml)
+                  python_coverage_required=1
+                  break
+                  ;;
+              esac
+              # Any text file below a requirements directory may be a bounded
+              # include target of a base lock, so retain materialization
+              # conservatively instead of relying on path depth alone.
+              case "/$changed_path/" in
+                */requirements/*)
+                  case "$changed_basename" in
+                    *.txt|*.in)
+                      python_coverage_required=1
+                      break
+                      ;;
+                  esac
+                  ;;
+              esac
+            done <"$python_change_files"
+            if [ "$python_coverage_required" -eq 1 ]; then
+              python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_python_requirements.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --base-sha "$PR_BASE_SHA" \
+                --output-dir "$coverage_build_dir/base-python-requirements"
+            else
+              mkdir -p "$coverage_build_dir/base-python-requirements"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/manifest.json"
+              : >"$coverage_build_dir/base-python-requirements/manifest.txt"
+              printf '[]\n' >"$coverage_build_dir/base-python-requirements/vcs-manifest.json"
+              echo "No Python source or dependency-manifest changes on the exact current head; skipped base Python lock materialization."
+            fi
             python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_javascript_packages.py" \
               --repo-root "$COVERAGE_SOURCE_WORKDIR" \
               --base-sha "$PR_BASE_SHA" \
@@ -687,6 +726,9 @@ jobs:
               mkdir -p /opt/corepack /opt/javascript-package-locks /opt/npm-cache /opt/pnpm-store; \
               install -m 0444 /tmp/base-javascript-packages/manifest.json \
                 /opt/javascript-package-locks/manifest.json; \
+              has_exact_npm_package_manager() { \
+                jq -e '(.packageManager // null) as $spec | if $spec != null then if ($spec | type) == "string" then ($spec | test("^npm@[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else (.devEngines // {}) as $engines | (if ($engines | type) == "object" then ($engines.packageManager // null) else null end) as $dev | if ($dev | type) == "object" then if ($dev.name // null) == "npm" then ($dev.version // null) as $version | if ($version | type) == "string" then ($version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9._+-]+)?$")) else false end else false end else false end end' package.json >/dev/null 2>&1; \
+              }; \
               jq -r '.[] | [.directory, .package_manager] | @tsv' \
                 /tmp/base-javascript-packages/manifest.json \
                 | while IFS="$(printf '\t')" read -r project_dir package_manager; do \
@@ -694,11 +736,19 @@ jobs:
                     cd "/tmp/base-javascript-packages/${project_dir}"; \
                     case "$package_manager" in \
                       npm) \
-                        npm ci \
-                          --ignore-scripts \
-                          --cache /opt/npm-cache \
-                          --no-audit \
-                          --no-fund; \
+                        if has_exact_npm_package_manager; then \
+                          corepack npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        else \
+                          npm ci \
+                            --ignore-scripts \
+                            --cache /opt/npm-cache \
+                            --no-audit \
+                            --no-fund; \
+                        fi; \
                         rm -rf node_modules; \
                         ;; \
                       pnpm@*) \
@@ -713,7 +763,7 @@ jobs:
                         ;; \
                     esac; \
                   done; \
-              npm cache verify --cache /opt/npm-cache; \
+              corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
           COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
@@ -1405,6 +1455,9 @@ jobs:
               printf 'Coverage package runner %s requires an exact packageManager version (for example %s@1.2.3); mutable or missing specifications are refused.\n' "$runner" "$runner" >&2
               return 1
             fi
+            if [ "$runner" = "npm" ] && command -v corepack >/dev/null 2>&1; then
+              return 0
+            fi
             if [ "$runner" = "pnpm" ] && command -v corepack >/dev/null 2>&1; then
               return 0
             fi
@@ -1432,7 +1485,7 @@ jobs:
                 return
                 ;;
               npm)
-                command -v npm >/dev/null 2>&1 && printf '%s\n' "npm"
+                ensure_corepack_runner npm "$declared_spec" && printf '%s\n' "npm"
                 return
                 ;;
             esac
@@ -1453,7 +1506,7 @@ jobs:
             local package_runner="$2"
             local script="$3"
             case "$package_runner" in
-              npm) run_and_capture "$label" npm run "$script" ;;
+              npm) run_and_capture "$label" corepack npm run "$script" ;;
               pnpm) run_and_capture "$label" corepack pnpm run "$script" ;;
               yarn) run_and_capture "$label" yarn run "$script" ;;
             esac
@@ -1699,7 +1752,7 @@ jobs:
                     return 0
                   fi
                   run_and_capture "JavaScript/TypeScript dependencies (npm offline ci, lifecycle hooks disabled)" \
-                    npm ci \
+                    corepack npm ci \
                       --offline \
                       --ignore-scripts \
                       --cache "$writable_npm_cache_dir" \
@@ -1831,9 +1884,9 @@ jobs:
             case "$package_runner" in
               npm)
                 if [ -n "$package_name" ] && jq -e '.workspaces // empty' package.json >/dev/null 2>&1; then
-                  run_and_capture "Tauri frontendDist build (${package_dir})" npm run build --workspace "$package_name"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" corepack npm run build --workspace "$package_name"
                 else
-                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && npm run build' bash "$package_dir"
+                  run_and_capture "Tauri frontendDist build (${package_dir})" bash -c 'cd "$1" && corepack npm run build' bash "$package_dir"
                 fi
                 ;;
               pnpm)
@@ -2244,13 +2297,13 @@ jobs:
                 if javascript_test_script_collects_coverage || javascript_test_runner_accepts_coverage_flag; then
                   if javascript_test_script_collects_coverage; then
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm test ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test ;;
                     esac
                   else
                     case "$package_runner" in
-                      npm) run_and_capture "JavaScript/TypeScript test coverage" npm test -- --coverage ;;
+                      npm) run_and_capture "JavaScript/TypeScript test coverage" corepack npm test -- --coverage ;;
                       pnpm) run_and_capture "JavaScript/TypeScript test coverage" corepack pnpm run test --coverage ;;
                       yarn) run_and_capture "JavaScript/TypeScript test coverage" yarn test --coverage ;;
                     esac
@@ -2258,7 +2311,7 @@ jobs:
                   javascript_coverage_ran=1
                 else
                   case "$package_runner" in
-                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" npm test ;;
+                    npm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack npm test ;;
                     pnpm) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" corepack pnpm test ;;
                     yarn) run_and_capture "JavaScript/TypeScript tests (coverage provider not declared)" yarn test ;;
                   esac
@@ -2390,9 +2443,8 @@ jobs:
     # 36-minute publication gate, the 18-minute Noema handoff, and setup/cleanup
     # overhead without truncating a late current-head verdict, handoff, merge
     # scheduler follow-up, or bounded failure reason.
-    timeout-minutes: 325
     permissions:
-      actions: read
+      actions: write
       checks: read
       id-token: write
       contents: read
@@ -4071,7 +4123,6 @@ jobs:
       - name: Run OpenCode PR Review model pool
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
-        timeout-minutes: 205
         continue-on-error: true
         env:
           SHARE: "false"
@@ -4082,14 +4133,7 @@ jobs:
           # the SAME model 5x let a rate-limited/hung leader consume the whole
           # step, so the pool never reached a healthy fallback model.
           OPENCODE_MODEL_ATTEMPTS: "1"
-          # Preserve reviews that legitimately need tens of minutes to inspect a
-          # large repository. Changed-file count is not a repository-complexity
-          # proxy, so every cadence class gets 90 minutes per candidate while the
-          # bounded provider-pool watchdog remains the outer guard.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "5400"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"
-          OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"
-          OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"
           # A second pass through the same provider catalog repeats the same
           # quota/format failures and can occupy the required check for hours.
           # Exhaust each distinct candidate once, then publish the bounded
@@ -4098,23 +4142,10 @@ jobs:
           OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"
           OPENCODE_SMALL_CHANGE_FILE_THRESHOLD: "3"
           OPENCODE_MEDIUM_CHANGE_FILE_THRESHOLD: "20"
-          OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"
-          OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"
-          OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"
           OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"
-          OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"
           OPENCODE_DYNAMIC_MAX_CYCLES: "1"
           CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE: ${{ steps.central_review_process_fallback_scope.outputs.eligible || 'false' }}
           CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL: ${{ steps.central_review_process_fallback_scope.outputs.scope_label || 'unsupported' }}
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"
-          OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"
           OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"
           OPENCODE_BACKOFF_INITIAL_SECONDS: "30"
           OPENCODE_BACKOFF_MAX_SECONDS: "30"
@@ -4137,18 +4168,9 @@ jobs:
           set -euo pipefail
           source "$GITHUB_WORKSPACE/scripts/ci/load_contextual_orchestrator_token.sh"
           set +e
-          timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s" \
-            bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
+          bash "$GITHUB_WORKSPACE/scripts/ci/run_opencode_review_model_pool.sh"
           pool_status=$?
           set -e
-          if [ "$pool_status" -eq 124 ] || [ "$pool_status" -eq 137 ] || [ "$pool_status" -eq 143 ]; then
-            printf 'OpenCode model pool exceeded the outer %ss step budget; marking the pool exhausted so current-head evidence fallback can publish a bounded reason instead of blocking the org queue.\n' \
-              "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}"
-            {
-              printf 'review_model=\n'
-              printf 'review_status=exhausted\n'
-            } >>"$GITHUB_OUTPUT"
-          fi
           exit "$pool_status"
 
       - name: Exchange OpenCode app token for review writes
@@ -4701,7 +4723,6 @@ jobs:
         # The approval gate normally waits about six minutes, with bounded
         # extensions for image validation or package/GPU builds plus API and
         # publication overhead.
-        timeout-minutes: 36
         env:
           GH_TOKEN: ${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           CHECK_LOOKUP_GH_TOKEN: ${{ github.token }}
@@ -4756,7 +4777,6 @@ jobs:
           # failed-check diagnosis in this publish step is a short best-effort
           # augmentation; current-head logs/SARIF remain the authoritative
           # reason source when the augmentation is unavailable.
-          OPENCODE_RUN_TIMEOUT_SECONDS: "120"
           OPENCODE_EXPORT_TIMEOUT_SECONDS: "60"
         run: |
           set -euo pipefail
@@ -6110,8 +6130,7 @@ jobs:
             } >"$prompt_file"
 
             cd "$OPENCODE_REVIEW_WORKDIR"
-            if ! timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" \
-              env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
+            if ! env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
               -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
               opencode run "$(cat "$prompt_file")" \
               --pure \
@@ -7788,6 +7807,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Enforce current-head formal OpenCode review receipt
+        id: formal_review_receipt
         if: >-
           always()
           && needs.validate-pr-metadata.result == 'success'
@@ -7811,6 +7831,61 @@ jobs:
             --head-sha "$PR_HEAD_SHA" \
             "${draft_args[@]}"
 
+      - name: Wake exact-head required OpenCode workflow
+        if: >-
+          always()
+          && github.event_name == 'repository_dispatch'
+          && steps.formal_review_receipt.outcome == 'success'
+          && needs.validate-pr-metadata.outputs.target_repository != ''
+          && needs.validate-pr-metadata.outputs.head_sha != ''
+          && github.event.client_payload.required_run_id != ''
+        env:
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            echo "::error::Actions-capable wake credential is unavailable. Native runs use github.token; sibling runs require PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN."
+            exit 1
+          fi
+          [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Required OpenCode run id is missing or non-canonical."
+            exit 1
+          }
+          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
+          # event, central workflow path, and live PR head before rerunning it;
+          # rendered titles and workflow_url differ between native and
+          # organization-required workflow contexts.
+          for attempt in $(seq 1 12); do
+            run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id)
+              | select(.event == "pull_request_target")
+              | select(.path == ".github/workflows/opencode-review.yml")
+              | select(.head_sha == $head)
+              | [(.id // ""), (.status // ""), (.conclusion // "")]
+              | @tsv
+            ')"
+            IFS=$'\t' read -r required_run_id required_status required_conclusion <<<"$required_run"
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "failure" ]; then
+              gh api -X POST "repos/${GH_REPOSITORY}/actions/runs/${required_run_id}/rerun-failed-jobs" >/dev/null
+              echo "Re-ran failed jobs for exact-head Required OpenCode Review run ${required_run_id}."
+              exit 0
+            fi
+            if [ "$required_status" = "completed" ] && [ "$required_conclusion" = "success" ]; then
+              echo "Exact-head Required OpenCode Review run ${required_run_id} already succeeded."
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Formal OpenCode receipt exists, but the exact-head required workflow did not reach a rerunnable failed state."
+          exit 1
+
       - name: Publish repository_dispatch OpenCode status
         if: >-
           always()
@@ -7818,14 +7893,14 @@ jobs:
           && needs.validate-pr-metadata.outputs.target_repository != ''
           && needs.validate-pr-metadata.outputs.head_sha != ''
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           OPENCODE_MODEL_POOL_OUTCOME: ${{ steps.opencode_review_model_pool.outputs.review_status }}
           COVERAGE_EVIDENCE_RESULT: ${{ needs.coverage-evidence.result }}
-          OPENCODE_STATUS_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
+          OPENCODE_STATUS_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.opencode_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head

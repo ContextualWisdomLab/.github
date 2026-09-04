@@ -80,6 +80,18 @@ def test_draft_never_accepts_bot_approve_as_receipt() -> None:
     assert "no current-head formal" in reason
 
 
+def test_fallback_approval_with_product_heading_is_not_substantive() -> None:
+    """A normal overview cannot disguise deterministic fallback evidence."""
+    fallback = review(
+        commit=receipt.AFIPC_230_HEAD,
+        state="APPROVED",
+        body="## Pull request overview\n\ndeterministic fallback approval",
+    )
+    found, reason = receipt.evaluate_receipts([fallback], receipt.AFIPC_230_HEAD)
+    assert found is None
+    assert "fallback" in reason
+
+
 def test_status_comment_and_mention_payloads_are_not_receipts() -> None:
     """Issue-comment status text and @mentions cannot green the required check."""
     status = review(
@@ -237,18 +249,40 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
 
     def fake_run(args, **kwargs):
         assert args[0] == "gh"
+        assert args[-2:] == ["--paginate", "--slurp"]
         return type(
             "Completed",
             (),
             {
                 "returncode": 0,
                 "stdout": json.dumps(
-                    [review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]
+                    [[review(commit=receipt.AFIPC_230_HEAD, state="CHANGES_REQUESTED")]]
                 ),
                 "stderr": "",
             },
         )()
 
+    monkeypatch.setattr(receipt.subprocess, "run", fake_run)
+    assert receipt.fetch_reviews("ContextualWisdomLab/.github", 1392)
+
+    def fake_pages(args, **kwargs):
+        return type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        [review(commit="b" * 40, review_id=1)],
+                        [review(commit=receipt.AFIPC_230_HEAD, review_id=2)],
+                    ]
+                ),
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(receipt.subprocess, "run", fake_pages)
+    assert [item["id"] for item in receipt.fetch_reviews("ContextualWisdomLab/.github", 1392)] == [1, 2]
     monkeypatch.setattr(receipt.subprocess, "run", fake_run)
     assert (
         receipt.main(
@@ -275,6 +309,9 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     with pytest.raises(receipt.ReceiptGateError, match="lookup failed"):
         receipt.fetch_reviews("ContextualWisdomLab/aFIPC", 230)
 
+    with pytest.raises(receipt.ReceiptGateError, match="lookup failed"):
+        receipt.fetch_reviews("ContextualWisdomLab/.github", 1388)
+
     def fake_bad(args, **kwargs):
         return type("Completed", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
 
@@ -293,6 +330,8 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(receipt.subprocess, "run", unexpected_run)
     with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
         receipt.fetch_reviews("../evil", 230)
+    with pytest.raises(receipt.ReceiptGateError, match="owner/repo"):
+        receipt.fetch_reviews("ContextualWisdomLab/.evil", 230)
     monkeypatch.setattr(
         receipt.sys,
         "stdin",

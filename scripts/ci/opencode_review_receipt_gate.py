@@ -16,7 +16,7 @@ from typing import Any
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_RE = re.compile(
-    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?!\.\.$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$"
+    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?:\.github|[A-Za-z0-9_][A-Za-z0-9_.-]*)$"
 )
 HEAD_SHA_IN_BODY_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 FORMAL_AUTHORS = frozenset(
@@ -37,6 +37,14 @@ PRODUCT_MARKERS = (
     "opencode-review-control-v1",
     "OpenCode reviewed the current-head product diff",
     "OpenCode reviewed the current-head bounded evidence",
+)
+FALLBACK_APPROVAL_MARKERS = (
+    "deterministic current-head evidence",
+    "deterministic fallback approval",
+    "model-unavailable evidence fallback",
+    "did not emit a usable current-head control block",
+    "scope: `unsupported`",
+    "model-pool outcome: `unknown`",
 )
 MENTION_RE = re.compile(r"^@opencode-agent\b", re.IGNORECASE)
 
@@ -122,6 +130,10 @@ def is_formal_receipt(
     body = str(review.get("body") or "")
     if is_mention_or_malformed(body):
         return False, "mention, status-only, or malformed payload is not a formal review"
+    if state == "APPROVED" and any(
+        marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
+    ):
+        return False, "fallback approval is not a substantive formal review"
     if is_draft and state == "APPROVED":
         return False, "draft must never receive bot APPROVE"
     return True, "current-head formal review"
@@ -148,6 +160,8 @@ def evaluate_receipts(
         if ok:
             return review, reason
         if "never receive bot APPROVE" in reason:
+            return None, reason
+        if "fallback approval" in reason:
             return None, reason
         if reason.startswith("stale"):
             stale_hits += 1
@@ -179,6 +193,7 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
             "api",
             f"repos/{repo}/pulls/{number}/reviews",
             "--paginate",
+            "--slurp",
         ],
         text=True,
         stdout=subprocess.PIPE,
@@ -190,8 +205,12 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
         detail = (completed.stderr or completed.stdout or "gh reviews lookup failed").strip()
         raise ReceiptGateError(f"formal review receipt lookup failed: {detail}")
     loaded = json.loads(completed.stdout or "[]")
-    if isinstance(loaded, list):
-        return [item for item in loaded if isinstance(item, Mapping)]
+    if (
+        isinstance(loaded, list)
+        and all(isinstance(page, list) for page in loaded)
+        and all(isinstance(item, Mapping) for page in loaded for item in page)
+    ):
+        return [item for page in loaded for item in page]
     raise ReceiptGateError("formal review receipt lookup returned malformed JSON")
 
 

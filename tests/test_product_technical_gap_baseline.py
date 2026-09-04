@@ -76,6 +76,15 @@ def test_baseline_records_the_ui_adr_boundary() -> None:
     assert "ISO/IEC 27001:2022" in doctoring
 
 
+def test_baseline_tracks_the_review_gateway_bootstrap_boundary() -> None:
+    """The runtime gap stays bound to both protected-main bootstrap commits."""
+    source = BASELINE.read_text(encoding="utf-8")
+    assert "b21645116b352967e50fc497b87eb745b9cc8c61" in source
+    assert "e1b03eebc6dc5c85aed393e5928927c96376cf46" in source
+    assert "512 MiB" in source
+    assert "actual LLM verdict" in source
+
+
 def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     """Section 10 must send agents to the live snapshot and UI-scope ADR.
 

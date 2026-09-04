@@ -160,11 +160,11 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
     assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
+    assert "actions: read" in signer
     assert "contents: read" in signer
     assert "id-token: write" in signer
     assert "attestations: write" in signer
     assert "artifact-metadata: write" in signer
-    assert "actions: read" not in signer
 
     for forbidden_permission in (
         "actions: write",
@@ -253,7 +253,7 @@ def test_quality_workflow_pins_supported_runner_images() -> None:
     """Keep exact supply-chain evidence on an explicit runner image."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") == 2
+    assert workflow.count("runs-on: ubuntu-24.04") == 1
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:

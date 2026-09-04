@@ -12,14 +12,12 @@ from scripts.ci import pr_review_conflict_scope as scope
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
-HOURLY_CALLER_WORKFLOW = Path(
-    ".github/workflows/clearfolio-hourly-review-repair.yml"
-)
+HOURLY_CALLER_WORKFLOW = Path(".github/workflows/hourly-review-repair.yml")
 AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "a6d48ddca4130d8dd591f0cb21e952ae890cad1f"
+REVIEW_DISPATCH_BLOB_SHA = "2d2b719b4710286ada2975480eb407f854ea3561"
 
 
 def _workflow_text(path: Path) -> str:

@@ -289,6 +289,83 @@ def test_materializes_only_exact_base_npm_inputs(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
 
+def test_materializes_head_npm_manifest_when_lock_is_unchanged(tmp_path: Path) -> None:
+    """An npm version change must prime Corepack even with the same lock blob."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+    git(
+        repo,
+        "checkout",
+        base_sha,
+        "--",
+        "package.json",
+        "package-lock.json",
+        "packages/worker/package.json",
+    )
+    package_path = repo / "package.json"
+    package_data = json.loads(package_path.read_text(encoding="utf-8"))
+    package_data["packageManager"] = "npm@10.9.9"
+    package_path.write_text(json.dumps(package_data) + "\n", encoding="utf-8")
+    git(repo, "add", "package.json", "package-lock.json", "packages/worker/package.json")
+    git(repo, "commit", "-m", "pin head npm")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    manifest = materializer.materialize(
+        repo, base_sha, tmp_path / "output", head_sha=head_sha
+    )
+
+    assert {entry["revision_sha"] for entry in manifest} == {base_sha, head_sha}
+    head_entry = next(entry for entry in manifest if entry["revision_sha"] == head_sha)
+    assert head_entry["lock_blob"] == git(
+        repo, "rev-parse", f"{base_sha}:package-lock.json"
+    )
+    assert json.loads(
+        (tmp_path / "output" / head_entry["directory"] / "package.json").read_text(
+            encoding="utf-8"
+        )
+    )["packageManager"] == "npm@10.9.9"
+
+
+def test_manifest_change_does_not_revalidate_unchanged_base_npm_lock(
+    tmp_path: Path,
+) -> None:
+    """A legacy base lock stays trusted when only the head manifest changes."""
+    repo, base_sha = npm_fixture_repo(tmp_path)
+    git(
+        repo,
+        "checkout",
+        base_sha,
+        "--",
+        "package.json",
+        "package-lock.json",
+        "packages/worker/package.json",
+    )
+    lock_path = repo / "package-lock.json"
+    lock_path.write_text(
+        json.dumps({"name": "trusted-base", "lockfileVersion": 1}) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "package-lock.json")
+    git(repo, "commit", "-m", "retain legacy npm lock")
+    legacy_base_sha = git(repo, "rev-parse", "HEAD")
+
+    package_path = repo / "package.json"
+    package_data = json.loads(package_path.read_text(encoding="utf-8"))
+    package_data["packageManager"] = "npm@10.9.9"
+    package_path.write_text(json.dumps(package_data) + "\n", encoding="utf-8")
+    git(repo, "add", "package.json")
+    git(repo, "commit", "-m", "pin head npm with legacy lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    manifest = materializer.materialize(
+        repo, legacy_base_sha, tmp_path / "output", head_sha=head_sha
+    )
+
+    assert {entry["revision_sha"] for entry in manifest} == {
+        legacy_base_sha,
+        head_sha,
+    }
+
+
 def test_npm_shrinkwrap_takes_precedence_over_package_lock(tmp_path: Path) -> None:
     """npm-shrinkwrap is materialized once with npm's documented precedence."""
     repo, _base_sha = npm_fixture_repo(tmp_path)
