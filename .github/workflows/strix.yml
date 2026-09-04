@@ -684,9 +684,11 @@ jobs:
               ;;
           esac
           strix_model="$(printf '%s' "$STRIX_MODEL" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          echo "strix_model=$strix_model" >> "$GITHUB_OUTPUT"
-          echo 'enabled=true' >> "$GITHUB_OUTPUT"
-          echo 'provider_mode=contextual_orchestrator' >> "$GITHUB_OUTPUT"
+          {
+            echo "strix_model=$strix_model"
+            echo 'enabled=true'
+            echo 'provider_mode=contextual_orchestrator'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Provision contextual-orchestrator Strix sidecar
         if: steps.gate.outputs.enabled == 'true'
