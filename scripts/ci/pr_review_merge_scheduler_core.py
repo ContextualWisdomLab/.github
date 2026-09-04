@@ -5209,6 +5209,14 @@ def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
     with declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
         self_test_scheduler_invariants()
+    try:
+        from scripts.ci.review_admission_controller import (
+            self_test as admission_self_test,
+        )
+    except ModuleNotFoundError:  # direct ``python scripts/ci/...`` execution
+        from review_admission_controller import self_test as admission_self_test
+
+    admission_self_test()
 
 
 def self_test_scheduler_invariants() -> None:
