@@ -1352,6 +1352,7 @@ def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]])
     total_count = len(allowed_locations)
 
     def render(count: int) -> str:
+        """Serialize the first `count` locations, flagged as truncated if fewer than all."""
         return json.dumps(
             {
                 "total_count": total_count,
