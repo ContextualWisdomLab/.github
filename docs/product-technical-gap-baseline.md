@@ -3016,3 +3016,58 @@ would only add another incompatible lineage to reconcile later.
 (the "Cancel superseded Noema runs after live-head validation" concurrency-deadlock extraction) — i.e. the
 pattern of multiple sessions independently repairing the same hot file is already a known, recurring shape
 in this specific workflow, not a one-off.
+
+## 2026-09-04 follow-up: 4 more PRs confirmed in the hot-file collision zone (`strix.yml`, `pr_review_merge_scheduler.py`, `noema_review_gate.py`); one genuine pre-existing test bug found and fixed elsewhere
+
+Continuing the same round's PR sweep, four additional open PRs hit real merge conflicts whose root cause is
+the same class documented above — main has independently evolved a materially different, incompatible
+design for the same mechanism since each branch's last sync — rather than a resolvable text collision.
+Evidence-based comments were left on each; no guessed resolution was pushed on any of them.
+
+- **`#1065`** (`fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails`) conflicts in
+  `.github/workflows/strix.yml`: its branch still has the older neutral-skip design (a backend-unavailable
+  signal with no reported vulnerability prints a warning and `exit 0`), while `origin/main` has since landed
+  a stricter fail-closed `STRIX_PROVIDER_UNAVAILABLE` design (new `strix_neutralization_scope_log` log-tail
+  isolation, a new `model_behavior_error_signal` classification, `exit "$strix_rc"` instead of a neutral
+  pass). A text merge here would either silently downgrade the since-hardened gate back to a neutral skip,
+  or require guessing which parts of two designs to keep.
+- **`#1271`** (`fix(scheduler): fail after summarized action errors`) and **`#1231`**
+  (`fix(scheduler): isolate central Actions inventory quota`) both edit `scripts/ci/pr_review_merge_scheduler.py`
+  directly — a **4,074-line monolith** on each branch's own version of that file — while `origin/main` has
+  since landed the facade/core split from `#1803`: `scripts/ci/pr_review_merge_scheduler.py` is now a
+  **241-line** thin re-export shim, and the ~5,700 lines of real implementation live in the new
+  `scripts/ci/pr_review_merge_scheduler_core.py`, which main has continued to evolve independently of either
+  PR. A text-level `git merge` cannot reconcile "edit function X in the 4,074-line monolith" against "that
+  file is now a 241-line shim and X's body moved to a different file main also changed since." `#1231`
+  additionally carries its own already-documented external stack dependency on `#1213`.
+- **`#1681`** (`fix(noema): require finding-level confidence, not just severity`) conflicts in
+  `scripts/ci/noema_review_gate.py`: its branch still carries the pre-"single-request-gateway" retry/repair
+  structure (`is_retry`, `deadline_context = _repair_wall_clock_deadline(...)`, an inline `json.dumps(...)`
+  schema restated in the prompt text), while `origin/main` landed the 2026-09-02 "Noema single-request
+  gateway ownership" restructuring (see `CHANGELOG.md`) that removed the repository-owned repair deadline
+  outright, made the LLM call single-request with `contextual-orchestrator` owning repair/failover, added
+  `active_phase`/`served_model` telemetry, and moved the findings schema into `response_format` rather than
+  prompt text. The PR's actual payload (a `confidence` field alongside `severity`) is small and valuable but
+  expressed against code structure that no longer exists in that shape on `main`.
+
+This raises the confirmed hot-file collision count from 7 PRs (`#1198`, `#1606`, `#1589`, `#939`, `#1009`,
+`#1674`, `#1158`) to 11, and confirms `scripts/ci/pr_review_merge_scheduler.py`'s new facade/core split
+(`#1803`) is now *also* an active collision surface in the same way `noema_review_gate.py`/`strix.yml` are —
+the same underlying dynamic (many long-lived branches, each written by a different agent/session, racing on
+the same central files without visibility into each other's now-merged changes) recurring in a third
+subsystem. No fix attempted for the file-shape divergence itself here, consistent with this document's
+standing practice of not bundling live-workflow-logic changes into a documentation-only entry.
+
+**Separately, one genuine pre-existing (not merge-caused) bug was found and fixed while merge-repairing
+`#1655`** (`fix(review): keep OpenCode uncertainty schema-representable`): its new end-to-end test
+(`tests/test_opencode_uncertainty_model_pool_transport.py`) asserted byte-exact equality between a fake
+model's export text and the file `scripts/ci/run_opencode_review_model_pool.sh` writes via `jq -r`. `jq`
+always appends a trailing newline after printing a value, so model text that itself already ends in `"\n"`
+legitimately produces one extra trailing blank line — harmless in production (both the bash pool's own
+`is_current_run_needs_info_output` check and the Python normalizer strip blank lines before comparing), but
+the test's exact-equality assertion didn't account for it. Confirmed pre-existing (not something the main
+merge introduced) by running the test against the PR's pristine, unmerged head before merging. Separately,
+`scripts/ci/opencode_review_normalize_output.py`'s new needs-info transport wrapper had two branches
+exercised only by subprocess-invoking tests, which `coverage.py` cannot see across a process boundary,
+leaving 2 statements/branches short of the required 100%; added direct in-process unit tests covering both.
+Both fixes are test-only; pushed as part of `#1655`'s merge-repair commit.
