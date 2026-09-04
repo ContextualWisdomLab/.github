@@ -621,33 +621,24 @@ def test_opencode_review_trigger_reacts_to_draft_conversion() -> None:
         "types: [opened, synchronize, reopened, ready_for_review, "
         "converted_to_draft, closed]"
     ) in trigger_block
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" in workflow.split("\npermissions:\n", 1)[0]
 
 
-def test_opencode_review_concurrency_group_is_live_admitted_repo_and_pr() -> None:
-    """Only a live head enters the repo + PR cancellation group.
-
-    The admission job compares event metadata with the live pull request.
-    A delayed stale event exits before the target reaches concurrency, while
-    a newer admitted head cancels the same PR's older target before a runner.
-
-    Also confirms the group is JOB-level (on opencode-review-target only),
-    not workflow-level: a workflow-level block would capture the
-    structurally-separate cancel-superseded-opencode-review-runs job too,
-    deadlocking it behind the very run it's supposed to cancel (Devin
-    Review, 2026-09-03, confirmed independently before this fix landed).
-    """
+def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> None:
+    """Cancel an obsolete queued head before any job needs a runner."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert re.search(r"(?m)^concurrency:", workflow)
     target_job = workflow.split("\n  opencode-review-target:\n", 1)[1].split(
         "\n  cancel-superseded-opencode-review-runs:", 1
     )[0]
-    concurrency_block = target_job.split("    concurrency:\n", 1)[1].split(
-        "\n    permissions:", 1
+    concurrency_block = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
     )[0]
+    assert "required-opencode-review-${{" in concurrency_block
     assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
     assert "cancel-in-progress: true" in concurrency_block
+    assert "    concurrency:" not in target_job.split("    permissions:", 1)[0]
     admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
         "\n  coverage-source-tree:", 1
     )[0]

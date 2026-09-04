@@ -364,6 +364,20 @@ def test_dispatch_job_uses_a_per_repository_dynamic_concurrency_group() -> None:
         assert f"group: {repo_slug}-hourly-review-repair" not in text
 
 
+def test_schedule_admission_keeps_running_work_and_replaces_only_pending() -> None:
+    """GitHub's default single queue coalesces pending, not running, work."""
+    text = _read(_CALLER)
+    workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
+    normalized_scope = " ".join(workflow_scope.replace("#", "").split())
+
+    assert "group: hourly-review-repair-${{ github.event.schedule }}" in workflow_scope
+    assert "cancel-in-progress: false" in workflow_scope
+    assert "at most one running and one pending workflow per group" in normalized_scope
+    assert "pending heartbeat replaces the older pending heartbeat" in normalized_scope
+    assert "queue:" not in workflow_scope
+    assert "group: ${{ matrix.concurrency_group }}" in jobs_scope
+
+
 def test_dispatch_job_fans_out_over_the_resolved_targets_matrix() -> None:
     """The matrix consumes resolve-target's output for every schedule."""
     text = _read(_CALLER)
