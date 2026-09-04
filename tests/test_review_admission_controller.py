@@ -76,6 +76,10 @@ def test_worker_boundaries_remain_separate_and_publish_requires_live_head_cas() 
         "pull-requests: read" in boundary.permissions
         for boundary in WORKER_BOUNDARIES.values()
     )
+    assert all(boundary.cancel_in_progress for boundary in WORKER_BOUNDARIES.values())
+    assert WORKER_BOUNDARIES["strix"].concurrency_group(request("strix")) == (
+        "strix-security-scan-ContextualWisdomLab/example-7"
+    )
 
     planned = plan_dispatches(
         ControllerState.empty(),

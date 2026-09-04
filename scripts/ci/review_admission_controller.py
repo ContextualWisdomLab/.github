@@ -18,6 +18,12 @@ class WorkerBoundary:
     credential: str
     permissions: tuple[str, ...]
     concurrency_namespace: str
+    cancel_in_progress: bool = True
+
+    def concurrency_group(self, request: AdmissionRequest) -> str:
+        return (
+            f"{self.concurrency_namespace}-{request.repository}-{request.pull_request}"
+        )
 
 
 WORKER_BOUNDARIES = {
@@ -116,6 +122,12 @@ class ControllerState:
     @classmethod
     def from_json(cls, value: str) -> ControllerState:
         payload = json.loads(value)
+        if not isinstance(payload, dict):
+            raise TypeError("durable admission state must be an object")
+        if not isinstance(payload.get("records", {}), dict) or not isinstance(
+            payload.get("latest_sequences", {}), dict
+        ):
+            raise TypeError("durable admission state has invalid collections")
         records = {}
         for identity, raw in payload.get("records", {}).items():
             request = AdmissionRequest.create(**raw["request"])
@@ -131,6 +143,9 @@ class ControllerState:
             str(key): int(sequence)
             for key, sequence in payload.get("latest_sequences", {}).items()
         }
+        for record in records.values():
+            if latest.get(record.request.stream, 0) < record.request.sequence:
+                raise ValueError("durable admission sequence regressed")
         return cls(records, latest)
 
 
