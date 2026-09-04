@@ -1,7 +1,7 @@
-# Runs a supplemental OpenSSF Scorecard analysis on every PR and preserves its
-# filtered SARIF as an artifact. The central Security Scan workflow owns the
-# PR code-scanning upload so this workflow does not duplicate installation API
-# calls or fail a clean PR when GitHub's upload quota is spent.
+# Keeps this repository's historical Scorecard context available for classic
+# branch protection. Organization PRs receive Scorecard from security-scan.yml
+# only; this supplemental workflow is intentionally absent from the
+# organization required-workflow ruleset.
 #
 # NOTE: Scorecard reports repository-posture findings (branch protection, token
 # permissions, dependency pinning, ...) that are unrelated to the PR diff. The

@@ -31,8 +31,6 @@ REQUIRED_WORKFLOW_PATHS = (
     ".github/workflows/security-scan.yml",
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
-    ".github/workflows/osv-scanner-pr.yml",
-    ".github/workflows/scorecard-pr.yml",
 )
 STACKED_WORKFLOW_PATH = ".github/workflows/opencode-review.yml"
 
