@@ -18,6 +18,16 @@ on:
         required: false
         default: "1"
         type: string
+      scan_window_size:
+        description: Maximum PRs to deeply inspect in one scheduler run
+        required: false
+        default: "50"
+        type: string
+      rotation_seed:
+        description: Deterministic seed selecting the bounded PR scan window
+        required: false
+        default: "0"
+        type: string
       target_repository:
         description: Repository to scan, in owner/name form; defaults to the caller repository
         required: false
@@ -88,6 +98,8 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
+      SCAN_WINDOW_SIZE: ${{ github.event.client_payload.scan_window_size || inputs.scan_window_size || '50' }}
+      ROTATION_SEED: ${{ github.event.client_payload.rotation_seed || inputs.rotation_seed || '0' }}
       RESOLVE_UNREVIEWED_CONFLICTS: ${{ github.event.client_payload.resolve_unreviewed_conflicts == true || github.event.client_payload.resolve_unreviewed_conflicts == 'true' || inputs.resolve_unreviewed_conflicts == true }}
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
@@ -318,6 +330,8 @@ jobs:
             --base-branch "$DEFAULT_BRANCH"
             --max-prs "$MAX_PRS"
             --max-dispatches "$MAX_DISPATCHES"
+            --scan-window-size "$SCAN_WINDOW_SIZE"
+            --rotation-seed "$ROTATION_SEED"
             --retry-hours "$RETRY_HOURS"
             --autofix-workflow "$AUTOFIX_WORKFLOW"
             --autofix-repository "$AUTOFIX_REPOSITORY"

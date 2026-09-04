@@ -228,6 +228,7 @@ COVERAGE_REVIEW_MARKERS = (
     "required test/docstring evidence",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
+STARTUP_FAILURE_RESTAMP_MESSAGE = "chore: refresh head after Actions startup failure"
 
 
 @dataclass
@@ -1221,13 +1222,37 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None) -> list[dict[str, Any]]:
+def rotating_pr_window(
+    prs: list[dict[str, Any]], *, offset: int = 0, window_size: int | None = None
+) -> list[dict[str, Any]]:
+    """Return one bounded rotating window, wrapping over the actual result count."""
+    if window_size is None:
+        return prs
+    if offset < 0 or window_size < 1:
+        raise ValueError(
+            "PR window offset must be non-negative and size must be positive"
+        )
+    if not prs:
+        return []
+    slot_count = (len(prs) + window_size - 1) // window_size
+    start = ((offset // window_size) % slot_count) * window_size
+    return prs[start : start + window_size]
+
+
+def fetch_open_prs_rest(
+    repo: str,
+    max_prs: int,
+    base_branch: str | None = None,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL is unavailable."""
 
-    prs: list[dict[str, Any]] = []
+    raw_prs: list[dict[str, Any]] = []
     page = 1
-    while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+    while len(raw_prs) < max_prs:
+        page_size = min(100, max_prs - len(raw_prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
             f"&per_page={page_size}&page={page}"
@@ -1237,17 +1262,24 @@ def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None)
         payload = gh_api_json(path)
         if not payload:
             break
-        if len(payload) <= 1:
-            prs.extend(rest_pr_node(repo, pr) for pr in payload)  # pragma: no cover
-        else:
-            max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(payload))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Keep original API sort order
-                prs.extend(list(executor.map(lambda pr: rest_pr_node(repo, pr), payload)))
+        raw_prs.extend(payload)
         if len(payload) < page_size:
             break
         page += 1
-    return prs[:max_prs]
+    selected_prs = rotating_pr_window(
+        raw_prs[:max_prs], offset=offset, window_size=window_size
+    )
+    prs: list[dict[str, Any]] = []
+    if len(selected_prs) <= 1:
+        prs.extend(rest_pr_node(repo, pr) for pr in selected_prs)  # pragma: no cover
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(selected_prs))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Keep original API sort order while hydrating only the selected window.
+            prs.extend(
+                list(executor.map(lambda pr: rest_pr_node(repo, pr), selected_prs))
+            )
+    return prs
 
 
 def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
@@ -1257,7 +1289,13 @@ def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return [rest_pr_node(repo, pr)] if pr else []
 
 
-def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
+def fetch_open_prs(
+    repo: str,
+    max_prs: int,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests from GitHub, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
@@ -1276,13 +1314,17 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             payload = gh_graphql(OPEN_PRS_QUERY, **fields)
         except RuntimeError as exc:
             if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
-                return fetch_open_prs_rest(repo, max_prs)
+                return fetch_open_prs_rest(
+                    repo, max_prs, offset=offset, window_size=window_size
+                )
             raise
         pr_page = payload["data"]["repository"]["pullRequests"]
         prs.extend(pr_page.get("nodes") or [])
         if not pr_page["pageInfo"]["hasNextPage"]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
+
+    prs = rotating_pr_window(prs, offset=offset, window_size=window_size)
 
     # Bulk-scan results feed merge decisions directly (the scheduler's push-
     # triggered and org-queue-sweep runs never re-fetch a single PR before
@@ -2539,15 +2581,22 @@ def last_push_approval_block_reason() -> str:
     )
 
 
-def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
-    """Create a same-tree child commit and move the PR head with a force=false ref update."""
+def restamp_pr_head(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    action: str,
+    message: str,
+) -> str | None:
+    """Create a same-tree child commit and move a same-repository PR head safely."""
     if dry_run:
         return None
-    require_github_actions_mutation_actor("last-push-approval-head-refresh")
-    require_workflow_starting_mutation_credential("last-push-approval-head-refresh")
+    require_github_actions_mutation_actor(action)
+    require_workflow_starting_mutation_credential(action)
     repo = validate_github_repository(repo)
     if not same_repository_head(repo, pr):
-        raise RuntimeError("last-push approval head refresh only supports same-repository PR heads")
+        raise RuntimeError("head refresh only supports same-repository PR heads")
 
     number = str(int(pr["number"]))
     head = validate_git_sha(pr["headRefOid"])
@@ -2555,7 +2604,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
     if live_head != head:
         raise RuntimeError(
-            "PR head changed before last-push approval head refresh; "
+            "PR head changed before head refresh; "
             f"expected {head}, observed {live_head or '<missing>'}"
         )
 
@@ -2567,7 +2616,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
             ["gh", "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
             stdin=json.dumps(
                 {
-                    "message": LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+                    "message": message,
                     "tree": tree_sha,
                     "parents": [head],
                 }
@@ -2580,6 +2629,30 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
         stdin=json.dumps({"sha": new_head, "force": False}),
     )
     return new_head
+
+
+def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
+    """Refresh a PR head so an independent last-push approval can materialize."""
+    return restamp_pr_head(
+        repo,
+        pr,
+        dry_run=dry_run,
+        action="last-push-approval-head-refresh",
+        message=LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+    )
+
+
+def restamp_pr_head_after_startup_failure(
+    repo: str, pr: dict[str, Any], *, dry_run: bool
+) -> str | None:
+    """Refresh a PR head because GitHub cannot rerun a pre-job failure."""
+    return restamp_pr_head(
+        repo,
+        pr,
+        dry_run=dry_run,
+        action="startup-failure-head-refresh",
+        message=STARTUP_FAILURE_RESTAMP_MESSAGE,
+    )
 
 
 def short_sha(value: str | None) -> str:
@@ -2766,6 +2839,64 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     # A rerun brings a completed run back to queued/in_progress; invalidate
     # any cached active_workflow_runs snapshot so it is not read as stale.
     reset_active_workflow_runs_cache()
+
+
+def recover_current_head_startup_failures(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> list[int]:
+    """Create one same-tree head refresh for unrecoverable pre-job failures."""
+    repo = validate_github_repository(repo)
+    head_sha = validate_git_sha(pr["headRefOid"])
+    runs = json.loads(
+        run_github_read(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                f"repos/{repo}/actions/runs",
+                "-f",
+                f"head_sha={head_sha}",
+                "-F",
+                "per_page=100",
+            ]
+        )
+    ).get("workflow_runs", [])
+    latest_by_workflow: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if run.get("event") not in {"pull_request", "pull_request_target"}:
+            continue
+        workflow_key = str(run.get("workflow_id") or run.get("path") or run.get("name") or "")
+        if not workflow_key:
+            continue
+        previous = latest_by_workflow.get(workflow_key)
+        if previous is None or (
+            str(run.get("created_at") or ""), int(run.get("id") or 0)
+        ) > (
+            str(previous.get("created_at") or ""), int(previous.get("id") or 0)
+        ):
+            latest_by_workflow[workflow_key] = run
+
+    retryable = [
+        run
+        for run in latest_by_workflow.values()
+        if run.get("head_sha") == head_sha
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "startup_failure"
+        and run.get("name") != "CodeQL PR"
+        and not str(run.get("path") or "").endswith("/codeql-pr.yml")
+    ]
+    if (
+        retryable
+        and latest_commit_headline(pr) != STARTUP_FAILURE_RESTAMP_MESSAGE
+        and same_repository_head(repo, pr)
+    ):
+        restamp_pr_head_after_startup_failure(repo, pr, dry_run=dry_run)
+        return sorted(int(run["id"]) for run in retryable)
+    return []
 
 
 _active_workflow_runs_cache: dict[
@@ -3837,6 +3968,20 @@ def inspect_pr(
     """Decide and optionally act on one pull request's merge-readiness state."""
     number = pr["number"]
     base_ref = pr.get("baseRefName")
+
+    recovered_startup_runs = (
+        recover_current_head_startup_failures(repo, pr, dry_run=False)
+        if not dry_run and os.environ.get("GITHUB_ACTIONS") == "true"
+        else []
+    )
+    if recovered_startup_runs:
+        verb = "would refresh" if dry_run else "refreshed"
+        return Decision(
+            number,
+            "check_rerun",
+            f"{verb} the current head after startup-failure workflow run(s): "
+            + ", ".join(str(run_id) for run_id in recovered_startup_runs),
+        )
 
     if pr.get("isDraft"):
         if trigger_reviews and (

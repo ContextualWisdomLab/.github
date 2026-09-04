@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-09-03 KST
+Updated: 2026-09-04 KST
 
 ## Decision
 
@@ -12,17 +12,11 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths (live-verified 2026-09-03, nine entries — this
-  list previously undercounted by omitting `scorecard-pr.yml` and
-  `osv-scanner-pr.yml`, added to the ruleset weeks earlier per the "CodeQL
-  ruleset gap" fix but never reflected here; see the 2026-09-03 entry below for
-  why `codeql-pr.yml` is deliberately absent):
+- Active required workflow paths (live-verified 2026-09-04, seven entries):
   - `.github/workflows/close-empty-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
-  - `.github/workflows/osv-scanner-pr.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
-  - `.github/workflows/scorecard-pr.yml`
   - `.github/workflows/security-scan.yml`
   - `.github/workflows/strix.yml`
   - `.github/workflows/sast-semgrep.yml`
@@ -111,14 +105,13 @@ repositories concluded `startup_failure` with zero check runs ever created (a pl
 configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
 annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
 ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
-9 entries remain, `close-empty-pr.yml` through `osv-scanner-pr.yml`, no CodeQL entry). Coverage now comes
+seven entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
 from GitHub's native code-scanning default setup, enabled directly per repository
 (`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
 repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
 41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
-"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history, and still describe
-`scorecard-pr.yml`/`osv-scanner-pr.yml`'s mechanism accurately, since those two remain required and
-functioning; do not re-add any workflow using `github/codeql-action` to a required-workflow ruleset entry.
+"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history. Do not re-add any
+workflow using `github/codeql-action` to a required-workflow ruleset entry.
 The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
 make this automatic for every newly created repository, but item 41's investigation confirmed it is
 empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
@@ -127,10 +120,9 @@ periodic reconciliation sweep, vs. this org's stated aversion to more scheduled 
 reasons) is recorded as still open in `docs/product-technical-gap-baseline.md`'s item 41 entry, not decided
 here.
 
-The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml` workflows
-supply PR-head and merge-preview code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
-osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
-Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
+The central `.github/workflows/security-scan.yml` supplies PR-head OSV and Scorecard evidence in one
+required workflow. The former standalone PR workflows were retired after the live ruleset and `.github`
+classic branch protection stopped requiring their duplicate contexts.
 `.github/workflows/codeql-pr.yml` used the same trigger shape and merge-preview
 technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
 `sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
@@ -217,8 +209,7 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
-- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so a PR that becomes mergeable AFTER its last event (approval published after the scheduler pass, merge-preview checks landing late, a temporary base-branch policy blocker clearing) has no later trigger and sits approved-but-unmerged. The `org-queue-sweep` job in the central scheduler workflow closes this gap: it runs hourly (`0 * * * *`) only in `ContextualWisdomLab/.github`, re-runs the same trusted scheduler script against every non-archived organization repository, and merges/updates through the identical guarded contract. Stacked PRs, which do not receive injected required workflows, use a separate bounded OpenCode dispatch budget so ordinary default-branch traffic cannot leave them at `OpenCode review absent`. It never uses the `.github` repository `github.token` for sibling mutations — it requires `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or the exchanged OpenCode app token, and fails with a visible `::error` reason when no cross-repository mutation credential is available instead of silently no-opping. Every swept repository prints its per-PR decision log, so an unmerged PR always has a concrete logged reason at most one hour old.
-- Queue hygiene posture: during the sweep, workflow runs still `queued` after `ORG_SWEEP_STALE_QUEUE_HOURS` (default 24h) are cancelled with their run id, workflow name, head branch, and age logged. A run queued that long belongs to a head that PR events will never revisit (closed PR, force-pushed branch, or a previous runner outage), and leaving it keeps the Actions queue holding non-current-head work.
+- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so the `org-queue-sweep` job keeps one daily missed-event recovery (`17 3 * * *`) for approved or stacked PRs. It re-runs the same guarded scheduler against repositories with open work, but it no longer inventories or cancels repository-wide Actions runs. Same-PR supersession belongs to native trigger-aware concurrency and the repository-local exact-head coalescer; removing the duplicate sweep owner also removes two paginated Actions queries per repository and the associated shared-installation rate-limit pressure.
 - Inaccessible-repository posture: a sibling repository the sweep credential structurally cannot read — the OpenCode app is not installed there, or `PR_REVIEW_MERGE_TOKEN` does not cover it — returns HTTP 403 `Resource not accessible by integration` on every read. That is an access-grant fact the automation can never resolve, so the sweep classifies it as a skipped, non-fatal **unavailable** repository (a `::warning` naming the repository and the remediation) instead of a hard failure. Without this, a handful of un-enrolled repositories keeps the scheduled sweep heartbeat (the org sweep's `0 * * * *` cron) permanently red and masks a genuinely new repository that starts failing. Fail-closed is preserved on both sides: any non-403 scheduler failure still fails the sweep with its per-PR reason, and if more than `ORG_SWEEP_MAX_UNAVAILABLE` (default 5) repositories become unreachable in one pass — a credential-scope regression rather than a few un-enrolled repos — the job fails loudly. Remediation for a listed repository is to install the OpenCode app on it or grant `PR_REVIEW_MERGE_TOKEN` access.
 
 ## Second-reviewer (Noema) posture
@@ -331,6 +322,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
   complete successor carryover of every unique valid delta; redundancy alone
   is not a close instruction.
 - On 2026-09-03 13:05 KST, the 23-repository CodeQL coverage gap recorded below was made permanently self-detecting instead of relying on another one-time manual sweep: `scripts/ci/audit_org_codeql_coverage.py` (pure `audit_codeql_coverage(repositories) -> list[str]` function plus a `load_payload`/`parse_args`/`main` CLI wrapper, 100% test and docstring coverage) flags any non-archived organization repository where both `code-scanning/default-setup` state is not `configured` and `code-scanning/analyses?tool_name=CodeQL` shows no recent run, exactly the two signals used to find the original 23 repositories; archived repositories are skipped, matching the `trivy-sarif-repro` exclusion below. The existing scheduled `audit-central-ruleset.yml` workflow (cron `11 2 * * *`, plus `repository_dispatch` and relevant-path `push`) now also enumerates every organization repository via `gh api --paginate "orgs/${ORG_LOGIN}/repos?type=all&per_page=100"`, probes both coverage signals per repository (tolerating a 404/403 on either endpoint as no-coverage rather than a hard failure), and pipes the result into this script. Like the existing ruleset audit, this is read-only: it reports drift with `ERROR:`/`FAIL:` lines and a nonzero exit code, and never mutates default-setup or repository settings itself — a newly created repository or one where default-setup is later disabled will now surface here on the next scheduled run instead of silently regressing.
+- On 2026-09-04 KST, backlog item 38 closed the remaining remediation gap. The same daily audit now exchanges its trusted-main OIDC identity for an OpenCode GitHub App installation token and runs `scripts/ci/bootstrap_codeql_pull_requests.py` before the final fail-closed audit. Each uncovered, non-archived repository receives at most one `opencode/codeql-setup` pull request against its exact default-branch SHA. The generated workflow queries GitHub's language statistics on every default-branch push and scheduled run, maps every [CodeQL-supported language](https://docs.github.com/en/code-security/reference/code-scanning/workflow-configuration-options#languages-to-be-analyzed) to its canonical identifier, always includes Actions analysis, and uses `build-mode: none`; it therefore adapts when the repository stack changes without executing repository build scripts or PR heads. Organization-required `codeql-pr.yml` remains the single PR scanner, avoiding duplicate local PR jobs. Existing open setup PRs are reused, an unexplained bot branch blocks rather than being overwritten, empty repositories wait for their first commit, and every action is pinned to a full commit SHA. The bootstrap treats the installation token as an opaque non-empty value and uses a multiline output, so neither the older fixed-length token nor GitHub's [new stateless installation-token format](https://github.blog/changelog/2026-05-15-github-app-installation-tokens-per-request-override-header/) is assumed. The trusted central workflow alone performs writes; it never checks out or executes a target repository's PR head.
 - On 2026-09-03 12:20 KST, ruleset `18156473` was updated to remove `.github/workflows/codeql-pr.yml` from its required `workflows` list, bringing the count to nine. Every ruleset-injected run of that workflow, in every one of the ~71 covered repositories, had concluded `startup_failure` with zero check runs ever created — the REST API surfaces no reason, but the run page's web UI "Annotations" panel does: `github/codeql-action/init` and `github/codeql-action/analyze` are categorically disallowed inside a required workflow, a GitHub platform restriction confirmed by independent web corroboration, not a defect in the workflow file's own content. Before treating removal as safe, real CodeQL coverage was ground-truth-verified (via `code-scanning/analyses`, not workflow-file-name pattern matching — some repositories run CodeQL from unexpectedly-named files, e.g. `contextual-orchestrator`'s coverage comes from `security.yml:codeql_analysis`) across all 71 covered repositories: 48 already had real coverage from a local workflow or GitHub's native default-setup; 23 (`CalendarWeave`, `ConceptWeave`, `DiagramWeave`, `ELUNVERA`, `EmbedRelay`, `LineageWeave`, `Orgmetra`, `OriginWeave`, `PolicyWeave`, `TEPP`, `accounting-information-platform`, `context-graph-contracts`, `disksage`, `enterprise-architecture-core`, `j-planner`, `learning-content-studio`, `learning-interoperability-contracts`, `learning-management-platform`, `learning-record-store`, `life-os`, `pingora-gateway`, `quarantine-sandbox-runtime`, `supply-chain-control-plane`) had none from any source and were given GitHub's native `code-scanning/default-setup` (`trivy-sarif-repro` excluded — an archived, explicitly-throwaway repro repository, not a real coverage gap). `.github#1768` records this in `docs/product-technical-gap-baseline.md`.
 - On 2026-08-28 21:43 KST, ruleset `21732164` was created with active enforcement for every non-default branch. Reproduction on an existing LineageWeave PR head and a new branch returned GH013 before either ref could emit the required workflow event. The ruleset was returned to `evaluate` mode at 21:49 KST; the audit now fails if this impossible all-ref contract is reactivated.
 

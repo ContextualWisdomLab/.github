@@ -30,13 +30,11 @@ import re
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
 
-# The five workflows that got a copy of the canonical `changed-scope` gate job.
+# The required workflows that keep the canonical `changed-scope` gate job.
 GATE_WORKFLOWS = (
     "security-scan.yml",
     "sast-semgrep.yml",
     "strix.yml",
-    "scorecard-pr.yml",
-    "osv-scanner-pr.yml",
 )
 
 # Workflows that must never gain a trigger-level paths/paths-ignore filter.
@@ -45,8 +43,6 @@ NO_TRIGGER_FILTER_WORKFLOWS = (
     "security-scan.yml",
     "sast-semgrep.yml",
     "codeql-pr.yml",
-    "scorecard-pr.yml",
-    "osv-scanner-pr.yml",
     "close-empty-pr.yml",
     "opencode-review.yml",
     "noema-review.yml",
@@ -59,8 +55,6 @@ GATED_JOBS = {
     "security-scan.yml": ("osv-scan", "dependency-review", "trivy-fs", "scorecard"),
     "sast-semgrep.yml": ("semgrep",),
     "strix.yml": ("strix",),
-    "scorecard-pr.yml": ("analysis",),
-    "osv-scanner-pr.yml": ("osv-scan",),
 }
 
 
