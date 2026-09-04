@@ -289,11 +289,10 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             # runs -- they queued up independently instead, worsening the
             # self-inflicted queue-thrashing pattern this org measured
             # directly (236/300 cancelled runs from concurrent push volume).
-            # Plain repo+PR-number scoping with cancel-in-progress: false
-            # structurally closes the #1568 race instead of reopening it:
-            # nothing in the group is ever preempted, so a late-arriving
-            # older-head run can never evict a current one at any arrival
-            # order -- see the workflow's own comment for the full mechanism.
+            # GitHub applies native concurrency cancellation before a job can
+            # compare event and live heads. Keeping false prevents a delayed
+            # stale event from evicting a fresh run; the live-head-aware cleanup
+            # job performs precise stale cancellation instead.
             assert (
                 "github.event.pull_request.head.sha || github.run_id"
                 not in concurrency_contract
