@@ -1016,8 +1016,8 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
-def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
-    """Guard the org-wide approved-PR fallback sweep contract.
+def test_org_queue_sweep_is_explicit_bounded_recovery_only() -> None:
+    """Guard the explicit org-wide approved-PR fallback sweep contract.
 
     Target repositories only receive scheduler runs on PR events, so a PR that
     becomes mergeable after its last event sits approved-but-unmerged forever.
@@ -1025,33 +1025,20 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. Native events
-    handle the normal path; the daily sweep recovers missed events. Its cron has a
-    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
-    job has enough runtime headroom to finish a complete organization walk.
+    handle the normal path; only an explicit bounded dispatch may start the
+    expensive organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "17 3 * * *"' in workflow
+    assert '- cron: "17 3 * * *"' not in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '17 3 * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
-    assert (
-        "github.event_name == 'schedule' && format('schedule-{0}', "
-        "github.event.schedule)"
-    ) in workflow
     org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
         "    permissions:", 1
     )[0]
     assert "timeout-minutes: 60" in org_sweep_header
-    for setting in (
-        "ORG_SWEEP_TRIGGER_REVIEWS",
-        "ORG_SWEEP_ENABLE_AUTO_MERGE",
-        "ORG_SWEEP_UPDATE_BRANCHES",
-    ):
-        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
-    # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '17 3 * * *'" in workflow
+    # The single-repository scan must not double-run on explicit sweep dispatch.
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (

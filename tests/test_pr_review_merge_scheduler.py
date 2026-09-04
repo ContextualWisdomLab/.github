@@ -4906,6 +4906,7 @@ def test_recover_current_head_startup_failures_restamps_only_latest_failed_workf
         )
 
     monkeypatch.setattr(sched, "run_github_read", fake_read)
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -4952,6 +4953,7 @@ def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatc
             }
         ),
     )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -4990,6 +4992,7 @@ def test_recover_current_head_startup_failures_restamps_codeql_alone(
         "run_github_read",
         lambda _args: json.dumps({"workflow_runs": [run]}),
     )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -5002,6 +5005,50 @@ def test_recover_current_head_startup_failures_restamps_codeql_alone(
 
     assert recovered == [92]
     assert restamps == [("owner/repo", head_sha, {"dry_run": False})]
+
+
+def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatch):
+    head_sha = "a" * 40
+    run = {
+        "id": 92,
+        "workflow_id": 12,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-04T01:02:00Z",
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: False)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda *_args, **_kwargs: pytest.fail("a run with jobs is not a pre-job failure"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    ) == []
+
+
+def test_actions_run_has_no_jobs_checks_every_attempt(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda args: calls.append(args) or json.dumps({"total_count": 0, "jobs": []}),
+    )
+
+    assert sched.actions_run_has_no_jobs("owner/repo", 92)
+    assert calls == [[
+        "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs/92/jobs",
+        "-f", "filter=all", "-F", "per_page=1",
+    ]]
 
 
 def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):

@@ -70,19 +70,9 @@ on:
         default: ""
         type: string
   schedule:
-    # Daily missed-event recovery for this repository. org-queue-sweep below
-    # explicitly excludes ContextualWisdomLab/.github from its target list
-    # (a PR in THIS repository, including one editing the governance
-    # workflows themselves, is never covered by the org-wide sweep), so this
-    # remains the bounded fallback for a genuinely missed native event. GitHub
-    # auto-merge handles required-check completion without another workflow run.
-    # Offset from the organization sweep so recovery jobs do not collide.
+    # Daily missed-event recovery for this repository. Native PR/review events
+    # own the normal path; auto-merge handles required-check completion.
     - cron: "47 3 * * *"
-    # Daily organization-wide missed-event recovery. Native PR, review, and
-    # protected-branch push events handle the normal path; GitHub auto-merge
-    # handles required-check completion. This lower-frequency sweep only
-    # recovers delivery gaps and stacked PRs without required workflows.
-    - cron: "17 3 * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -112,16 +102,12 @@ jobs:
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
-    # The org-sweep cron and org_sweep dispatches are handled by org-queue-sweep
-    # below; skipping them here avoids a duplicate same-repository scan.
+    # Explicit org_sweep dispatches are handled by org-queue-sweep below;
+    # skipping them here avoids a duplicate same-repository scan.
     if: >-
       (
         github.event_name != 'pull_request_target' ||
         github.event.action != 'closed'
-      ) &&
-      (
-        github.event_name != 'schedule' ||
-        github.event.schedule != '17 3 * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -474,7 +460,7 @@ jobs:
           done
 
           if [ "$opencode_state" != "success" ]; then
-            printf '::warning::Post-approval direct-merge follow-up skipped because the approved OpenCode publication run did not complete successfully. PR=%s head=%s state=%s reason=%s. The scheduled organization sweep remains authoritative.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$opencode_state" "$opencode_reason"
+            printf '::warning::Post-approval direct-merge follow-up skipped because the approved OpenCode publication run did not complete successfully. PR=%s head=%s state=%s reason=%s. Native events and the explicit org-sweep recovery remain authoritative.\n' "$REVIEW_PR_NUMBER" "$REVIEW_HEAD_SHA" "$opencode_state" "$opencode_reason"
             echo "proceed=false" >>"$GITHUB_OUTPUT"
           fi
 
@@ -579,8 +565,7 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '17 3 * * *') ||
-        (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
+        github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true
       )
     runs-on: ubuntu-24.04
     # The complete organization walk exceeded the legacy 30-minute boundary in
