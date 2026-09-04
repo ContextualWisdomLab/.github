@@ -2845,6 +2845,26 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     reset_active_workflow_runs_cache()
 
 
+def actions_run_has_no_jobs(repo: str, run_id: int) -> bool:
+    """Return whether GitHub created no jobs for a completed workflow run."""
+    payload = json.loads(
+        run_github_read(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                f"repos/{validate_github_repository(repo)}/actions/runs/{int(run_id)}/jobs",
+                "-f",
+                "filter=all",
+                "-F",
+                "per_page=1",
+            ]
+        )
+    )
+    return payload.get("total_count") == 0
+
+
 def recover_current_head_startup_failures(
     repo: str,
     pr: dict[str, Any],
@@ -2890,6 +2910,7 @@ def recover_current_head_startup_failures(
         if run.get("head_sha") == head_sha
         and run.get("status") == "completed"
         and run.get("conclusion") == "startup_failure"
+        and actions_run_has_no_jobs(repo, int(run["id"]))
     ]
     if (
         retryable
