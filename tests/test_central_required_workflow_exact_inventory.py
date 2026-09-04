@@ -6,7 +6,6 @@ from scripts.ci import audit_central_required_workflows as audit
 
 
 EXPECTED_REQUIRED_WORKFLOW_PATHS = (
-    ".github/workflows/close-empty-pr.yml",
     ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
@@ -17,7 +16,7 @@ EXPECTED_REQUIRED_WORKFLOW_PATHS = (
 
 
 def _ruleset_payload() -> dict:
-    """Build an independent seven-workflow live-policy oracle."""
+    """Build an independent six-workflow live-policy oracle."""
     return {
         "id": audit.RULESET_ID,
         "name": audit.RULESET_NAME,

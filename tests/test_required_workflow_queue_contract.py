@@ -240,7 +240,6 @@ def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     """Ensure required pull-request workflows cancel obsolete executions."""
     for filename in (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
@@ -257,10 +256,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.number" in workflow
         if filename not in {"noema-review.yml", "opencode-review.yml"}:
             assert "cancel-in-progress: true" in workflow
-        if filename in {
-            "close-empty-pr.yml",
-            "security-scan.yml",
-        }:
+        if filename == "security-scan.yml":
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
@@ -587,7 +583,6 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "pr-review-merge-scheduler.yml",
@@ -633,7 +628,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
         elif filename in {
-            "close-empty-pr.yml",
             "codeql-pr.yml",
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
@@ -666,16 +660,14 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "cancel-in-progress: true" in strix_workflow
 
 
-def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
-    """Retry invalid close-event metadata and leave the PR open on uncertainty."""
-    workflow = workflow_text("close-empty-pr.yml")
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
 
-    assert "gh_api_json_with_retry()" in workflow
-    assert "jq -e type" in workflow
-    assert "did not return valid JSON; retrying" in workflow
-    assert "did not return valid JSON after 4 attempts" in workflow
-    assert "leaving it open because metadata could not be read" in workflow
-    assert "exit 0" in workflow
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
 
 
 def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:

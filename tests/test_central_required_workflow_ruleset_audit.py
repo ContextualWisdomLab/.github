@@ -10,7 +10,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
     workflow_paths = (
-        "close-empty-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
         "pr-review-merge-scheduler.yml",
@@ -113,7 +112,7 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 7 central required workflows"
+            "PASS: ruleset 18156473 enforces 6 central required workflows"
         in capsys.readouterr().out
     )
 
@@ -384,7 +383,6 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset does not target every default branch",
         "expected one workflows rule, found 0",
-        "missing central required workflow .github/workflows/close-empty-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
         "missing central required workflow .github/workflows/pr-review-merge-scheduler.yml",
