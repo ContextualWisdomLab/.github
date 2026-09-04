@@ -1535,7 +1535,18 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     body = json.dumps(
         {
             "error": {
-                "detail": {"model": "github_models/deepseek-v3", "secret": secret},
+                "detail": {
+                    "model": "github_models/deepseek-v3",
+                    "terminal_reason": "eligible_candidates_exhausted",
+                    "attempts": [{
+                        "provider_name": "nvidia_nim",
+                        "phase": "connecting",
+                        "attempt_number": 2,
+                        "provider_status": 503,
+                        "secret": secret,
+                    }],
+                    "secret": secret,
+                },
                 "message": secret,
             },
             "arbitrary": secret,
@@ -1559,6 +1570,11 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "served_model=github_models/deepseek-v3" in output
     assert "phase=response_error" in diagnostic
     assert "served_model=github_models/deepseek-v3" in diagnostic
+    assert "provider_name=nvidia_nim" in output
+    assert "upstream_phase=connecting" in output
+    assert "attempt_number=2" in output
+    assert "upstream_status=503" in output
+    assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
 
@@ -1593,6 +1609,37 @@ def test_call_llm_http_error_malformed_or_oversized_model_is_unknown(
     assert "phase=response_error" in output
     assert "served_model=unknown" in output
     assert body.decode("utf-8", errors="ignore") not in output
+
+
+def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
+    monkeypatch, capsys
+):
+    """A truncated gateway error body cannot bypass the stable transport boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    class BrokenBody:
+        def read(self, _limit):
+            raise noema.http.client.IncompleteRead(b'{"error":')
+
+        def close(self):
+            return None
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, BrokenBody()
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError, match="served_model=unknown"):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    assert "phase=response_error" in output
+    assert "served_model=unknown" in output
+    assert '{"error":' not in output
 
 
 def test_noema_redirect_handler_rejects_redirects():
