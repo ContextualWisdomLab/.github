@@ -338,6 +338,44 @@ def test_fetch_open_prs_zero_limit_skips_graphql(monkeypatch):
     assert calls == [("owner/repo", [])]
 
 
+def test_rotating_pr_window_is_bounded_and_wraps_over_actual_results():
+    """A deterministic offset rotates bounded windows without empty tail slots."""
+    prs = [{"number": number} for number in range(1, 121)]
+
+    assert sched.rotating_pr_window(prs, offset=0, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=50, window_size=50) == prs[50:100]
+    assert sched.rotating_pr_window(prs, offset=100, window_size=50) == prs[100:120]
+    assert sched.rotating_pr_window(prs, offset=150, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=0, window_size=None) == prs
+
+
+def test_rest_fallback_hydrates_only_the_selected_rotating_window(monkeypatch):
+    """REST discovery may reach 120 PRs but hydrates no more than 50 of them."""
+    pages = {
+        1: [{"number": number} for number in range(1, 101)],
+        2: [{"number": number} for number in range(101, 121)],
+    }
+    hydrated = []
+
+    def fake_api(path):
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+
+    def fake_rest_pr_node(repo, pr):
+        hydrated.append(pr["number"])
+        return {"number": pr["number"]}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(sched, "rest_pr_node", fake_rest_pr_node)
+
+    result = sched.fetch_open_prs_rest(
+        "owner/repo", 120, offset=50, window_size=50
+    )
+
+    assert [pr["number"] for pr in result] == list(range(51, 101))
+    assert sorted(hydrated) == list(range(51, 101))
+
+
 def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
     seen = []
 
@@ -1387,7 +1425,7 @@ def test_fetch_open_prs_rest_paginates_and_fetch_open_prs_falls_back(monkeypatch
         raise RuntimeError("gh: Resource not accessible by integration")
 
     monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     assert sched.fetch_open_prs("owner/repo", 5) == [{"repo": "owner/repo", "max": 5}]
 
 
@@ -1418,7 +1456,7 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
         raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
