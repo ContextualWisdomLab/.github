@@ -235,8 +235,7 @@ jobs:
             exit 0
           fi
 
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
+          if ! app_token="$(jq -er '.token | select(type == "string" and length > 0)' <<<"$token_response")"; then
             echo "OpenCode app token exchange unavailable: app token response was empty."
             mark_unavailable
             exit 0
@@ -719,8 +718,7 @@ jobs:
             exit 0
           fi
 
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
+          if ! app_token="$(jq -er '.token | select(type == "string" and length > 0)' <<<"$token_response")"; then
             echo "OpenCode app token exchange unavailable: app token response was empty."
             mark_unavailable
             exit 0

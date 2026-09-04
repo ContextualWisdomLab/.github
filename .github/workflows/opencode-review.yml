@@ -404,8 +404,7 @@ jobs:
             echo "::error::OpenCode review dispatch could not obtain its OIDC token."
             exit 1
           fi
-          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
-          if [ -z "$app_token" ]; then
+          if ! app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -er '.token | select(type == "string" and length > 0)')"; then
             echo "::error::OpenCode review dispatch could not obtain its repository-scoped app token."
             exit 1
           fi
