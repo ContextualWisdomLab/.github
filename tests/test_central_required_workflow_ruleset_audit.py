@@ -17,8 +17,6 @@ def ruleset_payload() -> dict:
         "security-scan.yml",
         "strix.yml",
         "sast-semgrep.yml",
-        "osv-scanner-pr.yml",
-        "scorecard-pr.yml",
     )
     return {
         "id": 18156473,
@@ -115,7 +113,7 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 9 central required workflows"
+        "PASS: ruleset 18156473 enforces 7 central required workflows"
         in capsys.readouterr().out
     )
 
@@ -254,32 +252,42 @@ def test_missing_noema_workflow_reports_exact_drift() -> None:
     assert "missing central required workflow .github/workflows/noema-review.yml" in errors
 
 
-def test_missing_osv_scanner_workflow_reports_exact_drift() -> None:
+def test_readded_osv_scanner_workflow_reports_duplicate_scan() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
-    workflow_rule["parameters"]["workflows"] = [
-        workflow
-        for workflow in workflow_rule["parameters"]["workflows"]
-        if workflow["path"] != ".github/workflows/osv-scanner-pr.yml"
-    ]
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/osv-scanner-pr.yml",
+            "ref": "refs/heads/main",
+        }
+    )
 
     errors = audit.audit_ruleset(payload)
 
-    assert "missing central required workflow .github/workflows/osv-scanner-pr.yml" in errors
+    assert (
+        "unexpected workflow present in required set: .github/workflows/osv-scanner-pr.yml"
+        in errors
+    )
 
 
-def test_missing_scorecard_workflow_reports_exact_drift() -> None:
+def test_readded_scorecard_workflow_reports_duplicate_scan() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
-    workflow_rule["parameters"]["workflows"] = [
-        workflow
-        for workflow in workflow_rule["parameters"]["workflows"]
-        if workflow["path"] != ".github/workflows/scorecard-pr.yml"
-    ]
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/scorecard-pr.yml",
+            "ref": "refs/heads/main",
+        }
+    )
 
     errors = audit.audit_ruleset(payload)
 
-    assert "missing central required workflow .github/workflows/scorecard-pr.yml" in errors
+    assert (
+        "unexpected workflow present in required set: .github/workflows/scorecard-pr.yml"
+        in errors
+    )
 
 
 def test_readded_codeql_workflow_alongside_full_set_reports_unexpected_entry() -> None:
@@ -383,8 +391,6 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "missing central required workflow .github/workflows/security-scan.yml",
         "missing central required workflow .github/workflows/strix.yml",
         "missing central required workflow .github/workflows/sast-semgrep.yml",
-        "missing central required workflow .github/workflows/osv-scanner-pr.yml",
-        "missing central required workflow .github/workflows/scorecard-pr.yml",
         "expected one pull_request rule, found 0",
         "default-branch deletion protection is missing",
         "default-branch non-fast-forward protection is missing",
@@ -397,7 +403,13 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     workflows = workflow_rule["parameters"]["workflows"]
     workflows.insert(0, "malformed")
     workflows.insert(1, {"path": 42})
-    workflows.append(deepcopy(workflows[-1]))
+    security_scan = next(
+        workflow
+        for workflow in workflows
+        if isinstance(workflow, dict)
+        and workflow.get("path") == ".github/workflows/security-scan.yml"
+    )
+    workflows.append(deepcopy(security_scan))
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
     review_rule["parameters"] = {
         "required_approving_review_count": 0,
@@ -411,7 +423,7 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
 
     assert "central required workflow entry 0 is malformed" in errors
     assert "central required workflow entry 1 is malformed" in errors
-    assert "central required workflow .github/workflows/scorecard-pr.yml is configured 2 times" in errors
+    assert "central required workflow .github/workflows/security-scan.yml is configured 2 times" in errors
     assert "exactly two approving reviews are not required" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "last-push approval protection is disabled" in errors
