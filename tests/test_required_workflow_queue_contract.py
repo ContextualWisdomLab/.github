@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -241,7 +242,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename != "noema-review.yml":
+        if filename not in {"noema-review.yml", "opencode-review.yml"}:
             assert "cancel-in-progress: true" in workflow
         if filename in {
             "close-empty-pr.yml",
@@ -252,17 +253,33 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
+            # Job-level (scoped to opencode-review-target only), not
+            # workflow-level: a workflow-level block would capture the
+            # structurally-separate cancel-superseded-opencode-review-runs
+            # job too, deadlocking it behind the very run it exists to
+            # cancel (Devin Review, 2026-09-03).
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "opencode-review-bootstrap-" in concurrency_contract
-            # Unlike the other required pull-request workflows below, this
-            # group is deliberately also scoped by exact head SHA: a
-            # delayed, out-of-order run for an older head must not be able
-            # to cancel the authoritative run already active for a newer
-            # head (Devin Review on `#1568`). Same-head events still share
-            # one group and can still cancel each other.
+            # Deliberately NOT scoped by head SHA and deliberately
+            # cancel-in-progress: false (reverted/refined 2026-09-03 by
+            # explicit user directive plus peer review): head-SHA scoping
+            # (originally added for Devin Review's `#1568` finding) meant
+            # every push to a PR got its own concurrency group, so rapid
+            # successive pushes no longer cancelled each other's in-flight
+            # runs -- they queued up independently instead, worsening the
+            # self-inflicted queue-thrashing pattern this org measured
+            # directly (236/300 cancelled runs from concurrent push volume).
+            # Plain repo+PR-number scoping with cancel-in-progress: false
+            # structurally closes the #1568 race instead of reopening it:
+            # nothing in the group is ever preempted, so a late-arriving
+            # older-head run can never evict a current one at any arrival
+            # order -- see the workflow's own comment for the full mechanism.
             assert (
                 "github.event.pull_request.head.sha || github.run_id"
-                in concurrency_contract
+                not in concurrency_contract
             )
+            assert "cancel-in-progress: false" in concurrency_contract
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
@@ -278,7 +295,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
+        if filename != "noema-review.yml":
             assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -333,18 +350,34 @@ def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
     )
 
 
-def test_strix_serializes_provider_evidence_per_repository() -> None:
-    """Serialize Strix per repository so shared provider keys are not rate-limited.
+def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
+    """Scope Strix per repository AND PR, matching every other central workflow.
 
-    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
-    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
-    storms and fail-closed gate failures on every open PR. The concurrency group
-    now scopes the scan job per repository and event class. The cleanup job is
-    outside that queue so a synchronize event can immediately retire an older
-    exact-head run without allowing sibling scans to overlap.
+    History: from 2026-08-24 through 2026-09-03 the concurrency group was
+    deliberately repository-wide (not PR-scoped) because PR-scoping is what
+    caused a real litellm.RateLimitError storm against the shared NVIDIA NIM
+    key on 2026-08-23/24 -- sibling PRs scanned concurrently, each retrying the
+    shared key three times, producing fail-closed gate failures on every open
+    PR. That repository-wide scoping fixed the storm but starved cross-PR
+    Strix evidence within the same repository instead (a different PR's scan
+    always queued behind whichever scan was already running there).
+
+    Restored to PR-scoped on explicit owner authorization (2026-09-03) after
+    confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
+    rate limits rather than a shared pool, giving materially more headroom
+    than the single-key 2026-08-23/24 incident had. The concurrency group now
+    scopes the scan job per repository, PR (or run id for non-PR events), and
+    event class. The cleanup job is outside that queue so a synchronize event
+    can immediately retire an older exact-head run without allowing sibling
+    scans for *other* PRs to be blocked by it.
     """
     workflow = workflow_text("strix.yml")
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+    # Isolate the strix: job's own text first: cancel-superseded-pr-runs above
+    # it now carries its own (PR-scoped, dedup-only) concurrency: block, so a
+    # naive first-match split on the bare "concurrency:" literal would grab
+    # that job's block instead of this one.
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
+    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
 
@@ -353,15 +386,18 @@ def test_strix_serializes_provider_evidence_per_repository() -> None:
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.repository" in concurrency_contract
     assert (
-        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository)"
+        "format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || "
+        "github.event.pull_request.base.repo.full_name || github.repository, "
+        "github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id)"
     ) in concurrency_contract
     assert (
         "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
         in concurrency_contract
     )
-    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
-    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
+    # PR-scoped grouping: the PR (or client_payload) number is part of the key.
+    assert "github.event.pull_request.number || github.event.client_payload.pr_number" in (
+        concurrency_contract
+    )
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     # Running scans are not cancelled; GitHub's native group has one pending slot.
@@ -541,7 +577,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "sbom-generation.yml",
         "scorecard-pr.yml",
         "secret-scan.yml",
         "security-scan.yml",
@@ -590,7 +625,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "sbom-generation.yml",
             "scorecard-pr.yml",
             "secret-scan.yml",
             "security-scan.yml",
@@ -614,10 +648,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix serializes scans per repository while cleanup stays outside that
+    # Strix scopes scans per repository and PR while cleanup stays outside that
     # queue so synchronize and close events can immediately retire old work.
     assert "cancel-in-progress: false" in strix_workflow
-    assert "Keep provider-backed scans serial per repository" in strix_workflow
+    assert "PR-scoped (workflow-repository-PR)" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
@@ -977,6 +1011,26 @@ def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
     )[1].splitlines()[0]
 
 
+def test_scan_pr_queue_has_a_bounded_runtime() -> None:
+    """scan-pr-queue must not fall back to GitHub's 360-minute platform default.
+
+    Without a job-level timeout-minutes, a stuck run (rate-limited GitHub API,
+    a hung gh invocation) can occupy a shared runner for up to six hours,
+    contributing to org-wide Actions capacity saturation. The bound must be
+    shorter than org-queue-sweep's timeout-minutes: 60, since scan-pr-queue
+    only scans this one repository's queue while org-queue-sweep walks every
+    target repository in the organization.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
+
+    match = re.search(r"^    timeout-minutes: (\d+)$", scan_job, flags=re.MULTILINE)
+    assert match is not None, "scan-pr-queue must declare a job-level timeout-minutes"
+    scan_timeout = int(match.group(1))
+    assert 1 <= scan_timeout <= 45
+    assert scan_timeout < 60
+
+
 def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 
@@ -988,8 +1042,8 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     visible reason when it cannot mutate sibling repositories. The sweep runs
     hourly so an approval that lands after a PR's last event is
     auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate 30-minute scan, and the job has
-    enough runtime headroom to finish a complete organization walk.
+    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
+    job has enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
@@ -1543,6 +1597,82 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # if condition (which set -e does not trap) and silently skip the guard.
     assert '"$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$' in workflow
     assert "ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer" in workflow
+
+
+def test_org_queue_sweep_treats_rate_limited_repositories_as_non_fatal() -> None:
+    """A shared installation-token rate-limit exhaustion must not fail the sweep.
+
+    Installation 141441800's primary rate limit (5,000-12,500 requests/hour)
+    is shared by at least eight other central workflows that mint tokens for
+    the same GitHub App installation. When that bucket is exhausted, ``gh``
+    fails with "API rate limit exceeded" — routine cross-workflow contention,
+    not a defect in the target repository — and self-heals on GitHub's own
+    hourly reset. Treating it as a hard failure previously turned one
+    exhausted bucket into a permanently red ``*/15 * * * *`` cron for as long
+    as the contention lasted (observed: repeated same-signature failures
+    spanning 15+ hours). That repository is now reported as a skipped,
+    non-fatal "deferred" repository instead, exactly like the existing
+    inaccessible-repository handling, and is retried on the next rotation.
+
+    Unlike ``ORG_SWEEP_MAX_UNAVAILABLE``, there is deliberately no fail-closed
+    ceiling on the rate-limited count: one exhausted installation bucket is
+    shared by every remaining repository, so the sweep records the current
+    repository and stops the rotation instead of repeating the same bounded
+    retries and API calls for every later repository.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    # The rate-limit signal is classified as a skipped, non-fatal "deferred" repo.
+    assert 'grep -qiF "API rate limit exceeded"' in workflow
+    assert "rate_limited=$((rate_limited + 1))" in workflow
+    assert 'rate_limited_repos+=("$repo_full_name")' in workflow
+    assert "the shared GitHub App installation-token rate limit is exhausted" in workflow
+    assert "retried automatically" in workflow
+    # It must be checked as its own branch, distinct from both the existing
+    # 403 "unavailable" classification and the generic hard-failure branch —
+    # a rate-limited sweep must not also increment unavailable or failures.
+    assert (
+        'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then'
+        in workflow
+    )
+    rate_limited_branch = workflow.split(
+        'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then',
+        maxsplit=1,
+    )[1].split("\n              else\n", maxsplit=1)[0]
+    assert 'rate_limited_repos+=("$repo_full_name")' in rate_limited_branch
+    assert 'echo "::endgroup::"' in rate_limited_branch
+    assert "break" in rate_limited_branch
+    assert rate_limited_branch.index('rate_limited_repos+=("$repo_full_name")') < (
+        rate_limited_branch.index('echo "::endgroup::"')
+    ) < (
+        rate_limited_branch.index("break")
+    )
+    script = (
+        "rate_limited=0\n"
+        "rate_limited_repos=()\n"
+        "visited_repos=()\n"
+        "for repo_full_name in ContextualWisdomLab/first ContextualWisdomLab/second; do\n"
+        "  visited_repos+=(\"$repo_full_name\")\n"
+        + textwrap.indent(textwrap.dedent(rate_limited_branch).strip() + "\n", "  ")
+        + "done\n"
+        + "printf 'RESULT|%s|%s|%s\\n' \"$rate_limited\" "
+        '"${rate_limited_repos[*]}" "${visited_repos[*]}"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == (
+        "RESULT|1|ContextualWisdomLab/first|ContextualWisdomLab/first"
+    )
+    # A genuine (non-403, non-rate-limit) failure must still be a hard failure.
+    assert "failures=$((failures + 1))" in workflow
+    # No fail-closed ceiling on rate-limited repositories (see docstring):
+    # unlike ORG_SWEEP_MAX_UNAVAILABLE, no configured limit ever turns
+    # widespread rate-limiting into a hard "exit 1" job failure.
+    assert "ORG_SWEEP_MAX_RATE_LIMITED" not in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:

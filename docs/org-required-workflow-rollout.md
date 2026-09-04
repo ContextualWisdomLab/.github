@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-08-28 KST
+Updated: 2026-09-03 KST
 
 ## Decision
 
@@ -12,22 +12,25 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths:
+- Active required workflow paths (live-verified 2026-09-03, nine entries — this
+  list previously undercounted by omitting `scorecard-pr.yml` and
+  `osv-scanner-pr.yml`, added to the ruleset weeks earlier per the "CodeQL
+  ruleset gap" fix but never reflected here; see the 2026-09-03 entry below for
+  why `codeql-pr.yml` is deliberately absent):
   - `.github/workflows/close-empty-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
+  - `.github/workflows/osv-scanner-pr.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
+  - `.github/workflows/scorecard-pr.yml`
   - `.github/workflows/security-scan.yml`
   - `.github/workflows/strix.yml`
   - `.github/workflows/sast-semgrep.yml`
 - Required workflow ref: `refs/heads/main`
-- Last verified workflow implementation base commit: `050e6d59b0de9e62c8413d5f8f26f4f2f9ebea09` (`#584`)
+- Last verified workflow implementation base commit: `050e6d59b0de9e62c8413d5f8f26f4f2f9ebea09` (`ContextualWisdomLab/.github#584`)
 - Required workflow trigger support: `pull_request`, `pull_request_target`, `push`, `workflow_run`
 
-The required-workflow implementation is current through merged `.github#584`.
-The ruleset points at `.github@main`; if live organization ruleset inspection
-reports another ref, treat that as operations drift and restore ruleset
-`18156473` to the current `main` head.
+The required-workflow implementation is current through merged `ContextualWisdomLab/.github#584` plus the later governance and security repairs recorded below. The ruleset points at `.github@main`; if live organization ruleset inspection reports another ref, treat that as operations drift and restore ruleset `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
 
@@ -101,26 +104,60 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
-The central `.github/workflows/codeql-pr.yml`, `.github/workflows/scorecard-pr.yml`,
-and `.github/workflows/osv-scanner-pr.yml` workflows supply PR-head and merge-preview
-code scanning analyses for ruleset `18156473` `code_scanning` (CodeQL, Scorecard,
+**Superseded (2026-09-03): `codeql-pr.yml` is deliberately no longer required-workflow-injected.**
+GitHub categorically disallows `github/codeql-action/init` and `github/codeql-action/analyze` inside a
+ruleset-required workflow — every ruleset-injected `codeql-pr.yml` run across every one of the ~71 covered
+repositories concluded `startup_failure` with zero check runs ever created (a platform restriction, not a
+configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
+annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
+ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
+9 entries remain, `close-empty-pr.yml` through `osv-scanner-pr.yml`, no CodeQL entry). Coverage now comes
+from GitHub's native code-scanning default setup, enabled directly per repository
+(`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
+repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
+41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
+"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history, and still describe
+`scorecard-pr.yml`/`osv-scanner-pr.yml`'s mechanism accurately, since those two remain required and
+functioning; do not re-add any workflow using `github/codeql-action` to a required-workflow ruleset entry.
+The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
+make this automatic for every newly created repository, but item 41's investigation confirmed it is
+empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
+well after that policy's own `updated_at` of 2025-03-04 — never received it. Closing that specific gap (a
+periodic reconciliation sweep, vs. this org's stated aversion to more scheduled workflows for rate-limit
+reasons) is recorded as still open in `docs/product-technical-gap-baseline.md`'s item 41 entry, not decided
+here.
+
+The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml` workflows
+supply PR-head and merge-preview code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
 osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
 Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
+`.github/workflows/codeql-pr.yml` used the same trigger shape and merge-preview
+technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
+`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
+the ephemeral merge ref OID) before its removal above.
 
-CodeQL merge preview checks out `refs/pull/<n>/merge` and uploads SARIF with
-`sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit,
-not the ephemeral merge ref OID.
+Repository-local `codeql.yml` push/default-branch scans, or GitHub's native
+`code-scanning/default-setup`, are now the only source of CodeQL coverage —
+PR merge gates cannot rely on a central required-workflow CodeQL check for the
+platform reason above.
 
-Repository-local `codeql.yml` push/default-branch scans may remain for branch
-history, but PR merge gates should rely on the central `codeql-pr.yml` workflow.
+### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
 
-### Repository-local CodeQL inventory (2026-07-04)
+**This entire subsection describes a plan that did not work and is not
+current guidance.** It assumed `codeql-pr.yml` would become a functioning
+central required check once ruleset `18156473` included it; the "Correction
+(2026-09-03)" note under "Code scanning required workflow posture" above
+explains why that assumption was wrong — `codeql-action` cannot run inside a
+required workflow at all, so `codeql-pr.yml` was removed from the ruleset,
+not fixed. "Centralizing through `codeql-pr.yml` fixes every inherited
+repository in one ruleset change" (below) never happened and never could.
+Coverage for repositories without a local CodeQL workflow now comes from
+GitHub's native `code-scanning/default-setup` instead (see the 2026-09-03
+"Evidence from this rollout" entry) — do not read the table below as
+"repositories still needing the ruleset update to land"; treat it only as a
+2026-07-04 point-in-time snapshot of which repositories had a local `codeql.yml`.
 
-Org audit of default-branch workflow files. Repos without any local CodeQL
-workflow depend entirely on central `codeql-pr.yml` once ruleset `18156473`
-includes that path; they are the most exposed to
-`Code scanning is waiting for results from CodeQL` until the ruleset update
-lands.
+Org audit of default-branch workflow files as of 2026-07-04.
 
 | Repository | Default branch | Local CodeQL workflow | PR trigger | merge_commit_sha SARIF |
 | --- | --- | --- | ---: | ---: |
@@ -130,12 +167,36 @@ lands.
 | `pg-erd-cloud` | `main` | `codeql.yml`, `codeql-backfill.yml` | yes (`codeql.yml`) | no |
 | `xtrmLLMBatchPython` | `develop` | `codeql.yml` | yes | no |
 | `naruon` | `develop` | `codeql.yml` | yes (temporary; PR `#916` retires PR trigger) | yes (repo-local interim fix) |
-| all other public non-fork org repos | varies | none observed | — | — |
+| all other public non-fork org repos | varies | none observed as of 2026-07-04 | — | — |
 
-No repository-local PR CodeQL workflow besides `naruon` uploads merge-preview
-SARIF on `merge_commit_sha`. Centralizing through `codeql-pr.yml` fixes every
-inherited repository in one ruleset change; per-repo deletion of PR triggers is
-optional cleanup to avoid duplicate scans.
+No repository-local PR CodeQL workflow besides `naruon` uploaded merge-preview
+SARIF on `merge_commit_sha` as of this 2026-07-04 snapshot. The plan at the
+time was that centralizing through `codeql-pr.yml` would fix every inherited
+repository in one ruleset change; per-repo deletion of PR triggers was
+intended as optional cleanup to avoid duplicate scans. Neither happened —
+see the historical marker above.
+
+### Audit tool coverage
+
+`scripts/ci/audit_central_required_workflows.py` defines all nine canonical
+required workflow paths (`codeql-pr.yml` deliberately excluded, per the
+2026-09-03 correction above) and treats the live policy as an exact
+inventory: every required path must appear exactly once with repository id
+`1274066402` and `refs/heads/main`, while any additional well-formed workflow
+path — including a re-added `codeql-pr.yml` — is reported as
+`unexpected workflow present in required set` drift instead of silently
+passing. A malformed workflow entry (not an object, or missing a string
+`path`) is now reported by its index (`central required workflow entry N is
+malformed`) instead of being silently skipped, so a structurally broken
+ruleset payload surfaces as loud audit failures rather than a quietly
+incomplete inventory check.
+
+`tests/test_central_required_workflow_exact_inventory.py` pins the full
+nine-path oracle independently of the production tuple, proves the
+independent payload passes, and proves an extra live workflow fails. This
+prevents a future edit to `REQUIRED_WORKFLOW_PATHS` from silently rewriting
+the only happy-path fixture. The scheduled audit and rollout-document tests
+continue to assert the canonical code-scanning paths explicitly.
 
 ## Scheduler required workflow posture
 
@@ -172,7 +233,7 @@ App has read-only Actions/checks/contents/status/code-scanning/Dependabot access
 and write access only to pull-request reviews.
 
 The PydanticAI `ReviewAgent` product in `ContextualWisdomLab/noema`
-(`reviewer/noema_reviewer`, noema#9) is the target standalone judgement plane,
+(`reviewer/noema_reviewer`, `ContextualWisdomLab/noema#9`) is the target standalone judgement plane,
 while the central Python gate remains the deployed fail-closed reviewer. The
 standalone package is not imported into the privileged workflow. External proof
 exists on `ContextualWisdomLab/clearfolio#161`: `cwl-noema-review[bot]` submitted
@@ -197,16 +258,22 @@ SARIF/dependency evidence, test evidence, and review marker all bind to
 
 ## Scope
 
-The active ruleset no longer maintains a repository-name allowlist. Live
-ruleset inspection on 2026-07-02 18:15 KST reports
-`repository_name.include=["~ALL"]`, so all current and future organization
-repositories inherit the seven central required workflows on their default
-branch unless a later ruleset exclusion is added. The table below is the public
+The active ruleset uses `repository_name.include=["~ALL"]` together with the
+canonical exclusions `.github`, `noema`, and `IRT-bibliography-set`, matching
+`scripts/ci/audit_central_required_workflows.py::EXPECTED_EXCLUSIONS` and the
+live ruleset contract re-verified on 2026-09-03 KST. Every current or future
+organization repository outside that exclusion set inherits the nine central
+required workflows on its default branch — the workflow count itself is not
+fixed at the count an earlier inspection observed (seven, on 2026-07-02) or
+at ten (2026-09-02, before `codeql-pr.yml`'s removal); see the "Active
+required workflow paths" list under Decision above for the current live
+count and treat that list, not this sentence, as the source of truth for how
+many workflows are currently required. The table below is the public
 non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 | Repository | Visibility | Default branch | Flow | Open PRs | Local central-workflow copies on default branch | Rollout status |
 | --- | --- | --- | --- | ---: | --- | --- |
-| `ContextualWisdomLab/.github` | public | `main` | GitHub Flow | 27 | central source; keep | single source of truth; central PRs through `#283` merged; PR `#286` current head queued after review-thread fixes |
+| `ContextualWisdomLab/.github` | public | `main` | GitHub Flow | 27 | central source; keep | single source of truth; historical central PRs are evidence only; current PR state must be re-read before action |
 | `ContextualWisdomLab/aFIPC` | public | `master` | GitHub Flow | 22 | none | central checks proven on PR `#78`; active queue still needs per-PR review |
 | `ContextualWisdomLab/pg-erd-cloud` | public | `main` | GitHub Flow | 81 | none | repo-local autofix worker removed by PR `#393`; default branch now keeps only repository-owned application and security workflows |
 | `ContextualWisdomLab/fast-mlsirm` | public | `main` | GitHub Flow | 25 | none | migrated; re-verify inherited checks on current open PRs |
@@ -238,6 +305,33 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 ## Evidence from this rollout
 
+- On 2026-09-02 KST, live verification via `gh api repos/<org>/<repo>/rules/branches/<branch>`
+  against six repositories (`aFIPC`, `bandscope`, `newsdom-api`, `naruon`,
+  `xtrmLLMBatchPython`, `pg-erd-cloud`) found ruleset `18156473`'s `workflows`
+  rule listed exactly the same seven required paths for every repository
+  checked, and that `codeql-pr.yml`, `scorecard-pr.yml`, and `osv-scanner-pr.yml`
+  were absent from all of them. This is historical pre-fix evidence, not the
+  current operator state. The gap required org-admin action and was fixed later
+  the same day.
+- On 2026-09-02 KST, later the same day, an organization administrator
+  granted a session `admin:org` scope specifically to close the gap above.
+  With that scope, `gh api orgs/ContextualWisdomLab/rulesets/18156473`
+  confirmed the same seven-path gap from the org side, and
+  `PUT /orgs/ContextualWisdomLab/rulesets/18156473` appended
+  `.github/workflows/codeql-pr.yml`, `.github/workflows/scorecard-pr.yml`, and
+  `.github/workflows/osv-scanner-pr.yml` (each pinned to
+  `ContextualWisdomLab/.github@refs/heads/main`) to the ruleset's `workflows`
+  rule, preserving every other existing path and rule field unchanged. The
+  write was verified live from two independent angles: re-reading the org
+  ruleset itself, and re-reading `aFIPC`'s inherited dispatch list
+  (`gh api repos/ContextualWisdomLab/aFIPC/rules/branches/master`) — both now
+  show all ten required workflow paths. Interim restoration PRs
+  `ContextualWisdomLab/aFIPC#321`, `ContextualWisdomLab/bandscope#1144`, and
+  `ContextualWisdomLab/pg-erd-cloud#1059` may be retired only after verified
+  complete successor carryover of every unique valid delta; redundancy alone
+  is not a close instruction.
+- On 2026-09-03 13:05 KST, the 23-repository CodeQL coverage gap recorded below was made permanently self-detecting instead of relying on another one-time manual sweep: `scripts/ci/audit_org_codeql_coverage.py` (pure `audit_codeql_coverage(repositories) -> list[str]` function plus a `load_payload`/`parse_args`/`main` CLI wrapper, 100% test and docstring coverage) flags any non-archived organization repository where both `code-scanning/default-setup` state is not `configured` and `code-scanning/analyses?tool_name=CodeQL` shows no recent run, exactly the two signals used to find the original 23 repositories; archived repositories are skipped, matching the `trivy-sarif-repro` exclusion below. The existing scheduled `audit-central-ruleset.yml` workflow (cron `11 2 * * *`, plus `repository_dispatch` and relevant-path `push`) now also enumerates every organization repository via `gh api --paginate "orgs/${ORG_LOGIN}/repos?type=all&per_page=100"`, probes both coverage signals per repository (tolerating a 404/403 on either endpoint as no-coverage rather than a hard failure), and pipes the result into this script. Like the existing ruleset audit, this is read-only: it reports drift with `ERROR:`/`FAIL:` lines and a nonzero exit code, and never mutates default-setup or repository settings itself — a newly created repository or one where default-setup is later disabled will now surface here on the next scheduled run instead of silently regressing.
+- On 2026-09-03 12:20 KST, ruleset `18156473` was updated to remove `.github/workflows/codeql-pr.yml` from its required `workflows` list, bringing the count to nine. Every ruleset-injected run of that workflow, in every one of the ~71 covered repositories, had concluded `startup_failure` with zero check runs ever created — the REST API surfaces no reason, but the run page's web UI "Annotations" panel does: `github/codeql-action/init` and `github/codeql-action/analyze` are categorically disallowed inside a required workflow, a GitHub platform restriction confirmed by independent web corroboration, not a defect in the workflow file's own content. Before treating removal as safe, real CodeQL coverage was ground-truth-verified (via `code-scanning/analyses`, not workflow-file-name pattern matching — some repositories run CodeQL from unexpectedly-named files, e.g. `contextual-orchestrator`'s coverage comes from `security.yml:codeql_analysis`) across all 71 covered repositories: 48 already had real coverage from a local workflow or GitHub's native default-setup; 23 (`CalendarWeave`, `ConceptWeave`, `DiagramWeave`, `ELUNVERA`, `EmbedRelay`, `LineageWeave`, `Orgmetra`, `OriginWeave`, `PolicyWeave`, `TEPP`, `accounting-information-platform`, `context-graph-contracts`, `disksage`, `enterprise-architecture-core`, `j-planner`, `learning-content-studio`, `learning-interoperability-contracts`, `learning-management-platform`, `learning-record-store`, `life-os`, `pingora-gateway`, `quarantine-sandbox-runtime`, `supply-chain-control-plane`) had none from any source and were given GitHub's native `code-scanning/default-setup` (`trivy-sarif-repro` excluded — an archived, explicitly-throwaway repro repository, not a real coverage gap). `.github#1768` records this in `docs/product-technical-gap-baseline.md`.
 - On 2026-08-28 21:43 KST, ruleset `21732164` was created with active enforcement for every non-default branch. Reproduction on an existing LineageWeave PR head and a new branch returned GH013 before either ref could emit the required workflow event. The ruleset was returned to `evaluate` mode at 21:49 KST; the audit now fails if this impossible all-ref contract is reactivated.
 
 - On 2026-06-30 08:33 KST, organization ruleset `18156473` was changed from an explicit repository-name list to `repository_name.include=["~ALL"]` while keeping `ref_name.include=["~DEFAULT_BRANCH"]` and the same three central required workflow paths from `.github@refs/heads/main`.
@@ -245,10 +339,10 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - On 2026-07-01 06:30 KST, organization ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
 - On 2026-07-02 07:25 KST, organization ruleset `18156473` still reported `enforcement=active`, `repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`, and the same three required workflow paths from `ContextualWisdomLab/.github@refs/heads/main`.
 - On 2026-07-11 11:30 KST, organization ruleset `18156473` was normalized to keep the five central required workflows, stale-review dismissal, last-pusher protection, and review-thread resolution while setting `required_approving_review_count=0` and `require_code_owner_review=false`. The merge gate remains current-head OpenCode approval plus required checks and scheduler evidence; the change removes self-authored/code-owner deadlocks that left approved PRs unable to merge.
-- On 2026-07-13 21:10 KST, live inspection found that `sast-semgrep.yml` described itself as the central replacement for removed repository-local Semgrep jobs but was absent from ruleset `18156473`. The active ruleset was updated to require that workflow from `.github@refs/heads/main`, while preserving one approval, stale-review dismissal, last-push approval, and review-thread resolution. `scripts/ci/audit_central_required_workflows.py` and the scheduled ruleset audit now report each missing workflow, wrong source ref, or weakened review protection explicitly.
+- On 2026-07-13 21:10 KST, live inspection found that `sast-semgrep.yml` described itself as the central replacement for removed repository-local Semgrep jobs but was absent from ruleset `18156473`. The active ruleset was updated to require that workflow from `.github@refs/heads/main`, while preserving one approval, stale-review dismissal, last-push approval, and review-thread resolution. `scripts/ci/audit_central_required_workflows.py` and the scheduled ruleset audit now report each missing workflow, wrong source ref, weakened review protection, malformed/duplicate entry, or unexpected workflow explicitly.
 - On 2026-07-13 22:21 KST, the first main-branch ruleset audit proved that a repository `GITHUB_TOKEN` cannot read the organization-administration endpoint (`HTTP 403 Resource not accessible by integration`). The audit uses the least-privilege inherited-ruleset endpoint, logs `RULESET_SCOPE` for each enumerated repository, and validates the complete workflow and pull-request rule payload through `naruon`. The original public-only scope and its historical `.github`/`argos`/`noema` exclusions were superseded by the 2026-07-23 audit below.
 - On 2026-07-13 22:37 KST, xtrmLLMBatchPython current-head evidence proved that Semgrep 1.169.0 reports zero blocking findings while retaining 23 source-suppressed results in raw SARIF. The central gate now logs the suppressed count, removes only SARIF results carrying explicit in-source suppressions before upload, and fails from the remaining SARIF finding count even when Semgrep's SARIF-mode exit code is zero.
-- On 2026-07-16 14:18 KST, `ContextualWisdomLab/clearfolio#161` proved the independent reviewer on exact current head `4512fb9e9b56ab95df3acd85ebec2e6b849335a7`: `cwl-noema-review[bot]` submitted an App-authored `APPROVED` review whose body records the same Head SHA and cites the clean SARIF, dependency, test, and diff evidence.
+- On 2026-07-16 14:18 KST, `ContextualWisdomLab/clearfolio#161` proved the independent reviewer on exact current head `4512fb9e9b56ab95df3acd85ebec2e6b849335a7`: `cwl-noema-review[bot]` submitted an `APPROVED` review whose body records the same Head SHA and cites the clean SARIF, dependency, test, and diff evidence.
 - On 2026-07-23 06:35 KST, ruleset `18156473` was updated to require `.github/workflows/noema-review.yml`, making seven central required workflows while preserving exactly two approvals, stale-review dismissal, last-push approval, review-thread resolution, and merge/squash-only policy. The all-repository scope excludes only `.github`, `noema`, and private `IRT-bibliography-set`; `argos` now inherits the ruleset. The scheduled audit now enumerates every organization repository visible to its credential (`type=all`), rather than only public repositories, so the private exclusion and all other visible private-repository inheritance are verified. Existing open PRs may need a new PR event or branch update before GitHub creates the newly required Noema run.
 - `.github` PR `#225` raised high reasoning effort for all reasoning-capable OpenCode review model definitions and merged at `50c6ef82f52af3eeb0e58c174902fc9855c36682`.
 - `.github` PR `#226` stopped the merge scheduler from treating old deterministic fallback approval bodies as current-head approval evidence and merged at `57a1fa580731a0f76b31dcf29a597c5715dba2fd`.
@@ -267,10 +361,7 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - `.github` PR `#283` refreshed the central OpenCode model configuration so every reasoning-capable review candidate sets `reasoning=true`, `options.reasoningEffort: high`, and `variants.high.reasoningEffort: high`; non-reasoning fallback candidates remain available without a false effort claim. It merged at `ef9950e6b55bf943c0295e1df3e34c94210d21cc`.
 - After PR `#255` merged, `ContextualWisdomLab/bandscope` PRs `#493`, `#494`, `#495`, and `#500` were rechecked for branch freshness. Merge simulation against `develop` found real conflicts rather than update-branch candidates: `#493` conflicts in `apps/desktop/src/App.tsx` plus the design-system docs, while `#494`, `#495`, and `#500` conflict in `docs/design-system/README.md`, `docs/design-system/component-contract.md`, and `docs/design-system/figma-to-code-workflow.md`. Each PR received a corrected conflict-resolution comment with the exact file list and merge/rebase repair commands.
 - `ContextualWisdomLab/aFIPC` PR `#78` is no longer a target-coverage gap. It merged after current-head central `coverage-evidence`, `opencode-review`, `strix`, and `scan-pr-queue` checks all passed on head `b1ddafced86302f461e95259699f1efde5ec87c9`; the OpenCode review approved the same head on 2026-06-30 06:02:55Z.
-- `ContextualWisdomLab/pg-erd-cloud` PR `#393` removed the repo-local `pr-review-autofix.yml` worker after the central autofix worker merged.
-  The first OpenCode run on head `9d8eed5be47670b1b46f413295d9a6044d7327b2` exhausted the older model pool and requested changes.
-  After `.github` PR `#246` merged, central OpenCode run `28485070313` approved the same head and the PR merged at `1e0d6a3dda5ea9afcd74dcd8380689672e1c8ef1` on 2026-07-01 00:33:50Z.
-  Live default-branch content lookup returned 404 for `.github/workflows/pr-review-autofix.yml` after merge.
+- `ContextualWisdomLab/pg-erd-cloud#393` removed the repo-local `pr-review-autofix.yml` worker after the central autofix worker merged. The first OpenCode run on head `9d8eed5be47670b1b46f413295d9a6044d7327b2` exhausted the older model pool and requested changes. After `.github` PR `#246` merged, central OpenCode run `28485070313` approved the same head and the PR merged at `1e0d6a3dda5ea9afcd74dcd8380689672e1c8ef1` on 2026-07-01 00:33:50Z. Live default-branch content lookup returned 404 for `.github/workflows/pr-review-autofix.yml` after merge.
 - Live non-fork inventory on 2026-07-02 18:15 KST found 17 public non-fork repositories, inherited ruleset `18156473` on `kaefa` and `waf-ids-ai-soc`, and no default-branch copies of `opencode-review.yml`, `strix.yml`, or `pr-review-merge-scheduler.yml` outside `.github`.
 - `ContextualWisdomLab/waf-ids-ai-soc` PR `#6` merged at `e1c0a85fd4a8e6dd67039be43eb7f659fec22abd` after central required workflow proof on head `43b62b5f347d1532c81b5ae38d8e41b4494fd486`; PR `#8` current head `48d8b56a0f995829fc95de4fed129d1c33aaadff` is now the open runtime proof fixture with central and local Rust checks queued at the 2026-07-02 18:15 KST refresh.
 - `ContextualWisdomLab/kaefa` inherits ruleset `18156473`, but PR `#60` current head `13c9089855fcdd34391173560ccf6935bac1eebe` showed only repo-local R-CMD-check, dependency-review, and CodeQL signals in status rollup. Treat this as a runtime proof gap until a new PR event or manual dispatch proves central OpenCode, Strix, and scheduler checks on a kaefa current head.
@@ -312,18 +403,19 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - `ContextualWisdomLab/pg-erd-cloud` PR `#361` removed the repo-local `pr-review-fix-scheduler.yml` wrapper after central `.github` gained target repository support. It merged at 2026-06-29 22:40 KST with merge commit `21cbc14b21d59ac28ac789de58502816cc8df6ad`; live default-branch content lookup returned 404 for that wrapper path after merge.
 - `ContextualWisdomLab/naruon` classic branch protection no longer requires direct `strix` or `opencode-review` status checks on `develop`; after deletion, `branches/develop/protection/required_status_checks` returns `404 Required status checks not enabled`, while org ruleset `18156473` remains `active` and still targets `naruon`.
 - `ContextualWisdomLab/naruon` PR `#852` rewrites `backend/tests/test_release_governance.py` and `docs/development/merge-gate-policy.md` to make the central scheduler the contract, then deletes the repo-local `pr-review-merge-scheduler.yml`. The first current-head central `coverage-evidence` failed because nested `backend/requirements.txt` was not installed; `.github` PR `#146` fixed that central path. PR `#852` was pushed to head `2c8257ce0d02838b80650997d65e85569f4ab27f` to generate fresh required workflows from the updated central main. The stale OpenCode `CHANGES_REQUESTED` review `4592643416` on previous head `0f103836f15d9055c4ed85152f925a6e9514adb2` was dismissed on 2026-06-30 00:25 KST; the PR now requires fresh current-head OpenCode/coverage evidence and still has queued `coverage-evidence`.
+- 2026-09-03 KST runner-admission repair (queue-congestion investigation: 9,368 checks queued organization-wide, roughly 3 in-progress, queue depth roughly equal to open-PR-count times required-workflow-count): live re-verification confirmed ruleset `18156473` (fetched via `gh api orgs/ContextualWisdomLab/rulesets/18156473`) covers exactly the same 10 workflows with `repository_name.exclude=["noema",".github","IRT-bibliography-set"]`, `.github`'s classic protection (fetched via `gh api repos/ContextualWisdomLab/.github/branches/main/protection`) requires exactly the same 14 named contexts with `strict: true`/`enforce_admins: false`, and `bandscope`'s live workflow directory has no local `codeql-pr.yml`/`strix.yml`/`security-scan.yml` while ruleset-injected runs of all three exist there -- proving a trigger-level `paths`/`paths-ignore` filter on a required workflow is inert in 40+ repositories and would leave `.github`'s classic contexts Pending forever. **Decision: trigger-level path filtering on a required workflow is a no-go; job-level `if:` gating is the safe mechanism.** A `changed-scope` job (byte-identical apart from one `if:` line) was added as the first job in `security-scan.yml`, `sast-semgrep.yml`, `strix.yml`, `scorecard-pr.yml`, and `osv-scanner-pr.yml`; downstream jobs gained `needs: changed-scope` plus an output-gated `if:`. `codeql-pr.yml`'s `detect-languages` job gained the same classifier as a step, but `analyze-head` is gated at STEP level (not job level) because run `33708209086` proved a job-level skip on a job whose matrix comes from another job's output publishes the unexpanded `${{ matrix.language }}` check-run name instead of the required `CodeQL compatibility analysis (actions|python)` contexts; `analyze-merge` (required nowhere) keeps a job-level guard. `strix.yml` keeps its existing `paths-ignore:` (the one documented exception -- verified via a live run-event census that its runs are native, not ruleset-injected, in the three excluded repositories) with corrected comments. `sbom-generation.yml` dropped its `pull_request` trigger for `push`+`release` only, since nothing gated on the PR-scoped SBOM artifact and its `dependency-snapshot: true` submission is the only feeder of the dependency graph `sbom-inventory-scheduler.yml` reads hourly -- a PR-head snapshot was polluting that graph. Every ruleset-injected `CodeQL PR` run observed in every covered repository (`bandscope`, `naruon`, `aFIPC`, `pg-erd-cloud`, `xtrmLLMBatchPython`) is `startup_failure` with zero check runs created; that is an independent, pre-existing, higher-priority blocker this repair does not fix (see `docs/doctoring/required-workflow-path-filter-boundary.md`, which also has the full live evidence and the doc/image pattern-list fix that replaced `LICENSE.*` -- it matches the executable `LICENSE.py` -- with explicit `LICENSE`/`LICENSE.txt`/`COPYING`/`COPYING.txt`/`NOTICE`/`NOTICE.txt` names). `tests/test_docs_only_pr_runner_admission.py` is the RED-first contract.
 
 ## Good patterns to keep
 
 - `naruon`: separates PR Governance, OpenCode review, Strix evidence, and application CI into explicit checks.
 - `.github`: centralizes reusable workflow logic and review/merge scheduler code.
-- `pg-erd-cloud`: its previous repo-local autofix worker was folded into the central `PR Review Autofix` worker and removed from the repository by PR `#393`; keep only repository-specific application and security checks locally.
+- `pg-erd-cloud`: its previous repo-local autofix worker was folded into the central `PR Review Autofix` worker and removed from the repository by `ContextualWisdomLab/pg-erd-cloud#393`; keep only repository-specific application and security checks locally.
 - `ContextualWisdomLab.github.io`: thin caller pattern is acceptable for repository-local workflows only when GitHub does not offer an organization-level control. It should not be the default rollout mechanism.
 
 ## Risks and follow-up
 
 - Existing open PRs may need a new push or base update before the latest required workflow SHA appears on their current head.
-- The central OpenCode workflow now retries DeepSeek R1, DeepSeek V3, GPT-5, and a catalog fallback pool. Keep model/tooling failures out of PR comments unless there is a source-backed failed-check diagnosis.
+- The central OpenCode workflow now routes model-backed review through the canonical contextual-orchestrator contract; model/provider selection and fallback belong to that owner boundary, not workflow-local heuristics or paid fallback.
 - The central OpenCode config includes a read-only `code-reviewer` subagent for focused review passes. The subagent may read, grep, glob, and run safe local verification commands, but it must not edit files, stage changes, commit, push, install dependencies, mutate branches, or touch production state.
 - OpenCode execution evidence must be sandboxed in the CI workspace or an isolated temporary directory, with a credential-scrubbed environment by default and no persistent mutation outside test caches or scratch files. Prefer `python3 scripts/ci/sandboxed_verify.py --repo-root <reviewed worktree> -- <verification command>` when the central helper is available, and cite its `SANDBOXED_VERIFY_RESULT` line. When repo-native verification legitimately needs network access or GitHub Secrets, pass only the needed names with `--allow-env`, record `--network required`, and explain it with `--evidence-note` without printing secret values. The helper does not replace existing bash, task, webfetch, websearch, lsp, CodeGraph, DeepWiki, Context7, or web_search review policy. If a verification cannot be sandboxed without changing the result, the review must say so instead of presenting an unsafe run as evidence.
 - Web application reviews should run backend, frontend, and repository-native E2E checks together through `python3 scripts/ci/sandboxed_web_e2e.py --repo-root <reviewed worktree> --backend-cmd <backend command> --frontend-cmd <frontend command> --e2e-cmd <e2e command>` when those contracts exist, then cite `SANDBOXED_WEB_E2E_RESULT`. If backend/frontend/E2E/readiness contracts are missing, the review must name the gap instead of treating unit or lint evidence as full E2E proof.
@@ -334,6 +426,6 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 - Same-repository post-approval merge/update follow-up should use the workflow `github.token` first so the mechanical actor is `github-actions[bot]`; cross-repository manual dispatch may still fall back to configured secrets or the OpenCode app token when the workflow token cannot mutate the target repository.
 - Do not copy central Strix, OpenCode, merge scheduler, fix scheduler, or autofix worker workflows into repositories. Repository-local application CI and security CI may remain when they are not substitutes for the central workflows.
 - The central autofix worker is for source-actionable current-head review findings. It must not treat model-pool exhaustion, missing approval evidence, unresolved human threads, failed checks, `coverage-evidence`, Strix failures, `DIRTY`, or `CONFLICTING` merge states as code-autofix requests; those states need retry, failed-check explanation, branch update, or conflict guidance instead.
-- `pg-erd-cloud` no longer has a repository-local `pr-review-autofix.yml` worker on its default branch. Live default-branch workflows after PR `#393` are `ci.yml`, `codeql-backfill.yml`, `codeql.yml`, `dependency-review.yml`, and `scorecard.yml`.
+- `pg-erd-cloud` no longer has a repository-local `pr-review-autofix.yml` worker on its default branch. Live default-branch workflows after `ContextualWisdomLab/pg-erd-cloud#393` are `ci.yml`, `codeql-backfill.yml`, `codeql.yml`, `dependency-review.yml`, and `scorecard.yml`.
 - Some repositories use classic branch protection while others use rulesets. Normalize branch protection into rulesets without removing repository-specific required application checks.
 - Existing PRs may not show newly inherited required workflows until a new PR event or branch update occurs, even though the org ruleset now uses the all-repository condition.
