@@ -137,6 +137,7 @@ jobs:
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
@@ -360,6 +361,15 @@ jobs:
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
 
+      - name: Restore durable review admission state
+        id: admission_restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/review-admission
+          key: review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-
+
       - name: Wait for approved OpenCode publication run to finish
         id: review_followup
         if: >-
@@ -522,6 +532,9 @@ jobs:
             --project-flow "$project_flow"
             --review-workflow "Required OpenCode Review"
             --review-dispatch-limit "$review_dispatch_limit"
+            --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
+            --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+            --admission-sequence "$GITHUB_RUN_ID"
             --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
           )
@@ -548,6 +561,13 @@ jobs:
             args+=(--no-update-branches)
           fi
           python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"
+
+      - name: Save durable review admission state
+        if: always() && steps.review_followup.outputs.proceed != 'false'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/review-admission
+          key: review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   org-queue-sweep:
     # Organization-wide approved-PR recovery sweep. Event-driven scheduler runs
@@ -593,6 +613,7 @@ jobs:
       # #1823 moved ordinary PR OpenCode dispatch into the required workflow.
       # Keep only the separate stacked-PR fallback budget enabled by default.
       ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
@@ -762,6 +783,14 @@ jobs:
 
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
+
+      - name: Restore durable organization admission state
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/review-admission
+          key: review-admission-${{ github.repository_id }}-org-sweep-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-admission-${{ github.repository_id }}-org-sweep-
 
       - name: Sweep organization repository queues
         env:
@@ -1020,6 +1049,9 @@ jobs:
               --max-prs "$ORG_SWEEP_MAX_PRS"
               --review-workflow "Required OpenCode Review"
               --review-dispatch-limit "$review_dispatch_limit"
+              --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
+              --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+              --admission-sequence "$GITHUB_RUN_ID"
               --stacked-review-dispatch-limit "$stacked_review_dispatch_limit"
               --branch-update-limit "$branch_update_limit"
               --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
@@ -1116,3 +1148,10 @@ jobs:
             exit 1
           fi
           echo "Organization queue sweep completed cleanly."
+
+      - name: Save durable organization admission state
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/review-admission
+          key: review-admission-${{ github.repository_id }}-org-sweep-${{ github.run_id }}-${{ github.run_attempt }}

@@ -308,7 +308,12 @@ def plan_dispatches(
             rejections[request.identity] = "duplicate"
             continue
         seen.add(request.identity)
-        if request.identity in records:
+        if (
+            request.identity in records
+            and records[request.identity].status == "stale"
+        ):
+            del records[request.identity]
+        elif request.identity in records:
             rejections[request.identity] = "idempotent"
             continue
         if request.sequence <= prior_sequence:

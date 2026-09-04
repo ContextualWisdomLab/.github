@@ -45,6 +45,26 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_processes_share_one_durable_bounded_admission_store() -> None:
+    """The real scheduler and org sweep must share one run-scoped dispatch budget."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert workflow.count(
+        "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0"
+    ) == 2
+    assert workflow.count(
+        "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0"
+    ) == 2
+    assert workflow.count("path: ${{ runner.temp }}/review-admission") == 4
+    assert "restore-keys:" in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

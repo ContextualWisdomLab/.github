@@ -10108,3 +10108,75 @@ def test_pr1669_strix_open_draft_old_head_remains_cancellable(monkeypatch):
     assert sched._review_run_still_superseded(
         "owner/repo", "Strix Security Scan", 7, "ContextualWisdomLab/.github", "97"
     ) is True
+
+
+def test_bounded_admission_persists_leases_and_completes_only_current_head(
+    monkeypatch, tmp_path
+):
+    """One durable budget slot prevents a second worker until exact-head completion."""
+    state_path = tmp_path / "admission.json"
+    gate = sched.SchedulerAdmissionGate(state_path, sequence=77, dispatch_budget=1)
+    pr = make_pr(number=7, headRefOid="a" * 40)
+
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is True
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is False
+    from scripts.ci.review_admission_controller import load_state_file
+
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+    assert [record.status for record in persisted.records.values()].count("queued") == 1
+
+    monkeypatch.setattr(sched, "has_current_head_approval", lambda _pr: True)
+    monkeypatch.setattr(sched, "has_current_head_changes_requested", lambda _pr: False)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is True
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("complete") == 1
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+
+
+def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
+    monkeypatch, tmp_path
+):
+    """Two eligible PRs create only one worker dispatch under a one-slot budget."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=88, dispatch_budget=1
+    )
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(
+        sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], [])
+    )
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, *, stdin=None: dispatched.append((args, stdin)),
+    )
+
+    first = make_pr(
+        number=7,
+        baseRefOid="b" * 40,
+        headRefOid="a" * 40,
+        headRefName="feature-a",
+    )
+    second = make_pr(
+        number=8,
+        baseRefOid="b" * 40,
+        headRefOid="c" * 40,
+        headRefName="feature-b",
+    )
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", first, dry_run=False
+        ) == "dispatched"
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", second, dry_run=False
+        ) == "admission_deferred"
+
+    assert len(dispatched) == 1
