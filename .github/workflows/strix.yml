@@ -144,6 +144,62 @@ jobs:
           echo "deps=${deps}" >> "$GITHUB_OUTPUT"
           echo "changed-scope code=${code} deps=${deps}"
 
+  admit-current-head:
+    name: Admit current pull request head
+    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      admitted: ${{ steps.admission.outputs.admitted }}
+      target_repository: ${{ steps.admission.outputs.target_repository }}
+      pr_number: ${{ steps.admission.outputs.pr_number }}
+    steps:
+      - name: Verify event metadata against the live pull request
+        id: admission
+        env:
+          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
+          TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number || github.event.pull_request.number }}
+          EXPECTED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || github.event.pull_request.base.ref }}
+          EXPECTED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.event.client_payload.target_repository }}
+          EXPECTED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'admitted=false\n' >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" != "pull_request_target" ] && [ "$EVENT_NAME" != "repository_dispatch" ]; then
+            {
+              echo "admitted=true"
+              echo "target_repository=${TARGET_REPOSITORY}"
+              echo "pr_number=${GITHUB_RUN_ID}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            [[ ! "$TARGET_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            [[ ! "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Strix event metadata is incomplete or malformed."
+            exit 1
+          fi
+          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
+          live_tuple="$(jq -r '[.state // "", .base.repo.full_name // "", .base.ref // "", .base.sha // "", .head.repo.full_name // "", .head.sha // ""] | @tsv' <<<"$pull_request_json")"
+          expected_tuple="$(printf 'open\t%s\t%s\t%s\t%s\t%s' "$TARGET_REPOSITORY" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_REPOSITORY" "$EXPECTED_HEAD_SHA")"
+          if [ "$live_tuple" != "$expected_tuple" ]; then
+            echo "::notice::Strix event does not match the live pull request head; skipping stale evidence."
+            exit 0
+          fi
+          {
+            echo "admitted=true"
+            echo "target_repository=${TARGET_REPOSITORY}"
+            echo "pr_number=${TARGET_PR_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
+
   cancel-superseded-pr-runs:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
     # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
@@ -263,32 +319,15 @@ jobs:
           done
 
   strix:
-    needs: changed-scope
-    if: (github.event_name != 'pull_request_target' || github.event.action != 'closed') && needs.changed-scope.outputs.code == 'true'
+    needs: [changed-scope, admit-current-head]
+    if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
     concurrency:
-      # PR-scoped (workflow-repository-PR), matching every other central
-      # required workflow's group-key convention. This was deliberately
-      # repository-wide instead, from 2026-08-24 through 2026-09-03, because
-      # PR-scoping is what caused a real litellm.RateLimitError storm against
-      # the shared NVIDIA NIM key on 2026-08-23/24 (.github#1297) -- widening
-      # it back reintroduces that risk, now at a larger blast radius since
-      # Strix is required org-wide via ruleset 18156473. Restored to PR-scoped
-      # on explicit owner authorization (2026-09-03) after confirming the two
-      # NVIDIA NIM credentials (NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB)
-      # have independent rate limits (~40 RPM each per community-reported
-      # figures, no official SLA) rather than a shared pool -- see
-      # docs/product-technical-gap-baseline.md for the full tradeoff writeup.
-      # cancel-in-progress stays false: a same-PR push still queues behind an
-      # in-flight scan for that PR rather than cancelling it, preserving that
-      # head's scan log (the trusted cleanup job above independently retires
-      # a genuinely superseded head).
+      # Admission runs before this queue. A delayed stale event is skipped and
+      # therefore cannot cancel newer evidence for the live pull request head.
       group: >-
-        strix-${{
-          (github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch') &&
-          format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository, github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id) ||
-          format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)
-        }}
-      cancel-in-progress: false
+        strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{
+        needs.admit-current-head.outputs.pr_number }}
+      cancel-in-progress: true
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
     # legitimately require well over two hours to scan -- this org's own
     # standing operating directive accepts that central OpenCode/Strix/Noema
