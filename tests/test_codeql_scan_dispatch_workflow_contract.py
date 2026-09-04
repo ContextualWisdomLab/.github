@@ -1,10 +1,9 @@
 """Structure and shell-syntax contract for the new codeql-scan-dispatch.yml handler.
 
 ContextualWisdomLab/.github#1772 designs this file as the native
-(non-required-workflow) half of the CodeQL dispatch+poll rewrite. It is not
-wired up to codeql-pr.yml yet -- that rewrite is a
-separate, still-pending follow-up -- so this only guards the handler's own
-structure and shell syntax, mirroring the established pattern in
+(non-required-workflow) half of the CodeQL dispatch+poll rewrite, and
+ContextualWisdomLab/.github#1778 wires the required entrypoint to it. This
+guards the handler's structure and shell syntax, mirroring the established pattern in
 tests/test_opencode_workflow_shell_syntax.py and
 tests/test_codeql_pr_workflow_contract.py.
 """
@@ -18,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -238,7 +238,7 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     admission restriction documented in
     docs/doctoring/codeql-pr-required-workflow-always-fails.md.
     """
-    audit_path = REPO_ROOT / "docs/org-required-workflow-rollout.md"
-    if not audit_path.exists():
-        return
-    assert "codeql-scan-dispatch.yml" not in audit_path.read_text(encoding="utf-8")
+    required_paths = set(ruleset_audit.REQUIRED_WORKFLOW_PATHS)
+
+    assert ".github/workflows/codeql-pr.yml" in required_paths
+    assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
