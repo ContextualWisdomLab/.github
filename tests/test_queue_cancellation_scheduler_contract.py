@@ -43,15 +43,8 @@ def test_revalidation_helper_is_executable_and_temp_writer_is_retired() -> None:
 def test_reconciled_scheduler_preserves_current_main_control_plane_fixes() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    # Repository and org-wide missed-event recovery moved from hourly to a
-    # once-daily, staggered cadence (see the workflow's own "Daily
-    # missed-event recovery" comments) to reduce control-plane pressure,
-    # matching this file's own earlier */30 -> hourly and 15-minute -> hourly
-    # cadence reductions for the same reason.
-    assert '- cron: "47 3 * * *"' in workflow
-    assert '- cron: "17 3 * * *"' in workflow
+    assert '- cron: "0 * * * *"' in workflow
     assert '*/15 * * * *' not in workflow
-    assert '0 * * * *' not in workflow
     assert workflow.count("runs-on: ubuntu-24.04") >= 2
     scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
     assert "github.event_name == 'pull_request_review'" in scan_job.split(
