@@ -49,6 +49,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Fix a `test_strix_quick_gate.sh` assertion left stale by the org-sweep
+  dispatch-only redesign.** `assert_pr_review_merge_scheduler_uses_github_actions_bot_token`
+  still required `pr-review-merge-scheduler.yml` to contain a second daily cron
+  (`cron: "17 3 * * *"`) for the organization missed-event sweep. That cron was
+  already retired in favor of an explicit `github.event.client_payload.org_sweep
+  == true` dispatch-only trigger, and its absence is already an enforced
+  regression contract in both `tests/test_actions_queue_saturation_scheduler_cadence.py`
+  (`test_org_queue_sweep_is_explicit_recovery_not_scheduled_polling`) and
+  `tests/test_required_workflow_queue_contract.py` -- so the quick-gate assertion
+  directly contradicted two other tests already on `main` and failed on every PR
+  merging current `main`, independent of that PR's own diff. Updated the
+  assertion to require the cron's *absence*, matching the other two contracts.
+  Found while resolving a merge conflict on PR #1503 (this PR's own branch
+  predates the org-sweep dispatch-only redesign).
 - Harden `noema_review_gate.py` against the bare-script import failure PR
   #1497 introduced: it added an unconditional `from
   scripts.ci.opencode_review_normalize_output import
