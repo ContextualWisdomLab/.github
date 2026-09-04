@@ -3021,7 +3021,10 @@ active advanced uploader/default-setup collision, and reports either `READY_DISA
 CodeQL fails after default setup is disabled, re-enable default setup before continuing, but only when no
 active advanced uploader would make that rollback invalid. `.github`, `noema`, and
 `IRT-bibliography-set` are explicit ruleset exceptions and must remain `EXEMPT`, not silently counted as
-rollout failures.
+rollout failures. Run the live collector as
+`python3 scripts/ci/audit_codeql_default_setup_rollout.py --repository ContextualWisdomLab/<repo> --pr <number>`;
+it uses only authenticated REST `GET` requests and re-reads the PR head after collection to reject a moving
+snapshot.
 
 The xtrmLLMBatchPython pilot is intentionally not yet proof of completion: default setup currently reports
 `not-configured`, ruleset `18156473` requires central CodeQL, and PR #292 head
