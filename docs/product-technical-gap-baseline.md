@@ -2981,8 +2981,9 @@ README/marketing feature list, before recommending against adoption. Saved to
 
 ## Org-wide audit: `code-scanning/default-setup` vs. a repository's own advanced-configuration CodeQL workflow — 2026-09-04
 
-**Status:** Superseded by a staged central-CodeQL rollout contract. `contextual-orchestrator` was confirmed as the only repository, of 74 audited, with a
-currently-live instance of this conflict; it was already fixed in the same investigation that discovered it
+**Status:** Superseded by a staged central-CodeQL rollout contract. `contextual-orchestrator` was the only
+confirmed live instance among the 11 Code Search candidates and repositories inspected directly; it was
+already fixed in the same investigation that discovered it
 (`contextual-orchestrator` PR #1028's failing "CodeQL analysis" check — `code-scanning/default-setup` was
 `state: "configured"` while `.github/workflows/security.yml`'s `codeql_analysis` job also ran a real,
 working `github/codeql-action/init` + `analyze` sequence; GitHub rejects that combination outright, failing
