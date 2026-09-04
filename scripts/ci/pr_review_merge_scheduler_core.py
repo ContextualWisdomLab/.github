@@ -2890,8 +2890,6 @@ def recover_current_head_startup_failures(
         if run.get("head_sha") == head_sha
         and run.get("status") == "completed"
         and run.get("conclusion") == "startup_failure"
-        and run.get("name") != "CodeQL PR"
-        and not str(run.get("path") or "").endswith("/codeql-pr.yml")
     ]
     if (
         retryable
