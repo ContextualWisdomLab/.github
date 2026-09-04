@@ -4445,3 +4445,49 @@ grep-based check can confirm a string is present/absent while missing that the t
 assertion never runs at all. Actually running the suite, not just reading CodeRabbit's confirmation text,
 is what caught this — reinforcing the standing discipline of treating even a bot's own "resolved" state as a
 claim to verify, not a fact to inherit.
+
+## `naruon#1532` — a real, independent Devin Review finding, fixed and verified; a second finding left open — 2026-09-04
+
+**Trigger.** With the CodeRabbit ROPC thread fully closed, checked `naruon#1532`'s remaining review threads
+via GraphQL `reviewThreads` rather than assuming the PR was clean: two were still `isResolved: false`,
+both from an older (2026-09-02) Devin Review pass, unrelated to the ROPC/password-UI saga above.
+
+**Finding 1, real and still live: "Settings stay failed after login."** `frontend/src/components/
+SettingsLayout.tsx`'s `handleOidcLogin` called `refreshOidcSessionClaims()` after a successful Keyverse SSO
+login, which re-fetches only identity claims. The five other settings requests the mount effect fires once
+(`useEffect(..., [])`: runner config, operational signals, account config, calendar/webdav sources, LLM
+providers) are all plausibly auth-gated and, if they failed pre-login (401, before the user completed SSO),
+stayed in their failed `*Error` state indefinitely — only a full page reload would retry them. Confirmed the
+underlying code was unchanged by the password-UI removal above (that removal only deleted the *other*,
+now-gone login path this same bug also used to apply to) — not moot, still live on the one surviving login
+method.
+
+**Fixed at the root: one function all callers route through.** Extracted the mount effect's five fetch
+chains into a single `loadAccountSettings(isCancelled)` callback (`useCallback`, `[]` deps), called once on
+mount as before and now also called from `handleOidcLogin` right after login succeeds. Hit a real lint gate
+during this: putting the "reset to loading" `setXLoading(true)` calls inside `loadAccountSettings` itself
+tripped `react-hooks/set-state-in-effect` ("Calling setState synchronously within an effect can trigger
+cascading renders") once that function ran inside the mount `useEffect`'s body. Moved those five resets out
+of the shared callback and into `handleOidcLogin` (a regular event-handler function, not an effect body),
+which the rule doesn't flag.
+
+**TDD-verified, not just locally green.** Wrote a regression test simulating a 401 `/api/accounts/config`
+pre-login that flips to success once login succeeds; confirmed it actually fails against the *unfixed*
+handler (`git checkout HEAD -- SettingsLayout.tsx` while keeping the new test, reran, watched it fail for
+the right reason) before confirming it passes against the fix. Along the way found the Korean fallback
+error strings this file's catch handlers use (e.g. `계정 설정을 불러오지 못했습니다.`) are dead: `apiClient`'s
+thrown error always carries a truthy `.message` ("API request failed"), so `error.message || fallback`
+never reaches the fallback — the test's first assertion caught this by failing against real rendered text,
+not the Korean string I'd assumed would show. Left that fallback-string bug as-is (out of scope: it spans
+every catch handler in this file's established pattern, a separate finding, not this one). Full verification
+(`typecheck`, `lint`, `build --webpack`, 458/458 tests) passed; re-checked the remote tip via `gh api`
+immediately before pushing (unchanged, no conflict). Pushed `16470fc2`. Replied to Devin's review comment
+(comment_id=3910452309) describing the fix and resolved the thread (`PRRT_kwDOSNjZ2s6eWuPW`) via GraphQL
+`resolveReviewThread`.
+
+**Finding 2, left open, not addressed.** A second Devin Review thread (`PRRT_kwDOSNjZ2s6eWuTX`,
+`frontend/src/lib/oidc-session.ts`) asks for E2E browser coverage of the login popup flow (password
+submission, popup success/closure/blocked-popup fallback) per repo guidance. Genuinely unaddressed this
+pass — no E2E tests were added, only the unit-level regression test above. Left unresolved and unreplied,
+per the standing instruction to skip replies/resolves for findings not actually acted on; a real fix needs
+browser-level E2E infrastructure this pass didn't scope in.
