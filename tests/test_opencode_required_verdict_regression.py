@@ -256,8 +256,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
     assert "timeout-minutes:" not in target_job.split("    steps:\n", 1)[0]
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert 'event_type:"merge-scheduler"' in workflow
-    assert "trigger_reviews:true" in workflow
+    assert 'event_type:"opencode-review"' in workflow
+    assert "required_run_id:$required_run_id" in workflow
     dispatch_step = target_job.split(
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
@@ -268,12 +268,12 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "exchange_github_app_token"
     )
     assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
-    assert "while :; do" in target_job
-    assert 'sleep "$poll_interval_seconds"' in target_job
-    assert "enable_auto_merge:false" in workflow
+    assert "while :; do" not in target_job
+    assert "poll_interval_seconds" not in target_job
+    assert "180 minutes of polling" not in target_job
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
-    assert "This required check is not a review and must not succeed" in workflow
+    assert "will rerun this failed job" in workflow
     assert (
         "Review approval remains a separate current-head PR review requirement"
         not in workflow
@@ -281,16 +281,7 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
 
 
 def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
-    """Serve the authoritative live PR lookup, then reject downstream GitHub I/O.
-
-    Also stubs ``sleep`` to return instantly. The production poll loop's
-    transport-failure path really does ``sleep "$poll_interval_seconds"``
-    (60s) between retries -- without this stub, a test that drives that path
-    to its 3-failure fail-closed threshold performs two genuine 60s sleeps
-    (observed directly: this exact gap made
-    ``test_fail_closed_step_still_polls_for_a_non_draft_pr`` take ~120s of
-    real wall-clock time per run instead of running fast).
-    """
+    """Serve the authoritative live PR lookup, then reject further GitHub I/O."""
     fake_gh = bin_dir / "gh"
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
@@ -304,9 +295,6 @@ def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
-    fake_sleep = bin_dir / "sleep"
-    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    fake_sleep.chmod(fake_sleep.stat().st_mode | 0o111)
 
 
 def _run_fail_closed_step(
@@ -320,12 +308,8 @@ def _run_fail_closed_step(
 ) -> subprocess.CompletedProcess[str]:
     """Execute the "Fail closed without a current-head OpenCode verdict" step body.
 
-    A fake ``gh`` that fails loudly is installed on ``PATH`` so a closed or
-    draft early exit that reaches the Reviews API call at all fails the test
-    immediately, rather than actually looping (the production step's
-    ``while :; do ... sleep "$poll_interval_seconds"; done`` never naturally terminates on a
-    non-matching review, so a real ``gh`` fixture serving no match would hang
-    a test rather than fail it).
+    A fake ``gh`` fails loudly if a closed or draft early exit reaches the
+    single Reviews API request.
 
     ``live_head_sha`` defaults to ``head_sha`` (an exact-head snapshot) but
     can be set independently to simulate a push landing between the event
@@ -363,8 +347,8 @@ def _run_fail_closed_step(
     )
 
 
-def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> None:
-    """A draft PR's required check must pass without ever polling Reviews API.
+def test_fail_closed_step_exempts_a_draft_pr_before_review_lookup(tmp_path: Path) -> None:
+    """A draft PR's required check passes without reading Reviews API.
 
     `#1546` added `PR_DRAFT` to the dispatch step's receipt-gate check
     (`evaluate_receipts(..., is_draft=...)`), but that only narrows which
@@ -372,12 +356,7 @@ def test_fail_closed_step_exempts_a_draft_pr_before_polling(tmp_path: Path) -> N
     and the scheduler's own draft path
     (`scripts/ci/pr_review_merge_scheduler.py`'s `inspect_pr`) skips
     dispatching a review for an ordinary draft entirely (no
-    `@opencode-agent` mention). With no draft exemption here, this step's
-    `while :; do ... sleep "$poll_interval_seconds"; done` loop would poll for a verdict OpenCode
-    will never post, until the job's own ~360-minute runtime ceiling kills
-    it -- reproduced against this exact commit before this fix (`#1443`
-    fixed the same class of bug on a now-superseded design; this restores
-    the equivalent exemption on the current receipt/scheduler-gated design).
+    `@opencode-agent` mention).
     """
     result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="true")
     assert result.returncode == 0, result.stderr
@@ -542,34 +521,28 @@ def test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved(
 def test_fail_closed_step_exits_gracefully_when_open_nondraft_head_moved(
     tmp_path: Path,
 ) -> None:
-    """An open, ready PR whose live head has advanced retires this poll quietly."""
+    """An open, ready PR whose live head has advanced retires quietly."""
     result = _run_fail_closed_step(
         tmp_path, pr_action="synchronize", pr_draft="false", live_head_sha="f" * 40
     )
     assert result.returncode == 0, result.stderr
     assert (
         "Pull request head moved on the live open, ready-for-review PR; "
-        "a fresh poll will start for the current head." in result.stdout
+        "a fresh run will check the current head." in result.stdout
     )
     assert "::error::" not in result.stdout
 
 
-def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
+def test_fail_closed_step_exempts_a_pr_converted_to_draft(
     tmp_path: Path,
 ) -> None:
-    """A PR converted to draft while a poll is in flight exits before polling.
+    """A PR converted to draft exits before reading Reviews API.
 
     Devin Review on `#1568` found that `converted_to_draft` was missing from
     this workflow's `pull_request_target.types`, so converting a PR to draft
-    while an earlier event's "Fail closed" poll was still running left the
-    stale non-draft poll waiting for a verdict the now-draft PR can never
-    receive -- nothing re-triggered it to notice sooner. Adding
-    `converted_to_draft` to the trigger set doesn't cancel that in-flight
-    poll (the concurrency group is `cancel-in-progress: false`, see the
-    workflow's own comment); instead it's the in-flight poll's own live-state
-    recheck (already run every iteration) that notices the draft flag on its
-    next pass and exits within one `poll_interval_seconds`. This test proves
-    the step-level exemption logic that recheck relies on exits before ever
+    while an earlier event was running could leave an unnecessary required
+    check. Including `converted_to_draft` creates an exempting run. This test
+    proves the step-level exemption exits before ever
     reaching the Reviews API for the exact `PR_ACTION=converted_to_draft`
     value GitHub sends for that event (`PR_DRAFT` is always `"true"` on that
     event, mirroring GitHub's own payload).
@@ -581,14 +554,14 @@ def test_fail_closed_step_exempts_a_pr_converted_to_draft_mid_poll(
     assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout
 
 
-def test_opencode_review_trigger_reacts_to_mid_poll_draft_conversion() -> None:
+def test_opencode_review_trigger_reacts_to_draft_conversion() -> None:
     """The workflow's own trigger set -- not just the step body -- covers it.
 
     A step-level test alone cannot prove the draft exemption above is
     actually reachable in production: GitHub only re-invokes this workflow
     for event types listed in `pull_request_target.types`. This pins that
-    `converted_to_draft` is present there, so a mid-poll draft conversion
-    fires a fresh run at all.
+    `converted_to_draft` is present there, so a draft conversion fires a fresh
+    exempting run.
     """
     workflow = WORKFLOW.read_text(encoding="utf-8")
     trigger_block = workflow.split("  pull_request_target:\n", 1)[1].split(
@@ -653,22 +626,11 @@ def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Pat
     assert "PR is a draft" not in result.stdout
 
 
-def test_fail_closed_step_still_polls_for_a_non_draft_pr(tmp_path: Path) -> None:
-    """A non-draft PR must still reach the Reviews API call (not exempted).
-
-    Unlike the request-review step's single unguarded call, the Reviews API
-    fetch here retries a transport failure up to three times (with a
-    stubbed, instant backoff "sleep" between attempts -- see
-    ``_write_live_pr_then_refusing_gh``) before failing closed with its own
-    exit 1, so the fixture's synthetic unmocked-call sentinel exit code (17)
-    never reaches this script's own exit status -- it is absorbed by the
-    retry loop instead, which still logs the sentinel's stderr diagnostic on
-    every attempt.
-    """
+def test_fail_closed_step_checks_once_for_a_non_draft_pr(tmp_path: Path) -> None:
+    """A non-draft PR performs one Reviews API read and never holds the runner."""
     result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="false")
-    assert result.returncode == 1, result.stderr
+    assert result.returncode == 17, result.stderr
     assert "unexpected gh invocation after live-state validation" in result.stderr
-    assert "Reviews API read failed 3 consecutive times" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -729,8 +691,11 @@ fi
         "HEAD_SHA": HEAD,
         "PR_DRAFT": "false",
         "BASE_BRANCH": "main",
+        "BASE_SHA": "b" * 40,
+        "HEAD_REF": "feature-branch",
         "WORKFLOW_SHA": "c" * 40,
         "GH_TOKEN": "token",
+        "GITHUB_RUN_ID": "123456789",
         "LIVE_PR_JSON": json.dumps(
             {"draft": False, "head": {"sha": HEAD}, "state": "open"}
         ),
@@ -743,12 +708,14 @@ fi
     assert actual == dispatches
 
 
-def test_formal_receipt_wake_remains_available_without_bounding_runner_polling() -> None:
-    """The receipt wake path coexists with the unbounded required review wait."""
+def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> None:
+    """The dispatch receipt wakes the exact failed run without runner polling."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "for attempt in" not in required
-    assert "while :; do" in required
+    assert "while :; do" not in required
+    assert "poll_interval_seconds" not in required
+    assert "180 minutes of polling" not in required
     assert "rerun-failed-jobs" in dispatched
     assert "id: formal_review_receipt" in dispatched
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
