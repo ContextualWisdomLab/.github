@@ -14,12 +14,16 @@ on:
   repository_dispatch:
     types: [noema-review]
 
-# No workflow-level concurrency block here, deliberately -- see the
-# noema-review job's own concurrency block and the cancel-superseded-noema-runs
-# job below (docs/doctoring/item13-stale-head-cancellation-audit-20260903.md).
-# A workflow-level block applies to every job in this file, including the
-# structurally-separate cancel-superseded-noema-runs job, which would trap
-# that job's cleanup behind the very group it exists to unblock.
+concurrency:
+  # Workflow-level admission retires an older queued head without waiting for
+  # the model job or its API cleanup job to receive a runner.
+  group: >-
+    required-noema-review-${{
+    github.event.pull_request.base.repo.full_name ||
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.pull_request.number ||
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,6 +32,48 @@ permissions:
   id-token: write
 
 jobs:
+  admit-current-head:
+    if: >-
+      github.event_name == 'repository_dispatch'
+      || (
+        github.event_name == 'pull_request_target'
+        && github.event.action != 'closed'
+        && github.event.pull_request.head.repo.full_name == github.repository
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+    steps:
+      - name: Admit only the exact live Noema head
+        id: live_head
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema admission rejected malformed pull request metadata."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ]; then
+            echo "::notice::Noema admission retired a stale trigger before review queue entry."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+          echo "Exact live Noema head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
+
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
@@ -336,6 +382,7 @@ jobs:
 
   noema-review:
     name: noema-review
+    needs: [admit-current-head]
     runs-on: ubuntu-24.04
     # Job-level concurrency, not workflow-level: cancel-superseded-noema-runs
     # above deliberately has NO concurrency block of its own so it is never
@@ -424,11 +471,14 @@ jobs:
     # cap the policy forbids. See
     # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
-      github.event_name == 'repository_dispatch'
-      || (
+      needs.admit-current-head.outputs.admitted == 'true'
+      && (
+        github.event_name == 'repository_dispatch'
+        || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
         && github.event.pull_request.head.repo.full_name == github.repository
+        )
       )
     permissions:
       # actions: write moved with the cancellation logic to
