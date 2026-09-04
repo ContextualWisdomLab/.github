@@ -12,8 +12,7 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths (live-verified 2026-09-04, seven entries):
-  - `.github/workflows/close-empty-pr.yml`
+- Active required workflow paths (live-verified 2026-09-04, six entries):
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
@@ -27,6 +26,11 @@ Use an organization repository ruleset instead of copying workflow files into ea
 The required-workflow implementation is current through merged `ContextualWisdomLab/.github#584` plus the later governance and security repairs recorded below. The ruleset points at `.github@main`; if live organization ruleset inspection reports another ref, treat that as operations drift and restore ruleset `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+
+Empty non-draft pull requests are closed by the existing metadata-only
+`pr-review-merge-scheduler.yml` scan after an exact-head REST recheck. The
+former standalone required workflow was removed so the same PR no longer
+consumes a second runner for the same metadata decision.
 
 The central `security-scan.yml` and `sast-semgrep.yml` pull-request triggers are
 base-ref agnostic. They therefore also run for stacked pull requests targeting a
@@ -105,7 +109,7 @@ repositories concluded `startup_failure` with zero check runs ever created (a pl
 configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
 annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
 ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
-seven entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
+six entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
 from GitHub's native code-scanning default setup, enabled directly per repository
 (`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
 repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
