@@ -256,8 +256,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
     assert "timeout-minutes:" not in target_job.split("    steps:\n", 1)[0]
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert 'event_type:"merge-scheduler"' in workflow
-    assert "trigger_reviews:true" in workflow
+    assert 'event_type:"opencode-review"' in workflow
+    assert "required_run_id:$required_run_id" in workflow
     dispatch_step = target_job.split(
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
@@ -270,7 +270,6 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
     assert "while :; do" in target_job
     assert 'sleep "$poll_interval_seconds"' in target_job
-    assert "enable_auto_merge:false" in workflow
     assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "This required check is not a review and must not succeed" in workflow
@@ -729,8 +728,11 @@ fi
         "HEAD_SHA": HEAD,
         "PR_DRAFT": "false",
         "BASE_BRANCH": "main",
+        "BASE_SHA": "b" * 40,
+        "HEAD_REF": "feature-branch",
         "WORKFLOW_SHA": "c" * 40,
         "GH_TOKEN": "token",
+        "GITHUB_RUN_ID": "123456789",
         "LIVE_PR_JSON": json.dumps(
             {"draft": False, "head": {"sha": HEAD}, "state": "open"}
         ),
