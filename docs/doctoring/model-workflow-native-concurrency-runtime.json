@@ -6,5 +6,12 @@
     "opencode": 33871580244,
     "strix": null
   },
+  "first_full_model_head": "b1c353ecf31978c98251b22640ecd89d17d46c20",
+  "first_full_model_runs": {
+    "noema": 33871687610,
+    "opencode": 33871687602,
+    "strix": 33871687583
+  },
+  "expected_after_next_push": "All first_full_model_runs reach conclusion=cancelled while the next head remains authoritative.",
   "note": "The initial Markdown-only head was intentionally excluded by Strix path filters."
 }
