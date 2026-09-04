@@ -1,0 +1,10 @@
+{
+  "pull_request": 1855,
+  "initial_document_head": "641297d3ef60d8914a1cbfbab51c980c824c45bc",
+  "initial_runs": {
+    "noema": 33871580217,
+    "opencode": 33871580244,
+    "strix": null
+  },
+  "note": "The initial Markdown-only head was intentionally excluded by Strix path filters."
+}
