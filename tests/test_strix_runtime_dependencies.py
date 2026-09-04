@@ -13,4 +13,5 @@ def test_strix_installs_openai_httpx2_runtime() -> None:
     ).read_text(encoding="utf-8")
 
     assert "openai[httpx2]==2.54.0" in requirements.splitlines()
+    assert "openai==2.54.0 \\" in requirements_lock.splitlines()
     assert "httpx2==2.12.0 \\" in requirements_lock.splitlines()
