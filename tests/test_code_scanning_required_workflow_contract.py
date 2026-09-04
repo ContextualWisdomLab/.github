@@ -20,6 +20,12 @@ def test_ruleset_requires_only_the_consolidated_security_scan() -> None:
     assert _SUPPLEMENTAL_CODE_SCANNING_WORKFLOW_PATHS.isdisjoint(required_paths)
 
 
+def test_superseded_standalone_pr_scanners_are_removed() -> None:
+    """Do not recreate duplicate PR runs after the ruleset migration."""
+    for workflow_path in _SUPPLEMENTAL_CODE_SCANNING_WORKFLOW_PATHS:
+        assert not (REPOSITORY_ROOT / workflow_path).exists()
+
+
 def test_consolidated_security_scan_preserves_osv_and_scorecard_evidence() -> None:
     """The sole required owner must retain both scanners and their SARIF uploads."""
     workflow = (

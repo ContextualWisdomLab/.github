@@ -60,7 +60,10 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
+MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -1455,14 +1458,72 @@ def _extract_served_model(raw: str) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    served = data.get("model")
-    if not isinstance(served, str) or not served.strip():
+    return _safe_model_identifier(data.get("model"))
+
+
+def _safe_model_identifier(value: Any) -> str | None:
+    """Accept only a conservative, bounded model identifier safe for public logs."""
+    if not isinstance(value, str):
         return None
-    scrubbed = scrub_sensitive_data(served.strip()) or ""
-    printable = scrubbed.encode("utf-8", errors="backslashreplace").decode("utf-8")
-    printable = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in printable)
-    printable = " ".join(printable.split())
-    return printable[:200] or None
+    candidate = value.strip()
+    if not SAFE_MODEL_IDENTIFIER_RE.fullmatch(candidate):
+        return None
+    return candidate
+
+
+def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
+    """Read a bounded gateway error envelope and return only its safe model id.
+
+    The response body is never returned or logged. Only the canonical
+    ``error.detail.model`` field is allowed; malformed, oversized, or unexpected
+    envelopes fail closed to an unknown model.
+    """
+    try:
+        raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
+    except (AttributeError, OSError, ValueError):
+        return None
+    if len(raw_bytes) > MAX_HTTP_ERROR_BODY_BYTES:
+        return None
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    detail = error.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    return _safe_model_identifier(detail.get("model"))
+
+
+def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
+    """Serialize the largest location prefix that fits the prompt byte budget."""
+    total_count = len(allowed_locations)
+
+    def render(count: int) -> str:
+        """Serialize the first `count` locations, flagged as truncated if fewer than all."""
+        return json.dumps(
+            {
+                "total_count": total_count,
+                "truncated": count < total_count,
+                "locations": list(allowed_locations[:count]),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    low = 0
+    high = total_count
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(render(midpoint).encode("utf-8")) <= MAX_ALLOWED_LOCATIONS_JSON_BYTES:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return render(low)
 
 
 def _truthy_env(name: str) -> bool:
@@ -1641,6 +1702,7 @@ def call_llm(
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
+    allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -1649,6 +1711,9 @@ def call_llm(
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
+                f"Allowed changed-side locations: {allowed_locations_json}",
+                f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 f"Repository: {repo}",
                 f"PR: #{number}",
@@ -1746,6 +1811,9 @@ def call_llm(
             )
         validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            active_phase = "response_error"
+            served_model = _extract_http_error_served_model(exc)
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
