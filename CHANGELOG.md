@@ -11,6 +11,9 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Align current-main workflow contract tests with native auto-merge completion,
+  validated dispatch concurrency keys, rotating queue pagination, globbed watch
+  paths, admission jobs, and the reviewed OpenCode dispatch blob.
 - Restore the central Strix runtime after OpenAI Python 2.54.0 began importing
   HTTPX2 by selecting the SDK's `httpx2` extra in the hash-compiled dependency
   input. The required workflow now installs a verified HTTPX2 wheel before the
