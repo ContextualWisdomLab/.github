@@ -4584,3 +4584,34 @@ assuming uniformity:
 
 Retried all 6 (`#1132`, `#1133`, `#1134`, `#1137`, `#1138`, `#1139`) via the same `rerun-failed-jobs`
 endpoint; all confirmed `run_attempt: 2`, `status: queued`. Left the 2 already-`SUCCESS` PRs untouched.
+
+## `keyverse#128` — two more review threads, checked directly (own tracked PR, not a ci-monitor-event) — 2026-09-04
+
+**Trigger.** With the org queue still saturated and the last few retried CI jobs still stuck, checked this
+session's own secondary tracked PR's remaining review threads directly via GraphQL `reviewThreads` — self-
+initiated, not from an Autofix event, since this is a PR this session already owns deep context on from
+earlier item-20 ROPC/RFC-9700 work. Two threads were still `isResolved: false`.
+
+**Thread 1 (CodeRabbit, `docs/adr/0015-naruon-password-credential-issuance.md`, comment_id=3910983394):
+already fixed, just never marked resolved.** Posted `2026-09-02T05:22:43Z`, asking the ADR to reflect RFC
+9700 §2.4 and update its `Accepted` decision. Cloned the PR's current head (`6ffef105`) and read the file
+directly: it already carries a `## Correction (2026-09-03)` section — posted a day *after* this comment —
+explicitly citing RFC 9700 §2.4 / RFC 10017 §7.3, documenting that `directAccessGrantsEnabled` is disabled
+and `POST /registration/accounts/password` fails closed, and marking the `Status:` line accordingly. Replied
+with the exact evidence and resolved the thread via GraphQL `resolveReviewThread`.
+
+**Thread 2 (Devin Review, `services/account_unification/app/password_registration.py:48`,
+comment_id=3922899635): confirmed accurate, deliberately not fixed.** "Dormant endpoint expands credential
+authority" — the shared `ProductAdminApi` client gained a `reset-password` Keycloak admin-API allowlist
+entry for this endpoint, which now permanently 503s. Traced it fully: `ProductAdminApi.reset_password` has
+exactly one call site anywhere in the codebase (`password_registration.py:192`, inside
+`_create_account_with_password`), reachable only through `register_account_with_password`, whose first line
+is `if not PASSWORD_CREDENTIAL_LOGIN_AVAILABLE: raise HTTPException(503, ...)` with the flag hardcoded
+`False` — confirmed via `grep` that no other file in the service imports or calls `reset_password`. The
+finding is accurate: this is 100% unreachable code carrying real (if currently unexercised) admin authority
+on a shared client. Chose not to trim it, because ADR-0015's own Correction section explicitly plans to
+restore this exact mechanism ("flip the constant back to `True` only alongside the same standards-compliant
+login replacement") — removing it now would be pure churn (re-adding the identical method and allowlist
+entry later) with no present security benefit, since nothing can reach it either way while the flag is
+`False`. Replied explaining the verification and the reasoning for deferring, then resolved the thread —
+this is a documented, understood, ADR-tracked tradeoff, not a silently-ignored gap.
