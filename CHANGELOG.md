@@ -14,6 +14,10 @@
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.
+- Restore the central Strix runtime after OpenAI Python 2.54.0 began importing
+  HTTPX2 by selecting the SDK's `httpx2` extra in the hash-compiled dependency
+  input. The required workflow now installs a verified HTTPX2 wheel before the
+  scanner starts instead of failing before analysis with a missing module.
 - Move the exact-artifact SBOM attestation quality contract into the existing
   agent review runtime selector and job, preserving Python 3.10 compilation,
   Python 3.14 test evidence, exact-head checkout, hash locks, and read-only
