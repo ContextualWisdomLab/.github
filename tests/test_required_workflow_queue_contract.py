@@ -3,7 +3,6 @@
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +45,20 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
+    """Keep each run bounded without treating immutable cache snapshots as locks."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert "actions/cache/restore" not in workflow
+    assert "actions/cache/save" not in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -85,8 +98,8 @@ def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
     assert workflow.count('STALE_OPENCODE_MINUTES="$stale_opencode_minutes"') == 2
 
 
-def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
-    """Use stable repository-scoped concurrency keys for unscoped events."""
+def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
+    """Do not enqueue a scheduler run after every required workflow completion."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -94,11 +107,8 @@ def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
 
     assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
-    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
-    assert (
-        "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
-        in concurrency_contract
-    )
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
+    assert "github.event.workflow_run" not in concurrency_contract
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
@@ -211,6 +221,25 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
+def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
+    """Dispatch review execution directly so polling cannot starve its producer."""
+    workflow = workflow_text("opencode-review.yml")
+    dispatch = workflow_step(workflow, "Request current-head OpenCode review execution")
+
+    assert 'event_type:"opencode-review"' in dispatch
+    assert 'event_type:"merge-scheduler"' not in dispatch
+    assert 'required_run_id:$required_run_id' in dispatch
+    for field in (
+        "target_repository",
+        "pr_number",
+        "pr_base_ref",
+        "pr_base_sha",
+        "pr_head_ref",
+        "pr_head_sha",
+    ):
+        assert f"{field}:${field}" in dispatch
+
+
 def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
     """Every central manual entrypoint must load code from the default branch."""
     workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
@@ -225,13 +254,10 @@ def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     """Ensure required pull-request workflows cancel obsolete executions."""
     for filename in (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
-        "osv-scanner-pr.yml",
         "security-scan.yml",
-        "scorecard-pr.yml",
     ):
         workflow = workflow_text(filename)
         concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -243,45 +269,58 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
         if filename != "noema-review.yml":
-            assert "cancel-in-progress: true" in workflow
-        if filename in {
-            "close-empty-pr.yml",
-            "security-scan.yml",
-        }:
+            assert re.search(r"(?m)^concurrency:", workflow)
+        assert "cancel-in-progress: true" in concurrency_contract
+        if filename == "security-scan.yml":
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
-            assert "opencode-review-bootstrap-" in concurrency_contract
-            # Unlike the other required pull-request workflows below, this
-            # group is deliberately also scoped by exact head SHA: a
-            # delayed, out-of-order run for an older head must not be able
-            # to cancel the authoritative run already active for a newer
-            # head (Devin Review on `#1568`). Same-head events still share
-            # one group and can still cancel each other.
-            assert (
-                "github.event.pull_request.head.sha || github.run_id"
-                in concurrency_contract
-            )
+            assert "required-opencode-review-${{" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
-            assert "noema-review-${{" in concurrency_contract
-            assert "github.event_name" not in concurrency_contract.split(
-                "cancel-in-progress:", 1
-            )[0]
-            assert "github.event.action == 'synchronize'" in concurrency_contract
-            assert "github.event.action == 'closed'" in concurrency_contract
+            assert "required-noema-review-${{" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
         else:
-            if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
+            if filename == "codeql-pr.yml":
                 assert "github.event_name == 'pull_request'" in concurrency_contract
             else:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
+
+
+def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None:
+    """Quality runs from different repositories must never share a PR queue."""
+    groups = {
+        "agent-mention-router-quality-ci.yml": "agent-mention-router-quality",
+        "cloudflare-dns.yml": "cloudflare-dns",
+        "javascript-coverage-quality-ci.yml": "javascript-coverage-quality",
+        "trusted-uv-materializer-quality-ci.yml": (
+            "trusted-uv-materializer-quality"
+        ),
+    }
+
+    for filename, group_name in groups.items():
+        workflow = workflow_text(filename)
+        concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+        assert (
+            f"group: {group_name}-${{{{ github.repository }}}}-"
+            "${{ github.event.pull_request.number || github.ref }}"
+        ) in concurrency
+        if filename == "cloudflare-dns.yml":
+            assert (
+                "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
+                in concurrency
+            )
+        else:
+            assert "cancel-in-progress: true" in concurrency
 
 
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
@@ -334,42 +373,46 @@ def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
     )
 
 
-def test_strix_serializes_provider_evidence_per_repository() -> None:
-    """Serialize Strix per repository so shared provider keys are not rate-limited.
+def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
+    """Scope Strix workflow admission per repository AND PR.
 
-    Root cause (2026-08-23/24): sibling PRs scanned concurrently, each retrying
-    the shared NVIDIA NIM key three times, producing litellm.RateLimitError
-    storms and fail-closed gate failures on every open PR. The concurrency group
-    now scopes the scan job per repository and event class. The cleanup job is
-    outside that queue so a synchronize event can immediately retire an older
-    exact-head run without allowing sibling scans to overlap.
+    History: from 2026-08-24 through 2026-09-03 the concurrency group was
+    deliberately repository-wide (not PR-scoped) because PR-scoping is what
+    caused a real litellm.RateLimitError storm against the shared NVIDIA NIM
+    key on 2026-08-23/24 -- sibling PRs scanned concurrently, each retrying the
+    shared key three times, producing fail-closed gate failures on every open
+    PR. That repository-wide scoping fixed the storm but starved cross-PR
+    Strix evidence within the same repository instead (a different PR's scan
+    always queued behind whichever scan was already running there).
+
+    Restored to PR-scoped on explicit owner authorization (2026-09-03) after
+    confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
+    rate limits rather than a shared pool. The workflow-level group now retires
+    superseded runs before runner admission, including runs still blocked by
+    the organization-wide job ceiling. Native and dispatched evidence share
+    one group; non-PR events use a unique run id.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
 
-    assert "concurrency:" in workflow
-    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert re.search(r"(?m)^concurrency:", workflow)
+    assert "needs: [changed-scope, admit-current-head]" in strix_job
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
+    assert "strix-security-scan-${{" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.repository" in concurrency_contract
-    assert (
-        "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository)"
-    ) in concurrency_contract
-    assert (
-        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
-        in concurrency_contract
-    )
-    # Repository-level (not PR-level) grouping: no pr-{N} component remains.
-    assert "format('pr-{0}', github.event.pull_request.number)" not in concurrency_contract
+    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert "github.event.pull_request.number" in concurrency_contract
+    assert "github.event.client_payload.pr_number" in concurrency_contract
+    assert "github.run_id" in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    # Running scans are not cancelled; GitHub's native group has one pending slot.
-    assert "cancel-in-progress: false" in workflow
-    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
-    assert workflow.index("cancel-superseded-pr-runs:") < workflow.index("concurrency:")
+    assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
         "  strix:", 1
     )[0]
@@ -440,14 +483,16 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     assert result.stdout.splitlines() == ["1"]
 
 
-def _run_strix_cleanup(tmp_path: Path, pull_states: list[dict[str, object]]) -> str:
+def _run_strix_cleanup(
+    tmp_path: Path, pull_states: list[dict[str, object]], *, action: str = "synchronize"
+) -> str:
     """Execute the production cleanup step against a stateful fake ``gh``."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup")
     step = workflow_step(
         workflow_text("strix.yml"),
-        "Cancel queued and running scans for superseded or closed pull request heads",
+        "Cancel queued and running scans for superseded or inactive pull requests",
     )
     run_block = step.split("        run: |\n", 1)[1].split("\n  strix:", 1)[0]
     script = textwrap.dedent(run_block)
@@ -494,7 +539,7 @@ exit 0
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
         "TARGET_PR_HEAD_SHA": "current",
-        "PR_ACTION": "synchronize",
+        "PR_ACTION": action,
         "CURRENT_RUN_ID": "999",
     }
     subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
@@ -521,10 +566,10 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     calls = _run_strix_cleanup(
         tmp_path,
         [
-            {"state": "open", "head": {"sha": "current"}},
-            {"state": "open", "head": {"sha": "newer"}},
+            {"state": "open", "draft": False, "head": {"sha": "current"}},
+            {"state": "open", "draft": False, "head": {"sha": "newer"}},
         ]
-        + [{"state": "open", "head": {"sha": "newer"}}] * 4,
+        + [{"state": "open", "draft": False, "head": {"sha": "newer"}}] * 4,
     )
 
     assert "actions/runs?status=queued" in calls
@@ -532,19 +577,25 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     assert "/actions/runs/100/force-cancel" not in calls
 
 
+def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
+    """A verified Draft transition retires the current expensive Strix run."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": True, "head": {"sha": "current"}}] * 6,
+        action="converted_to_draft",
+    )
+
+    assert "/actions/runs/100/cancel" in calls
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
-        "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "sbom-generation.yml",
-        "scorecard-pr.yml",
-        "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
     )
@@ -555,7 +606,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "closed" in workflow
         if filename == "strix.yml":
             assert "cancel-superseded-pr-runs:" in workflow
-            assert "Cancel queued and running scans for superseded or closed pull request heads" in workflow
+            assert "Cancel queued and running scans for superseded or inactive pull requests" in workflow
             assert (
                 "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
                 "|| github.token"
@@ -576,7 +627,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )[0]
         elif filename == "noema-review.yml":
             assert "cancel-closed-pr-runs:" in workflow
-            assert "Cancel queued and running Noema reviews for the closed pull request" in workflow
+            assert "Cancel queued and running Noema reviews for the inactive pull request" in workflow
             assert "leaving runs unchanged" in workflow
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
                 "  noema-review:", 1
@@ -585,15 +636,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
         elif filename in {
-            "close-empty-pr.yml",
             "codeql-pr.yml",
-            "osv-scanner-pr.yml",
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "sbom-generation.yml",
-            "scorecard-pr.yml",
-            "secret-scan.yml",
             "security-scan.yml",
         }:
             assert "cancel-closed-pr-runs:" not in workflow
@@ -606,6 +652,8 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
+        if filename in {"noema-review.yml", "strix.yml"}:
+            assert "github.event.action != 'converted_to_draft'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
     assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" in (
@@ -615,28 +663,27 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix serializes scans per repository while cleanup stays outside that
-    # queue so synchronize and close events can immediately retire old work.
-    assert "cancel-in-progress: false" in strix_workflow
-    assert "Keep provider-backed scans serial per repository" in strix_workflow
+    # Strix admits the live head before same-PR cancellation while cleanup stays
+    # outside that queue so synchronize and close events can retire old work.
+    assert "admit-current-head:" in strix_workflow
+    assert "skipping stale evidence" in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
 
 
-def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
-    """Retry invalid close-event metadata and leave the PR open on uncertainty."""
-    workflow = workflow_text("close-empty-pr.yml")
-
-    assert "gh_api_json_with_retry()" in workflow
-    assert "jq -e type" in workflow
-    assert "did not return valid JSON; retrying" in workflow
-    assert "did not return valid JSON after 4 attempts" in workflow
-    assert "leaving it open because metadata could not be read" in workflow
-    assert "exit 0" in workflow
-
-
-def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
-    """Prevent cancelled review runs from creating follow-up queue work."""
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
-    assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
+
+
+def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
+    """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    assert "github.event.workflow_run" not in workflow
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
@@ -669,19 +716,25 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    noema_job = workflow.split("\n  noema-review:\n", 1)[1]
+    concurrency_contract = noema_job.split("    concurrency:\n", 1)[1].split(
+        "    permissions:\n", 1
+    )[0]
 
     assert "workflow_run:" not in concurrency_contract
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "noema-review-${{" in concurrency_contract
+    assert "required-noema-review-${{" in concurrency_contract
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "github.event.action == 'synchronize'" in concurrency_contract
-    assert "github.event.action == 'closed'" in concurrency_contract
-    assert "cancel-in-progress: true" not in concurrency_contract
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert workflow.index("  admit-current-head:") < workflow.index(
+        "    concurrency:", workflow.index("  noema-review:")
+    )
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
@@ -961,11 +1014,11 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
         assert "INPUT_CANONICAL_REF" not in workflow
 
 
-def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
-    """Avoid scanning every PR when a workflow run has no associated pull request."""
+def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
+    """Required-check completion must not create another Actions run."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert "github.event.workflow_run.pull_requests[0].number" in workflow
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
@@ -998,43 +1051,29 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
-def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
-    """Guard the org-wide approved-PR fallback sweep contract.
+def test_org_queue_sweep_is_explicit_bounded_recovery_only() -> None:
+    """Guard the explicit org-wide approved-PR fallback sweep contract.
 
     Target repositories only receive scheduler runs on PR events, so a PR that
     becomes mergeable after its last event sits approved-but-unmerged forever.
     The sweep job must exist, run only from the central repository on its own
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
-    visible reason when it cannot mutate sibling repositories. The sweep runs
-    hourly so an approval that lands after a PR's last event is
-    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
-    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
-    job has enough runtime headroom to finish a complete organization walk.
+    visible reason when it cannot mutate sibling repositories. Native events
+    handle the normal path; only an explicit bounded dispatch may start the
+    expensive organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "0 * * * *"' in workflow
+    assert '- cron: "17 3 * * *"' not in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '0 * * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
-    assert (
-        "github.event_name == 'schedule' && format('schedule-{0}', "
-        "github.event.schedule)"
-    ) in workflow
     org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
         "    permissions:", 1
     )[0]
     assert "timeout-minutes: 60" in org_sweep_header
-    for setting in (
-        "ORG_SWEEP_TRIGGER_REVIEWS",
-        "ORG_SWEEP_ENABLE_AUTO_MERGE",
-        "ORG_SWEEP_UPDATE_BRANCHES",
-    ):
-        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
-    # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '0 * * * *'" in workflow
+    # The single-repository scan must not double-run on explicit sweep dispatch.
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
@@ -1043,6 +1082,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     )
     assert 'select(.full_name != "ContextualWisdomLab/.github")' in workflow
     assert "select(.archived == false and .disabled == false)" in workflow
+    assert "select((.open_issues_count // 1) > 0)" in workflow
     # The sweep must not silently truncate large/old queues or skip a repository
     # whose only open work is a stacked/non-default-base PR.
     assert "vars.ORG_SWEEP_MAX_PRS || '1000'" in workflow
@@ -1050,24 +1090,11 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "No open PRs (including stacked or non-default-base PRs)" in workflow
     # Every repository failure must leave a concrete logged reason.
     assert "see the decision log above for the concrete per-PR reason" in workflow
-    # Queue hygiene: previous-head runs are cancelled immediately, while the
-    # legacy age guard cannot cancel a valid current-head PR run.
-    assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
-    assert "/actions/runs?status=${active_status}&per_page=100" in workflow
-    assert "for active_status in queued in_progress" in workflow
-    assert '"pull_request" or .event == "pull_request_target"' in workflow
-    assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
-    assert ".head_sha != $current_default_sha" in workflow
-    assert "classified as not matching an open PR or default-branch Current HEAD" in workflow
-    assert '.current_head // "closed-or-no-open-pr"' in workflow
-    assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
-    assert "select($current_pr_heads[$head_key] == null)" in workflow
-    revalidate_script = (
-        REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
-    ).read_text(encoding="utf-8")
-    assert "Could not cancel ${cancellation_mode} run" in revalidate_script
-    assert "No run will be cancelled from incomplete evidence" in workflow
-    assert "queue_hygiene_ready=false" in workflow
+    # Queue cancellation belongs to native per-PR concurrency and the local
+    # exact-head coalescer, not this cross-repository recovery walk.
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" not in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" not in workflow
+    assert "revalidate_queue_cancellation.sh" not in workflow
     # Organization sweep budgets must be consumed across the repository loop;
     # resetting the configured limit for every target can flood Actions with
     # long-running review dispatches.
@@ -1092,42 +1119,6 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     assert "--project-flow" in workflow
     assert 'main|master) project_flow="github-flow"' in workflow
     assert 'develop) project_flow="git-flow"' in workflow
-
-
-def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
-    """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    jq_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "closed-or-no-open-pr" in line and "jq -r" in line
-    )
-    jq_filter = shlex.split(jq_line)[2]
-    payload = [
-        {
-            "id": 42,
-            "name": "Required OpenCode Review",
-            "status": "in_progress",
-            "event": "pull_request_target",
-            "head_branch": "old-head",
-            "run_head": "deadbeef",
-            "current_head": None,
-        }
-    ]
-
-    result = subprocess.run(
-        [jq, "-r", jq_filter],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "classified_head=closed-or-no-open-pr" in result.stdout
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
@@ -1335,7 +1326,7 @@ def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])  # last line: the printed value; earlier: the warning
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
     assert "could not read/write" in result.stdout  # a `::warning::` workflow command
 
@@ -1361,7 +1352,7 @@ def test_org_queue_sweep_rotation_index_transient_read_failure_does_not_reset_co
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1
     # Critically: never "1" -- that would mean the failed read was treated
     # as a fresh-start reset rather than an unreadable existing value.
@@ -1384,7 +1375,7 @@ def test_org_queue_sweep_rotation_index_successful_read_but_failed_patch_falls_b
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1
     assert "read ORG_SWEEP_ROTATION_COUNTER=41 but could not PATCH it" in result.stdout
 
@@ -1429,7 +1420,7 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
 
     assert "ContextualWisdomLab/.github#1219" in workflow
     assert (
-        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))'
+        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 86400 ))'
     ) in workflow
     assert (
         'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
@@ -1444,7 +1435,7 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
     assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
     # Keep ordinary and stacked review budgets independently configurable so
     # ordinary work cannot starve the only review path for stacked PRs.
-    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0'" in workflow
     assert "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1'" in workflow
     assert "Stacked PRs have no" in workflow
 
@@ -1455,7 +1446,7 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
 
     assert (
         "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || "
-        "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
+        "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0' }}"
     ) in workflow
     assert (
         "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || "
@@ -1500,34 +1491,6 @@ def test_stacked_budget_is_not_declared_as_an_unused_workflow_call_input() -> No
     assert "inputs.stacked_review_dispatch_limit" not in workflow
 
 
-def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
-    """An inaccessible Actions page must not add a secondary jq null error."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    aggregation_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "done | jq -sc" in line and "workflow_runs" in line
-    )
-    jq_filter = shlex.split(aggregation_line)[4]
-    payload = (
-        '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
-    )
-
-    result = subprocess.run(
-        [jq, "-sc", jq_filter],
-        input=payload,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == []
-
-
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
     """A repository the sweep credential cannot read must not fail the sweep.
 
@@ -1564,6 +1527,82 @@ def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None
     # if condition (which set -e does not trap) and silently skip the guard.
     assert '"$ORG_SWEEP_MAX_UNAVAILABLE" =~ ^[0-9]+$' in workflow
     assert "ORG_SWEEP_MAX_UNAVAILABLE must be a non-negative integer" in workflow
+
+
+def test_org_queue_sweep_treats_rate_limited_repositories_as_non_fatal() -> None:
+    """A shared installation-token rate-limit exhaustion must not fail the sweep.
+
+    Installation 141441800's primary rate limit (5,000-12,500 requests/hour)
+    is shared by at least eight other central workflows that mint tokens for
+    the same GitHub App installation. When that bucket is exhausted, ``gh``
+    fails with "API rate limit exceeded" — routine cross-workflow contention,
+    not a defect in the target repository — and self-heals on GitHub's own
+    hourly reset. Treating it as a hard failure previously turned one
+    exhausted bucket into a permanently red ``*/15 * * * *`` cron for as long
+    as the contention lasted (observed: repeated same-signature failures
+    spanning 15+ hours). That repository is now reported as a skipped,
+    non-fatal "deferred" repository instead, exactly like the existing
+    inaccessible-repository handling, and is retried on the next rotation.
+
+    Unlike ``ORG_SWEEP_MAX_UNAVAILABLE``, there is deliberately no fail-closed
+    ceiling on the rate-limited count: one exhausted installation bucket is
+    shared by every remaining repository, so the sweep records the current
+    repository and stops the rotation instead of repeating the same bounded
+    retries and API calls for every later repository.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    # The rate-limit signal is classified as a skipped, non-fatal "deferred" repo.
+    assert 'grep -qiF "API rate limit exceeded"' in workflow
+    assert "rate_limited=$((rate_limited + 1))" in workflow
+    assert 'rate_limited_repos+=("$repo_full_name")' in workflow
+    assert "the shared GitHub App installation-token rate limit is exhausted" in workflow
+    assert "retried automatically" in workflow
+    # It must be checked as its own branch, distinct from both the existing
+    # 403 "unavailable" classification and the generic hard-failure branch —
+    # a rate-limited sweep must not also increment unavailable or failures.
+    assert (
+        'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then'
+        in workflow
+    )
+    rate_limited_branch = workflow.split(
+        'elif printf \'%s\' "$sweep_output" | grep -qiF "API rate limit exceeded"; then',
+        maxsplit=1,
+    )[1].split("\n              else\n", maxsplit=1)[0]
+    assert 'rate_limited_repos+=("$repo_full_name")' in rate_limited_branch
+    assert 'echo "::endgroup::"' in rate_limited_branch
+    assert "break" in rate_limited_branch
+    assert rate_limited_branch.index('rate_limited_repos+=("$repo_full_name")') < (
+        rate_limited_branch.index('echo "::endgroup::"')
+    ) < (
+        rate_limited_branch.index("break")
+    )
+    script = (
+        "rate_limited=0\n"
+        "rate_limited_repos=()\n"
+        "visited_repos=()\n"
+        "for repo_full_name in ContextualWisdomLab/first ContextualWisdomLab/second; do\n"
+        "  visited_repos+=(\"$repo_full_name\")\n"
+        + textwrap.indent(textwrap.dedent(rate_limited_branch).strip() + "\n", "  ")
+        + "done\n"
+        + "printf 'RESULT|%s|%s|%s\\n' \"$rate_limited\" "
+        '"${rate_limited_repos[*]}" "${visited_repos[*]}"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == (
+        "RESULT|1|ContextualWisdomLab/first|ContextualWisdomLab/first"
+    )
+    # A genuine (non-403, non-rate-limit) failure must still be a hard failure.
+    assert "failures=$((failures + 1))" in workflow
+    # No fail-closed ceiling on rate-limited repositories (see docstring):
+    # unlike ORG_SWEEP_MAX_UNAVAILABLE, no configured limit ever turns
+    # widespread rate-limiting into a hard "exit 1" job failure.
+    assert "ORG_SWEEP_MAX_RATE_LIMITED" not in workflow
 
 
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
@@ -1740,31 +1779,12 @@ def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
     workflow = workflow_text("secret-scan.yml")
 
     assert "CURRENT_SHA: ${{ github.sha }}" in workflow
-    assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' in workflow
+    assert "pull_request:" not in workflow.split("concurrency:", 1)[0]
+    assert "BASE_SHA:" not in workflow
+    assert "HEAD_SHA:" not in workflow
     assert 'log_opts="${CURRENT_SHA}"' in workflow
     assert '--log-opts="${log_opts}"' in workflow
     assert "unrelated remote refs are excluded" in workflow
-
-
-def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
-    """Keep the standalone OSV workflow's resolver settings singular and safe."""
-    workflow = workflow_text("osv-scanner-pr.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
-
-    assert (
-        "github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name"
-        in concurrency_contract
-    )
-    assert (
-        "github.event_name == 'pull_request' && github.event.pull_request.number"
-        in concurrency_contract
-    )
-    assert workflow.count("scan-args: |-") == 1
-    assert "--no-resolve" in workflow
-    assert (
-        "--maven-registry=https://maven-central.storage-download.googleapis.com/maven2"
-        in workflow
-    )
 
 
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> (
@@ -1919,19 +1939,6 @@ def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
         assert warning_text in warning_step
 
 
-def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
-    """The supplemental OSV diff must not duplicate the central SARIF upload."""
-    standalone = workflow_text("osv-scanner-pr.yml")
-    central = workflow_text("security-scan.yml")
-
-    assert "upload-sarif: false" in standalone
-    assert "pinned upstream reusable workflow declares this permission" in standalone
-    assert "security-events: write" in standalone
-    assert "--fail-on-vuln=true" in central
-    assert "Print OSV findings being compared" in central
-    assert "Upload OSV SARIF to code scanning" in central
-
-
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
     tmp_path: Path,
 ) -> None:
@@ -2024,37 +2031,23 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     None
 ):
     """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
-    for filename in ("scorecard-pr.yml", "security-scan.yml"):
-        workflow = workflow_text(filename)
+    workflow = workflow_text("security-scan.yml")
 
-        assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
-        assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
-        assert (
-            "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS"
-            in workflow
-        )
-        assert "Delegated " in workflow
-        assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
-        assert "default-branch governance tracking" in workflow
+    assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+    assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
+    assert (
+        "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS"
+        in workflow
+    )
+    assert "Delegated " in workflow
+    assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+    assert "default-branch governance tracking" in workflow
 
     default_branch_scorecard = workflow_text("scorecard-analysis.yml")
 
     assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
     assert "FuzzingID" not in default_branch_scorecard
     assert "VulnerabilitiesID" not in default_branch_scorecard
-
-
-def test_standalone_scorecard_delegates_code_scanning_upload_to_central_gate() -> None:
-    """The supplemental Scorecard run must not duplicate the central SARIF upload."""
-    standalone = workflow_text("scorecard-pr.yml")
-    central = workflow_text("security-scan.yml")
-
-    assert "security-events: write" not in standalone
-    assert "github/codeql-action/upload-sarif" not in standalone
-    assert "Preserve Scorecard PR SARIF evidence" in standalone
-    assert "actions/upload-artifact" in standalone
-    assert "Upload Scorecard SARIF to code scanning" in central
-    assert "category: scorecard" in central
 
 
 @pytest.mark.parametrize(

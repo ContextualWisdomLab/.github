@@ -306,6 +306,8 @@ def test_workflow_covers_ready_transition_and_never_expands_head_ref_inside_shel
     for event_name in ("opened", "synchronize", "reopened", "ready_for_review"):
         assert event_name in trigger_line
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in run_block
     assert 'github.event.pull_request.head.ref' not in run_block
