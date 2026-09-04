@@ -140,7 +140,13 @@ def select_duplicate_queued_run_ids(
     branch: str,
     head_sha: str,
 ) -> list[int]:
-    """Select redundant queued runs while retaining one authoritative sibling."""
+    """Select redundant queued runs while retaining one authoritative sibling.
+
+    ``_run_identity_matches`` already requires a positive-int ``workflow_id``
+    before a run reaches this loop body, so re-deriving it here is only ever
+    non-``None`` -- grouping unconditionally, rather than behind a redundant
+    ``is not None`` guard, avoids a branch no input can ever fail.
+    """
     groups: dict[int, list[dict[str, Any]]] = {}
     for run_data in runs:
         if not _run_identity_matches(
@@ -148,8 +154,7 @@ def select_duplicate_queued_run_ids(
         ):
             continue
         workflow_id = _positive_int(run_data.get("workflow_id"))
-        if workflow_id is not None:
-            groups.setdefault(workflow_id, []).append(run_data)
+        groups.setdefault(workflow_id, []).append(run_data)
 
     redundant: list[int] = []
     for group in groups.values():
@@ -222,7 +227,15 @@ def validate_candidate_against_live_state(
     current_pr_number: int | None = None,
     associated_prs: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> None:
-    """Fail closed unless a queued candidate still has an authoritative sibling."""
+    """Fail closed unless a queued candidate still has an authoritative sibling.
+
+    ``_run_matches_head_identity`` already rejects any candidate whose
+    ``event`` is not in ``PR_EVENTS`` before comparing repository, branch, or
+    SHA, so a non-pull-request candidate always fails the head-identity check
+    below rather than reaching a later, narrower event-only check -- there is
+    no candidate shape that can satisfy head identity while carrying a
+    disqualifying event.
+    """
     if candidate.get("status") != "queued":
         raise CoalescingRefused("candidate is no longer queued")
     if live_pr.get("state") != "open":
@@ -241,8 +254,6 @@ def validate_candidate_against_live_state(
     workflow_id = _positive_int(candidate.get("workflow_id"))
     if candidate_id is None or workflow_id is None:
         raise CoalescingRefused("candidate identity is malformed")
-    if candidate.get("event") not in PR_EVENTS:
-        raise CoalescingRefused("candidate is not a pull-request workflow run")
 
     association_map = associated_prs or {}
     if current_pr_number is not None and not _run_pr_scope_is_safe(

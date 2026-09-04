@@ -1,0 +1,40 @@
+name: Orchestrator free sidecar
+description: Provision the immutable contextual-orchestrator orchestrator/free gateway for a model-backed workflow.
+inputs:
+  require_zdr:
+    description: Require an attested Zero Data Retention route for private or internal content.
+    required: false
+    default: "false"
+  catalog_limit:
+    description: Maximum discovered route catalog size for the sidecar preflight.
+    required: false
+    default: "12"
+  catalog_account_cap:
+    description: Maximum routes admitted from one credential account.
+    required: false
+    default: "8"
+runs:
+  using: composite
+  steps:
+    - name: Checkout immutable central sidecar source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ContextualWisdomLab/.github
+        ref: ${{ github.action_ref }}
+        path: ${{ runner.temp }}/cwl-control-plane
+        persist-credentials: false
+    - name: Provision contextual-orchestrator orchestrator/free
+      shell: bash --noprofile --norc -e -o pipefail {0}
+      env:
+        CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ inputs.require_zdr }}
+        ORCHESTRATOR_CATALOG_LIMIT: ${{ inputs.catalog_limit }}
+        ORCHESTRATOR_CATALOG_ACCOUNT_CAP: ${{ inputs.catalog_account_cap }}
+      run: |
+        set -euo pipefail
+        control_plane="${RUNNER_TEMP}/cwl-control-plane"
+        sidecar="${control_plane}/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+        if [ ! -f "$sidecar" ] || [ -L "$sidecar" ]; then
+          echo "::error::Immutable central contextual-orchestrator sidecar source is missing or symlinked."
+          exit 1
+        fi
+        bash "$sidecar"
