@@ -24,22 +24,29 @@ def _workflow_text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_declares_workflow_call_with_three_inputs_and_recorded_defaults() -> None:
-    """Every genuinely-varying field found while auditing the four originals is an input."""
+def test_declares_workflow_call_with_four_inputs_and_recorded_defaults() -> None:
+    """Every genuinely-varying field found while auditing the five originals is an input."""
     workflow = _workflow_text()
     assert "on:\n  workflow_call:\n    inputs:" in workflow
-    for name in ("fail_on_severity:", "allow_ghsas:", "continue_on_error:"):
+    for name in (
+        "fail_on_severity:",
+        "allow_ghsas:",
+        "continue_on_error:",
+        "comment_summary_in_pr:",
+    ):
         assert name in workflow
 
     assert 'default: "moderate"' in workflow
     assert 'default: ""' in workflow
     assert "default: false" in workflow
+    assert 'default: "on-failure"' in workflow
 
 
-def test_step_order_is_checkout_then_preflight_then_gated_steps() -> None:
-    """checkout -> dependency-graph preflight -> conditional gate/note, in that order."""
+def test_step_order_is_harden_then_checkout_then_preflight_then_gated_steps() -> None:
+    """harden-runner -> checkout -> dependency-graph preflight -> conditional gate/note."""
     workflow = _workflow_text()
     order = [
+        "Harden the runner",
         "actions/checkout@",
         "Check dependency graph availability",
         "Dependency review",
@@ -61,10 +68,18 @@ def test_dependency_review_and_note_steps_are_mutually_exclusive_on_availability
 
 
 def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:
-    """fail_on_severity and allow_ghsas must reach the underlying action untouched."""
+    """fail_on_severity, allow_ghsas, and comment_summary_in_pr must reach the action untouched."""
     workflow = _workflow_text()
     assert "fail-on-severity: ${{ inputs.fail_on_severity }}" in workflow
     assert "allow-ghsas: ${{ inputs.allow_ghsas }}" in workflow
+    assert "comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}" in workflow
+
+
+def test_harden_runner_audits_egress() -> None:
+    """naruon's harden-runner step applies uniformly, not only to that one caller."""
+    workflow = _workflow_text()
+    assert "step-security/harden-runner@" in workflow
+    assert "egress-policy: audit" in workflow
 
 
 def test_action_pins_are_current_and_uniform() -> None:
@@ -113,7 +128,15 @@ def test_availability_check_only_runs_the_gate_for_pull_request_events() -> None
     assert '"${{ github.event_name }}" != "pull_request"' in workflow
 
 
-def test_dependency_review_posts_a_pr_comment_on_failure() -> None:
-    """scopeweave's PR-comment-on-failure UX applies uniformly, not only to that one caller."""
+def test_dependency_review_comment_summary_defaults_to_on_failure() -> None:
+    """scopeweave's PR-comment-on-failure UX applies uniformly by default, overridable per caller.
+
+    naruon explicitly overrides it to "never" -- see
+    test_declares_workflow_call_with_four_inputs_and_recorded_defaults for
+    the default assertion and test_inputs_are_forwarded_to_the_dependency_review_action
+    for the forwarding assertion; this test just pins the specific default
+    value chosen (scopeweave's original, not naruon's or some other value).
+    """
     workflow = _workflow_text()
-    assert "comment-summary-in-pr: on-failure" in workflow
+    assert 'comment_summary_in_pr:\n' in workflow
+    assert 'default: "on-failure"' in workflow

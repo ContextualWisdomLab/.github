@@ -1,3 +1,47 @@
+### Contextual-orchestrator pin refresh
+
+- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
+
+### Scheduler target admission
+
+- Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
+
+### Hourly review-repair queue-scan bound
+
+- Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
+
+## [Unreleased]
+- Align current-main workflow contract tests with native auto-merge completion,
+  validated dispatch concurrency keys, rotating queue pagination, globbed watch
+  paths, admission jobs, and the reviewed OpenCode dispatch blob.
+- Restore the central Strix runtime after OpenAI Python 2.54.0 began importing
+  HTTPX2 by selecting the SDK's `httpx2` extra in the hash-compiled dependency
+  input. The required workflow now installs a verified HTTPX2 wheel before the
+  scanner starts instead of failing before analysis with a missing module.
+- Move the exact-artifact SBOM attestation quality contract into the existing
+  agent review runtime selector and job, preserving Python 3.10 compilation,
+  Python 3.14 test evidence, exact-head checkout, hash locks, and read-only
+  permissions while removing the standalone workflow.
+- Move the organization commercial-readiness contract suite into the existing
+  agent review runtime quality selector and job, removing its standalone thin
+  caller while retaining the reusable exact-head coverage implementation.
+- Consolidate the standalone review-repair contract workflow into the existing
+  agent review runtime quality selector and job. Matching PRs now reuse one
+  checkout and dependency bootstrap while retaining the focused coverage,
+  docstring, compile, and exact-PR concurrency contracts.
+- Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.
+- Retire the standalone OSV and Scorecard pull-request workflows after both scanners moved into the required `security-scan.yml`. The organization ruleset now has seven required workflow paths, and `.github` branch protection no longer requires the duplicate `osv-scan / osv-scan` context.
+
+- Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
+- Repointed 10 `scripts/ci/test_strix_quick_gate.sh` self-test assertions that had gone stale after the `pr_review_merge_scheduler.py`/`pr_review_merge_scheduler_core.py` facade/core split (#1803): they checked the now-98-line facade file for content (the exact-head branch-update guard, the squash-fallback retry, the subprocess-safety flags, the same-head Strix/OpenCode dispatch markers, and the `pr_head_ref` repository-dispatch payload) that lives in the core module instead, so they had been silently failing on every run since the split. The same repair aligns the wake-workflow list and daily recovery assertions with the current event-driven scheduler contract. A coverage/docstring version of the same gap was already fixed via #1810; this bash contract script was missed.
+- **Fix the `coalesce` required check crashing instead of exiting cleanly for a superseded queued run.** `current-head-run-coalescer.yml`'s own design comment documents that `current_head_run_coalescer.py` raising `CoalescingRefused` (its remembered head no longer matching the PR's live head) is "a safe no-op" — but `main()` only ever called `coalesce()` directly, so the exception raised by `coalesce()`'s own top-level live-PR-state check propagated uncaught and crashed the job with exit code 1, instead of the intended graceful no-op. Reproduced live on `ContextualWisdomLab/.github#1503` (run `33766056421`, job `100684095620`): a stale queued run drained from the org-wide Actions capacity backlog against an already-superseded head failed the required `coalesce` check with `CoalescingRefused: pull request head moved before duplicate classification`. `main()` now catches `CoalescingRefused` specifically and exits 0 with an informational message; any other exception (malformed identity, an unavailable GitHub API) still fails closed.
+## 2026-09-02 — Noema single-request gateway ownership
+
+- Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
+- Hardened serving-model telemetry against control-character/workflow-command injection and lone-surrogate encoding failures, restored actionable exact changed-line diagnostics, and constrained local trailing-comma repair to complete JSON values.
+- Added permanent single-request/no-fixed-timeout regressions and retired obsolete deadline/retry fixtures.
+- Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
+
 # Changelog
 
 All notable changes to the organization automation repository are documented in
@@ -6,6 +50,60 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - **Bind stale-review run revalidation to repository-correct credentials.** Central `repository_dispatch` Actions evidence now uses the existing central dispatch read authority while direct target-repository runs retain target read authority.
+- **Catch scheduler target-list drift before it silently fails an hourly heartbeat.** `hourly-review-repair.yml`'s per-cron `target_repository` matrix and the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`) are two independently hand-maintained lists with no structural link -- three repositories (`governance-risk-compliance`, `nonnest2`, `quarantine-sandbox-runtime`) were added to the hourly matrix without a corresponding variable update, so their hourly heartbeat failed closed with "target repository is not allowlisted" until each was found and fixed the same day. Added `scripts/ci/opencode_repository_dispatch_targets.json`, a hand-maintained mirror of the variable's live value, and a new contract test (`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller target is present in it, so a future PR that repeats the omission fails at review time instead of at the next silent hourly failure. See `docs/doctoring/scheduler-target-list-drift-20260902.md`.
+- **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
+  scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
+  heartbeat was changed from a quarter-hourly `cron: "*/30 * * * *"` to an hourly
+  `cron: "30 * * * *"` (see `docs/doctoring/actions-queue-saturation-hourly-sweep.md`),
+  and the Python regression `tests/test_actions_queue_saturation_scheduler_cadence.py`
+  was updated to match at the time — but the parallel bash contract in
+  `scripts/ci/test_strix_quick_gate.sh` still asserted the literal old string, so
+  every PR whose required `exact-head-path-policy` check ran this script against a
+  current `main` checkout failed on an assertion the workflow file itself could no
+  longer satisfy, regardless of the PR's own diff. Updated the assertion to the
+  current cron string and corrected an adjacent stale "15-minute organization sweep
+  / 30-minute scheduled scan" description to the current hourly/hourly cadence.
+  Verified: `bash scripts/ci/test_strix_quick_gate.sh` now passes against unmodified
+  `main` (confirmed failing before this fix, on the same clean clone); full suite
+  unaffected (2600+ passed, 100% coverage, 100% docstrings) since this is a
+  bash-only assertion string with no Python-side counterpart to update.
+- **Consolidate the two genuinely duplicate quality-CI callers behind one reusable
+  `workflow_call` gate; leave the other six alone.** An audit of the 8
+  `.github/workflows/*-quality-ci.yml` bootstrap-templated files found only one pair —
+  `javascript-coverage-quality-ci.yml` and
+  `organization-commercial-readiness-loop-quality-ci.yml` — where the shared skeleton
+  (checkout at the exact PR head, an identical pinned six-package mini-requirements
+  heredoc, `coverage run --branch -m pytest --import-mode=importlib`, `coverage report
+  --fail-under=100`, `compileall`, `git diff --exit-code`) was byte-for-byte the same
+  logic with only the timeout, pytest target, and coverage `--include` path varying per
+  subsystem. Extracted that shared shape into a new
+  `.github/workflows/exact-head-coverage-quality-gate.yml` reusable workflow
+  (`workflow_call`-only, four required inputs: `timeout_minutes`, `pytest_target`,
+  `coverage_include`, `compileall_targets`) and turned both callers into thin
+  `uses:`/`with:` wrappers. Verified first that no branch-protection required status
+  check or the org's required-workflow ruleset references either caller's job name
+  (`exact-head-coverage-contract` / `exact-head-policy`) before restructuring, so nothing
+  downstream depends on their exact shape. Updated the three contract tests that pinned
+  the old inline text
+  (`test_organization_commercial_readiness_loop_policy.py`,
+  `test_organization_commercial_readiness_loop_import_contract.py`) to check the
+  coverage/exact-head mechanics against the shared gate file and the subsystem wiring
+  against each caller, and added
+  `tests/test_exact_head_coverage_quality_gate_contract.py` to pin the gate's own
+  `workflow_call` contract and both callers' input wiring. The other 6 files
+  (`agent-mention-router-quality-ci.yml`, `exact-artifact-sbom-attestation-quality.yml`,
+  `noema-token-lifetime-quality-ci.yml`,
+  `opencode-rust-coverage-toolchain-quality-ci.yml`, `strix-changed-path-quality-ci.yml`,
+  `trusted-uv-materializer-quality-ci.yml`) look superficially similar but each encodes a
+  genuinely different policy -- harden-runner presence, a docstring/interrogate gate,
+  exact-head-verification mechanics (or, for noema, no `ref:` pin at all), multi-Python-
+  version matrices with non-shared extra logic (a tomli-fallback exercise, a Python 3.10
+  compile-only contract), or no `coverage --fail-under` step at all (strix delegates to a
+  bash gate script instead) -- so templatizing them would either weaken what they
+  individually enforce or need enough per-caller toggles to defeat the point of sharing.
+  Left untouched, matching the precedent already set for ruling out the agent-mention
+  dispatch pair and the noema/opencode/strix "cancel superseded runs" jobs. Full suite:
+  2603 passed, 1 skipped, 100% branch coverage, 100% docstrings, `actionlint` clean.
 - **Fail closed before cancelling stale PR workflow runs.** Validate snapshot `headRefOid` and re-read live PR/run identity immediately before destructive cancellation, including OpenCode/Strix dispatch cleanup, so a missing head or concurrent push cannot cancel the sole current-head evidence or trigger a duplicate review. Also ensures every cancellation path (`cancel_stale_pr_runs`, `cancel_stale_opencode_runs`, `_cancel_revalidated_review_run_refs`) treats a run as cancelled only when `force_cancel_workflow_runs` actually reports success, not merely when live revalidation proved it stale -- superseding PR #1712's simpler `force_cancel_workflow_run_refs` wrapper (removed as dead code; its safety guarantee is preserved inline at every call site by this more thorough revalidate-then-cancel design).
 - **Cache `active_workflow_runs` for the life of one `pr_review_merge_scheduler.py`
   invocation.** `inspect_pr()` calls `cancel_stale_pr_runs()` unconditionally for
@@ -1109,6 +1207,22 @@ Semantic Versioning where the repository publishes a release.
   required-workflow placeholder. Conflicting heads and failed sibling jobs in an
   OpenCode workflow remain fail-closed alongside unresolved threads, Strix,
   coverage, and unrelated failed checks.
+- Stop the organization PR sweep after the first exhausted shared GitHub App
+  installation bucket, rather than repeating up to three reset-aware waits and
+  follow-on queue-hygiene reads for every remaining repository. The current
+  target is recorded as deferred, the run remains non-fatal for this external
+  capacity condition, and later rotations retry the unfinished repository set.
+- Close a gap in the above deferral: a shared-installation rate limit hit
+  mid-scan (inside a single PR's `inspect_pr()` call — an active-run read,
+  cancellation, dispatch, merge, or branch update — rather than the
+  once-per-repository `fetch_open_prs()`/`fetch_pr()` call before the loop)
+  previously fell back to an ordinary `action_error` decision and kept
+  scanning the repository's remaining PRs with the same exhausted bucket,
+  and returned exit 0, so the workflow's "API rate limit exceeded"
+  skip-and-defer branch — which only triggers on a non-zero sweep exit —
+  never saw it and later repositories in the same rotation kept spending
+  the bucket too. It now stops the repository's scan and propagates the
+  error like the pre-loop path already did.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.
