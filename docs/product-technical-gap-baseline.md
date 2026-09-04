@@ -2981,7 +2981,7 @@ README/marketing feature list, before recommending against adoption. Saved to
 
 ## Org-wide audit: `code-scanning/default-setup` vs. a repository's own advanced-configuration CodeQL workflow — 2026-09-04
 
-**Status:** Closed. `contextual-orchestrator` was confirmed as the only repository, of 74 audited, with a
+**Status:** Superseded by a staged central-CodeQL rollout contract. `contextual-orchestrator` was confirmed as the only repository, of 74 audited, with a
 currently-live instance of this conflict; it was already fixed in the same investigation that discovered it
 (`contextual-orchestrator` PR #1028's failing "CodeQL analysis" check — `code-scanning/default-setup` was
 `state: "configured"` while `.github/workflows/security.yml`'s `codeql_analysis` job also ran a real,
@@ -3010,6 +3010,27 @@ or whether default-setup landed on it (and possibly others) through an unrelated
 **Conclusion.** `contextual-orchestrator`'s conflict was an isolated incident, not a symptom of a broader misclassification in item-41's rollout (none of the 3 repositories found here with `default-setup=configured` alongside a local workflow were among that rollout's 23 targets) and not evidence of an org policy silently re-enabling default-setup on repositories that already had real coverage. Two of the three already carry a deliberate, working design for this exact conflict (`if: false` / `upload: never`) that predates or is independent of this audit — worth keeping as the reference pattern if this conflict resurfaces elsewhere, in preference to `contextual-orchestrator`'s "disable default-setup" fix when the local workflow does not yet have established real-coverage precedence.
 
 **Caveat.** This audit trusted GitHub's code-search index for the initial 11-repository candidate list rather than fetching and grepping all 74 repositories' workflow directories individually; code search can lag very recent pushes by a short window. The 10 non-`contextual-orchestrator` candidates it did surface were each verified directly against the live API/content, not from search snippets alone.
+
+**2026-09-05 staged rollout correction.** The organization now requires the central
+`.github/workflows/codeql-pr.yml` through ruleset `18156473`; keeping GitHub's generated
+`dynamic/github-code-scanning/codeql` default setup on the same PR spends another CodeQL job set. Removal
+must proceed one repository at a time. `scripts/ci/audit_codeql_default_setup_rollout.py` is the read-only
+gate: it requires the inherited ruleset and central workflow, binds evidence to the exact PR head, blocks an
+active advanced uploader/default-setup collision, and reports either `READY_DISABLE`, `VERIFIED`, `WAIT`,
+`ROLLBACK`, or `BLOCK`. A repository advances only after exact-head central CodeQL succeeds. If central
+CodeQL fails after default setup is disabled, re-enable default setup before continuing, but only when no
+active advanced uploader would make that rollback invalid. `.github`, `noema`, and
+`IRT-bibliography-set` are explicit ruleset exceptions and must remain `EXEMPT`, not silently counted as
+rollout failures.
+
+The xtrmLLMBatchPython pilot is intentionally not yet proof of completion: default setup currently reports
+`not-configured`, ruleset `18156473` requires central CodeQL, and PR #292 head
+`5f4de312e72da5e1303c701d8e6f65cec7207409` has central run `33904225451`; that run is still `queued`.
+The generated default-setup run `33904220801` for the same head was cancelled after the setting change.
+No second repository may be changed until the central run reaches an explicit successful terminal state and
+the detector reports `VERIFIED` for that exact head. GitHub documents the hard boundary: default setup blocks
+CodeQL-generated SARIF uploads from advanced configuration, so rollback must never blindly enable it beside
+an active uploader.
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
 **Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against
