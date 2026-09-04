@@ -1,7 +1,7 @@
-# Keeps the upstream OSV base/head diff check available on every PR. The
-# central Security Scan workflow owns the blocking OSV result, finding logs,
-# and SARIF upload so this supplemental check does not duplicate installation
-# API calls or fail an otherwise clean PR when GitHub's upload quota is spent.
+# Keeps this repository's historical OSV check context available for classic
+# branch protection. Organization PRs receive OSV from security-scan.yml only;
+# this supplemental workflow is intentionally absent from the organization
+# required-workflow ruleset.
 name: OSV-Scanner PR
 
 on:

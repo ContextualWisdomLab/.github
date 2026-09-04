@@ -1752,6 +1752,41 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 opencode.jsonc nvidia-nim block: follow-up to the 2026-08-30 ZDR/NIM-routing review
+
+**Supersedes, for this one item only, the 2026-08-30 "ZDR/NIM-routing architecture review" entry's call
+to leave `opencode.jsonc`'s dormant `nvidia-nim` provider block in place** (that entry's other findings —
+`select_nvidia_nim_model.py` already removed by `#1442`, `run_opencode_review_model_pool.sh`'s dead
+NIM-candidate branches, Strix's `orchestrator/free`-only narrowing — are unaffected and not revisited
+here). Per this repo's "append a dated note, don't rewrite history" convention, that entry is left
+unedited; this is the follow-up.
+
+Two independent investigation passes re-examined the same block this pass and found the 2026-08-30
+entry's stated justification ("may still serve local/interactive OpenCode use outside CI") does not
+survive a check of `enabled_providers`: `opencode.jsonc:9` lists only `["contextual-orchestrator"]`, so
+the block confers zero benefit even for a developer running `opencode` locally from repo root — they
+would need to hand-edit `enabled_providers` regardless of whether the block exists, at which point a
+gitignored local override serves the same purpose without stale in-repo scaffolding and an
+undocumented-outside-a-stale-hotfix-doc `{env:NVIDIA_API_KEY}` credential alias. More importantly, two
+assertions in `scripts/ci/test_strix_quick_gate.sh` (`opencode config enables nvidia-nim provider` /
+`opencode config points nvidia-nim at NIM API`) were pinning the block's *presence* as if it were still
+required — accurate when authored for the pre-`#1364` design, stale and misleading since. Removed the
+block, fixed the two assertions to `assert_file_not_contains` (matching the sibling assertions already
+forbidding the old NVIDIA NIM model-id defaults), and deleted `docs/nvidia-nim-opencode-hotfix.md` per
+its own Rollback section. Full trace, safety argument, and the separate `strix_quick_gate.sh`
+allowlist/`zdr_policy.py` audit (both confirmed non-bypass, left untouched) are in
+`docs/doctoring/opencode-jsonc-nvidia-nim-block-removal.md`. Net effect: no runtime behavior changes
+(the block was already unreachable in every automated review path); the contract-test suite now asserts
+the actual, current state instead of a retired one.
+
+Left for a separate follow-up, not attempted this pass (matching this org's stated preference for
+splitting unrelated dead-code cleanups into their own PRs, per the `#1437` review-thread precedent):
+`scripts/ci/run_opencode_review_model_pool.sh`'s dead `nvidia-nim/*` candidate-handling branches and
+their dedicated tests, and `docs/doctoring/hourly-nvidia-nim-autofix.md`'s stale "Provider contract"
+section (still describes the scheduled autofix worker as calling `integrate.api.nvidia.com` directly
+with a hard-coded model id — the exact pre-ADR-0003 pattern `test_pr_review_autofix_nvidia_nim_contract.py`
+already forbids in the live workflow; the doctoring record itself was never updated to match).
+
 ## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
 
 The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an
@@ -2783,7 +2818,9 @@ product/operational decision this record surfaces rather than makes.
 
 **Verdict: the hypothesis is refuted for the item's own cited evidence, but `noema-review.yml` has a separate, confirmed, unfixed concurrency bug.** `strix.yml`, `opencode-review.yml`, and `pr-review-merge-scheduler.yml` already reliably retire a stale prior-head run on a new push — via correctly SHA-scoped native `concurrency:` groups where that's the right tool (`opencode-review.yml`, fixed after a real prior incident, `#1568`), and purpose-built same-file jobs that call the GitHub Actions API directly to find and cancel stale-head runs by exact `head_sha` match where native concurrency alone can't reach (`strix.yml`'s `cancel-superseded-pr-runs`, `pr-review-merge-scheduler.yml`'s hourly `org-queue-sweep`). `noema-review.yml` does not: its concurrency group has no head-SHA component, so if GitHub ever processes an older push's `synchronize` event after a newer one's (GitHub does not guarantee delivery order), native `cancel-in-progress` cancels the newer, valid, current-head run immediately — before the older run's own stale-trigger check ever executes, and nothing in the file can prevent this since GitHub evaluates `concurrency:` before any job step runs. Confirmed via two independent adversarial re-verification passes, neither of which found a refutation; corroborated by `strix.yml` and `opencode-review.yml` both deliberately using different patterns specifically to avoid this exact hazard. Not fixed here — a live CI concurrency-scoping change deserves its own dedicated PR with a regression test, not a same-breath edit to documentation. See the doctoring record for the full mechanism and evidence.
 
-**The cited evidence shows a different, real problem instead: pure queue starvation, not a cancellation gap.** `ContextualWisdomLab/naruon#1528`'s full 17-run history (pulled live) shows every run sharing one unchanged head SHA — no multi-SHA race ever occurred. What did happen: the cited Strix run sat **23h22m queued before it even started running**, and the paired OpenCode Review run for the same commit was **still queued 24+ hours later with no job started** at time of check. This corroborates `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`'s plan-level-ceiling finding with a concrete, individually-named example rather than aggregate counts — the fix is capacity (a plan decision or added runner capacity), not a workflow-config bug.
+**The cited evidence shows a different, real problem instead: pure queue starvation, not a cancellation gap.** `ContextualWisdomLab/naruon#1528`'s full 17-run history (pulled live) shows every run sharing one unchanged head SHA — no multi-SHA race ever occurred. This corroborates `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`'s plan-level-ceiling finding with a concrete, individually-named example rather than aggregate counts — the fix is capacity (a plan decision or added runner capacity), not a workflow-config bug.
+
+**Correction (2026-09-04, evidence audit):** the specific "cited Strix run sat 23h22m queued before it even started running" claim above is wrong, disproven by direct re-verification. Both attempts of the cited Strix job (`33581213829`) show `created_at == started_at` — attempt 1 (2026-09-02T01:54:46Z→01:56:44Z, 2 min) and attempt 2 (2026-09-03T01:17:10Z→01:31:18Z, 14 min) both started **immediately** and were **cancelled mid-run**, not after a long queue wait. This pattern (prompt start, cancel during execution) is the opposite of queue starvation and is consistent with `strix.yml`'s own `cancel-superseded-pr-runs` mechanism (already documented above as working correctly) firing on this run — though the exact trigger for canceling a run against an unchanged head SHA was not further traced here. The paired OpenCode Review run for the same commit (`33581213805`) tells a different, worse story than "still queued 24+ hours later with no job started": its 5 sequential dependent jobs each queued for hours — `required-workflow-bootstrap` ~7h57m, `coverage-source-tree` ~9h40m, `coverage-evidence` ~13h1m, `opencode-review` ~12h13m — before `opencode-review` finally started 2026-09-03T20:46:49Z, ran for ~6 hours, and was itself cancelled 2026-09-04T02:47:05Z, roughly two full days after the original push. **Net effect on this entry's conclusion: unchanged, if anything understated.** The specific "23h22m" number attached to the wrong run doesn't survive scrutiny, but the underlying severe-queue-congestion finding this entry uses it to support is corroborated more strongly by the OpenCode Review run's real multi-stage delays than the original single figure conveyed. Found via a user-initiated adversarial evidence audit of 6 cited CI runs (5 of 6 confirmed accurate; this was the one exception).
 
 **Not acted on further, deliberately, except for the confirmed `noema-review.yml` bug which is deferred to its own PR.** No fix was applied to item 13's own hypothesis or the (also-refuted) `strix.yml` paths-ignore claim, because no fixable bug was found there — forcing one would have meant inventing a problem the evidence does not support. The `noema-review.yml` concurrency bug is real and confirmed, but a live security-critical CI concurrency-scoping change was deliberately not bundled into this documentation PR; the standing chicken-and-egg bypass-merge authorization remains available for whichever PR carries that fix, once it exists. A peer session's lead on `naruon`'s `pr-governance.yml` (six runs on PR #1528's one unchanged SHA) was investigated further by fetching and reading the workflow and its gate script in full: a `check_run`-triggered job-slot-waste claim was corrected (the job's own `if:` restricts that path to CodeRabbit checks only — GitHub Actions requests no runner for a skipped job), and a proposed same-head debounce fix was found to be unsafe rather than implemented — `scripts/ci/pr_governance_gate.sh` evaluates live required-check/review-thread/CodeRabbit state on every run, not a pure function of head SHA, so skipping re-evaluation whenever the SHA is unchanged would leave the gate reporting a stale blocker list after a check finishes or a review lands. See `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md` for the full trace; recorded as still open, not fixed.
 

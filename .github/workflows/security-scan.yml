@@ -9,6 +9,10 @@
 #   trivy-fs          HARD  repo-wide   — fails on FIXABLE MEDIUM/HIGH/CRITICAL findings
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
 #
+# This is the sole organization-required owner for OSV and Scorecard PR work.
+# The standalone workflows remain local to this repository because its classic
+# branch protection still requires their historical check contexts.
+#
 # Gating is by the JOB result (a failed job fails this required workflow ->
 # merge blocked), NOT by the code_scanning ruleset rule. The code_scanning rule
 # stays CodeQL-only on purpose: requiring multiple code-scanning TOOLS there is
@@ -315,7 +319,7 @@ jobs:
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: results.sarif
           # results.sarif is produced after checkout of the pull request head.
@@ -514,7 +518,7 @@ jobs:
         if: always() && hashFiles('trivy-results.sarif') != ''
         # The parser above fails on every fixable Medium+ finding independently.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
@@ -605,7 +609,7 @@ jobs:
         id: upload_scorecard_sarif
         # Scorecard is soft repository-posture evidence; upload quota is external.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: results.sarif
           category: scorecard
