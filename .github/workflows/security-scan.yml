@@ -379,38 +379,77 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
         run: |
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
-          set +e
-          status="$(
-            curl -sS --connect-timeout 10 --max-time 30 \
-              -o /dev/null \
-              -w '%{http_code}' \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}"
-          )"
-          curl_status=$?
-          set -e
-
-          case "$status" in
-            [0-9][0-9][0-9]) http_status="$status" ;;
-            "") http_status="unavailable" ;;
-            *) http_status="malformed" ;;
-          esac
-
           case "${REPOSITORY_VISIBILITY:-}" in
             public | private | internal) repository_visibility="$REPOSITORY_VISIBILITY" ;;
             *) repository_visibility="unknown" ;;
           esac
 
-          echo "DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} http_status=${http_status} curl_exit=${curl_status}"
+          headers_file="$(mktemp)"
+          trap 'rm -f -- "$headers_file"' EXIT
+          http_status="unavailable"
+          curl_status=1
+          request_id="unavailable"
+          retry_after="unavailable"
+          rate_remaining="unavailable"
+
+          for attempt in 1 2 3; do
+            : >"$headers_file"
+            set +e
+            status="$(
+              curl -sS --connect-timeout 10 --max-time 30 \
+                -D "$headers_file" \
+                -o /dev/null \
+                -w '%{http_code}' \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${api_url}/repos/${REPOSITORY}/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}"
+            )"
+            curl_status=$?
+            set -e
+
+            case "$status" in
+              [0-9][0-9][0-9]) http_status="$status" ;;
+              "") http_status="unavailable" ;;
+              *) http_status="malformed" ;;
+            esac
+
+            request_id="$(awk -F': *' 'tolower($1) == "x-github-request-id" {gsub("\\r", "", $2); print $2; exit}' "$headers_file" | tr -cd 'A-Za-z0-9._:-')"
+            retry_after="$(awk -F': *' 'tolower($1) == "retry-after" {gsub("\\r", "", $2); print $2; exit}' "$headers_file" | tr -cd '0-9')"
+            rate_remaining="$(awk -F': *' 'tolower($1) == "x-ratelimit-remaining" {gsub("\\r", "", $2); print $2; exit}' "$headers_file" | tr -cd '0-9')"
+            request_id="${request_id:-unavailable}"
+            retry_after="${retry_after:-unavailable}"
+            rate_remaining="${rate_remaining:-unavailable}"
+
+            echo "DEPENDENCY_REVIEW_SUPPORT repository=${REPOSITORY} visibility=${repository_visibility} fork=${REPOSITORY_IS_FORK:-unknown} base_sha=${BASE_SHA} head_sha=${HEAD_SHA} attempt=${attempt} http_status=${http_status} curl_exit=${curl_status} X-GitHub-Request-Id=${request_id} Retry-After=${retry_after} X-RateLimit-Remaining=${rate_remaining}"
+
+            if [ "$curl_status" -eq 0 ] && [ "$http_status" = "200" ]; then
+              break
+            fi
+
+            if [ "$curl_status" -eq 0 ] && [ "$http_status" = "403" ] && [ "$repository_visibility" = "public" ] && [ "${REPOSITORY_IS_FORK:-}" = "false" ] && [ "$attempt" -lt 3 ]; then
+              # A public non-fork 403 contradicts the documented normal capability
+              # shape. Re-observe with the same credential; never convert 403 into
+              # support. Retry-After is honored only when small and numeric so an
+              # untrusted service response cannot hold the required queue open.
+              if [ "$retry_after" != "unavailable" ] && [ "$retry_after" -le 5 ]; then
+                sleep "$retry_after"
+              else
+                sleep "$attempt"
+              fi
+              continue
+            fi
+
+            break
+          done
 
           if [ "$curl_status" -ne 0 ] || [ "$http_status" != "200" ]; then
-            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
+            echo "::error::Dependency review evidence unavailable for ${REPOSITORY} at exact base ${BASE_SHA} and head ${HEAD_SHA}: HTTP ${http_status}; curl exit ${curl_status}; request ${request_id}; retry-after ${retry_after}; rate-remaining ${rate_remaining}. Verify dependency-graph/security configuration and GitHub service behavior, then rerun. Failing closed."
             exit 1
           fi
 
