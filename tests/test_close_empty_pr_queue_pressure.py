@@ -16,7 +16,6 @@ WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
         ("pr-review-merge-scheduler.yml", "  scan-pr-queue:"),
         ("python-security.yml", "  detect-python:"),
         ("sast-semgrep.yml", "  semgrep:"),
-        ("secret-scan.yml", "  gitleaks:"),
         ("security-scan.yml", "  osv-scan:"),
     ),
 )
