@@ -483,14 +483,16 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     assert result.stdout.splitlines() == ["1"]
 
 
-def _run_strix_cleanup(tmp_path: Path, pull_states: list[dict[str, object]]) -> str:
+def _run_strix_cleanup(
+    tmp_path: Path, pull_states: list[dict[str, object]], *, action: str = "synchronize"
+) -> str:
     """Execute the production cleanup step against a stateful fake ``gh``."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup")
     step = workflow_step(
         workflow_text("strix.yml"),
-        "Cancel queued and running scans for superseded or closed pull request heads",
+        "Cancel queued and running scans for superseded or inactive pull requests",
     )
     run_block = step.split("        run: |\n", 1)[1].split("\n  strix:", 1)[0]
     script = textwrap.dedent(run_block)
@@ -537,7 +539,7 @@ exit 0
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
         "TARGET_PR_HEAD_SHA": "current",
-        "PR_ACTION": "synchronize",
+        "PR_ACTION": action,
         "CURRENT_RUN_ID": "999",
     }
     subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
@@ -564,15 +566,26 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     calls = _run_strix_cleanup(
         tmp_path,
         [
-            {"state": "open", "head": {"sha": "current"}},
-            {"state": "open", "head": {"sha": "newer"}},
+            {"state": "open", "draft": False, "head": {"sha": "current"}},
+            {"state": "open", "draft": False, "head": {"sha": "newer"}},
         ]
-        + [{"state": "open", "head": {"sha": "newer"}}] * 4,
+        + [{"state": "open", "draft": False, "head": {"sha": "newer"}}] * 4,
     )
 
     assert "actions/runs?status=queued" in calls
     assert "/actions/runs/100/cancel" not in calls
     assert "/actions/runs/100/force-cancel" not in calls
+
+
+def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
+    """A verified Draft transition retires the current expensive Strix run."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": True, "head": {"sha": "current"}}] * 6,
+        action="converted_to_draft",
+    )
+
+    assert "/actions/runs/100/cancel" in calls
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -593,7 +606,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "closed" in workflow
         if filename == "strix.yml":
             assert "cancel-superseded-pr-runs:" in workflow
-            assert "Cancel queued and running scans for superseded or closed pull request heads" in workflow
+            assert "Cancel queued and running scans for superseded or inactive pull requests" in workflow
             assert (
                 "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
                 "|| github.token"
@@ -614,7 +627,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )[0]
         elif filename == "noema-review.yml":
             assert "cancel-closed-pr-runs:" in workflow
-            assert "Cancel queued and running Noema reviews for the closed pull request" in workflow
+            assert "Cancel queued and running Noema reviews for the inactive pull request" in workflow
             assert "leaving runs unchanged" in workflow
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
                 "  noema-review:", 1
@@ -639,6 +652,8 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
+        if filename in {"noema-review.yml", "strix.yml"}:
+            assert "github.event.action != 'converted_to_draft'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
     assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" in (
