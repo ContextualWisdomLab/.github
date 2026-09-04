@@ -116,10 +116,18 @@ def test_reusable_scheduler_enables_policy_for_hourly_callers() -> None:
 
 
 def test_central_repository_has_hourly_self_caller() -> None:
-    """The central repository itself is scanned instead of relying on product callers."""
+    """The central repository itself is scanned instead of relying on product callers.
+
+    ``hourly-review-repair.yml`` was redesigned from a single hourly cron
+    shared by 18 thin per-repository callers into one file with 17 distinct
+    *daily* cron entries, each pinned to a distinct UTC hour (see
+    docs/adr/0021-hourly-review-repair-single-file-consolidation.md and the
+    workflow's own top-of-file comment). The central `.github` self-caller's
+    entry kept its original minute (21) and was assigned hour 6.
+    """
     workflow = _CALLER.read_text(encoding="utf-8")
 
-    assert 'cron: "21 * * * *"' in workflow
+    assert 'cron: "21 6 * * *"' in workflow
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in workflow
     # The consolidated file resolves per-repository parameters through a
     # github.event.schedule lookup table rather than flat `key: value`

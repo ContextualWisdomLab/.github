@@ -25,12 +25,31 @@ def _workflow_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_review_fix_caller_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair caller on the approved hourly cadence."""
+def test_review_fix_caller_runs_once_each_day() -> None:
+    """Keep the actionable-review repair caller on the approved daily cadence.
+
+    ``hourly-review-repair.yml`` (its `name:` is now "Daily Review Recovery")
+    was redesigned from a single cron shared by up to 18 thin per-repository
+    callers, firing every hour, into one file with 17 distinct daily cron
+    entries staggered across UTC hours -- see
+    docs/adr/0021-hourly-review-repair-single-file-consolidation.md. Each
+    resolved target, including this file's representative example
+    (Clearfolio, minute 23, hour 7), now runs once per day rather than once
+    per hour. The protected invariant this test originally guarded --
+    dispatch reaches the reusable, product-neutral `pr-review-fix-scheduler.yml`
+    engine rather than reimplementing review-fix logic in the caller -- is
+    unchanged and reasserted here.
+    """
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in caller
+    assert 'cron: "23 7 * * *"' in caller
+    assert 'cron: "23 * * * *"' not in caller
     assert 'cron: "23 */2 * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
+    # Product-hourly-caller-neutral per CLAUDE.md/AGENTS.md: no target
+    # repository dispatched by the caller is hard-coded into the reusable
+    # engine itself.
+    reusable = _workflow_text(FIX_SCHEDULER_WORKFLOW)
+    assert "ContextualWisdomLab/clearfolio" not in reusable
 
 
 def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:

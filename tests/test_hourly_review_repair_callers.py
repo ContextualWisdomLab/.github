@@ -49,8 +49,19 @@ _FORMER_CALLERS = (
 # was raised to "200" here -- see test_max_prs_and_max_dispatches_stay_uniform_static_values)
 # and both are asserted separately as static `with:` values rather than
 # carried per-target.
+#
+# Each schedule key is a full 5-field daily cron string (minute, then a
+# distinct hour 0-16), not the hourly `"<minute> * * * *"` shape the original
+# 18 per-repository files used. The redesign (see
+# docs/doctoring/hourly-review-repair-single-file-consolidation.md and
+# docs/adr/0021-hourly-review-repair-single-file-consolidation.md) turned the
+# single shared hourly cron into 17 distinct once-per-day schedules,
+# staggered across UTC hours 0-16, so this control plane admits at most one
+# recovery workflow per hour instead of seventeen every hour. Each
+# repository's original minute is preserved verbatim as the new cron's
+# minute field; only the hour field is new.
 _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
-    "2 * * * *": [
+    "2 0 * * *": [
         {
             "name": "afipc",
             "target_repository": "ContextualWisdomLab/aFIPC",
@@ -59,7 +70,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "afipc-hourly-review-repair",
         },
     ],
-    "4 * * * *": [
+    "4 1 * * *": [
         {
             "name": "lineageweave",
             "target_repository": "ContextualWisdomLab/LineageWeave",
@@ -68,7 +79,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "lineageweave-hourly-review-repair",
         },
     ],
-    "9 * * * *": [
+    "9 2 * * *": [
         {
             "name": "psychometrics-commons",
             "target_repository": "ContextualWisdomLab/psychometrics-commons",
@@ -77,7 +88,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "psychometrics-commons-hourly-review-repair",
         },
     ],
-    "10 * * * *": [
+    "10 3 * * *": [
         {
             "name": "originweave",
             "target_repository": "ContextualWisdomLab/OriginWeave",
@@ -86,7 +97,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "originweave-hourly-review-repair",
         },
     ],
-    "14 * * * *": [
+    "14 4 * * *": [
         {
             "name": "quarantine-sandbox",
             "target_repository": "ContextualWisdomLab/quarantine-sandbox-runtime",
@@ -95,7 +106,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "quarantine-sandbox-hourly-review-repair",
         },
     ],
-    "16 * * * *": [
+    "16 5 * * *": [
         {
             "name": "nonnest2",
             "target_repository": "ContextualWisdomLab/nonnest2",
@@ -104,7 +115,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "nonnest2-hourly-review-repair",
         },
     ],
-    "21 * * * *": [
+    "21 6 * * *": [
         {
             "name": "github",
             "target_repository": "ContextualWisdomLab/.github",
@@ -113,7 +124,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "github-hourly-review-repair",
         },
     ],
-    "23 * * * *": [
+    "23 7 * * *": [
         {
             "name": "clearfolio",
             "target_repository": "ContextualWisdomLab/clearfolio",
@@ -122,7 +133,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "clearfolio-hourly-review-repair",
         },
     ],
-    "27 * * * *": [
+    "27 8 * * *": [
         {
             "name": "accounting-information-platform",
             "target_repository": "ContextualWisdomLab/accounting-information-platform",
@@ -131,7 +142,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "accounting-information-platform-hourly-review-repair",
         },
     ],
-    "34 * * * *": [
+    "34 9 * * *": [
         {
             "name": "contextual-orchestrator",
             "target_repository": "ContextualWisdomLab/contextual-orchestrator",
@@ -140,7 +151,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "contextual-orchestrator-hourly-review-repair",
         },
     ],
-    "37 * * * *": [
+    "37 10 * * *": [
         {
             "name": "disksage",
             "target_repository": "ContextualWisdomLab/disksage",
@@ -149,7 +160,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "disksage-hourly-review-repair",
         },
     ],
-    "43 * * * *": [
+    "43 11 * * *": [
         {
             "name": "governance-risk-compliance",
             "target_repository": "ContextualWisdomLab/governance-risk-compliance",
@@ -162,9 +173,9 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     # independent files (fast-mlsirm, metering-billing-platform) had each
     # chosen minute 49 without knowing about the other. The consolidated
     # lookup makes that sharing explicit and still dispatches each
-    # repository exactly once per hour, via the matrix in
+    # repository exactly once per day (hour 12 UTC), via the matrix in
     # dispatch-review-repair.
-    "49 * * * *": [
+    "49 12 * * *": [
         {
             "name": "fast-mlsirm",
             "target_repository": "ContextualWisdomLab/fast-mlsirm",
@@ -180,7 +191,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "metering-billing-platform-hourly-review-repair",
         },
     ],
-    "53 * * * *": [
+    "53 13 * * *": [
         {
             "name": "bandscope",
             "target_repository": "ContextualWisdomLab/bandscope",
@@ -189,7 +200,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "bandscope-hourly-review-repair",
         },
     ],
-    "56 * * * *": [
+    "56 14 * * *": [
         {
             "name": "inkspan",
             "target_repository": "ContextualWisdomLab/inkspan",
@@ -198,7 +209,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "inkspan-hourly-review-repair",
         },
     ],
-    "58 * * * *": [
+    "58 15 * * *": [
         {
             "name": "orgmetra",
             "target_repository": "ContextualWisdomLab/Orgmetra",
@@ -207,7 +218,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "orgmetra-hourly-review-repair",
         },
     ],
-    "59 * * * *": [
+    "59 16 * * *": [
         {
             "name": "semantic-data-portal",
             "target_repository": "ContextualWisdomLab/semantic-data-portal",
@@ -277,7 +288,15 @@ def test_all_eighteen_former_callers_are_deleted() -> None:
 
 
 def test_schedule_list_has_every_distinct_minute_exactly_once() -> None:
-    """The 17 distinct minutes (49 is intentionally shared) each appear once."""
+    """The 17 distinct daily cron entries (minute 49 is intentionally shared
+    by two repositories at hour 12) each appear exactly once.
+
+    Each entry is a full ``<minute> <hour> * * *`` daily schedule, not an
+    hourly ``<minute> * * * *`` one: the redesign spreads the 17 (18
+    repository) recoveries across distinct UTC hours 0-16 so this control
+    plane admits at most one recovery workflow per hour instead of
+    seventeen every hour.
+    """
     text = _read(_CALLER)
     cron_lines = re.findall(r'- cron: "([^"]+)"', text)
 
