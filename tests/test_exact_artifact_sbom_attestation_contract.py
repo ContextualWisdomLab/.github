@@ -253,7 +253,7 @@ def test_quality_workflow_pins_supported_runner_images() -> None:
     """Keep exact supply-chain evidence on an explicit runner image."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") == 2
+    assert workflow.count("runs-on: ubuntu-24.04") == 1
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:
