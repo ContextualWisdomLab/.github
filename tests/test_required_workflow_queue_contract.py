@@ -625,7 +625,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
     )
@@ -671,7 +670,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "secret-scan.yml",
             "security-scan.yml",
         }:
             assert "cancel-closed-pr-runs:" not in workflow
@@ -1894,7 +1892,9 @@ def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
     workflow = workflow_text("secret-scan.yml")
 
     assert "CURRENT_SHA: ${{ github.sha }}" in workflow
-    assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' in workflow
+    assert "pull_request:" not in workflow.split("concurrency:", 1)[0]
+    assert "BASE_SHA:" not in workflow
+    assert "HEAD_SHA:" not in workflow
     assert 'log_opts="${CURRENT_SHA}"' in workflow
     assert '--log-opts="${log_opts}"' in workflow
     assert "unrelated remote refs are excluded" in workflow
