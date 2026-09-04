@@ -1535,7 +1535,18 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     body = json.dumps(
         {
             "error": {
-                "detail": {"model": "github_models/deepseek-v3", "secret": secret},
+                "detail": {
+                    "model": "github_models/deepseek-v3",
+                    "terminal_reason": "eligible_candidates_exhausted",
+                    "attempts": [{
+                        "provider_name": "nvidia_nim",
+                        "phase": "connecting",
+                        "attempt_number": 2,
+                        "provider_status": 503,
+                        "secret": secret,
+                    }],
+                    "secret": secret,
+                },
                 "message": secret,
             },
             "arbitrary": secret,
@@ -1559,6 +1570,11 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "served_model=github_models/deepseek-v3" in output
     assert "phase=response_error" in diagnostic
     assert "served_model=github_models/deepseek-v3" in diagnostic
+    assert "provider_name=nvidia_nim" in output
+    assert "upstream_phase=connecting" in output
+    assert "attempt_number=2" in output
+    assert "upstream_status=503" in output
+    assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
 
