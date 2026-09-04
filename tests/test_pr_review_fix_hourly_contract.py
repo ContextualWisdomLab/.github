@@ -14,7 +14,7 @@ from scripts.ci import pr_review_fix_scheduler as scheduler
 _REUSABLE_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 _CONSOLIDATED_CALLER = Path(".github/workflows/hourly-review-repair.yml")
-_CONTRACT_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+_CONTRACT_WORKFLOW = Path(".github/workflows/agent-review-runtime-quality-ci.yml")
 _AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 
 

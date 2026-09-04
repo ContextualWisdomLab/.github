@@ -61,8 +61,8 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 ## Structure
 
 - `.github/workflows/` — the central workflows. `pull_request_target`-triggered required workflows
-  (`opencode-review.yml`, `noema-review.yml`, `pr-review-merge-scheduler.yml`, `strix.yml`,
-  `close-empty-pr.yml`, …), security gates (`python-security.yml` bandit + pip-audit,
+  (`opencode-review.yml`, `noema-review.yml`, `pr-review-merge-scheduler.yml`, `strix.yml`, …),
+  security gates (`python-security.yml` bandit + pip-audit,
   `security-scan.yml`, `sast-semgrep.yml`, `secret-scan.yml`, `codeql-pr.yml`, `osv-scanner-pr.yml`,
   `scorecard-*.yml`, SBOM workflows), and reusable `workflow_call` workflows sibling repos call
   (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`).
