@@ -42,13 +42,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        the same PR (proven end to end by
        ``test_superseded_cleanup_preserves_current_and_newer_run_ids``,
        executing the real production jq selector).
-    2. A delayed ``workflow_run``/``repository_dispatch`` completion for an
-       OLDER head must never cancel a genuinely current run -- pinned here by
-       the head-inclusive concurrency group assertions below (native
-       protection, independent of this step) AND by the step-level ``if:``
-       gate restricting this explicit cancellation entirely to live
-       ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
-       execution never even reaches this step.
+    2. A delayed ``repository_dispatch`` for an older head must stop in the
+       live-head admission job before it can reach native concurrency.
     3. A cancellation step whose OWN trigger was confirmed live at the start
        of the job must still never cancel a run dispatched AFTER its own
        dispatch, even though its own multi-pass scan can take long enough in
@@ -65,9 +60,15 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
     assert "github.event.workflow_run" not in concurrency
-    assert "github.event.action == 'synchronize'" in concurrency
-    assert "github.event.action == 'closed'" in concurrency
-    assert "cancel-in-progress: true" not in concurrency
+    assert "cancel-in-progress: true" in concurrency
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  cancel-closed-pr-runs:", 1
+    )[0]
+    assert 'echo "admitted=false"' in admission
+    assert 'echo "admitted=true"' in admission
+    assert "live_head" in admission
+    assert "live_state" in admission
+    assert "outputs.admitted == 'true'" in workflow
     assert "Cancel superseded Noema runs after live-head validation" in workflow
     assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
         "Cancel superseded Noema runs after live-head validation"

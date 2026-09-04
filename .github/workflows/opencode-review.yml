@@ -227,9 +227,50 @@ jobs:
             --event-action "$EVENT_ACTION" \
             --api-url "https://api.github.com"
 
+  admit-current-head:
+    name: admit-current-head
+    needs: [required-workflow-bootstrap]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Admit only the exact live OpenCode head
+        id: live_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EXPECTED_ACTION: ${{ github.event.action || '' }}
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenCode admission rejected malformed pull request metadata."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          expected_state=open
+          [ "$EXPECTED_ACTION" = "closed" ] && expected_state=closed
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "$expected_state" ]; then
+            echo "::notice::OpenCode admission retired a stale event before review queue entry."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+          echo "Exact live OpenCode head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
+
   coverage-source-tree:
     name: coverage-source-tree
-    needs: [required-workflow-bootstrap]
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -247,7 +288,8 @@ jobs:
 
   opencode-review-target:
     name: opencode-review
-    needs: [coverage-evidence]
+    needs: [admit-current-head, coverage-evidence]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     # Job-level (not workflow-level) on purpose: a workflow-level concurrency
     # block applies to the ENTIRE run as a unit -- every job in the file,
@@ -266,14 +308,16 @@ jobs:
     # cancel-in-progress below) at the same time.
     concurrency:
       group: >-
-        opencode-review-bootstrap-${{
+        opencode-review-${{
         github.event.pull_request.base.repo.full_name || github.repository }}-${{
         github.event.pull_request.number || github.run_id }}
       # Scoped by repository + PR number ONLY (not head SHA) with
-      # cancel-in-progress: false -- by explicit user directive on
-      # 2026-09-03, refined after cross-session review to fully close the
-      # race this is actually protecting against, not just trade one
-      # failure mode for another.
+      # The bootstrap and coverage chain finishes before this job is admitted.
+      # Its first privileged action re-fetches the live PR metadata, while the
+      # separate cleanup job rejects an out-of-order stale synchronize event.
+      # Therefore only the exact current-head target reaches this queue and a
+      # newer current-head target can safely retire the same PR's older target
+      # before a runner is assigned.
       #
       # History: head-SHA scoping was added for Devin Review's `#1568`
       # finding -- GitHub cancels whichever run is currently active in a
@@ -289,14 +333,7 @@ jobs:
       # concurrent push volume; see internal memory
       # project_queue_thrashing_self_inflicted_2026_09_03).
       #
-      # GitHub applies concurrency cancellation before any job step can compare
-      # the event head with the live PR head. Therefore a delayed stale event
-      # could cancel a fresh run if this were true; live-head admission cannot
-      # repair that ordering. The separate cleanup job revalidates the live
-      # head before each precise stale-run cancellation. These target jobs are
-      # short: a missing receipt fails immediately and the dispatch workflow
-      # reruns the failed job after publishing the exact-head verdict.
-      cancel-in-progress: false
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: read
