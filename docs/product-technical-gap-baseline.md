@@ -2944,3 +2944,17 @@ something absent) held for the wardnet correction; the EgressWeave correction is
 verifying "library X can't do Y" requires reading X's own policy/configuration surface, not just its
 README/marketing feature list, before recommending against adoption. Saved to
 `feedback_verify_org_wide_before_declaring_unstarted.md`.
+
+## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
+
+**Status:** Root-caused and fixed. `.github/workflows/hourly-review-repair.yml` (the single file that
+replaced 18 per-repository callers, see `docs/doctoring/hourly-review-repair-single-file-consolidation.md`)
+called `pr-review-fix-scheduler.yml` with `max_prs: "50"` for all 20 targets. `#1397` had already root-caused
+this exact bound as too low for BandScope specifically (136 open PRs at the time, so an oldest-first scan
+capped at 50 never reached current non-draft work), but that PR never merged before the consolidation deleted
+its target file out from under it — leaving `#1397` obsolete and the underlying cap live, org-wide, and
+unfixed. Independently confirmed live during this session's PR sweep: `ContextualWisdomLab/.github` itself
+(one of the 20 targets, `21 * * * *`) had 117 open PRs. Fixed by raising `max_prs` to `"200"` for all targets
+uniformly; see the doctoring doc's 2026-09-03 follow-up section for the full before/after and updated tests.
+A comment was left on `#1397` pointing at the replacement fix rather than closing it (closure is a merge-only
+action per this repo's governance model).
