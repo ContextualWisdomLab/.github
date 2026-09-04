@@ -26,9 +26,9 @@ def _workflow_text(path: Path) -> str:
 
 
 def test_review_fix_caller_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair caller on the approved hourly cadence."""
+    """Keep the actionable-review repair caller on the approved daily-staggered cadence."""
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in caller
+    assert 'cron: "23 7 * * *"' in caller
     assert 'cron: "23 */2 * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
