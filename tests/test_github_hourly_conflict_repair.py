@@ -119,7 +119,7 @@ def test_central_repository_has_hourly_self_caller() -> None:
     """The central repository itself is scanned instead of relying on product callers."""
     workflow = _CALLER.read_text(encoding="utf-8")
 
-    assert 'cron: "21 * * * *"' in workflow
+    assert 'cron: "21 6 * * *"' in workflow
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in workflow
     # The consolidated file resolves per-repository parameters through a
     # github.event.schedule lookup table rather than flat `key: value`

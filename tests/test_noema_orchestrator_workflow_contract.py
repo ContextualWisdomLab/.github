@@ -36,7 +36,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Cancel queued and running Noema reviews for the closed pull request",
+            "Cancel queued and running Noema reviews for the inactive pull request",
         ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
     )
     workflow_path = ".github/workflows/noema-review.yml"
@@ -100,6 +100,9 @@ if [[ "$*" == *"--paginate"* ]]; then
   status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
   jq --arg status "$status" '{workflow_runs: [.workflow_runs[] | select(.status == $status)]}' \\
     "$FAKE_RUNS_FILE"
+elif [[ "$*" == *"/pulls/"* ]]; then
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
+  printf '{"state": "closed", "draft": false, "head": {"sha": "%s"}}\n' "$(printf 'a%.0s' {1..40})"
 else
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
 fi
@@ -113,7 +116,9 @@ fi
             **os.environ,
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
-            "CLOSED_PR_NUMBER": "7",
+            "INACTIVE_PR_NUMBER": "7",
+            "INACTIVE_PR_HEAD_SHA": "a" * 40,
+            "PR_ACTION": "closed",
             "CURRENT_RUN_ID": "999",
             "FAKE_RUNS_FILE": str(runs_file),
             "FAKE_CALLS_FILE": str(calls_file),

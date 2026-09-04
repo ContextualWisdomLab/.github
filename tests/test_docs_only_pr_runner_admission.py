@@ -85,19 +85,40 @@ def _on_block(workflow: str) -> str:
     return match.group(1)
 
 
+def _strip_if_condition(block: str) -> str:
+    """Drop the `if:` line and, for a folded/literal scalar, its continuation lines.
+
+    A workflow's `if:` condition can span multiple lines (``if: >-`` or ``if: |``
+    followed by more-indented continuation lines) rather than a single line.
+    Comparing gate copies must ignore the whole condition, not just its first
+    line, since each copy is allowed its own admission condition independent
+    of how many source lines that condition takes.
+    """
+    kept: list[str] = []
+    skip_indent: int | None = None
+    for line in block.splitlines():
+        indent = len(line) - len(line.lstrip(" "))
+        if skip_indent is not None and line.strip() and indent > skip_indent:
+            continue
+        skip_indent = None
+        if line.strip().startswith("if:"):
+            skip_indent = indent
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
     """The `changed-scope` block must not drift between its five copies."""
     normalized_blocks = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
-        )
+        normalized = _strip_if_condition(block)
         normalized_blocks.add(normalized)
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
-        "from the single 'if:' line"
+        "from the 'if:' condition"
     )
 
 
