@@ -826,8 +826,9 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-    with pytest.raises(HTTPError):
+    with pytest.raises(HTTPError) as caught:
         policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
+    caught.value.close()
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

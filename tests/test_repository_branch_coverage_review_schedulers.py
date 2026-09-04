@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
+import runpy
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,6 +18,36 @@ from scripts.ci import pr_auto_rebase as auto_rebase
 from scripts.ci import pr_review_autofix_context as autofix_context
 from scripts.ci import pr_review_fix_scheduler as fix_scheduler
 from scripts.ci import pr_review_merge_scheduler as merge_scheduler
+
+
+def test_merge_scheduler_core_direct_import_fallback(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def import_without_package(name, *args, **kwargs):
+        if name == "scripts.ci.review_admission_controller":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.syspath_prepend(str(Path("scripts/ci").resolve()))
+    monkeypatch.setattr(builtins, "__import__", import_without_package)
+    namespace = runpy.run_path(
+        "scripts/ci/pr_review_merge_scheduler_core.py",
+        run_name="pr_review_merge_scheduler_core_direct_import_test",
+    )
+    assert namespace["SchedulerAdmissionGate"].__name__ == "SchedulerAdmissionGate"
+
+
+def test_merge_scheduler_self_test_direct_import_fallback(monkeypatch) -> None:
+    real_import = builtins.__import__
+
+    def import_without_package(name, *args, **kwargs):
+        if name == "scripts.ci.review_admission_controller":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.syspath_prepend(str(Path("scripts/ci").resolve()))
+    monkeypatch.setattr(builtins, "__import__", import_without_package)
+    merge_scheduler.self_test()
 
 
 def test_noema_public_dns_result_reaches_valid_model_response(
@@ -208,3 +241,37 @@ def test_merge_scheduler_keeps_newest_check_when_older_duplicate_arrives() -> No
         }
     }
     assert merge_scheduler.failed_status_checks(pr) == []
+
+
+def test_merge_scheduler_summary_loops_cover_optional_details() -> None:
+    conflicts = merge_scheduler.conflict_repair_summary(
+        [
+            merge_scheduler.Decision(
+                1, "wait", "merge conflict: DIRTY; base=main, head=feature-a"
+            ),
+            merge_scheduler.Decision(
+                2,
+                "wait",
+                "merge conflict: DIRTY; base=main, head=feature-b; changed files to inspect first: app.py",
+            ),
+        ]
+    )
+    assert "- `app.py`" in conflicts
+
+    restamps = merge_scheduler.last_push_approval_restamp_summary(
+        [
+            merge_scheduler.Decision(
+                1,
+                "restamp_head",
+                "last-push approval head refresh requested",
+                ("unrelated note",),
+            ),
+            merge_scheduler.Decision(
+                2,
+                "restamp_head",
+                "last-push approval head refresh requested",
+                ("last-push approval head refresh created same-tree head abc",),
+            ),
+        ]
+    )
+    assert any("same-tree head abc" in line for line in restamps)

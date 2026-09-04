@@ -304,6 +304,8 @@ def _github_open_json(url: str, token: str) -> object:
         with github_opener.open(request, timeout=30) as response:
             payload = response.read(MAX_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
+        if isinstance(exc, HTTPError):
+            exc.close()
         raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
     if len(payload) > MAX_RESPONSE_BYTES:
         raise PolicyError("GitHub API policy response exceeded the bounded response size")

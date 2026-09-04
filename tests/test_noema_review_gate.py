@@ -1702,12 +1702,38 @@ def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
     assert '{"error":' not in output
 
 
+@pytest.mark.parametrize(
+    "attempts",
+    (
+        [],
+        [None],
+        [
+            {
+                "provider_name": "unsafe provider",
+                "phase": "unsafe phase",
+                "attempt_number": True,
+                "provider_status": 99,
+            }
+        ],
+    ),
+)
+def test_http_error_telemetry_omits_invalid_attempt_fields(attempts) -> None:
+    body = json.dumps({"error": {"detail": {"attempts": attempts}}}).encode()
+    error = noema.urllib.error.HTTPError(
+        "https://llm.example.test/chat", 502, "Bad Gateway", {}, io.BytesIO(body)
+    )
+    try:
+        assert noema._extract_http_error_telemetry(error) == {}
+    finally:
+        error.close()
+
+
 def test_noema_redirect_handler_rejects_redirects():
     """Noema must not follow redirects after validating the initial URL."""
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError):
+    with pytest.raises(noema.urllib.error.HTTPError) as caught:
         handler.redirect_request(
             request,
             fp=None,
@@ -1716,6 +1742,7 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+    caught.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
