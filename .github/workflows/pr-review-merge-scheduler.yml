@@ -8,7 +8,7 @@ on:
   pull_request_review:
     types: [submitted, dismissed]
   workflow_run:
-    workflows: ["Required OpenCode Review", "Strix Security Scan"]
+    workflows: ["Required OpenCode Review", "Strix Security Scan", "Security Scan", "SAST Semgrep"]
     types: [completed]
   workflow_call:
     inputs:
@@ -73,32 +73,19 @@ on:
         default: ""
         type: string
   schedule:
-    # scan-pr-queue's own repository-local heartbeat. org-queue-sweep below
+    # Daily missed-event recovery for this repository. org-queue-sweep below
     # explicitly excludes ContextualWisdomLab/.github from its target list
     # (a PR in THIS repository, including one editing the governance
     # workflows themselves, is never covered by the org-wide sweep), so this
-    # is the only periodic fallback for this repository's own PR queue. It
-    # also plugs a real event-coverage gap shared by every repository:
-    # required checks such as Security Scan and SAST Semgrep have no
-    # workflow_run listener anywhere in this file, so a PR where either is
-    # the last required check to go green has no event-driven re-wake at
-    # all. Offset by 30 minutes from org-queue-sweep's "0 * * * *" tick so
-    # the two heartbeats do not collide. Lengthened from */30 to hourly for
-    # the same Actions-capacity reason, and by the same lever, as the
-    # org-queue-sweep hourly cadence below (see
-    # docs/doctoring/actions-queue-saturation-hourly-sweep.md, #1630) — do
-    # NOT remove it outright; that would leave this repository's own queue
-    # with zero fallback heartbeat.
-    - cron: "30 * * * *"
-    # Hourly org-wide sweep cadence for the org-queue-sweep job below. Target
-    # repositories only receive scheduler runs on PR events, review/security
-    # workflow completion, and protected-branch pushes; a PR whose approval or
-    # required checks land AFTER its last event has no later trigger and sits
-    # approved-but-unmerged until a human pushes something. The sweep closes
-    # that gap on a fixed heartbeat. Runs hourly so an approval or
-    # required check that lands after a PR's last event is auto-updated/merged
-    # within about an hour without adding quarter-hourly runner pressure.
-    - cron: "0 * * * *"
+    # remains the bounded fallback for a genuinely missed native event. Security
+    # Scan and SAST Semgrep completions now wake the scheduler directly above.
+    # Offset from the organization sweep so recovery jobs do not collide.
+    - cron: "47 3 * * *"
+    # Daily organization-wide missed-event recovery. Native PR, review,
+    # protected-branch push, OpenCode, Strix, Security Scan, and SAST Semgrep
+    # events handle the normal path; this lower-frequency sweep only recovers
+    # delivery gaps and stacked PRs that do not receive required workflows.
+    - cron: "17 3 * * *"
   repository_dispatch:
     types: [merge-scheduler]
 
@@ -146,7 +133,7 @@ jobs:
       ) &&
       (
         github.event_name != 'schedule' ||
-        github.event.schedule != '0 * * * *'
+        github.event.schedule != '17 3 * * *'
       ) &&
       (
         github.event_name != 'repository_dispatch' ||
@@ -589,13 +576,13 @@ jobs:
           python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"
 
   org-queue-sweep:
-    # Organization-wide approved-PR fallback sweep. Event-driven scheduler runs
+    # Organization-wide approved-PR recovery sweep. Event-driven scheduler runs
     # in target repositories stop retrying once their triggering event is
     # consumed, so a PR that becomes mergeable AFTER its last event (approval
     # published after the scheduler pass, required merge-preview checks landing
     # late, a base-branch policy blocker clearing) stays approved-but-unmerged
     # with no later trigger. This job re-runs the same trusted scheduler against
-    # every organization repository on an hourly heartbeat so each such PR is
+    # repositories that can contain open PRs on a daily heartbeat so each such PR is
     # merged, branch-updated, or leaves a concrete per-PR blocker reason in this
     # log. It never bypasses policy: all mutations go through the same guarded
     # scheduler contract as the per-repository runs. Stacked PRs have no
@@ -604,12 +591,12 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/.github' &&
       (
-        (github.event_name == 'schedule' && github.event.schedule == '0 * * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '17 3 * * *') ||
         (github.event_name == 'repository_dispatch' && github.event.client_payload.org_sweep == true)
       )
     runs-on: ubuntu-24.04
     # The complete organization walk exceeded the legacy 30-minute boundary in
-    # production. Keep one running and one latest pending hourly sweep through the
+    # production. Keep one running and one latest pending daily sweep through the
     # schedule-specific concurrency key above, while allowing the current walk
     # enough time to finish instead of cancelling before later repositories.
     timeout-minutes: 60
@@ -630,7 +617,9 @@ jobs:
       # this contract). The scheduler paginates, so 1000 keeps the practical
       # GitHub queue ceiling while avoiding an arbitrary per-repository sample.
       ORG_SWEEP_MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || vars.ORG_SWEEP_MAX_PRS || '1000' }}
-      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}
+      # #1823 moved ordinary PR OpenCode dispatch into the required workflow.
+      # Keep only the separate stacked-PR fallback budget enabled by default.
+      ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0' }}
       ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1' }}
       ORG_SWEEP_BRANCH_UPDATE_LIMIT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT || '1' }}
       ORG_SWEEP_TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false || inputs.trigger_reviews == true }}
@@ -653,7 +642,7 @@ jobs:
       # ticks" guarantee a rotation is meant to provide. Wall-clock time alone
       # is also insufficient, since this single-flight/non-cancelling job can
       # run up to 60 minutes and a delayed real execution can let more than
-      # one hourly window elapse, occasionally repeating a modulo offset
+      # one daily window elapse, occasionally repeating a modulo offset
       # (ContextualWisdomLab/.github#1223 review finding).
       # A repository the sweep credential structurally cannot read (the OpenCode
       # app is not installed there / the PR_REVIEW_MERGE_TOKEN lacks it) returns
@@ -867,10 +856,10 @@ jobs:
           # source: a persistent `ORG_SWEEP_ROTATION_COUNTER` repository
           # variable on this (.github) repository, incremented by exactly
           # one at the start of every actual org-queue-sweep execution. A
-          # wall-clock tick (one per hour) is *not* sufficient on its own:
+          # wall-clock tick (one per day) is *not* sufficient on its own:
           # this job is single-flight/non-cancelling with up to a 60-minute
           # timeout, so a delayed or backlogged execution can let more than
-          # one hourly window elapse between two real sweep runs, and if that
+          # one daily window elapse between two real sweep runs, and if that
           # gap happens to be an exact multiple of the repository count the
           # modulo offset repeats -- reintroducing the exact starvation
           # #1220 fixed (CodeRabbit review finding on #1223). A persistent
@@ -934,7 +923,7 @@ jobs:
                 ORG_SWEEP_ROTATION_INDEX="$counter_next"
               else
                 echo "::warning::read ${counter_variable_name}=${counter_current} but could not PATCH it; falling back to a wall-clock rotation tick for this run only"
-                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
+                ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 86400 ))
               fi
             elif gh api "repos/${GITHUB_REPOSITORY}/actions/variables" \
                    -X POST -f "name=${counter_variable_name}" -f "value=1" >/dev/null 2>&1; then
@@ -947,7 +936,7 @@ jobs:
               ORG_SWEEP_ROTATION_INDEX=1
             else
               echo "::warning::could not read/write ${counter_variable_name}; falling back to a wall-clock rotation tick for this run only"
-              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))
+              ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 86400 ))
             fi
           fi
           if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then
@@ -964,6 +953,7 @@ jobs:
             jq -r '
               .[]
               | select(.archived == false and .disabled == false)
+              | select((.open_issues_count // 1) > 0)
               | select(.full_name != "ContextualWisdomLab/.github")
               | "\(.full_name)\t\(.default_branch)"
             ' <<<"$repositories_json"
