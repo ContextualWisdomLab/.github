@@ -393,8 +393,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
     rate limits rather than a shared pool, giving materially more headroom
     than the single-key 2026-08-23/24 incident had. The concurrency group now
-    scopes the scan job per repository, PR (or run id for non-PR events), and
-    event class. The cleanup job is outside that queue so a synchronize event
+    scopes the scan job per repository and PR after exact live-head admission.
+    Native and dispatched evidence share one group; non-PR events use a unique
+    run id. The cleanup job is outside that queue so a synchronize event
     can immediately retire an older exact-head run without allowing sibling
     scans for *other* PRs to be blocked by it.
     """
@@ -409,29 +410,18 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     )[0]
 
     assert "concurrency:" in workflow
-    assert "github.event.client_payload.target_repository" in concurrency_contract
-    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.repository" in concurrency_contract
-    assert (
-        "format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository, "
-        "github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id)"
-    ) in concurrency_contract
-    assert (
-        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
-        in concurrency_contract
-    )
-    # PR-scoped grouping: the PR (or client_payload) number is part of the key.
-    assert "github.event.pull_request.number || github.event.client_payload.pr_number" in (
-        concurrency_contract
-    )
+    assert "needs: [changed-scope, admit-current-head]" in strix_job
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
+    assert "needs.admit-current-head.outputs.target_repository" in concurrency_contract
+    assert "needs.admit-current-head.outputs.pr_number" in concurrency_contract
+    assert "github.event_name" not in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    # Running scans are not cancelled; GitHub's native group has one pending slot.
-    assert "cancel-in-progress: false" in workflow
+    # Only live-admitted jobs can cancel an older scan for the same PR.
+    assert "cancel-in-progress: true" in concurrency_contract
     assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
     assert "queue: max" not in workflow
-    assert workflow.index("cancel-superseded-pr-runs:") < workflow.index("concurrency:")
+    assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
         "  strix:", 1
     )[0]
@@ -669,10 +659,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix scopes scans per repository and PR while cleanup stays outside that
-    # queue so synchronize and close events can immediately retire old work.
-    assert "cancel-in-progress: false" in strix_workflow
-    assert "PR-scoped (workflow-repository-PR)" in strix_workflow
+    # Strix admits the live head before same-PR cancellation while cleanup stays
+    # outside that queue so synchronize and close events can retire old work.
+    assert "admit-current-head:" in strix_workflow
+    assert "skipping stale evidence" in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
 
 
 def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
