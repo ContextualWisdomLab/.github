@@ -266,13 +266,3 @@ resolver conflict.
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
   — loopback-only web E2E readiness polling and APA 7th citations.
-
-
-### Required OpenCode one-shot verdict admission
-
-The protected required workflow validates live PR state once, reads formal review evidence once, and releases its runner immediately when no exact-head verdict exists. The authenticated default-branch dispatch revalidates repository, immutable run id, workflow path, PR number, and `pull_requests[].head.sha` before `rerun-failed-jobs`. GitHub's documented workflow-run completion event complements the formal-review receipt event; model reasoning has no caller wall-clock deadline and no fixed wake retry allocation is retained.
-
-
-### Required OpenCode event-driven verdict admission
-
-The required workflow performs one live-PR read and one complete paginated formal-review read, then fails closed immediately if no exact-head verdict exists. The privileged formal-review receipt reconciles the immutable required-run id once. If that review arrives before the run finishes, GitHub's `workflow_run: completed` event performs the complementary reconciliation. The completion path admits a rerun only when exact PR/head/workflow identity holds and `review.submitted_at > run.run_started_at`; the same old evidence therefore cannot create an unbounded rerun cycle. No repository-authored polling cadence, retry count, sleep, transport timeout, or model reasoning deadline is part of this verdict-wake state machine.
