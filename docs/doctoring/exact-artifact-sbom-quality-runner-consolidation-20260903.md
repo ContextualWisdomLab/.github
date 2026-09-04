@@ -1,5 +1,14 @@
 # Exact Artifact SBOM 품질 runner 통합
 
+## 2026-09-04 통합 품질 job 이관
+
+전용 품질 workflow는 삭제하고 계약을
+`.github/workflows/agent-review-runtime-quality-ci.yml`의 영향 선택 job으로 옮겼다.
+같은 PR의 관련 파일이 바뀔 때만 실행하며, 통합 job의 exact-head checkout과
+`contents: read` 권한을 공유한다. Python 3.10 compile을 먼저 수행한 뒤 Python 3.14를
+복원해 hash-locked 도구로 coverage, pytest, interrogate, compile을 실행한다.
+SBOM 발행·attestation reusable workflow 자체는 변경하지 않았다.
+
 - 기준: `ContextualWisdomLab/.github@5afbf58cc62c8ff12a57c60d426d1352307fcd04`
 - 확인 시점: 2026-09-03 KST
 - 상태: 구현 및 current-head 검증 대상
