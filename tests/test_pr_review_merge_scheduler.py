@@ -2251,6 +2251,7 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
 
     head_sha = "a" * 40
     pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
     assert result == "dispatched"
@@ -4467,6 +4468,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
@@ -4777,6 +4779,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
 
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
@@ -5097,6 +5100,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             }
         },
     )
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -10171,6 +10175,11 @@ def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
         headRefOid="c" * 40,
         headRefName="feature-b",
     )
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda _repo, number: [first if number == 7 else second],
+    )
     with sched.active_admission_gate(gate):
         assert sched.dispatch_opencode_review(
             "ContextualWisdomLab/example", "Required OpenCode Review", first, dry_run=False
@@ -10180,3 +10189,42 @@ def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
         ) == "admission_deferred"
 
     assert len(dispatched) == 1
+
+
+def test_opencode_dispatch_rechecks_live_head_immediately_before_side_effect(
+    monkeypatch, tmp_path
+):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=89, dispatch_budget=1
+    )
+    pr = make_pr(number=7, baseRefOid="b" * 40, headRefOid="a" * 40, headRefName="feature")
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(number=7, headRefOid="c" * 40)])
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, *, stdin=None: dispatched.append((args, stdin)))
+
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", pr, dry_run=False
+        ) == "stale_head"
+    assert dispatched == []
+
+
+def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=90, dispatch_budget=1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"

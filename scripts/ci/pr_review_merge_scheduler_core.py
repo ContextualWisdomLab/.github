@@ -121,7 +121,7 @@ class SchedulerAdmissionGate:
                     in {"absent", "stale"}
                 ) or (
                     record.request.component == "strix"
-                    and strix_evidence_state(pr) == "failed"
+                    and strix_evidence_state(pr) in {"missing", "failed"}
                 )
                 if failed:
                     records[identity] = RequestRecord(record.request, "stale")
@@ -158,6 +158,17 @@ def review_dispatch_admitted(component: str, repo: str, pr: dict[str, Any]) -> b
     """Return whether the current dispatch has a bounded durable lease."""
     return _ACTIVE_ADMISSION_GATE is None or _ACTIVE_ADMISSION_GATE.admit(
         component, repo, pr
+    )
+
+
+def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
+    """Re-read the authoritative PR immediately before an Actions side effect."""
+    live = fetch_pr(validate_github_repository(repo), int(pr["number"]))
+    return (
+        len(live) == 1
+        and str(live[0].get("state") or "OPEN").upper() == "OPEN"
+        and str(live[0].get("headRefOid") or "").lower()
+        == str(pr.get("headRefOid") or "").lower()
     )
 
 
@@ -3687,6 +3698,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id
+    if not live_dispatch_head_matches(target_repo, pr):
+        return "stale_head"
     run_github_dispatch(
         [
             "gh",
@@ -3725,6 +3738,8 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     if job_id:
         if not dry_run and not review_dispatch_admitted("strix", repo, pr):
             return "admission_deferred"
+        if not dry_run and not live_dispatch_head_matches(repo, pr):
+            return "stale_head"
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
         return "rerun" if not dry_run else "dry_run"
     if dry_run:
@@ -3772,6 +3787,8 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     if not review_dispatch_admitted("strix", repo, pr):
         return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    if not live_dispatch_head_matches(target_repo, pr):
+        return "stale_head"
     run_github_dispatch(
         [
             "gh",

@@ -361,15 +361,6 @@ jobs:
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
 
-      - name: Restore durable review admission state
-        id: admission_restore
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/review-admission
-          key: review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-
-
       - name: Wait for approved OpenCode publication run to finish
         id: review_followup
         if: >-
@@ -561,13 +552,6 @@ jobs:
             args+=(--no-update-branches)
           fi
           python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"
-
-      - name: Save durable review admission state
-        if: always() && steps.review_followup.outputs.proceed != 'false'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/review-admission
-          key: review-admission-${{ github.repository_id }}-${{ steps.targeted_dispatch.outputs.repository }}-${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || 'queue' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   org-queue-sweep:
     # Organization-wide approved-PR recovery sweep. Event-driven scheduler runs
@@ -783,14 +767,6 @@ jobs:
 
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
-
-      - name: Restore durable organization admission state
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/review-admission
-          key: review-admission-${{ github.repository_id }}-org-sweep-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            review-admission-${{ github.repository_id }}-org-sweep-
 
       - name: Sweep organization repository queues
         env:
@@ -1148,10 +1124,3 @@ jobs:
             exit 1
           fi
           echo "Organization queue sweep completed cleanly."
-
-      - name: Save durable organization admission state
-        if: always()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/review-admission
-          key: review-admission-${{ github.repository_id }}-org-sweep-${{ github.run_id }}-${{ github.run_attempt }}
