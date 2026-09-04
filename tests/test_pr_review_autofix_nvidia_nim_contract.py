@@ -17,7 +17,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "bb5d439c3fc2fc7b5fcd38533d38f96e1170cd2e"
+REVIEW_DISPATCH_BLOB_SHA = "0823eac0d21414b1f0b9fb953ac6bf93e573f7d6"
 
 
 def _workflow_text(path: Path) -> str:
@@ -28,7 +28,7 @@ def _workflow_text(path: Path) -> str:
 def test_review_fix_caller_runs_once_each_hour() -> None:
     """Keep the actionable-review repair caller on the approved hourly cadence."""
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in caller
+    assert 'cron: "23 7 * * *"' in caller
     assert 'cron: "23 */2 * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 

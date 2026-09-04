@@ -16,6 +16,15 @@ on:
     # events cannot publish stale evidence.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
+concurrency:
+  # Coalesce before runner admission. The live-head job and scheduler still
+  # reject or replace a delayed stale event after native queue cancellation.
+  group: >-
+    required-opencode-review-${{
+    github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
@@ -227,9 +236,50 @@ jobs:
             --event-action "$EVENT_ACTION" \
             --api-url "https://api.github.com"
 
+  admit-current-head:
+    name: admit-current-head
+    needs: [required-workflow-bootstrap]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Admit only the exact live OpenCode head
+        id: live_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EXPECTED_ACTION: ${{ github.event.action || '' }}
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenCode admission rejected malformed pull request metadata."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          expected_state=open
+          [ "$EXPECTED_ACTION" = "closed" ] && expected_state=closed
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "$expected_state" ]; then
+            echo "::notice::OpenCode admission retired a stale event before review queue entry."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+          echo "Exact live OpenCode head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
+
   coverage-source-tree:
     name: coverage-source-tree
-    needs: [required-workflow-bootstrap]
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -247,56 +297,9 @@ jobs:
 
   opencode-review-target:
     name: opencode-review
-    needs: [coverage-evidence]
+    needs: [admit-current-head, coverage-evidence]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
-    # Job-level (not workflow-level) on purpose: a workflow-level concurrency
-    # block applies to the ENTIRE run as a unit -- every job in the file,
-    # including the structurally-separate cancel-superseded-opencode-review-runs
-    # job below. That created a real deadlock (Devin Review, 2026-09-03,
-    # confirmed independently by two peer sessions before I acted on it): with
-    # cancel-in-progress: false, a new push's ENTIRE run -- cleanup job
-    # included -- could not even start until the group freed up, which only
-    # happens when the older run's own opencode-review-target job finishes.
-    # Scoping the group to ONLY this job leaves
-    # cancel-superseded-opencode-review-runs
-    # completely unblocked: it starts immediately on every push and cancels
-    # the older run via a direct Actions API call, which releases this job's
-    # own concurrency slot for the new push's instance -- no deadlock, and the
-    # #1568 stale-cancels-fresh race stays structurally closed (see
-    # cancel-in-progress below) at the same time.
-    concurrency:
-      group: >-
-        opencode-review-bootstrap-${{
-        github.event.pull_request.base.repo.full_name || github.repository }}-${{
-        github.event.pull_request.number || github.run_id }}
-      # Scoped by repository + PR number ONLY (not head SHA) with
-      # cancel-in-progress: false -- by explicit user directive on
-      # 2026-09-03, refined after cross-session review to fully close the
-      # race this is actually protecting against, not just trade one
-      # failure mode for another.
-      #
-      # History: head-SHA scoping was added for Devin Review's `#1568`
-      # finding -- GitHub cancels whichever run is currently active in a
-      # concurrency group when a new one starts, with no notion of
-      # "older"/"newer", so a delayed, out-of-order run for an older head
-      # could cancel the authoritative run already active for a newer head.
-      # Scoping by head SHA gave each push its own group so this couldn't
-      # happen -- but it also meant rapid successive pushes to the SAME PR
-      # no longer shared a group at all, so they stopped cancelling each
-      # other's in-flight runs and instead queued up independently,
-      # directly worsening the self-inflicted queue-thrashing pattern this
-      # org measured directly (236/300 cancelled runs attributed to
-      # concurrent push volume; see internal memory
-      # project_queue_thrashing_self_inflicted_2026_09_03).
-      #
-      # GitHub applies concurrency cancellation before any job step can compare
-      # the event head with the live PR head. Therefore a delayed stale event
-      # could cancel a fresh run if this were true; live-head admission cannot
-      # repair that ordering. The separate cleanup job revalidates the live
-      # head before each precise stale-run cancellation. These target jobs are
-      # short: a missing receipt fails immediately and the dispatch workflow
-      # reruns the failed job after publishing the exact-head verdict.
-      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read

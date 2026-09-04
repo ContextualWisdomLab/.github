@@ -1471,32 +1471,75 @@ def _safe_model_identifier(value: Any) -> str | None:
     return candidate
 
 
-def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
-    """Read a bounded gateway error envelope and return only its safe model id.
+def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str | int]:
+    """Read bounded, allowlisted gateway failure telemetry without raw diagnostics.
 
     The response body is never returned or logged. Only the canonical
-    ``error.detail.model`` field is allowed; malformed, oversized, or unexpected
-    envelopes fail closed to an unknown model.
+    ``error.detail`` receipt fields are allowed; malformed, oversized, or
+    unexpected envelopes fail closed to no telemetry.
     """
     try:
         raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
-    except (AttributeError, OSError, ValueError):
-        return None
+    except (AttributeError, OSError, ValueError, http.client.HTTPException):
+        return {}
     if len(raw_bytes) > MAX_HTTP_ERROR_BODY_BYTES:
-        return None
+        return {}
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-        return None
+        return {}
     if not isinstance(payload, dict):
-        return None
+        return {}
     error = payload.get("error")
     if not isinstance(error, dict):
-        return None
+        return {}
     detail = error.get("detail")
     if not isinstance(detail, dict):
-        return None
-    return _safe_model_identifier(detail.get("model"))
+        return {}
+    telemetry: dict[str, str | int] = {}
+    model = _safe_model_identifier(detail.get("model"))
+    terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
+    attempts = detail.get("attempts")
+    if model is not None:
+        telemetry["served_model"] = model
+    if terminal_reason is not None:
+        telemetry["terminal_reason"] = terminal_reason
+    if isinstance(attempts, list) and attempts and len(attempts) <= 64:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict):
+            provider_name = _safe_model_identifier(last_attempt.get("provider_name"))
+            phase = _safe_model_identifier(last_attempt.get("phase"))
+            attempt_number = last_attempt.get("attempt_number")
+            provider_status = last_attempt.get("provider_status")
+            if provider_name is not None:
+                telemetry["provider_name"] = provider_name
+            if phase is not None:
+                telemetry["upstream_phase"] = phase
+            if type(attempt_number) is int and 1 <= attempt_number <= 64:
+                telemetry["attempt_number"] = attempt_number
+            if type(provider_status) is int and 100 <= provider_status <= 599:
+                telemetry["upstream_status"] = provider_status
+    return telemetry
+
+
+def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
+    """Return the safe served model from one bounded gateway error envelope."""
+    model = _extract_http_error_telemetry(exc).get("served_model")
+    return model if isinstance(model, str) else None
+
+
+def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
+    """Format only allowlisted scalar receipt fields for a public Actions log."""
+    ordered_keys = (
+        "provider_name",
+        "upstream_phase",
+        "attempt_number",
+        "upstream_status",
+        "terminal_reason",
+    )
+    return " ".join(
+        f"{key}={telemetry[key]}" for key in ordered_keys if key in telemetry
+    )
 
 
 def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
@@ -1811,9 +1854,12 @@ def call_llm(
             )
         validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        gateway_telemetry: dict[str, str | int] = {}
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
-            served_model = _extract_http_error_served_model(exc)
+            gateway_telemetry = _extract_http_error_telemetry(exc)
+            model_value = gateway_telemetry.get("served_model")
+            served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
@@ -1830,14 +1876,17 @@ def call_llm(
             if active_phase == "connecting" and _is_definitely_pre_send_failure(exc)
             else "awaiting_response" if active_phase == "connecting" else active_phase
         )
+        gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
         print(
             f"::warning::Noema gateway attempt outcome=failed phase={reported_phase} "
             f"duration={elapsed:.1f}s requested_model={model} served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
+            + (f" gateway {gateway_note}" if gateway_note else "")
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
             f"phase={reported_phase}, requested_model={model}, served_model={model_note}"
+            + (f", gateway {gateway_note}" if gateway_note else "")
         )
         if isinstance(exc, NoemaModelOutputError):
             raise NoemaModelOutputError(

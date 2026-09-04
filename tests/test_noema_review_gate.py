@@ -72,14 +72,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        the same PR (proven end to end by
        ``test_superseded_cleanup_preserves_current_and_newer_run_ids``,
        executing the real production jq selector).
-    2. A delayed ``workflow_run``/``repository_dispatch`` completion for an
-       OLDER head must never cancel a genuinely current run -- pinned here by
-       the unconditional ``cancel-in-progress: false`` assertions below
-       (native protection: the active run is never preempted by anything
-       entering the group, regardless of event type or arrival order) AND by
-       the cleanup job's own ``if:`` gate restricting it entirely to live
-       ``pull_request_target`` triggers, so a workflow_run/repository_dispatch
-       execution never even reaches this job.
+    2. A delayed ``repository_dispatch`` for an older head must stop in the
+       live-head admission job before it can reach native concurrency.
     3. A cancellation step whose OWN trigger was confirmed live at the start
        of the job must still never cancel a run dispatched AFTER its own
        dispatch, even though its own multi-pass scan can take long enough in
@@ -116,8 +110,15 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
         concurrency_start + len("\n    concurrency:") : cancel_line_end
     ]
     assert "github.event.workflow_run" not in concurrency
-    assert "cancel-in-progress: false" in concurrency
-    assert "cancel-in-progress: true" not in concurrency
+    assert "cancel-in-progress: true" in concurrency
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  cancel-closed-pr-runs:", 1
+    )[0]
+    assert 'echo "admitted=false"' in admission
+    assert 'echo "admitted=true"' in admission
+    assert "live_head" in admission
+    assert "live_state" in admission
+    assert "outputs.admitted == 'true'" in workflow
     assert "Cancel superseded Noema runs after live-head validation" in workflow
 
     cleanup_job = workflow.split("\n  cancel-superseded-noema-runs:", 1)[1].split(
@@ -1603,7 +1604,18 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     body = json.dumps(
         {
             "error": {
-                "detail": {"model": "github_models/deepseek-v3", "secret": secret},
+                "detail": {
+                    "model": "github_models/deepseek-v3",
+                    "terminal_reason": "eligible_candidates_exhausted",
+                    "attempts": [{
+                        "provider_name": "nvidia_nim",
+                        "phase": "connecting",
+                        "attempt_number": 2,
+                        "provider_status": 503,
+                        "secret": secret,
+                    }],
+                    "secret": secret,
+                },
                 "message": secret,
             },
             "arbitrary": secret,
@@ -1627,6 +1639,11 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "served_model=github_models/deepseek-v3" in output
     assert "phase=response_error" in diagnostic
     assert "served_model=github_models/deepseek-v3" in diagnostic
+    assert "provider_name=nvidia_nim" in output
+    assert "upstream_phase=connecting" in output
+    assert "attempt_number=2" in output
+    assert "upstream_status=503" in output
+    assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
 
@@ -1661,6 +1678,37 @@ def test_call_llm_http_error_malformed_or_oversized_model_is_unknown(
     assert "phase=response_error" in output
     assert "served_model=unknown" in output
     assert body.decode("utf-8", errors="ignore") not in output
+
+
+def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
+    monkeypatch, capsys
+):
+    """A truncated gateway error body cannot bypass the stable transport boundary."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    class BrokenBody:
+        def read(self, _limit):
+            raise noema.http.client.IncompleteRead(b'{"error":')
+
+        def close(self):
+            return None
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, BrokenBody()
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError, match="served_model=unknown"):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    assert "phase=response_error" in output
+    assert "served_model=unknown" in output
+    assert '{"error":' not in output
 
 
 def test_noema_redirect_handler_rejects_redirects():

@@ -3,7 +3,6 @@
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +45,20 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
+    """Keep each run bounded without treating immutable cache snapshots as locks."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert "actions/cache/restore" not in workflow
+    assert "actions/cache/save" not in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -85,8 +98,8 @@ def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
     assert workflow.count('STALE_OPENCODE_MINUTES="$stale_opencode_minutes"') == 2
 
 
-def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
-    """Use stable repository-scoped concurrency keys for unscoped events."""
+def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
+    """Do not enqueue a scheduler run after every required workflow completion."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -94,11 +107,8 @@ def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
 
     assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
-    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
-    assert (
-        "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
-        in concurrency_contract
-    )
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
+    assert "github.event.workflow_run" not in concurrency_contract
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
@@ -244,7 +254,6 @@ def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     """Ensure required pull-request workflows cancel obsolete executions."""
     for filename in (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
@@ -275,73 +284,23 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
-            assert "cancel-in-progress: true" in workflow
-        if filename in {
-            "close-empty-pr.yml",
-            "security-scan.yml",
-        }:
+        if filename != "noema-review.yml":
+            assert re.search(r"(?m)^concurrency:", workflow)
+        assert "cancel-in-progress: true" in concurrency_contract
+        if filename == "security-scan.yml":
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
-            # Job-level (scoped to opencode-review-target only), not
-            # workflow-level: a workflow-level block would capture the
-            # structurally-separate cancel-superseded-opencode-review-runs
-            # job too, deadlocking it behind the very run it exists to
-            # cancel (Devin Review, 2026-09-03).
+            assert "required-opencode-review-${{" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
+        elif filename == "noema-review.yml":
             assert not re.search(r"(?m)^concurrency:", workflow)
             assert re.search(r"(?m)^    concurrency:", workflow)
-            assert "opencode-review-bootstrap-" in concurrency_contract
-            # Deliberately NOT scoped by head SHA and deliberately
-            # cancel-in-progress: false (reverted/refined 2026-09-03 by
-            # explicit user directive plus peer review): head-SHA scoping
-            # (originally added for Devin Review's `#1568` finding) meant
-            # every push to a PR got its own concurrency group, so rapid
-            # successive pushes no longer cancelled each other's in-flight
-            # runs -- they queued up independently instead, worsening the
-            # self-inflicted queue-thrashing pattern this org measured
-            # directly (236/300 cancelled runs from concurrent push volume).
-            # GitHub applies native concurrency cancellation before a job can
-            # compare event and live heads. Keeping false prevents a delayed
-            # stale event from evicting a fresh run; the live-head-aware cleanup
-            # job performs precise stale cancellation instead.
-            assert (
-                "github.event.pull_request.head.sha || github.run_id"
-                not in concurrency_contract
-            )
-            assert "cancel-in-progress: false" in concurrency_contract
-        elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
-            assert "noema-review-${{" in concurrency_contract
-            assert "github.event_name" not in concurrency_contract.split(
-                "cancel-in-progress:", 1
-            )[0]
-            # PR number only, no head SHA, and cancel-in-progress
-            # unconditionally false -- not the #1568-style SHA-scoped fix
-            # opencode-review.yml uses. A SHA-scoped group gives every push
-            # its own group, so under the org's saturated Actions ceiling a
-            # stale per-push run is only retired by a separate cleanup job
-            # that shares that same congested admission queue and can
-            # itself sit stuck behind it, letting superseded runs pile up
-            # rather than being promptly evicted. cancel-in-progress: false
-            # fixes the original #1568-class hazard just as completely
-            # without that cost: the active run is never preempted
-            # regardless of event arrival order, so a late old-head event
-            # can no longer kill a valid newer-head run no matter how the
-            # group is scoped -- and GitHub's own single-pending-slot rule
-            # still evicts an intermediate queued push for free. Whichever
-            # instance actually runs is never trusted blindly either way:
-            # "Reject a stale trigger before credential or model setup"
-            # re-fetches the live PR head and fails closed on a mismatch.
-            group_only = concurrency_contract.split("cancel-in-progress:", 1)[0]
-            assert "github.event.pull_request.head.sha" not in group_only
-            assert "github.event.client_payload.pr_head_sha" not in group_only
-            assert (
-                concurrency_contract.split("cancel-in-progress:", 1)[1].strip()
-                == "false"
-            )
+            assert "required-noema-review-${{" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
         else:
             if filename == "codeql-pr.yml":
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -349,11 +308,6 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        # No required pull-request workflow scopes its concurrency group by
-        # head SHA any more (2026-09-03): noema-review.yml and
-        # opencode-review.yml both dropped it the same day, independently,
-        # in favor of cancel-in-progress: false -- see the elif branches
-        # above for the full reasoning. No exclusion needed.
         assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -363,13 +317,7 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
     groups = {
         "agent-mention-router-quality-ci.yml": "agent-mention-router-quality",
         "cloudflare-dns.yml": "cloudflare-dns",
-        "hourly-nvidia-nim-review-repair.yml": (
-            "contextual-orchestrator-review-repair-quality"
-        ),
         "javascript-coverage-quality-ci.yml": "javascript-coverage-quality",
-        "organization-commercial-readiness-loop-quality-ci.yml": (
-            "organization-commercial-readiness-loop-quality"
-        ),
         "trusted-uv-materializer-quality-ci.yml": (
             "trusted-uv-materializer-quality"
         ),
@@ -442,7 +390,7 @@ def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
 
 
 def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
-    """Scope Strix per repository AND PR, matching every other central workflow.
+    """Scope Strix workflow admission per repository AND PR.
 
     History: from 2026-08-24 through 2026-09-03 the concurrency group was
     deliberately repository-wide (not PR-scoped) because PR-scoping is what
@@ -455,47 +403,32 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
 
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
-    rate limits rather than a shared pool, giving materially more headroom
-    than the single-key 2026-08-23/24 incident had. The concurrency group now
-    scopes the scan job per repository, PR (or run id for non-PR events), and
-    event class. The cleanup job is outside that queue so a synchronize event
-    can immediately retire an older exact-head run without allowing sibling
-    scans for *other* PRs to be blocked by it.
+    rate limits rather than a shared pool. The workflow-level group now retires
+    superseded runs before runner admission, including runs still blocked by
+    the organization-wide job ceiling. Native and dispatched evidence share
+    one group; non-PR events use a unique run id.
     """
     workflow = workflow_text("strix.yml")
-    # Isolate the strix: job's own text first: cancel-superseded-pr-runs above
-    # it now carries its own (PR-scoped, dedup-only) concurrency: block, so a
-    # naive first-match split on the bare "concurrency:" literal would grab
-    # that job's block instead of this one.
-    strix_job = workflow.split("\n  strix:\n", 1)[1]
-    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
 
-    assert "concurrency:" in workflow
-    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert re.search(r"(?m)^concurrency:", workflow)
+    assert "needs: [changed-scope, admit-current-head]" in strix_job
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
+    assert "strix-security-scan-${{" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.repository" in concurrency_contract
-    assert (
-        "format('{0}-{1}-{2}', github.event_name, github.event.client_payload.target_repository || "
-        "github.event.pull_request.base.repo.full_name || github.repository, "
-        "github.event.pull_request.number || github.event.client_payload.pr_number || github.run_id)"
-    ) in concurrency_contract
-    assert (
-        "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)"
-        in concurrency_contract
-    )
-    # PR-scoped grouping: the PR (or client_payload) number is part of the key.
-    assert "github.event.pull_request.number || github.event.client_payload.pr_number" in (
-        concurrency_contract
-    )
+    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert "github.event.pull_request.number" in concurrency_contract
+    assert "github.event.client_payload.pr_number" in concurrency_contract
+    assert "github.run_id" in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    # Running scans are not cancelled; GitHub's native group has one pending slot.
-    assert "cancel-in-progress: false" in workflow
-    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
-    assert workflow.index("cancel-superseded-pr-runs:") < workflow.index("concurrency:")
+    assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
         "  strix:", 1
     )[0]
@@ -661,13 +594,11 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
     )
@@ -708,12 +639,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
         elif filename in {
-            "close-empty-pr.yml",
             "codeql-pr.yml",
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "secret-scan.yml",
             "security-scan.yml",
         }:
             assert "cancel-closed-pr-runs:" not in workflow
@@ -735,28 +664,27 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix scopes scans per repository and PR while cleanup stays outside that
-    # queue so synchronize and close events can immediately retire old work.
-    assert "cancel-in-progress: false" in strix_workflow
-    assert "PR-scoped (workflow-repository-PR)" in strix_workflow
+    # Strix admits the live head before same-PR cancellation while cleanup stays
+    # outside that queue so synchronize and close events can retire old work.
+    assert "admit-current-head:" in strix_workflow
+    assert "skipping stale evidence" in strix_workflow
+    assert "cancel-in-progress: true" in strix_workflow
 
 
-def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
-    """Retry invalid close-event metadata and leave the PR open on uncertainty."""
-    workflow = workflow_text("close-empty-pr.yml")
-
-    assert "gh_api_json_with_retry()" in workflow
-    assert "jq -e type" in workflow
-    assert "did not return valid JSON; retrying" in workflow
-    assert "did not return valid JSON after 4 attempts" in workflow
-    assert "leaving it open because metadata could not be read" in workflow
-    assert "exit 0" in workflow
-
-
-def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
-    """Prevent cancelled review runs from creating follow-up queue work."""
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
-    assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
+
+
+def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
+    """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    assert "github.event.workflow_run" not in workflow
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
@@ -789,29 +717,25 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
-    triggers = workflow.split("permissions:", 1)[0]
-    # concurrency is job-level (on noema-review itself), not workflow-level,
-    # so it no longer sits in the same span as the `on:` trigger block.
-    # Bounded to the end of the cancel-in-progress line itself (not the
-    # next "if:") since an unrelated pre-existing comment about job-level
-    # timeout-minutes sits between cancel-in-progress and the job's "if:".
-    concurrency_start = workflow.index("\n    concurrency:")
-    cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
-    cancel_line_end = workflow.index("\n", cancel_key)
-    concurrency_contract = workflow[
-        concurrency_start + len("\n    concurrency:") : cancel_line_end
-    ]
+    noema_job = workflow.split("\n  noema-review:\n", 1)[1]
+    concurrency_contract = noema_job.split("    concurrency:\n", 1)[1].split(
+        "    permissions:\n", 1
+    )[0]
 
-    assert "workflow_run:" not in triggers
+    assert "workflow_run:" not in concurrency_contract
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "noema-review-${{" in concurrency_contract
+    assert "required-noema-review-${{" in concurrency_contract
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "cancel-in-progress: false" in concurrency_contract
-    assert "cancel-in-progress: true" not in concurrency_contract
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert workflow.index("  admit-current-head:") < workflow.index(
+        "    concurrency:", workflow.index("  noema-review:")
+    )
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
@@ -1091,11 +1015,11 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
         assert "INPUT_CANONICAL_REF" not in workflow
 
 
-def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
-    """Avoid scanning every PR when a workflow run has no associated pull request."""
+def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
+    """Required-check completion must not create another Actions run."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert "github.event.workflow_run.pull_requests[0].number" in workflow
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
@@ -1128,8 +1052,8 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
-def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
-    """Guard the org-wide approved-PR fallback sweep contract.
+def test_org_queue_sweep_is_explicit_bounded_recovery_only() -> None:
+    """Guard the explicit org-wide approved-PR fallback sweep contract.
 
     Target repositories only receive scheduler runs on PR events, so a PR that
     becomes mergeable after its last event sits approved-but-unmerged forever.
@@ -1137,33 +1061,20 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
     visible reason when it cannot mutate sibling repositories. Native events
-    handle the normal path; the daily sweep recovers missed events. Its cron has a
-    distinct concurrency key from the separate scan-pr-queue heartbeat, and the
-    job has enough runtime headroom to finish a complete organization walk.
+    handle the normal path; only an explicit bounded dispatch may start the
+    expensive organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "17 3 * * *"' in workflow
+    assert '- cron: "17 3 * * *"' not in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '17 3 * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
-    assert (
-        "github.event_name == 'schedule' && format('schedule-{0}', "
-        "github.event.schedule)"
-    ) in workflow
     org_sweep_header = workflow.split("  org-queue-sweep:", 1)[1].split(
         "    permissions:", 1
     )[0]
     assert "timeout-minutes: 60" in org_sweep_header
-    for setting in (
-        "ORG_SWEEP_TRIGGER_REVIEWS",
-        "ORG_SWEEP_ENABLE_AUTO_MERGE",
-        "ORG_SWEEP_UPDATE_BRANCHES",
-    ):
-        assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
-    # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '17 3 * * *'" in workflow
+    # The single-repository scan must not double-run on explicit sweep dispatch.
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
@@ -1180,24 +1091,11 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     assert "No open PRs (including stacked or non-default-base PRs)" in workflow
     # Every repository failure must leave a concrete logged reason.
     assert "see the decision log above for the concrete per-PR reason" in workflow
-    # Queue hygiene: previous-head runs are cancelled immediately, while the
-    # legacy age guard cannot cancel a valid current-head PR run.
-    assert "ORG_SWEEP_STALE_QUEUE_HOURS" in workflow
-    assert "/actions/runs?status=${active_status}&per_page=100" in workflow
-    assert "for active_status in queued in_progress" in workflow
-    assert '"pull_request" or .event == "pull_request_target"' in workflow
-    assert "$current_pr_head == null or .head_sha != $current_pr_head" in workflow
-    assert ".head_sha != $current_default_sha" in workflow
-    assert "classified as not matching an open PR or default-branch Current HEAD" in workflow
-    assert '.current_head // "closed-or-no-open-pr"' in workflow
-    assert '.current_head // \\"closed-or-no-open-pr\\"' not in workflow
-    assert "select($current_pr_heads[$head_key] == null)" in workflow
-    revalidate_script = (
-        REPO_ROOT / "scripts" / "ci" / "revalidate_queue_cancellation.sh"
-    ).read_text(encoding="utf-8")
-    assert "Could not cancel ${cancellation_mode} run" in revalidate_script
-    assert "No run will be cancelled from incomplete evidence" in workflow
-    assert "queue_hygiene_ready=false" in workflow
+    # Queue cancellation belongs to native per-PR concurrency and the local
+    # exact-head coalescer, not this cross-repository recovery walk.
+    assert "ORG_SWEEP_STALE_QUEUE_HOURS" not in workflow
+    assert "/actions/runs?status=${active_status}&per_page=100" not in workflow
+    assert "revalidate_queue_cancellation.sh" not in workflow
     # Organization sweep budgets must be consumed across the repository loop;
     # resetting the configured limit for every target can flood Actions with
     # long-running review dispatches.
@@ -1222,42 +1120,6 @@ def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     assert "--project-flow" in workflow
     assert 'main|master) project_flow="github-flow"' in workflow
     assert 'develop) project_flow="git-flow"' in workflow
-
-
-def test_org_queue_sweep_superseded_run_log_filter_executes() -> None:
-    """The Current-HEAD cancellation evidence must be valid jq, not just valid Bash."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    jq_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "closed-or-no-open-pr" in line and "jq -r" in line
-    )
-    jq_filter = shlex.split(jq_line)[2]
-    payload = [
-        {
-            "id": 42,
-            "name": "Required OpenCode Review",
-            "status": "in_progress",
-            "event": "pull_request_target",
-            "head_branch": "old-head",
-            "run_head": "deadbeef",
-            "current_head": None,
-        }
-    ]
-
-    result = subprocess.run(
-        [jq, "-r", jq_filter],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "classified_head=closed-or-no-open-pr" in result.stdout
 
 
 def _extract_org_sweep_rotation_snippet(workflow: str) -> str:
@@ -1630,34 +1492,6 @@ def test_stacked_budget_is_not_declared_as_an_unused_workflow_call_input() -> No
     assert "inputs.stacked_review_dispatch_limit" not in workflow
 
 
-def test_org_queue_sweep_active_run_aggregation_tolerates_error_payloads() -> None:
-    """An inaccessible Actions page must not add a secondary jq null error."""
-    jq = shutil.which("jq")
-    if jq is None:
-        pytest.skip("jq is required for the executable workflow filter regression test")
-
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    aggregation_line = next(
-        line.strip()
-        for line in workflow.splitlines()
-        if "done | jq -sc" in line and "workflow_runs" in line
-    )
-    jq_filter = shlex.split(aggregation_line)[4]
-    payload = (
-        '{"workflow_runs":[]}\n{"message":"Resource not accessible by integration"}\n'
-    )
-
-    result = subprocess.run(
-        [jq, "-sc", jq_filter],
-        input=payload,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == []
-
-
 def test_org_queue_sweep_treats_inaccessible_repositories_as_non_fatal() -> None:
     """A repository the sweep credential cannot read must not fail the sweep.
 
@@ -1946,7 +1780,9 @@ def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
     workflow = workflow_text("secret-scan.yml")
 
     assert "CURRENT_SHA: ${{ github.sha }}" in workflow
-    assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' in workflow
+    assert "pull_request:" not in workflow.split("concurrency:", 1)[0]
+    assert "BASE_SHA:" not in workflow
+    assert "HEAD_SHA:" not in workflow
     assert 'log_opts="${CURRENT_SHA}"' in workflow
     assert '--log-opts="${log_opts}"' in workflow
     assert "unrelated remote refs are excluded" in workflow

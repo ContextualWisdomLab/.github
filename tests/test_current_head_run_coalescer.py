@@ -638,28 +638,36 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "current_head_run_coalescer.py" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block
 
 
 def test_workflow_survives_repeated_pushes_before_any_run_starts() -> None:
-    """A plain cancel-in-progress:false does not stop GitHub from silently
-    replacing an already-queued (not yet started) run of this job with a
-    newer one from the same group -- only queue: max keeps every pending
-    instance instead of dropping all but the latest, so under rapid same-PR
-    pushes at least one coalescer invocation is guaranteed to eventually get
-    a runner rather than being evicted while still queued every time.
+    """A superseded coalescer run for an OLDER head is safe to cancel outright.
+
+    Unlike a review job (where a cancelled run wastes real inference work),
+    this job's only purpose is to retire other redundant queued exact-head
+    runs -- an idempotent cleanup pass. Scoping the workflow-level
+    concurrency group by head SHA (not just PR number) means a new push
+    never collides with an older push's still-running or still-queued
+    coalescer at all (each gets its own group), so cancel-in-progress: true
+    only ever cancels a genuinely superseded invocation for the SAME exact
+    head (e.g. a duplicate/retried event), which the newest invocation for
+    that head will redo anyway. An earlier design used queue: max with no
+    cancel-in-progress instead, to guard against GitHub silently dropping an
+    already-queued (not yet started) run in favor of a newer one from the
+    same PR-number-only group -- that hazard doesn't apply once each head
+    gets its own group.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
-    job_text = text.split("jobs:", 1)[1]
-    concurrency_block = job_text.split("concurrency:", 1)[1].split("runs-on:", 1)[0]
+    concurrency_block = text.split("concurrency:", 1)[1].split("jobs:", 1)[0]
 
     assert (
-        "group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}"
+        "group: >-\n"
+        "    current-head-run-coalescer-${{ github.repository }}-${{\n"
+        "    github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}"
         in concurrency_block
     )
-    assert "queue: max" in concurrency_block
-    # cancel-in-progress:true here would kill an in-progress coalescer mid
-    # run; cancel-in-progress:false alone (without queue: max) is exactly
-    # the insufficient fix this test guards against regressing to.
-    assert "cancel-in-progress" not in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block

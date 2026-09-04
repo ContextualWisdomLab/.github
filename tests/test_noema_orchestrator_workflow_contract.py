@@ -266,6 +266,44 @@ def _run_stale_trigger_step(
     )
 
 
+def test_noema_admission_retires_out_of_order_dispatch_before_concurrency(
+    tmp_path: Path,
+) -> None:
+    """A stale dispatch exits cleanly with admitted=false before model work."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    step_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Admit only the exact live Noema head",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [bash_executable, "-c", step_script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_TOKEN": "synthetic-token",
+            "GITHUB_OUTPUT": str(output),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD_SHA": "a" * 40,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
+    assert "retired a stale trigger" in result.stdout
+
+
 def test_stale_trigger_step_rejects_noncanonical_uppercase_head(
     tmp_path: Path,
 ) -> None:

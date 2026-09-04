@@ -6,7 +6,7 @@ from scripts.ci import audit_central_required_workflows as audit
 
 
 EXPECTED_REQUIRED_WORKFLOW_PATHS = (
-    ".github/workflows/close-empty-pr.yml",
+    ".github/workflows/codeql-pr.yml",
     ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",

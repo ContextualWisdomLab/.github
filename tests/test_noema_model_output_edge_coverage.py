@@ -8,6 +8,7 @@ import json
 from scripts.ci.noema_review_gate import (
     MAX_HTTP_ERROR_BODY_BYTES,
     _extract_http_error_served_model,
+    _extract_http_error_telemetry,
     _extract_served_model,
     _strip_trailing_commas_outside_strings,
     extract_json_object,
@@ -73,3 +74,28 @@ def test_extract_http_error_served_model_fails_closed_on_missing_error_object() 
 def test_extract_http_error_served_model_fails_closed_on_missing_detail_object() -> None:
     body = json.dumps({"error": {"detail": "boom"}}).encode()
     assert _extract_http_error_served_model(io.BytesIO(body)) is None
+
+
+def test_extract_http_error_telemetry_ignores_a_non_dict_last_attempt() -> None:
+    body = json.dumps({"error": {"detail": {"attempts": ["not-a-dict"]}}}).encode()
+    assert _extract_http_error_telemetry(io.BytesIO(body)) == {}
+
+
+def test_extract_http_error_telemetry_omits_unsafe_or_out_of_range_attempt_fields() -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "attempts": [
+                        {
+                            "provider_name": "bad\r\nname",
+                            "phase": "bad\r\nphase",
+                            "attempt_number": 0,
+                            "provider_status": 999,
+                        }
+                    ]
+                }
+            }
+        }
+    ).encode()
+    assert _extract_http_error_telemetry(io.BytesIO(body)) == {}

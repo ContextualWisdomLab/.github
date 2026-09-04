@@ -176,6 +176,116 @@ def inspect(pr, **overrides):
     return sched.inspect_pr("owner/repo", pr, **kwargs)
 
 
+def test_inspect_pr_closes_only_fresh_non_draft_empty_pull_request(monkeypatch):
+    head_sha = "a" * 40
+    candidate = make_pr(
+        headRefOid=head_sha,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "draft": False,
+            "changed_files": 0,
+            "head": {"sha": head_sha},
+        },
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action == "close_empty"
+    assert sched.contract_decision(decision) == "NO_ACTION"
+    assert calls[-1] == ["gh", "pr", "close", "1", "--repo", "owner/repo"]
+
+
+def test_inspect_pr_close_empty_dry_run_takes_no_action(monkeypatch):
+    """A dry run must decide close_empty without posting a comment or closing the PR."""
+    head_sha = "a" * 40
+    candidate = make_pr(
+        headRefOid=head_sha,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "draft": False,
+            "changed_files": 0,
+            "head": {"sha": head_sha},
+        },
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+
+    decision = inspect(candidate, dry_run=True)
+
+    assert decision.action == "close_empty"
+    assert calls == []
+
+
+def test_inspect_pr_close_empty_tolerates_a_failed_cleanup_comment(monkeypatch):
+    """A failed courtesy comment must not block closing an empty PR."""
+    head_sha = "a" * 40
+    candidate = make_pr(
+        headRefOid=head_sha,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "comment"]:
+            raise RuntimeError("simulated comment failure")
+        return ""
+
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "draft": False,
+            "changed_files": 0,
+            "head": {"sha": head_sha},
+        },
+    )
+    monkeypatch.setattr(sched, "run", fake_run)
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action == "close_empty"
+    assert calls[-1] == ["gh", "pr", "close", "1", "--repo", "owner/repo"]
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    (
+        {"draft": True, "changed_files": 0, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": 1, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": None, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": 0, "head": {"sha": "b" * 40}},
+    ),
+)
+def test_inspect_pr_does_not_close_stale_or_ineligible_empty_candidate(
+    monkeypatch, fresh
+):
+    candidate = make_pr(
+        headRefOid="a" * 40,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: fresh
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action in {"skip", "wait"}
+    assert calls == []
+
+
 def last_push_restamp_candidate(**overrides):
     value = make_pr(
         mergeStateStatus="BLOCKED",
@@ -336,6 +446,50 @@ def test_fetch_open_prs_zero_limit_skips_graphql(monkeypatch):
 
     assert sched.fetch_open_prs("owner/repo", 0) == []
     assert calls == [("owner/repo", [])]
+
+
+def test_rotating_pr_window_is_bounded_and_wraps_over_actual_results():
+    """A deterministic offset rotates bounded windows without empty tail slots."""
+    prs = [{"number": number} for number in range(1, 121)]
+
+    assert sched.rotating_pr_window(prs, offset=0, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=50, window_size=50) == prs[50:100]
+    assert sched.rotating_pr_window(prs, offset=100, window_size=50) == prs[100:120]
+    assert sched.rotating_pr_window(prs, offset=150, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=0, window_size=None) == prs
+    assert sched.rotating_pr_window([], offset=0, window_size=50) == []
+
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        sched.rotating_pr_window(prs, offset=-1, window_size=50)
+    with pytest.raises(ValueError, match="size must be positive"):
+        sched.rotating_pr_window(prs, offset=0, window_size=0)
+
+
+def test_rest_fallback_hydrates_only_the_selected_rotating_window(monkeypatch):
+    """REST discovery may reach 120 PRs but hydrates no more than 50 of them."""
+    pages = {
+        1: [{"number": number} for number in range(1, 101)],
+        2: [{"number": number} for number in range(101, 121)],
+    }
+    hydrated = []
+
+    def fake_api(path):
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+
+    def fake_rest_pr_node(repo, pr):
+        hydrated.append(pr["number"])
+        return {"number": pr["number"]}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(sched, "rest_pr_node", fake_rest_pr_node)
+
+    result = sched.fetch_open_prs_rest(
+        "owner/repo", 120, offset=50, window_size=50
+    )
+
+    assert [pr["number"] for pr in result] == list(range(51, 101))
+    assert sorted(hydrated) == list(range(51, 101))
 
 
 def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
@@ -1387,7 +1541,7 @@ def test_fetch_open_prs_rest_paginates_and_fetch_open_prs_falls_back(monkeypatch
         raise RuntimeError("gh: Resource not accessible by integration")
 
     monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     assert sched.fetch_open_prs("owner/repo", 5) == [{"repo": "owner/repo", "max": 5}]
 
 
@@ -1418,7 +1572,7 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
         raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
@@ -2160,6 +2314,7 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
 
     head_sha = "a" * 40
     pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
     assert result == "dispatched"
@@ -4376,6 +4531,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
@@ -4496,6 +4652,33 @@ def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
 
     assert sched.restamp_pr_head_for_last_push_approval("owner/repo", pr, dry_run=False) == new_head
     assert calls[-1][0][-2:] == ["--input", "-"]
+
+
+def test_startup_failure_restamp_reuses_guarded_same_tree_path(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head",
+        lambda repo, pr, **kwargs: calls.append((repo, pr["number"], kwargs)) or "b" * 40,
+    )
+
+    assert (
+        sched.restamp_pr_head_after_startup_failure(
+            "owner/repo", make_pr(number=7), dry_run=False
+        )
+        == "b" * 40
+    )
+    assert calls == [
+        (
+            "owner/repo",
+            7,
+            {
+                "dry_run": False,
+                "action": "startup-failure-head-refresh",
+                "message": sched.STARTUP_FAILURE_RESTAMP_MESSAGE,
+            },
+        )
+    ]
 
 
 def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
@@ -4659,6 +4842,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
 
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
@@ -4706,6 +4890,281 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     ]
 
 
+def test_recover_current_head_startup_failures_restamps_only_latest_failed_workflows(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+
+    def fake_read(args):
+        if args == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]:
+            return head_sha
+        assert args == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/runs",
+            "-f",
+            f"head_sha={head_sha}",
+            "-F",
+            "per_page=100",
+        ]
+        return json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 90,
+                        "workflow_id": 10,
+                        "name": "Security Scan",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:00:00Z",
+                    },
+                    {
+                        "id": 91,
+                        "workflow_id": 11,
+                        "name": "SAST Semgrep",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 2,
+                        "created_at": "2026-09-04T01:01:00Z",
+                    },
+                    {
+                        "id": 92,
+                        "workflow_id": 12,
+                        "name": "CodeQL PR",
+                        "path": ".github/workflows/codeql-pr.yml",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:02:00Z",
+                    },
+                    {
+                        "id": 93,
+                        "workflow_id": 13,
+                        "name": "Dependency Review",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:03:00Z",
+                    },
+                    {
+                        "id": 94,
+                        "workflow_id": 13,
+                        "name": "Dependency Review",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "queued",
+                        "conclusion": None,
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:04:00Z",
+                    },
+                    {
+                        "id": 95,
+                        "workflow_id": 14,
+                        "name": "Manual Dispatch",
+                        "event": "workflow_dispatch",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:05:00Z",
+                    },
+                    {
+                        "id": 96,
+                        "workflow_id": None,
+                        "path": None,
+                        "name": None,
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:06:00Z",
+                    },
+                    {
+                        "id": 89,
+                        "workflow_id": 10,
+                        "name": "Security Scan",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T00:59:00Z",
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(sched, "run_github_read", fake_read)
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda repo, pr, **kwargs: calls.append((repo, pr["headRefOid"], kwargs)),
+    )
+
+    recovered = sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    )
+
+    assert recovered == [90, 91, 92]
+    assert calls == [
+        (
+            "owner/repo",
+            head_sha,
+            {"dry_run": False},
+        )
+    ]
+
+
+def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatch):
+    head_sha = "a" * 40
+    pr = make_pr(headRefOid=head_sha)
+    pr["commits"]["nodes"][0]["commit"]["messageHeadline"] = (
+        sched.STARTUP_FAILURE_RESTAMP_MESSAGE
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 90,
+                        "workflow_id": 10,
+                        "name": "Security Scan",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "created_at": "2026-09-04T01:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda *_args, **_kwargs: pytest.fail("a recovery restamp must not repeat"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", pr, dry_run=False
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "workflow_metadata",
+    (
+        {"workflow_id": 12, "name": "CodeQL PR", "path": ".github/workflows/codeql-pr.yml"},
+        {"workflow_id": 12, "name": "Renamed CodeQL", "path": ".github/workflows/codeql-pr.yml"},
+        {"workflow_id": 12, "name": "CodeQL PR"},
+    ),
+)
+def test_recover_current_head_startup_failures_restamps_codeql_alone(
+    monkeypatch, workflow_metadata
+):
+    head_sha = "a" * 40
+    restamps = []
+    run = {
+        "id": 92,
+        "event": "pull_request",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-04T01:02:00Z",
+        **workflow_metadata,
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda repo, pr, **kwargs: restamps.append((repo, pr["headRefOid"], kwargs)),
+    )
+
+    recovered = sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    )
+
+    assert recovered == [92]
+    assert restamps == [("owner/repo", head_sha, {"dry_run": False})]
+
+
+def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatch):
+    head_sha = "a" * 40
+    run = {
+        "id": 92,
+        "workflow_id": 12,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-04T01:02:00Z",
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: False)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda *_args, **_kwargs: pytest.fail("a run with jobs is not a pre-job failure"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    ) == []
+
+
+def test_actions_run_has_no_jobs_checks_every_attempt(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda args: calls.append(args) or json.dumps({"total_count": 0, "jobs": []}),
+    )
+
+    assert sched.actions_run_has_no_jobs("owner/repo", 92)
+    assert calls == [[
+        "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs/92/jobs",
+        "-f", "filter=all", "-F", "per_page=1",
+    ]]
+
+
+def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        sched,
+        "recover_current_head_startup_failures",
+        lambda repo, pr, *, dry_run: [90],
+    )
+
+    decision = inspect(make_pr(headRefOid="a" * 40), dry_run=False)
+
+    assert decision.action == "check_rerun"
+    assert "90" in decision.reason
+
+
 def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
     calls = []
     head_sha = "a" * 40
@@ -4738,6 +5197,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             }
         },
     )
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -4851,6 +5311,19 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
 
     assert stacked.action == "wait"
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
+
+
+def test_stacked_pr_waits_when_admission_budget_is_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert stacked.reason == "stacked PR onto develop; bounded admission budget is exhausted"
 
 
 def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
@@ -6008,6 +6481,41 @@ def test_inspect_pr_treats_failed_strix_like_missing_and_never_dispatches_openco
     assert decision.reason == "current head has no completed Strix evidence; same-head Strix dispatched"
 
 
+def test_inspect_pr_waits_when_missing_strix_dispatch_hits_admission_budget(monkeypatch):
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(make_pr())
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
+def test_inspect_pr_waits_when_opencode_dispatch_hits_admission_budget(monkeypatch):
+    strix_complete = make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(strix_complete)
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
+def test_inspect_pr_waits_when_stale_opencode_retry_hits_admission_budget(monkeypatch):
+    stale_opencode = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [opencode_check(status="IN_PROGRESS", started_at="2020-01-01T00:00:00Z")]
+            }
+        }
+    )
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(stale_opencode)
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
 def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
     def fail(_args, stdin=None):
         raise RuntimeError("Resource not accessible by integration")
@@ -6452,6 +6960,15 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
     )
     assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    coverage_admission_deferred = inspect(coverage_request)
+    assert coverage_admission_deferred.action == "wait"
+    assert coverage_admission_deferred.reason == "bounded admission budget is exhausted"
 
     coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
         {
@@ -7214,6 +7731,31 @@ def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypa
     assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
 
 
+def test_draft_pr_review_only_dispatch_waits_when_strix_admission_budget_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; bounded admission budget is exhausted"
+
+
+def test_draft_pr_review_only_dispatch_waits_when_opencode_admission_budget_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; bounded admission budget is exhausted"
+
+
 def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
     monkeypatch.setattr(
         sched,
@@ -7623,6 +8165,14 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
     monkeypatch.setattr(
         sched,
         "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    assert "bounded admission budget is exhausted" in followup(
+        make_pr(headRefOid="new-head")
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
         lambda repo, workflow, pr, dry_run: "repository_busy",
     )
     assert "target repository already has active Strix evidence" in followup(
@@ -7649,6 +8199,18 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
     assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    assert "bounded admission budget is exhausted" in followup(
+        make_pr(
+            headRefOid="new-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        )
+    )
 
     monkeypatch.setattr(
         sched,
@@ -8596,6 +9158,46 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     assert exact_fetches == [("owner/repo", 7)]
     with pytest.raises(SystemExit, match="--pr-number must not be negative"):
         sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
+    with pytest.raises(SystemExit, match="--admission-dispatch-budget must not be negative"):
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-dispatch-budget", "-1",
+            ]
+        )
+    with pytest.raises(SystemExit, match="--admission-sequence must be positive"):
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-sequence", "0",
+            ]
+        )
+
+
+def test_main_wires_admission_state_path_into_a_reconciled_gate(monkeypatch, tmp_path):
+    """--admission-state-path must build a real gate and reconcile it against live PRs."""
+    pr = make_pr(number=7)
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(sched, "inspect_pr", lambda repo, pr, **kwargs: sched.Decision(pr["number"], "skip", "no-op"))
+    reconciled = []
+    monkeypatch.setattr(
+        sched.SchedulerAdmissionGate,
+        "reconcile",
+        lambda self, repo, prs: reconciled.append((repo, [p["number"] for p in prs])),
+    )
+
+    assert (
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-state-path", str(tmp_path / "admission.json"),
+                "--admission-dispatch-budget", "2",
+                "--admission-sequence", "5",
+            ]
+        )
+        == 0
+    )
+    assert reconciled == [("owner/repo", [7])]
 
 
 def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
@@ -9600,6 +10202,57 @@ def test_pr1669_strix_dispatch_preserves_candidate_that_is_current_after_revalid
     assert dispatches == []
 
 
+def test_dispatch_strix_evidence_rerun_path_respects_admission_and_staleness_gates(monkeypatch):
+    """Rerunning an existing job must obey the same admission/staleness gates as a fresh dispatch."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [strix_check(details_url="https://github.com/owner/repo/actions/runs/2/job/202")]
+            }
+        }
+    )
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "admission_deferred"
+    )
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "stale_head"
+    )
+
+
+def test_dispatch_strix_evidence_new_dispatch_respects_admission_and_staleness_gates(monkeypatch):
+    """A fresh Strix dispatch (no existing job to rerun) must also obey admission/staleness gates."""
+    pr = make_pr(number=7, headRefOid="b" * 40)
+    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "admission_deferred"
+    )
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(
+        sched,
+        "validated_pr_dispatch_fields",
+        lambda _pr: ("main", "c" * 40, "b" * 40),
+    )
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "stale_head"
+    )
+
 
 def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
     """Direct cancellation must preserve the candidate when fresh authority cannot be read."""
@@ -9749,3 +10402,165 @@ def test_pr1669_strix_open_draft_old_head_remains_cancellable(monkeypatch):
     assert sched._review_run_still_superseded(
         "owner/repo", "Strix Security Scan", 7, "ContextualWisdomLab/.github", "97"
     ) is True
+
+
+def test_scheduler_admission_gate_rejects_invalid_construction(tmp_path):
+    """A non-positive sequence or a negative budget must fail closed at construction."""
+    with pytest.raises(ValueError, match="sequence must be positive"):
+        sched.SchedulerAdmissionGate(tmp_path / "admission.json", sequence=0, dispatch_budget=1)
+    with pytest.raises(ValueError, match="dispatch budget must not be negative"):
+        sched.SchedulerAdmissionGate(tmp_path / "admission.json", sequence=1, dispatch_budget=-1)
+
+
+def test_bounded_admission_persists_leases_and_completes_only_current_head(
+    monkeypatch, tmp_path
+):
+    """One durable budget slot prevents a second worker until exact-head completion."""
+    state_path = tmp_path / "admission.json"
+    gate = sched.SchedulerAdmissionGate(state_path, sequence=77, dispatch_budget=1)
+    pr = make_pr(number=7, headRefOid="a" * 40)
+
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is True
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is False
+    from scripts.ci.review_admission_controller import load_state_file
+
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+    assert [record.status for record in persisted.records.values()].count("queued") == 1
+
+    monkeypatch.setattr(sched, "has_current_head_approval", lambda _pr: True)
+    monkeypatch.setattr(sched, "has_current_head_changes_requested", lambda _pr: False)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is True
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("complete") == 1
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+
+
+def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
+    monkeypatch, tmp_path
+):
+    """Two eligible PRs create only one worker dispatch under a one-slot budget."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=88, dispatch_budget=1
+    )
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(
+        sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], [])
+    )
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, *, stdin=None: dispatched.append((args, stdin)),
+    )
+
+    first = make_pr(
+        number=7,
+        baseRefOid="b" * 40,
+        headRefOid="a" * 40,
+        headRefName="feature-a",
+    )
+    second = make_pr(
+        number=8,
+        baseRefOid="b" * 40,
+        headRefOid="c" * 40,
+        headRefName="feature-b",
+    )
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda _repo, number: [first if number == 7 else second],
+    )
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", first, dry_run=False
+        ) == "dispatched"
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", second, dry_run=False
+        ) == "admission_deferred"
+
+    assert len(dispatched) == 1
+
+
+def test_opencode_dispatch_rechecks_live_head_immediately_before_side_effect(
+    monkeypatch, tmp_path
+):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=89, dispatch_budget=1
+    )
+    pr = make_pr(number=7, baseRefOid="b" * 40, headRefOid="a" * 40, headRefName="feature")
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(number=7, headRefOid="c" * 40)])
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, *, stdin=None: dispatched.append((args, stdin)))
+
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", pr, dry_run=False
+        ) == "stale_head"
+    assert dispatched == []
+
+
+def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=90, dispatch_budget=1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"
+
+
+def test_reconcile_retires_a_lease_whose_live_head_has_since_moved(tmp_path):
+    """A push after dispatch must retire the stranded lease, not leave it dispatched forever."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=91, dispatch_budget=1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+
+    moved_pr = make_pr(number=7, headRefOid="b" * 40)
+    gate.reconcile("ContextualWisdomLab/example", [moved_pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"
+    assert gate.admit("strix", "ContextualWisdomLab/example", moved_pr) is True
+
+
+def test_reconcile_leaves_a_still_running_lease_dispatched(tmp_path):
+    """A Strix run genuinely still in flight is neither complete nor failed -- leave it be."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=92, dispatch_budget=1
+    )
+    pr = make_pr(
+        number=7,
+        headRefOid="a" * 40,
+        statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "PENDING"}]}},
+    )
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "dispatched"
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is False

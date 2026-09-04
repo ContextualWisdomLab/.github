@@ -41,6 +41,55 @@ def fail_closed_script() -> str:
     return textwrap.dedent(step.split("        run: |\n", 1)[1])
 
 
+def admission_script() -> str:
+    """Extract the exact-head admission shell that precedes concurrency."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split("      - name: Admit only the exact live OpenCode head\n", 1)[1]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n  coverage-source-tree:", 1)[0])
+
+
+def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
+    """A delayed old synchronize event is retired by live-head admission."""
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", admission_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_TOKEN": "synthetic-token",
+            "GITHUB_OUTPUT": str(output),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD_SHA": HEAD,
+            "EXPECTED_ACTION": "synchronize",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
+    assert "retired a stale event" in result.stdout
+
+
+def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
+    """PR and repository_dispatch review jobs compute the same group text."""
+    required = WORKFLOW.read_text(encoding="utf-8")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    assert "opencode-review-${{" in required
+    assert "opencode-review-${{" in dispatched
+    assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
+    assert "cancel-in-progress: true" in dispatched
+    assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
+
+
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
     """Build one Reviews API record from the OpenCode GitHub App."""
     return {
@@ -572,50 +621,32 @@ def test_opencode_review_trigger_reacts_to_draft_conversion() -> None:
         "types: [opened, synchronize, reopened, ready_for_review, "
         "converted_to_draft, closed]"
     ) in trigger_block
-    assert "cancel-in-progress: false" in workflow
+    assert "cancel-in-progress: true" in workflow.split("\npermissions:\n", 1)[0]
 
 
-def test_opencode_review_concurrency_group_is_scoped_by_repo_and_pr_only() -> None:
-    """The concurrency group is keyed by repo + PR number only, and never cancels.
-
-    Devin Review on `#1568` originally found that a delayed, out-of-order run
-    for an older head could cancel the authoritative run already active for
-    a newer head (GitHub cancels whichever run is currently active in a
-    concurrency group when a new one starts, with no notion of "older" or
-    "newer"), and scoping the group by exact head SHA was the fix landed at
-    the time. Reverted 2026-09-03 by explicit user directive, refined after
-    peer review: head-SHA scoping meant every push to a PR got its own group,
-    so rapid successive pushes no longer cancelled each other's in-flight
-    runs -- they queued up independently instead, worsening the
-    self-inflicted queue-thrashing pattern this org measured directly
-    (236/300 cancelled runs attributed to concurrent push volume). Plain
-    repo+PR-number scoping combined with `cancel-in-progress: false`
-    structurally closes the #1568 race instead of just trading it for another
-    failure mode: nothing in this group is ever preempted regardless of
-    arrival order, so a late-arriving older-head run can never evict a
-    current one. The "Fail closed without a current-head OpenCode verdict"
-    step's own live-head/live-state revalidation (already run every poll
-    iteration for correctness) is what makes a now-queued older-head run
-    self-exit quickly once it finally gets its turn, instead of running to
-    completion or publishing stale evidence.
-
-    Also confirms the group is JOB-level (on opencode-review-target only),
-    not workflow-level: a workflow-level block would capture the
-    structurally-separate cancel-superseded-opencode-review-runs job too,
-    deadlocking it behind the very run it's supposed to cancel (Devin
-    Review, 2026-09-03, confirmed independently before this fix landed).
-    """
+def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> None:
+    """Cancel an obsolete queued head before any job needs a runner."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert re.search(r"(?m)^concurrency:", workflow)
     target_job = workflow.split("\n  opencode-review-target:\n", 1)[1].split(
         "\n  cancel-superseded-opencode-review-runs:", 1
     )[0]
-    concurrency_block = target_job.split("    concurrency:\n", 1)[1].split(
-        "\n    permissions:", 1
+    concurrency_block = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
     )[0]
+    assert "required-opencode-review-${{" in concurrency_block
     assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
-    assert "cancel-in-progress: false" in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block
+    assert "    concurrency:" not in target_job.split("    permissions:", 1)[0]
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  coverage-source-tree:", 1
+    )[0]
+    assert "live_head" in admission
+    assert "live_state" in admission
+    assert 'echo "admitted=false"' in admission
+    assert 'echo "admitted=true"' in admission
+    assert "outputs.admitted == 'true'" in target_job
 
 
 def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:

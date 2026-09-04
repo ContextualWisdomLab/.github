@@ -21,6 +21,48 @@ permissions:
   id-token: write
 
 jobs:
+  admit-current-head:
+    if: >-
+      github.event_name == 'repository_dispatch'
+      || (
+        github.event_name == 'pull_request_target'
+        && github.event.action != 'closed'
+        && github.event.pull_request.head.repo.full_name == github.repository
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+    steps:
+      - name: Admit only the exact live Noema head
+        id: live_head
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema admission rejected malformed pull request metadata."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ]; then
+            echo "::notice::Noema admission retired a stale trigger before review queue entry."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+          echo "Exact live Noema head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
+
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
@@ -628,40 +670,30 @@ jobs:
 
   noema-review:
     name: noema-review
+    needs: [admit-current-head]
     runs-on: ubuntu-24.04
-    # Job-level concurrency, not workflow-level: cancel-superseded-noema-runs
-    # above deliberately has NO concurrency block of its own so it is never
-    # blocked by this group -- see its own comment for why that matters.
-    # Scoped by PR number only, not head SHA -- and cancel-in-progress is
-    # unconditionally false. An earlier version of this fix added the head
-    # SHA to the group instead (mirroring opencode-review.yml's `#1568` fix)
-    # to stop a delayed/out-of-order synchronize event for an OLDER head from
-    # cancelling the run already active for a NEWER head. That worked, but
-    # traded a rare correctness bug for a much more common capacity cost: a
-    # SHA-scoped group gives every push its own group, so under the org's
-    # saturated Actions ceiling, stale per-push runs would only ever be
-    # retired once their own group's job got a runner. Setting
-    # cancel-in-progress to false instead fixes the original hazard just as
-    # completely, without that cost: the ACTIVE run is never preempted by
-    # anything regardless of event arrival order, so a late old-head event
-    # can no longer kill a valid newer-head run no matter how the group is
-    # scoped. GitHub's own single-pending-slot rule (independent of
-    # cancel-in-progress) still evicts an intermediate queued push for free
-    # the instant a newer one arrives, so rapid pushes still coalesce down to
-    # "at most one running + one pending" without any SHA segment. Whichever
-    # instance actually gets a runner is not trusted blindly either way:
-    # "Reject a stale trigger before credential or model setup" below
-    # re-fetches the live PR head and fails closed if it no longer matches
-    # what this run was triggered with.
+    # Only an exact live head reaches this group -- admit-current-head above
+    # already re-fetches the PR's live head via `gh api` and only sets
+    # admitted=true (the `if:` this job requires) when it still matches what
+    # this run was triggered with, so a stale/superseded trigger never
+    # reaches this job body at all. An earlier version of this fix (before
+    # that live re-verification existed here) instead disabled
+    # cancel-in-progress entirely to stop a delayed/out-of-order event from
+    # killing a newer run's job -- see git history on this block for that
+    # reasoning. That workaround is now redundant: since only a live-head-
+    # verified run can start, cancel-in-progress: true is safe again and
+    # matches opencode-review.yml's identical `required-` prefixed,
+    # admitted-gated pattern. Keeping concurrency at the job level prevents a
+    # delayed stale event from cancelling the current workflow before
+    # admit-current-head can reject it.
     concurrency:
       group: >-
-        noema-review-${{
+        required-noema-review-${{
         github.event.pull_request.base.repo.full_name ||
         github.event.client_payload.target_repository || github.repository }}-${{
         github.event.pull_request.number ||
-        github.event.client_payload.pr_number ||
-        github.run_id }}
-      cancel-in-progress: false
+        github.event.client_payload.pr_number || github.run_id }}
+      cancel-in-progress: true
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own
@@ -679,11 +711,14 @@ jobs:
     # cap the policy forbids. See
     # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
-      github.event_name == 'repository_dispatch'
-      || (
+      needs.admit-current-head.outputs.admitted == 'true'
+      && (
+        github.event_name == 'repository_dispatch'
+        || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
         && github.event.pull_request.head.repo.full_name == github.repository
+        )
       )
     permissions:
       # The Actions-cancel write permission moved with the cancellation
