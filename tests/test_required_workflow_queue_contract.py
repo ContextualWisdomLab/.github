@@ -273,33 +273,21 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             # cancel (Devin Review, 2026-09-03).
             assert not re.search(r"(?m)^concurrency:", workflow)
             assert re.search(r"(?m)^    concurrency:", workflow)
-            assert "opencode-review-bootstrap-" in concurrency_contract
-            # Deliberately NOT scoped by head SHA and deliberately
-            # cancel-in-progress: false (reverted/refined 2026-09-03 by
-            # explicit user directive plus peer review): head-SHA scoping
-            # (originally added for Devin Review's `#1568` finding) meant
-            # every push to a PR got its own concurrency group, so rapid
-            # successive pushes no longer cancelled each other's in-flight
-            # runs -- they queued up independently instead, worsening the
-            # self-inflicted queue-thrashing pattern this org measured
-            # directly (236/300 cancelled runs from concurrent push volume).
-            # GitHub applies native concurrency cancellation before a job can
-            # compare event and live heads. Keeping false prevents a delayed
-            # stale event from evicting a fresh run; the live-head-aware cleanup
-            # job performs precise stale cancellation instead.
+            assert "opencode-review-${{" in concurrency_contract
             assert (
                 "github.event.pull_request.head.sha || github.run_id"
                 not in concurrency_contract
             )
-            assert "cancel-in-progress: false" in concurrency_contract
+            assert "cancel-in-progress: true" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
             assert "noema-review-${{" in concurrency_contract
             assert "github.event_name" not in concurrency_contract.split(
                 "cancel-in-progress:", 1
             )[0]
-            assert "github.event.action == 'synchronize'" in concurrency_contract
-            assert "github.event.action == 'closed'" in concurrency_contract
+            assert "cancel-in-progress: true" in concurrency_contract
+            assert "outputs.admitted == 'true'" in workflow
         else:
             if filename == "codeql-pr.yml":
                 assert "github.event_name == 'pull_request'" in concurrency_contract
@@ -735,7 +723,10 @@ def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> Non
 def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
+    noema_job = workflow.split("\n  noema-review:\n", 1)[1]
+    concurrency_contract = noema_job.split("    concurrency:", 1)[1].split(
+        "    permissions:", 1
+    )[0]
 
     assert "workflow_run:" not in concurrency_contract
     assert "github.event.workflow_run" not in workflow
@@ -745,9 +736,8 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "github.event.action == 'synchronize'" in concurrency_contract
-    assert "github.event.action == 'closed'" in concurrency_contract
-    assert "cancel-in-progress: true" not in concurrency_contract
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
 
