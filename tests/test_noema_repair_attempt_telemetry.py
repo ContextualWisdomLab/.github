@@ -107,7 +107,10 @@ def test_transport_failure_reports_requested_model_and_not_literal_connecting(
     ``test_ambiguous_transport_failures_default_to_awaiting_response`` for
     the two Devin Review follow-ups this went through: only a conclusively
     pre-send exception may report "connecting"; anything ambiguous (a
-    timeout that could belong to either phase) safely defaults here.
+    timeout that could belong to either phase) safely defaults to
+    "awaiting_response". An HTTPError is not ambiguous -- it proves a real
+    response arrived -- so it gets its own, more specific "response_error"
+    phase instead of the ambiguous-case default.
     """
     calls, kwargs = _invoke_once(
         monkeypatch,
@@ -119,8 +122,9 @@ def test_transport_failure_reports_requested_model_and_not_literal_connecting(
         gate.call_llm(**kwargs)
     assert len(calls) == 1
     output = capsys.readouterr().out
-    assert "phase=awaiting_response" in output
+    assert "phase=response_error" in output
     assert "phase=connecting" not in output
+    assert "phase=awaiting_response" not in output
     assert "requested_model=orchestrator/free" in output
     assert "served_model=unknown" in output
 

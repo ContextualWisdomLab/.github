@@ -4688,3 +4688,110 @@ this check — the standard hourly window. Scheduling the next tick around that 
 recovering, and so the actual queue-clearing progress (or its reversal) can be verified once calls are safe
 again. Not yet claiming the congestion is resolved — both the recovery and this rate-limit side effect need
 one more confirmed data point next tick before either is treated as settled.
+
+## Queue drain confirmed real — four base-branch test/coverage/docstring regressions from the same merge burst found and fixed (`#1829`, `#1832`, `#1835`) — 2026-09-04
+
+**Confirmed: the queue recovery above was real, not a fluke.** The rate limit recovered faster than the
+scheduled ~60-minute backoff — a peer session's cross-session message about an unrelated finding arrived
+mid-backoff, and checking `gh api rate_limit` showed calls working again well before the wait elapsed. Once
+active, main moved rapidly: `#1822`, `#1824`–`#1828`, `#1830`, `#1833`, `#1716` all merged within roughly
+30 minutes, after days of the queue barely moving.
+
+**Peer 1 reported the trigger finding.** `#1826` ("consolidate required OSV and Scorecard scans",
+`REQUIRED_WORKFLOW_PATHS` 9→7) and `#1823` ("break runner-capacity dispatch deadlock`, opencode-review.yml's
+dispatch payload `event_type` changed) each left one sibling test assertion stale, breaking the required
+`backend` test suite for *every* `.github` PR regardless of that PR's own diff — a foundational,
+self-referential blocker (a PR fixing this needs the same broken suite to pass, unless bypass-merged).
+Peer 1 fixed both in `#1829` (merged by them before this session finished independently reproducing it).
+
+**This session found and fixed two more, independent instances of the exact same class, missed by the
+peer's own fix because they came from two *other* PRs in the same burst.** After merging `#1829`, re-running
+the full suite on fresh `main` still showed 1 failure: `#1828` ("reduce organization sweep polling")
+intentionally moved the scheduler's cron cadence from hourly (`"30 * * * *"` / `"0 * * * *"`) to daily
+(`"47 3 * * *"` / `"17 3 * * *"`) but left `test_reconciled_scheduler_preserves_current_main_control_plane_fixes`
+asserting the old hourly string. Fixed and bypass-merged as
+[#1832](https://github.com/ContextualWisdomLab/.github/pull/1832) (`[QUEUE_SATURATION_CHICKEN_EGG]`,
+same org-wide-blocking rationale as every prior bypass-merge of this class in this doc).
+
+Re-running again after `#1832` surfaced a *third*, more substantial gap from `#1831` ("ground verdicts and
+classify gateway errors") — not just a stale assertion this time, but a real behavior change with three
+distinct fallout gaps: (1) `_extract_served_model` was refactored from scrub-and-keep sanitization to a
+stricter reject-outright validator (`_safe_model_identifier`), breaking `test_served_model_is_annotation_safe`,
+which still expected the old sanitized-value behavior; (2) the new nested `render` closure inside
+`_bounded_allowed_locations_json` had no docstring (`interrogate` 99.9%); (3) the new
+`_extract_http_error_served_model` function shipped with zero test coverage (99% branch coverage,
+4 uncovered lines). Before fixing anything, verified the behavior change itself was not a regression: every
+real provider model id from this session's own gateway logs (`deepseek-ai/deepseek-v4-pro-0813`,
+`meta/llama-3.2-11b-vision-instruct`, `google/gemma-3-12b-it`, `orchestrator/free`) still passes the new
+regex unchanged, and `served_model` is embedded directly into `::warning::`/`::notice::` GitHub Actions
+workflow commands — so reject-and-report-`unknown` is strictly *safer* against annotation injection than
+the old scrub approach, not a weakening. Updated the test to assert the new safe outcome, added the missing
+docstring, and added 7 new tests covering the untested function's success path and all six fail-closed
+branches. Bypass-merged as [#1835](https://github.com/ContextualWisdomLab/.github/pull/1835), same
+rationale.
+
+**Cross-session verification happened for real, not just in principle.** Peer 1 independently reproduced
+`test_served_model_is_annotation_safe`'s failure on a *separate* branch (`#1812`) before this session's
+`#1835` fix landed, confirming it from a genuinely different vantage point — and held their own push until
+this fix merged rather than duplicating the investigation. Peer 2 (relayed via peer 1) independently
+rediscovered the exact same coverage gap and missing docstring this session had already found and fixed,
+confirming both were real, not an artifact of this session's own reasoning.
+
+**Net result for this tick.** Four base-branch regressions from one rapid merge burst, all found via
+full-suite reproduction (not by trusting any single PR's own narrower self-verification) and fixed:
+`#1826`+`#1823` (peer 1, `#1829`), `#1828` (this session, `#1832`), `#1831` (this session, `#1835`). The
+required test/coverage/docstring suite is real again for every `.github` PR as of `fd5cec4`. Lesson
+reinforced: a burst of near-simultaneous merges is exactly the condition under which cross-file test
+staleness accumulates fastest, since each PR's own author can only verify against the base branch as it
+existed *when they last synced* — full-suite reproduction against the actual current `main`, not trust in
+any one PR's stated verification, is what caught all three of the peer-missed instances.
+
+## A fifth failure, but a different kind: a silent merge-combination bug on this session's OWN branch, not a base-branch bug — 2026-09-04
+
+**Trigger.** Merging `origin/main` (now including `#1832`/`#1835`) into this session's own
+`claude/contextual-orchestrator-integration-8ec7f8` branch and re-running the full suite surfaced one more
+failure: `test_transport_failure_reports_requested_model_and_not_literal_connecting` expected
+`phase=awaiting_response` but got `phase=response_error`.
+
+**Ruled out as a base-branch bug before touching anything, per this session's own "verify org-wide before
+declaring" discipline.** Checked a completely fresh `origin/main` checkout (a separate worktree, no
+interaction with this branch's own history) — the same test passed cleanly there. Peer 1 also independently
+confirmed a clean 2788-pass run on their own branch around the same time. So the failure was specific to
+*this session's own branch state*, not `main`.
+
+**Root cause: a clean, conflict-marker-free merge silently combined two independently-correct-in-isolation
+changes into something broken.** This branch's own unreleased work (still only on `#1661`, not yet on
+`main`) already implements a DNS-pinning/TOCTOU-closing security hardening (`_pinned_connection_handlers`,
+`_PinnedHTTPSConnection`, `reject_private_llm_url` returning resolved IPs to pin to) *and* a careful
+`connecting`-vs-`awaiting_response` phase-telemetry distinction built through three prior PRs
+(`bebd7c7`, `e7b29f2`, `5c9d30e`) specifically to avoid mislabeling ambiguous timeouts as either
+phase falsely. That distinction works via a `reported_phase` ternary gated on
+`active_phase == "connecting"`. Separately, `main`'s own `#1831` added
+`if isinstance(exc, urllib.error.HTTPError): active_phase = "response_error"` earlier in the same
+`except` block, to also extract `served_model` from HTTP error bodies. Neither change conflicts
+textually with the other — they touch different, non-overlapping lines — so `git merge` combined them with
+zero conflict markers. But the *semantic* result is broken: by the time this branch's `reported_phase`
+ternary runs, `active_phase` has already been overwritten to `"response_error"` by `main`'s addition, so the
+ternary's `active_phase == "connecting"` check is always false for the HTTPError case, silently defeating
+this branch's own phase-distinction logic for exactly that case.
+
+**Resolved as a genuine improvement, not a revert.** Verified `"response_error"` is not a regression but a
+*more specific* label than the old `"awaiting_response"` fallback for this exact case: an HTTPError proves a
+real response arrived (unlike a bare ambiguous timeout, which genuinely can't be placed in either phase),
+so a dedicated label is strictly more informative, and it still satisfies the test's actual safety property
+(never mislabel a real HTTP-error response as `"connecting"`). The two sibling tests covering the
+non-HTTPError paths (`test_definitively_pre_send_failures_report_connecting`,
+`test_ambiguous_transport_failures_default_to_awaiting_response`) are untouched by `#1831`'s change (neither
+uses `urllib.error.HTTPError`) and continued passing throughout — confirming the fix scope was exactly this
+one test, not a deeper reconciliation of the production code. Updated the test's expected phase string and
+docstring to explain the distinction; no production code change was needed, since the merge itself already
+produced the semantically-better combined behavior — only the test's fixed-string expectation was stale.
+
+**Lesson, confirming (not just restating) an existing one.** This session already documented that a clean,
+zero-conflict-marker merge can silently combine stale and corrected facts (see the `contextual-orchestrator
+#911` and "silent stale auto-merge" entries earlier in this doc) — this is a second, independently-arrived-at
+confirmation of the exact same class, this time in this session's own branch rather than someone else's PR.
+The detection method that worked both times is the same: run the *full* suite after every merge, not just
+the files each side's own diff touched, and when a failure appears, test each side's branch tip *alone*
+before assuming either side (or worse, "the merge, generically") is at fault — the actual bug lived in
+neither branch individually, only in their specific combination.
