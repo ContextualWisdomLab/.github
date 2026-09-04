@@ -11,6 +11,7 @@ on:
       - ".github/workflows/audit-central-ruleset.yml"
       - "scripts/ci/audit_central_required_workflows.py"
       - "scripts/ci/audit_org_codeql_coverage.py"
+      - "scripts/ci/bootstrap_codeql_pull_requests.py"
       - "docs/org-required-workflow-rollout.md"
 
 concurrency:
@@ -19,6 +20,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   audit:
@@ -195,4 +197,35 @@ jobs:
             mv "${coverage_json}.next" "$coverage_json"
           done < <(jq -r '.[] | [.name, (.archived | tostring)] | @tsv' "$repositories_json")
 
-          python3 scripts/ci/audit_org_codeql_coverage.py "$coverage_json"
+      - name: Exchange OpenCode app token for CodeQL setup writes
+        id: opencode_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator='&'
+          [[ "$request_url" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS --connect-timeout 5 --max-time 20 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          [ -n "$oidc_token" ] || { echo "::error::OpenCode OIDC token was empty."; exit 1; }
+          app_token="$(curl -fsS --connect-timeout 5 --max-time 20 -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          [ -n "$app_token" ] || { echo "::error::OpenCode installation token was empty."; exit 1; }
+          echo "::add-mask::$app_token"
+          {
+            echo "token<<OPENCODE_TOKEN"
+            echo "$app_token"
+            echo "OPENCODE_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create missing CodeQL setup pull requests
+        env:
+          OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/bootstrap_codeql_pull_requests.py "$RUNNER_TEMP/codeql-coverage-repositories.json"
+          python3 scripts/ci/audit_org_codeql_coverage.py "$RUNNER_TEMP/codeql-coverage-repositories.json"
