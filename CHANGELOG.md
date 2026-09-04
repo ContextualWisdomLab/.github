@@ -11,6 +11,9 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Align current-main workflow contract tests with native auto-merge completion,
+  validated dispatch concurrency keys, rotating queue pagination, globbed watch
+  paths, admission jobs, and the reviewed OpenCode dispatch blob.
 - Move the exact-artifact SBOM attestation quality contract into the existing
   agent review runtime selector and job, preserving Python 3.10 compilation,
   Python 3.14 test evidence, exact-head checkout, hash locks, and read-only
