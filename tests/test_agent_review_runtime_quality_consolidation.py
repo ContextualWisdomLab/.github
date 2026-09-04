@@ -14,6 +14,7 @@ WORKFLOW_PATH = (
     / "agent-review-runtime-quality-ci.yml"
 )
 RETIRED_WORKFLOWS = (
+    "exact-artifact-sbom-attestation-quality.yml",
     "hourly-nvidia-nim-review-repair.yml",
     "organization-commercial-readiness-loop-quality-ci.yml",
     "noema-token-lifetime-quality-ci.yml",
@@ -65,10 +66,18 @@ def test_consolidated_workflow_materializes_one_runner_job() -> None:
 
     assert workflow.count("runs-on:") == 1
     assert workflow.count("actions/checkout@") == 1
-    assert workflow.count("actions/setup-python@") == 1
+    assert workflow.count("actions/setup-python@") == 3
     assert "workflow_dispatch:" not in workflow
     assert "gh api" not in workflow
     assert re.search(r"(?m)^[ \t]*sleep[ \t]+", workflow) is None
+
+
+def test_changelog_only_edits_do_not_boot_the_consolidated_runner() -> None:
+    """A release-note-only change needs no agent runtime contract suite."""
+
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+
+    assert '      - "CHANGELOG.md"' not in trigger
 
 
 def test_consolidated_workflow_preserves_all_contract_suites() -> None:
@@ -100,6 +109,11 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "scripts/ci/organization_commercial_readiness_loop.py",
         "organization_commercial_readiness_fixtures.py",
         "tests/test_organization_commercial_readiness_loop*.py",
+        "scripts/ci/verify_exact_artifact_sbom_handoff.py",
+        "tests/test_exact_artifact_sbom_attestation_contract.py",
+        "tests/test_exact_artifact_sbom_review_regressions.py",
+        "tests/test_verify_exact_artifact_sbom_handoff.py",
+        "tests/test_exact_artifact_quality_single_runner.py",
     ):
         assert required_path in workflow
 
@@ -143,3 +157,27 @@ def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> 
     )
     assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in workflow
     assert "--fail-under=100" in workflow
+
+
+def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
+    """Compile on Python 3.10 before running full Python 3.14 evidence."""
+
+    workflow = _workflow_text()
+    minimum_setup = workflow.index(
+        "- name: Set up minimum supported Python for exact-artifact contracts"
+    )
+    minimum_compile = workflow.index(
+        "- name: Compile exact-artifact production and contracts on Python 3.10"
+    )
+    current_setup = workflow.index(
+        "- name: Restore Python 3.14 for exact-artifact contracts"
+    )
+    current_contract = workflow.index(
+        "- name: Verify exact-artifact SBOM attestation contracts on Python 3.14"
+    )
+
+    assert minimum_setup < minimum_compile < current_setup < current_contract
+    assert "exact_artifact_suite=false" in workflow
+    assert "outputs.exact_artifact == 'true'" in workflow
+    assert "--include=scripts/ci/verify_exact_artifact_sbom_handoff.py" in workflow
+    assert "interrogate --fail-under=100" in workflow

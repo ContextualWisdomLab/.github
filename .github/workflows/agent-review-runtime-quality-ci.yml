@@ -90,8 +90,16 @@ on:
       - "organization_commercial_readiness_fixtures.py"
       - "tests/test_organization_commercial_readiness_loop*.py"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
+      - ".github/workflows/exact-artifact-sbom-attestation.yml"
+      - "scripts/ci/verify_exact_artifact_sbom_handoff.py"
+      - "tests/test_exact_artifact_sbom_attestation_contract.py"
+      - "tests/test_exact_artifact_sbom_review_regressions.py"
+      - "tests/test_verify_exact_artifact_sbom_handoff.py"
+      - "tests/test_exact_artifact_quality_single_runner.py"
+      - "docs/doctoring/exact-artifact-sbom-attestation.md"
+      - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
+      - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
       - "requirements-opencode-review-ci-hashes.txt"
-      - "CHANGELOG.md"
 
 # PR validation only: a new head cancels only an older run of this workflow
 # for the same repository and pull request.
@@ -143,16 +151,18 @@ jobs:
           queue_suite=false
           review_repair_suite=false
           commercial_readiness_suite=false
+          exact_artifact_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
-              .github/workflows/agent-review-runtime-quality-ci.yml|CHANGELOG.md)
+              .github/workflows/agent-review-runtime-quality-ci.yml)
                 noema_suite=true
                 opencode_suite=true
                 strix_suite=true
                 queue_suite=true
                 review_repair_suite=true
                 commercial_readiness_suite=true
+                exact_artifact_suite=true
                 ;;
               tests/test_pr_review_autofix_nvidia_nim_contract.py)
                 opencode_suite=true
@@ -259,6 +269,17 @@ jobs:
               docs/doctoring/organization-commercial-readiness-loop.md)
                 commercial_readiness_suite=true
                 ;;
+              .github/workflows/exact-artifact-sbom-attestation.yml|\
+              scripts/ci/verify_exact_artifact_sbom_handoff.py|\
+              tests/test_exact_artifact_sbom_attestation_contract.py|\
+              tests/test_exact_artifact_sbom_review_regressions.py|\
+              tests/test_verify_exact_artifact_sbom_handoff.py|\
+              tests/test_exact_artifact_quality_single_runner.py|\
+              docs/doctoring/exact-artifact-sbom-attestation.md|\
+              docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md|\
+              CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md)
+                exact_artifact_suite=true
+                ;;
             esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
@@ -269,6 +290,7 @@ jobs:
             echo "queue=$queue_suite"
             echo "review_repair=$review_repair_suite"
             echo "commercial_readiness=$commercial_readiness_suite"
+            echo "exact_artifact=$exact_artifact_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -291,7 +313,7 @@ jobs:
             -r "${RUNNER_TEMP}/strix-quality-requirements.txt"
 
       - name: Install exact review dependencies
-        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true'
+        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true' || steps.affected_suites.outputs.exact_artifact == 'true'
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
@@ -407,6 +429,52 @@ jobs:
             scripts/ci/organization_commercial_readiness_loop.py \
             organization_commercial_readiness_fixtures.py \
             tests/test_organization_commercial_readiness_loop*.py
+
+      - name: Set up minimum supported Python for exact-artifact contracts
+        if: steps.affected_suites.outputs.exact_artifact == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Compile exact-artifact production and contracts on Python 3.10
+        if: steps.affected_suites.outputs.exact_artifact == 'true'
+        run: |
+          python -m compileall -q \
+            scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_exact_artifact_sbom_review_regressions.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
+
+      - name: Restore Python 3.14 for exact-artifact contracts
+        if: steps.affected_suites.outputs.exact_artifact == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify exact-artifact SBOM attestation contracts on Python 3.14
+        if: steps.affected_suites.outputs.exact_artifact == 'true'
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_exact_artifact_sbom_review_regressions.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
+          python -m coverage report \
+            --include=scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/verify_exact_artifact_sbom_handoff.py
+          python -m compileall -q \
+            scripts/ci/verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_sbom_attestation_contract.py \
+            tests/test_exact_artifact_sbom_review_regressions.py \
+            tests/test_verify_exact_artifact_sbom_handoff.py \
+            tests/test_exact_artifact_quality_single_runner.py
 
       - name: Verify consolidated workflow contract
         run: |
