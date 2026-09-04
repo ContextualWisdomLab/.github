@@ -84,8 +84,8 @@ def test_merge_scheduler_rejects_untrusted_stale_timeout_values() -> None:
     assert workflow.count('STALE_OPENCODE_MINUTES="$stale_opencode_minutes"') == 2
 
 
-def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
-    """Use stable repository-scoped concurrency keys for unscoped events."""
+def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
+    """Do not enqueue a scheduler run after every required workflow completion."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
@@ -93,11 +93,8 @@ def test_merge_scheduler_deduplicates_unscoped_repository_dispatches() -> None:
 
     assert "format('org-sweep-{0}', github.repository)" in concurrency_contract
     assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
-    assert "format('workflow-run-no-pr-{0}', github.repository)" in concurrency_contract
-    assert (
-        "github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number"
-        in concurrency_contract
-    )
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
+    assert "github.event.workflow_run" not in concurrency_contract
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
@@ -702,10 +699,10 @@ def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
     assert "exit 0" in workflow
 
 
-def test_cancelled_review_workflow_runs_do_not_spawn_more_queue_work() -> None:
-    """Prevent cancelled review runs from creating follow-up queue work."""
+def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
+    """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
-    assert "github.event.workflow_run.conclusion != 'cancelled'" in workflow
+    assert "github.event.workflow_run" not in workflow
 
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
@@ -1030,11 +1027,11 @@ def test_noema_and_scheduler_trusted_checkouts_use_static_main() -> None:
         assert "INPUT_CANONICAL_REF" not in workflow
 
 
-def test_unassociated_review_workflow_runs_do_not_scan_the_whole_pr_queue() -> None:
-    """Avoid scanning every PR when a workflow run has no associated pull request."""
+def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
+    """Required-check completion must not create another Actions run."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert "github.event.workflow_run.pull_requests[0].number" in workflow
+    assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:

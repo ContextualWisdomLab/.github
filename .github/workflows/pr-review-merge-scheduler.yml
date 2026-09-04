@@ -7,9 +7,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
   pull_request_review:
     types: [submitted, dismissed]
-  workflow_run:
-    workflows: ["Required OpenCode Review", "Strix Security Scan", "Security Scan", "SAST Semgrep"]
-    types: [completed]
   workflow_call:
     inputs:
       dry_run:
@@ -77,14 +74,14 @@ on:
     # explicitly excludes ContextualWisdomLab/.github from its target list
     # (a PR in THIS repository, including one editing the governance
     # workflows themselves, is never covered by the org-wide sweep), so this
-    # remains the bounded fallback for a genuinely missed native event. Security
-    # Scan and SAST Semgrep completions now wake the scheduler directly above.
+    # remains the bounded fallback for a genuinely missed native event. GitHub
+    # auto-merge handles required-check completion without another workflow run.
     # Offset from the organization sweep so recovery jobs do not collide.
     - cron: "47 3 * * *"
-    # Daily organization-wide missed-event recovery. Native PR, review,
-    # protected-branch push, OpenCode, Strix, Security Scan, and SAST Semgrep
-    # events handle the normal path; this lower-frequency sweep only recovers
-    # delivery gaps and stacked PRs that do not receive required workflows.
+    # Daily organization-wide missed-event recovery. Native PR, review, and
+    # protected-branch push events handle the normal path; GitHub auto-merge
+    # handles required-check completion. This lower-frequency sweep only
+    # recovers delivery gaps and stacked PRs without required workflows.
     - cron: "17 3 * * *"
   repository_dispatch:
     types: [merge-scheduler]
@@ -94,8 +91,6 @@ concurrency:
     central-pr-review-merge-scheduler-${{ github.repository }}-${{
     github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||
     github.event_name == 'pull_request_review' && format('pr-{0}', github.event.pull_request.number) ||
-    github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
-    github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number && format('workflow-run-no-pr-{0}', github.repository) ||
     github.event_name == 'workflow_call' && inputs.pr_number != '' && format('pr-{0}', inputs.pr_number) ||
     github.event_name == 'workflow_call' && inputs.base_branch != '' && format('call-{0}', inputs.base_branch) ||
     github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule) ||
@@ -104,7 +99,7 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository) ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
@@ -123,13 +118,6 @@ jobs:
       (
         github.event_name != 'pull_request_target' ||
         github.event.action != 'closed'
-      ) &&
-      (
-        github.event_name != 'workflow_run' ||
-        (
-          github.event.workflow_run.conclusion != 'cancelled' &&
-          github.event.workflow_run.pull_requests[0].number
-        )
       ) &&
       (
         github.event_name != 'schedule' ||
@@ -160,13 +148,13 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
-      PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
+      PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
-      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
-      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
     steps:
       - name: Exchange OpenCode app token for scheduler mutations
@@ -636,7 +624,7 @@ jobs:
       # below derives it from a persistent per-execution counter (or, as a
       # fallback, wall-clock time) instead of `github.run_number`: run_number
       # increments on every trigger of this workflow (push,
-      # pull_request_target, pull_request_review, workflow_run), not only the
+      # pull_request_target, pull_request_review), not only the
       # sweep schedule, so it cannot give the "bounded by repository_count
       # ticks" guarantee a rotation is meant to provide. Wall-clock time alone
       # is also insufficient, since this single-flight/non-cancelling job can
