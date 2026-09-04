@@ -4359,3 +4359,52 @@ anything — `git reset --hard HEAD` in the scratch clone cleanly discarded the 
 nothing had been committed and the clone held no unpushed work worth preserving. `git show <treeish>:<path>`
 is the actually-read-only way to inspect a single file's content at another ref without touching the working
 tree; noted for next time this kind of one-file cross-branch check is needed.
+
+## `naruon#1532` — CodeRabbit's last open thread (dormant ROPC helper + misleading fail-closed UI errors) — investigated, then found already being fixed more thoroughly by a concurrent peer session — 2026-09-04
+
+**Trigger.** A ci-monitor-event pointed at CodeRabbit review thread `PRRT_kwDOSNjZ2s6ewYCg`
+(comment_id=3929949491) on `naruon#1532`, still `isResolved: false` after 7 comments spanning
+2026-09-03T02:47:34Z–2026-09-04T00:51:05Z. A prior pass (commits `f0bdb90c`..`b8e99161`, same day) had
+already made the reachable `POST /auth/password/{login,signup}` routes fail-closed (503 with a distinct
+`error_code`), but the thread's own last comment flagged two things still left behind: (1) a fully dead
+`exchangePasswordForSessionResponse()` helper in `frontend/src/app/auth/oidc/shared.ts` (zero call sites —
+confirmed via grep, the only other reference is `ropc-policy.test.ts`'s negative assertion that the string
+does *not* appear in the route files) and (2) `SettingsLayout.tsx`'s login/signup forms still showing
+"이메일 또는 비밀번호가 올바르지 않습니다." (wrong credentials) on the routes' 503, misleading users into
+thinking their own input was wrong rather than the feature being unavailable.
+
+**Scoped and TDD'd a narrow fix.** Wrote a failing test first (`SettingsLayout.test.tsx`, simulating typed
+input via the native-setter trick since this codebase's tests use raw `react-dom`/`createRoot`, not RTL),
+confirmed it failed against the unfixed handlers, then made `handlePasswordLogin`/`handlePasswordSignup`
+branch on the response's `error_code` to show "현재 사용할 수 없습니다" instead. Confirmed green, deleted
+the dead `exchangePasswordForSessionResponse()` helper and its two now-unused imports (its other
+dependencies — `postOidcTokenRequest`, `buildSessionCookieOptions`, etc. — stay, still used by the real
+OIDC callback route). Full verification (`typecheck`, `lint`, `build`, 469/469 tests) passed. Deliberately
+left the UI form itself in place — full removal is a larger, separate product decision the thread's own
+prior comment explicitly deferred pending Keyverse's released headless contract.
+
+**Found a concurrent peer mid-flight on the identical thread, going further.** Before pushing, `git fetch`
+showed the remote branch had moved 8 commits ahead in the few minutes since this investigation started —
+same author identity, i.e. a peer Claude session independently working the same CodeRabbit thread. Its
+commits (`768b29a`..`44abc04`) do strictly more than this session's own narrower plan: restore ADR-0005 to
+`Proposed` (docs), remove the entire dormant password-registration route authority (not just the shared
+helper — also `readBoundedJson`/`RequestBodyTooLargeError`/`MAX_CREDENTIAL_LENGTH` etc.), and add a new
+`ropc-policy.test.ts` assertion requiring `SettingsLayout.tsx` to drop the interactive form entirely in
+favor of a static "비밀번호 로그인과 가입은 현재 사용할 수 없습니다." notice — i.e. the peer chose to
+complete the very form-removal this session had deferred as out of scope, rather than stop short of it.
+
+**Resolution: dropped this session's own commit, did not push.** Diffing confirmed the peer's work fully
+supersedes this session's narrower fix (their route/helper removal covers the same dead code plus more; the
+planned full UI removal makes this session's error-message branching moot once it lands). Verified via
+`gh api repos/.../git/refs/...` (not `git fetch`, which lagged) that nothing had actually diverged/conflicted
+since this session never pushed. As of this writing the peer's own new test (`does not solicit passwords
+while the password capability is fail-closed`) is still red — the UI-removal implementation commit hasn't
+landed yet — so no CodeRabbit reply was sent; replying before the peer's fix is complete and pushed would
+describe stale state. Left `naruon#1532` to the peer session entirely rather than racing a second
+implementation onto the same file.
+
+**Lesson reinforced.** `[[feedback_verify_transitive_peer_citations]]`-style discipline paid off in a new
+direction: checking the *actual remote state* (not just this session's own plan) before pushing caught an
+in-progress duplicate before it became a real push conflict. `git fetch`/`git log origin/branch..HEAD` can
+itself go stale seconds after a peer's push — `gh api repos/<owner>/<repo>/git/refs/heads/<branch>` is the
+transport-independent way to confirm a branch's real current tip.
