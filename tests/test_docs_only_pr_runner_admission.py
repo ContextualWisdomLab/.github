@@ -109,8 +109,8 @@ def _strip_if_condition(block: str) -> str:
     return "\n".join(kept)
 
 
-def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
-    """The `changed-scope` block must not drift between its five copies."""
+def test_gate_job_is_byte_identical_across_the_three_workflows_apart_from_if():
+    """The `changed-scope` block must not drift between its three copies."""
     normalized_blocks = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
@@ -256,7 +256,7 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
 def test_each_gate_workflow_keeps_an_always_admitted_job():
     """A fully-skipped run must conclude `success`, never `skipped`.
 
-    Every one of the five workflows needs at least one job with no `needs:`
+    Every one of the three workflows needs at least one job with no `needs:`
     and no needs-output-dependent `if:` -- the `changed-scope` job itself
     qualifies -- so a doc-only PR's run still has a job that runs and
     succeeds instead of every job skipping and the run itself reporting
