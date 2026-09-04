@@ -9,6 +9,10 @@
 #   trivy-fs          HARD  repo-wide   — fails on FIXABLE MEDIUM/HIGH/CRITICAL findings
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
 #
+# This is the sole organization-required owner for OSV and Scorecard PR work.
+# The standalone workflows remain local to this repository because its classic
+# branch protection still requires their historical check contexts.
+#
 # Gating is by the JOB result (a failed job fails this required workflow ->
 # merge blocked), NOT by the code_scanning ruleset rule. The code_scanning rule
 # stays CodeQL-only on purpose: requiring multiple code-scanning TOOLS there is
