@@ -1,6 +1,6 @@
 ### Contextual-orchestrator pin refresh
 
-- Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `464da4715b495b5eaaa593eba3796e2d976ee0c9` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
+- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying the shared no-default-timeout transport and current `orchestrator/free` gateway fixes into Strix, OpenCode, and Noema. All callers still consume an exact SHA; no branch or tag is introduced.
 
 ### Scheduler target admission
 
