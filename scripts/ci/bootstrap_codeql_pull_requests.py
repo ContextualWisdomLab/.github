@@ -81,14 +81,13 @@ def render_workflow(default_branch: str) -> str:
     return f'''name: CodeQL
 
 on:
-  pull_request:
   push:
     branches: [{json.dumps(default_branch)}]
   schedule:
     - cron: "23 4 * * 3"
 
 concurrency:
-  group: codeql-${{{{ github.repository }}}}-${{{{ github.event.pull_request.number || github.ref }}}}
+  group: codeql-${{{{ github.repository }}}}-${{{{ github.event_name == 'push' && github.ref || github.event_name }}}}
   cancel-in-progress: true
 
 permissions:

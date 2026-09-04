@@ -562,6 +562,11 @@ def test_codeql_gap_bootstrap_uses_trusted_opencode_identity_without_pr_head_exe
     assert "refs/pull/" not in bootstrap_step
     assert "ghs_" not in bootstrap_step
     assert "length" not in bootstrap_step
+    assert (
+        "central-required-workflow-ruleset-audit-${{ github.event_name == "
+        "'repository_dispatch' && github.event.action || github.event_name }}"
+        in workflow
+    )
 
 
 def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
