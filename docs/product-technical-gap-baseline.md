@@ -3185,31 +3185,47 @@ doctoring doc's 2026-09-03 follow-up section for the full before/after and updat
 A comment was left on `#1397` pointing at the replacement fix rather than closing it (closure is a merge-only
 action per this repo's governance model).
 
-## `hourly-review-repair.yml` daily-cadence redesign left three test files stale — 2026-09-04
+## `opencode-review-dispatch.yml` still requesting the starved floating image — 2026-09-04
 
-**Status:** Root-caused and fixed. Note on provenance: this entry documents a stale-cron test bug found
-while investigating a live required-check failure on `ContextualWisdomLab/.github#1870`; a prior search of
-this document for an earlier same-day note describing it as a deferred follow-up (expected near an entry
-about `opencode-review-dispatch.yml` and the starved floating runner image) did not find one in the current
-file, so this is recorded as a new entry rather than an edit to existing prose.
+**Status:** Fixed. The 2026-09-01 floating-image entry above closed the three required-check gates
+(`strix.yml`, `opencode-review.yml`, `noema-review.yml`) but explicitly flagged "any remaining unpinned
+central workflows" as an open follow-up. `opencode-review-dispatch.yml` — the workflow the required
+`opencode-review` check's own `repository_dispatch` lands on to actually run the OpenCode CLI and post the
+exact-head verdict — still requested `ubuntu-latest` on all 4 jobs. Confirmed live on
+`contextual-orchestrator#1017`: its dispatch run (`33916313804`) sat `queued` with no runner ever assigned
+from creation, and a 30-run sample of recent `opencode-review-dispatch.yml` runs org-wide showed 14 still
+`queued` (several 10+ hours old) and 0 clean successes in the sample. Pinned all 4 occurrences to
+`ubuntu-24.04` and extended `tests/test_required_review_runner_image_contract.py` with a fourth case.
 
+**Residual.** The rest of `.github/workflows/` still has unpinned `ubuntu-latest` jobs (`pr-review-autofix.yml`,
+`pr-review-fix-scheduler.yml`, `hourly-review-repair.yml`, `codeql-pr.yml`, `codeql-scan-dispatch.yml`, and
+others) — this fix deliberately stayed scoped to the one file with direct, confirmed live evidence of
+starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
+if queuing symptoms recur on them specifically.
+
+**Separately found while validating this fix, now fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+failed on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
+"Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
+repository), but this test still asserted the old single hourly `cron: "23 * * * *"`. Same bug class as the
+`test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
+behind by a workflow redesign. This PR's own follow-up commit renamed it to
+`test_review_fix_caller_keeps_the_github_daily_recovery_slot` and repointed it at Clearfolio's actual
+`cron: "23 7 * * *"`. Understanding the new staggered-daily design's actual intended contract in full (to
+avoid guessing) turned up two more stale files with the same root cause, never updated for the same
+redesign: `tests/test_hourly_review_repair_callers.py` (`_EXPECTED_TARGETS`' 17 schedule keys, and the
+schedule-list assertion, still used the old hourly `<minute> * * * *` shape instead of the actual daily
+`<minute> <hour> * * *` cron strings — 1 + 16 failing cases) and
+`tests/test_github_hourly_conflict_repair.py::test_central_repository_has_hourly_self_caller` (asserted
+`cron: "21 * * * *"` instead of the central `.github` self-caller's actual `cron: "21 6 * * *"`). All three
+files were corrected together, preserving each test's original protective intent (every distinct schedule
+maps to the right repository exactly once; the central self-caller entry exists; the caller still dispatches
+to the reusable, product-neutral `pr-review-fix-scheduler.yml` engine) rather than weakening any of them.
+This closes the confirmed live required-check failure on `ContextualWisdomLab/.github#1870`:
 `agent-review-runtime-quality-ci.yml`'s "Verify scheduler and contextual-orchestrator review-repair
-contracts" step runs `pytest` with no positional test path, so it falls back to full default `tests/`
-discovery. That discovery was picking up 19 failing assertions (1 schedule-list + 16 parametrized in
-`tests/test_hourly_review_repair_callers.py`, 1 in `tests/test_github_hourly_conflict_repair.py`, 1 in
-`tests/test_pr_review_autofix_nvidia_nim_contract.py`) left over from `hourly-review-repair.yml`'s
-consolidation into 17 distinct **daily** cron entries (one `<minute> <hour> * * *` per repository, staggered
-across UTC hours 0-16 — see `docs/doctoring/hourly-review-repair-single-file-consolidation.md` and
-`docs/adr/0021-hourly-review-repair-single-file-consolidation.md`), which the three test files still checked
-against the old hourly `<minute> * * * *` shape. Fixed by updating `_EXPECTED_TARGETS`' 17 schedule keys and
-the schedule-list assertion, repointing `test_central_repository_has_hourly_self_caller` at the central
-`.github` self-caller's actual `cron: "21 6 * * *"`, and renaming/repointing
-`test_review_fix_caller_runs_once_each_hour` to `test_review_fix_caller_runs_once_each_day` against
-Clearfolio's actual `cron: "23 7 * * *"` — preserving each test's original protective intent (every distinct
-schedule maps to the right repository exactly once; the caller still dispatches to the reusable,
-product-neutral `pr-review-fix-scheduler.yml` engine) rather than weakening it. With the assertions
-corrected, the exact unscoped `pytest` command the workflow runs passes cleanly (100% branch coverage across
-`pr_review_conflict_scope`, `pr_review_autofix_context`, `zdr_policy`, and
-`contextual_orchestrator_review_policy`; the only remaining local failures are two pre-existing, unrelated
-test/workflow-drift bugs and one `gh`-CLI-missing sandbox limitation, none introduced or resolved by this
-change) — so `agent-review-runtime-quality-ci.yml` itself needed no workflow-level change.
+contracts" step runs `pytest` with no positional test path (full default `tests/` discovery), so it was
+picking up all 19 of these stale assertions; with them fixed, the exact unscoped `pytest` command the
+workflow runs passes cleanly (100% branch coverage across `pr_review_conflict_scope`,
+`pr_review_autofix_context`, `zdr_policy`, and `contextual_orchestrator_review_policy` — the only remaining
+local failures are two pre-existing, unrelated test/workflow-drift bugs and one `gh`-CLI-missing sandbox
+limitation, none introduced or resolved by this change), so `agent-review-runtime-quality-ci.yml` itself
+needed no workflow-level change.
