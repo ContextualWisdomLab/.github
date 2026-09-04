@@ -321,9 +321,6 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
         "agent-mention-router-quality-ci.yml": "agent-mention-router-quality",
         "cloudflare-dns.yml": "cloudflare-dns",
         "javascript-coverage-quality-ci.yml": "javascript-coverage-quality",
-        "organization-commercial-readiness-loop-quality-ci.yml": (
-            "organization-commercial-readiness-loop-quality"
-        ),
         "trusted-uv-materializer-quality-ci.yml": (
             "trusted-uv-materializer-quality"
         ),
