@@ -2942,3 +2942,77 @@ something absent) held for the wardnet correction; the EgressWeave correction is
 verifying "library X can't do Y" requires reading X's own policy/configuration surface, not just its
 README/marketing feature list, before recommending against adoption. Saved to
 `feedback_verify_org_wide_before_declaring_unstarted.md`.
+
+## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
+
+**Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against
+live `main`; not a code change. This is the 900+ open-PR sweep continuing the standing autonomous PR
+review→fix→merge→develop loop; individual PR outcomes are recorded as comments on the affected PRs, not
+duplicated here.
+
+**Finding 1 — severe org-wide Actions capacity congestion, confirmed live, not the already-tracked
+`QUEUE_SATURATION_CHICKEN_EGG`/floating-runner-image pattern.** `actions_list` (`list_workflow_runs`,
+`status: queued`) returned **`total_count: 1719`** queued workflow runs at once, against **`total_count: 2`**
+`in_progress`. Spot-checked several PRs' check runs directly: most jobs (`CodeQL`, `Bandit`, `pip-audit`,
+`Semgrep`, `trivy-fs`, `scorecard`, `strix`, `noema-review`, `opencode-review`, the merge scheduler's own
+`Required PR Review Merge Scheduler` runs) sat `queued` for anywhere from ~20 minutes to over 2.5 hours
+(e.g. `#1817`'s own checks, still `queued` since `2026-09-03T22:53:57Z`, ~2.5h before this snapshot); a
+minority of lightweight jobs (`Detect changed scope`, `gitleaks`, `validate`) did complete normally in the
+same window. This is consistent with a hosted-runner concurrency ceiling being exhausted by simultaneous
+demand from the now-100+-PR open queue on this repository alone, compounded across every sibling repository
+the same central required workflows also run in. No fix attempted here — this is an Actions plan/concurrency
+capacity condition, not a workflow or script defect; per the standing operating directive, a merely-queued
+job is never re-run. Recorded so a future session does not mistake near-universal `queued` check state across
+dozens of otherwise-healthy PRs for something wrong with those PRs.
+
+**Finding 2 — `scripts/ci/noema_review_gate.py` and `.github/workflows/strix.yml`/`noema-review.yml` are
+active multi-PR hot-file collision zones; at least 6 open PRs each carry a materially different, mutually
+incompatible design for the same mechanism.** Attempted the standard `git merge --no-edit` conflict repair
+against 8 `dirty`/stale-conflicting PRs this session; 2 succeeded cleanly (`#1187`, `#933`, `#1685` — ordinary
+append-only doc/changelog drift or one confirmed-stale carried-forward test assertion, all pushed with full
+green suites) and 6 could not be resolved without guessing on a required security gate:
+
+- `#1198`, `#1606`, `#1589` each modify `scripts/ci/noema_review_gate.py`'s core verdict/response-format or
+  `inspect_and_review()` control flow, and `origin/main` has independently evolved a *fourth*, different
+  version of the same surface (`inspect_and_review(repo, number, expected_head)` +
+  `require_expected_head()`, and separately `_noema_verdict_response_format()` / `_required_probe_count()` —
+  neither of which any of the three PRs know about, and none of which the three PRs agree with each other
+  on either).
+- `#939`, `#1009` both modify `.github/workflows/strix.yml`'s provider/model-behavior-error retry
+  classification, and `origin/main` has *already independently shipped* a materially more advanced version
+  (bounded retry loop, `model_behavior_error_signal`, `is_model_behavior_error()` in
+  `scripts/ci/strix_quick_gate.sh`) that appears to make significant parts of both PRs' own core
+  contribution redundant — confirmed via direct `git show origin/main:... | grep`, not inferred from PR
+  prose.
+- `#1674`'s conflict footprint is a single ordinary doc hunk, but a full-suite run *after* the clean merge
+  (before any push) surfaced 10 failing tests: `origin/main` independently added a
+  `noema-review.yml` step ("Reject a stale trigger before credential or model setup", part of the same
+  `expected_head` mechanism above) that this branch has no knowledge of, and git's 3-way text merge silently
+  dropped it with **no conflict marker at all** rather than flagging a collision — a strictly more dangerous
+  failure mode than a marked conflict, since a naive merge-and-push here would have shipped a workflow
+  missing a real fail-closed check with a clean-looking `git merge` exit code.
+- `#1158` shows the same shape one layer down in `.github/workflows/security-scan.yml`: this branch replaced
+  the third-party `google/osv-scanner-action` invocation with a self-controlled `run-osv-scanner.sh` script
+  plus result-completeness classification at all four OSV call sites; `origin/main` has not adopted that
+  redesign at all (the script doesn't exist anywhere on `main`) and has continued evolving the
+  action-based path independently. `#1257` (small, `mergeable_state: blocked`, main-architecture-compatible)
+  may already close the actual underlying bug (OSV results lost across fork checkout) this branch was opened
+  for, without needing the larger rewrite reconciled at all.
+
+**Why this matters beyond the 6 individual PRs.** These are not isolated stale branches — they are 6+
+independent lines of development racing on the same 3 files (`noema_review_gate.py`, `strix.yml`,
+`security-scan.yml`) simultaneously, each written by a different agent/session across roughly 2-4 weeks,
+each with its own extensive TDD/evidence narrative, and none aware of the others' now-already-merged (or
+also-still-open) changes to the same functions. Per-PR comments with the specific evidence were left on each
+(`#1198`, `#1606`, `#1589`, `#939`, `#1009`, `#1674`, `#1158`) rather than guessing a text-level resolution
+on a required security gate, consistent with this loop's existing standard for `#1279`/`#1280`/`#1382`. The
+actionable follow-up is a design-aware reconciliation pass — deciding, per hot file, which in-flight PR (if
+any) should become the surviving lineage and which should be closed/rebased against it — not another
+automated merge-conflict sweep; a ninth or tenth independently-conflict-resolved branch on the same 3 files
+would only add another incompatible lineage to reconcile later.
+
+**Corroborating context already on this loop's radar.** `#1661` (currently open, `mergeable_state: blocked`,
+141 commits) documents having *already* fixed one instance of this exact class in `noema-review.yml`
+(the "Cancel superseded Noema runs after live-head validation" concurrency-deadlock extraction) — i.e. the
+pattern of multiple sessions independently repairing the same hot file is already a known, recurring shape
+in this specific workflow, not a one-off.
