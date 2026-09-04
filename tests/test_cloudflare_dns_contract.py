@@ -136,3 +136,15 @@ def test_workflow_allows_only_push_dry_run_token_soft_failure() -> None:
     workflow = (ROOT / ".github/workflows/cloudflare-dns.yml").read_text(encoding="utf-8")
 
     assert "CF_ALLOW_DRY_RUN_TOKEN_FAILURE: ${{ github.event_name == 'push' && 'true' || 'false' }}" in workflow
+
+
+def test_pull_request_validation_cancels_only_superseded_pr_runs() -> None:
+    workflow = (ROOT / ".github/workflows/cloudflare-dns.yml").read_text(encoding="utf-8")
+
+    assert (
+        "group: cloudflare-dns-${{ github.event.pull_request.number || github.ref }}"
+        in workflow
+    )
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    )
