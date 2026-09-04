@@ -43,7 +43,8 @@ def test_revalidation_helper_is_executable_and_temp_writer_is_retired() -> None:
 def test_reconciled_scheduler_preserves_current_main_control_plane_fixes() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert '- cron: "0 * * * *"' in workflow
+    assert '- cron: "47 3 * * *"' in workflow
+    assert '- cron: "17 3 * * *"' in workflow
     assert '*/15 * * * *' not in workflow
     assert workflow.count("runs-on: ubuntu-24.04") >= 2
     scan_job = workflow.split("  scan-pr-queue:", 1)[1].split("  org-queue-sweep:", 1)[0]
