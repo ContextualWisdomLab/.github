@@ -43,7 +43,6 @@ NO_TRIGGER_FILTER_WORKFLOWS = (
     "security-scan.yml",
     "sast-semgrep.yml",
     "codeql-pr.yml",
-    "close-empty-pr.yml",
     "opencode-review.yml",
     "noema-review.yml",
     "pr-review-merge-scheduler.yml",
@@ -163,7 +162,15 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
         workflow = _read(filename)
         for job_name in job_names:
             block = _top_level_job_block(workflow, job_name)
-            assert "github.event.action != 'closed'" in block, (filename, job_name)
+            close_guard_block = (
+                _top_level_job_block(workflow, "admit-current-head")
+                if filename == "strix.yml"
+                else block
+            )
+            assert "github.event.action != 'closed'" in close_guard_block, (
+                filename,
+                job_name,
+            )
             assert re.search(r"needs\.[\w-]+\.outputs\.\w+", block), (
                 filename,
                 job_name,

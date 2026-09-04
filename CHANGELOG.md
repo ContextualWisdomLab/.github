@@ -1,12 +1,28 @@
 ### Contextual-orchestrator pin refresh
 
-- Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `464da4715b495b5eaaa593eba3796e2d976ee0c9` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
+- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
 
 ### Scheduler target admission
 
 - Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
 
+### Hourly review-repair queue-scan bound
+
+- Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
+
 ## [Unreleased]
+- Move the exact-artifact SBOM attestation quality contract into the existing
+  agent review runtime selector and job, preserving Python 3.10 compilation,
+  Python 3.14 test evidence, exact-head checkout, hash locks, and read-only
+  permissions while removing the standalone workflow.
+- Move the organization commercial-readiness contract suite into the existing
+  agent review runtime quality selector and job, removing its standalone thin
+  caller while retaining the reusable exact-head coverage implementation.
+- Consolidate the standalone review-repair contract workflow into the existing
+  agent review runtime quality selector and job. Matching PRs now reuse one
+  checkout and dependency bootstrap while retaining the focused coverage,
+  docstring, compile, and exact-PR concurrency contracts.
+- Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.
 - Retire the standalone OSV and Scorecard pull-request workflows after both scanners moved into the required `security-scan.yml`. The organization ruleset now has seven required workflow paths, and `.github` branch protection no longer requires the duplicate `osv-scan / osv-scan` context.
 
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.

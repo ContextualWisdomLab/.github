@@ -66,10 +66,10 @@ def _is_analysis_fresh_and_successful(
     return parsed >= now - timedelta(days=CODEQL_ANALYSIS_FRESHNESS_DAYS)
 
 
-def audit_codeql_coverage(
+def repositories_without_codeql(
     repositories: list[dict[str, Any]], now: datetime | None = None
-) -> list[str]:
-    """Return one human-readable error per repository with zero CodeQL coverage.
+) -> list[dict[str, Any]]:
+    """Return non-archived repositories without current CodeQL coverage.
 
     A repository is flagged only when it is not archived AND both coverage
     signals are absent: ``default_setup_state`` is not ``"configured"``, and
@@ -80,11 +80,10 @@ def audit_codeql_coverage(
     the exclusion of ``trivy-sarif-repro`` from today's manual remediation).
     """
     current = now or datetime.now(timezone.utc)
-    errors: list[str] = []
+    uncovered: list[dict[str, Any]] = []
     for repository in repositories:
         if repository.get("archived"):
             continue
-        name = repository.get("name")
         # "configured" is GitHub's own forward-looking commitment to run
         # CodeQL going forward (like a scheduled cron guarantee), not a
         # one-time historical scan that can go stale -- so it does not need
@@ -95,11 +94,19 @@ def audit_codeql_coverage(
             repository.get("latest_codeql_analysis"), current
         )
         if not has_default_setup and not has_fresh_analysis:
-            errors.append(
-                f"{name} has no CodeQL coverage from any source "
-                "(no default-setup, no recent analysis)"
-            )
-    return errors
+            uncovered.append(repository)
+    return uncovered
+
+
+def audit_codeql_coverage(
+    repositories: list[dict[str, Any]], now: datetime | None = None
+) -> list[str]:
+    """Return one human-readable error per repository with zero CodeQL coverage."""
+    return [
+        f"{repository.get('name')} has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+        for repository in repositories_without_codeql(repositories, now)
+    ]
 
 
 def load_payload(path: Path | None, stdin: TextIO) -> list[dict[str, Any]]:
