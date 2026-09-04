@@ -2979,6 +2979,62 @@ verifying "library X can't do Y" requires reading X's own policy/configuration s
 README/marketing feature list, before recommending against adoption. Saved to
 `feedback_verify_org_wide_before_declaring_unstarted.md`.
 
+## Org-wide audit: `code-scanning/default-setup` vs. a repository's own advanced-configuration CodeQL workflow — 2026-09-04
+
+**Status:** Superseded by a staged central-CodeQL rollout contract. `contextual-orchestrator` was the only
+confirmed live instance among the 11 Code Search candidates and repositories inspected directly; it was
+already fixed in the same investigation that discovered it
+(`contextual-orchestrator` PR #1028's failing "CodeQL analysis" check — `code-scanning/default-setup` was
+`state: "configured"` while `.github/workflows/security.yml`'s `codeql_analysis` job also ran a real,
+working `github/codeql-action/init` + `analyze` sequence; GitHub rejects that combination outright, failing
+the SARIF upload with "CodeQL analyses from advanced configurations cannot be processed when the default
+setup is enabled." Fixed with `gh api --method PATCH repos/ContextualWisdomLab/contextual-orchestrator/code-scanning/default-setup -f state=not-configured`,
+since `security.yml` was the pre-existing, real coverage mechanism; a related suppression bug found in the
+same pass — the whole "Security" workflow, id `300545778`, had been `disabled_manually`, hiding the failure
+rather than fixing it — was reversed with `gh api --method PUT .../actions/workflows/300545778/enable`.)
+
+**Why an org-wide audit was warranted.** The item-41 entry above records that its 2026-09-03 default-setup
+rollout deliberately checked real coverage first via the `code-scanning/analyses` API before assigning
+default-setup only to the 23 repositories with zero coverage from any source. `contextual-orchestrator`
+having both mechanisms simultaneously raised the question of whether it was misclassified during that sweep,
+or whether default-setup landed on it (and possibly others) through an unrelated path.
+
+**Method.** Org-wide `gh api -X GET search/code -f q="codeql-action/analyze org:ContextualWisdomLab path:.github/workflows"` (content search, not a filename grep — the same lesson item-41 already applied, since `contextual-orchestrator`'s own coverage lives in an unexpectedly-named `security.yml` rather than a `codeql.yml`) returned 13 hits across 11 repositories with a local workflow file containing `github/codeql-action/init`/`analyze`: `newsdom-api`, `keyverse`, `ContextualWisdomLab.github.io`, `fast-mlsirm`, `scopeweave`, `bandscope`, `contextual-orchestrator`, `mightyETL`, `litellm-patched-proxy` (2 files), `pg-erd-cloud`, and `.github` itself (2 files — `codeql-scan-dispatch.yml`, the already-known central dispatch handler, and `scheduled-security-scan.yml`; expected, not investigated further as a "local repo" case). `gh api repos/ContextualWisdomLab/<repo>/code-scanning/default-setup --jq '.state'` was then checked for each of the other 10.
+
+**Result: `default-setup=configured` alongside a local advanced-config workflow, beyond `contextual-orchestrator`, in exactly 3 repositories — none of which are in item-41's 23-repository rollout list, and none of which are a live conflict.**
+- **`ContextualWisdomLab.github.io`** — false positive. Its `.github/workflows/codeql.yml` is named "CodeQL Default Setup Marker," triggers only on `workflow_dispatch` (never on push/PR), and its `analyze` step carries `if: ${{ false }}` (never executes) with an explicit preceding comment: *"Skipping github/codeql-action/analyze because central/default setup owns SARIF upload."* Deliberately engineered to expose `codeql-action` usage to Scorecard's static analysis without ever touching SARIF. No fix needed.
+- **`fast-mlsirm`** — false positive. `.github/workflows/codeql.yml` runs two real jobs (`analyze-actions` on every PR, `analyze-python` gated to `workflow_dispatch` only), and **both** `analyze` steps carry `with: upload: never`, with comments stating *"Default setup remains the repository's code-scanning upload owner"* and *"Default setup already owns ordinary Python code-scanning uploads."* Confirmed via a live job log (run `33754939454`, job `100646992008`, `2026-09-04T00:45Z`): `upload: never` present in the action's resolved input dump, `Exported results to SARIF` followed by no upload call, job concluded `success`. Deliberately engineered the opposite way from `contextual-orchestrator`'s fix (default-setup keeps ownership, the local workflow stays silent) rather than the way `contextual-orchestrator` was fixed (local workflow keeps ownership, default-setup disabled) — both are valid resolutions of the same conflict; this repository already had one in place. No fix needed.
+- **`scopeweave`** — no live conflict, but two dangling artifacts worth a light cleanup. The workflow with real `init`/`analyze` steps (`.github/workflows/codeql.yml`) is `disabled_manually`, so it never runs and cannot collide with default-setup today. A second, unrelated workflow entry — "CodeQL Required," id `335384625`, `.github/workflows/codeql-required.yml` — is registered `state: "active"` in the Actions API, but the file itself no longer exists on the `develop` default branch (`404` on direct content fetch); GitHub retains the workflow-run registration for a file that has since been deleted, so this entry can never actually trigger. Net effect: default-setup is the sole current CodeQL coverage source for this repository, matching item-41's own "zero coverage from any source" criterion at whatever point `codeql.yml` was disabled — not a misclassification, just a repository whose local workflow went inactive after (or independent of) the rollout. Not fixed in this pass: re-enabling the disabled `codeql.yml` would immediately recreate `contextual-orchestrator`'s exact conflict, so any future re-enable of that workflow must add `upload: never` (matching `fast-mlsirm`'s pattern) or disable default-setup first, whichever this repository's owner intends as the coverage source of record.
+
+**The remaining 7 repositories** (`newsdom-api`, `keyverse`, `bandscope`, `mightyETL`, `litellm-patched-proxy`, `pg-erd-cloud`, `.github`) all returned `default-setup=not-configured` — no conflict is possible regardless of their local workflow's upload configuration.
+
+**Conclusion.** `contextual-orchestrator`'s conflict was an isolated incident, not a symptom of a broader misclassification in item-41's rollout (none of the 3 repositories found here with `default-setup=configured` alongside a local workflow were among that rollout's 23 targets) and not evidence of an org policy silently re-enabling default-setup on repositories that already had real coverage. Two of the three already carry a deliberate, working design for this exact conflict (`if: false` / `upload: never`) that predates or is independent of this audit — worth keeping as the reference pattern if this conflict resurfaces elsewhere, in preference to `contextual-orchestrator`'s "disable default-setup" fix when the local workflow does not yet have established real-coverage precedence.
+
+**Caveat.** This audit trusted GitHub's code-search index for the initial 11-repository candidate list rather than fetching and grepping all 74 repositories' workflow directories individually; code search can lag very recent pushes by a short window. The 10 non-`contextual-orchestrator` candidates it did surface were each verified directly against the live API/content, not from search snippets alone.
+
+**2026-09-05 staged rollout correction.** The organization now requires the central
+`.github/workflows/codeql-pr.yml` through ruleset `18156473`; keeping GitHub's generated
+`dynamic/github-code-scanning/codeql` default setup on the same PR spends another CodeQL job set. Removal
+must proceed one repository at a time. `scripts/ci/audit_codeql_default_setup_rollout.py` is the read-only
+gate: it requires the inherited ruleset and central workflow, binds evidence to the exact PR head, blocks an
+active advanced uploader/default-setup collision, and reports either `READY_DISABLE`, `VERIFIED`, `WAIT`,
+`ROLLBACK`, or `BLOCK`. A repository advances only after exact-head central CodeQL succeeds. If central
+CodeQL fails after default setup is disabled, re-enable default setup before continuing, but only when no
+active advanced uploader would make that rollback invalid. `.github`, `noema`, and
+`IRT-bibliography-set` are explicit ruleset exceptions and must remain `EXEMPT`, not silently counted as
+rollout failures. Run the live collector as
+`python3 scripts/ci/audit_codeql_default_setup_rollout.py --repository ContextualWisdomLab/<repo> --pr <number>`;
+it uses only authenticated REST `GET` requests and re-reads the PR head after collection to reject a moving
+snapshot.
+
+The xtrmLLMBatchPython pilot is intentionally not yet proof of completion: default setup currently reports
+`not-configured`, ruleset `18156473` requires central CodeQL, and PR #292 head
+`5f4de312e72da5e1303c701d8e6f65cec7207409` has central run `33904225451`; that run is still `queued`.
+The generated default-setup run `33904220801` for the same head was cancelled after the setting change.
+No second repository may be changed until the central run reaches an explicit successful terminal state and
+the detector reports `VERIFIED` for that exact head. GitHub documents the hard boundary: default setup blocks
+CodeQL-generated SARIF uploads from advanced configuration, so rollback must never blindly enable it beside
+an active uploader.
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
 **Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against

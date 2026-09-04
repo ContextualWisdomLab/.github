@@ -30,10 +30,10 @@ def test_current_head_coalescer_owns_repo_local_exact_pr_scope() -> None:
     ).read_text(encoding="utf-8")
 
     assert "GH_TOKEN: ${{ github.token }}" in workflow
-    assert (
-        "group: current-head-run-coalescer-${{ github.repository }}-${{ "
-        "github.event.pull_request.number }}"
-    ) in workflow
+    concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert "current-head-run-coalescer-${{ github.repository }}-${{" in concurrency
+    assert "github.event.pull_request.number }}" in concurrency
+    assert "github.event.pull_request.head.sha }}" in concurrency
     assert (
         "EXPECTED_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}"
         in workflow
