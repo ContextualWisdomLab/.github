@@ -66,6 +66,7 @@ on:
       - docs/doctoring/contextual-orchestrator-hourly-review-caller.md
       - docs/doctoring/afipc-hourly-review-caller.md
   push:
+    branches: [main]
     paths:
       - .github/workflows/pr-review-fix-scheduler.yml
       - scripts/ci/pr_review_fix_scheduler.py
