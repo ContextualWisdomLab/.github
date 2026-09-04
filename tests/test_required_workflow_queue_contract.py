@@ -211,6 +211,25 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
+def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
+    """Dispatch review execution directly so polling cannot starve its producer."""
+    workflow = workflow_text("opencode-review.yml")
+    dispatch = workflow_step(workflow, "Request current-head OpenCode review execution")
+
+    assert 'event_type:"opencode-review"' in dispatch
+    assert 'event_type:"merge-scheduler"' not in dispatch
+    assert 'required_run_id:$required_run_id' in dispatch
+    for field in (
+        "target_repository",
+        "pr_number",
+        "pr_base_ref",
+        "pr_base_sha",
+        "pr_head_ref",
+        "pr_head_sha",
+    ):
+        assert f"{field}:${field}" in dispatch
+
+
 def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
     """Every central manual entrypoint must load code from the default branch."""
     workflow_files = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
