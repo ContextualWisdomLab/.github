@@ -338,6 +338,44 @@ def test_fetch_open_prs_zero_limit_skips_graphql(monkeypatch):
     assert calls == [("owner/repo", [])]
 
 
+def test_rotating_pr_window_is_bounded_and_wraps_over_actual_results():
+    """A deterministic offset rotates bounded windows without empty tail slots."""
+    prs = [{"number": number} for number in range(1, 121)]
+
+    assert sched.rotating_pr_window(prs, offset=0, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=50, window_size=50) == prs[50:100]
+    assert sched.rotating_pr_window(prs, offset=100, window_size=50) == prs[100:120]
+    assert sched.rotating_pr_window(prs, offset=150, window_size=50) == prs[:50]
+    assert sched.rotating_pr_window(prs, offset=0, window_size=None) == prs
+
+
+def test_rest_fallback_hydrates_only_the_selected_rotating_window(monkeypatch):
+    """REST discovery may reach 120 PRs but hydrates no more than 50 of them."""
+    pages = {
+        1: [{"number": number} for number in range(1, 101)],
+        2: [{"number": number} for number in range(101, 121)],
+    }
+    hydrated = []
+
+    def fake_api(path):
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+
+    def fake_rest_pr_node(repo, pr):
+        hydrated.append(pr["number"])
+        return {"number": pr["number"]}
+
+    monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(sched, "rest_pr_node", fake_rest_pr_node)
+
+    result = sched.fetch_open_prs_rest(
+        "owner/repo", 120, offset=50, window_size=50
+    )
+
+    assert [pr["number"] for pr in result] == list(range(51, 101))
+    assert sorted(hydrated) == list(range(51, 101))
+
+
 def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
     seen = []
 
@@ -1387,7 +1425,7 @@ def test_fetch_open_prs_rest_paginates_and_fetch_open_prs_falls_back(monkeypatch
         raise RuntimeError("gh: Resource not accessible by integration")
 
     monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     assert sched.fetch_open_prs("owner/repo", 5) == [{"repo": "owner/repo", "max": 5}]
 
 
@@ -1418,7 +1456,7 @@ def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
         raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
 
     monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs: [{"repo": repo, "max": max_prs}])
+    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
     monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
 
     assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
@@ -4498,6 +4536,33 @@ def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
     assert calls[-1][0][-2:] == ["--input", "-"]
 
 
+def test_startup_failure_restamp_reuses_guarded_same_tree_path(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head",
+        lambda repo, pr, **kwargs: calls.append((repo, pr["number"], kwargs)) or "b" * 40,
+    )
+
+    assert (
+        sched.restamp_pr_head_after_startup_failure(
+            "owner/repo", make_pr(number=7), dry_run=False
+        )
+        == "b" * 40
+    )
+    assert calls == [
+        (
+            "owner/repo",
+            7,
+            {
+                "dry_run": False,
+                "action": "startup-failure-head-refresh",
+                "message": sched.STARTUP_FAILURE_RESTAMP_MESSAGE,
+            },
+        )
+    ]
+
+
 def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
     """A GITHUB_TOKEN head mutation would deadlock the PR, so it must be refused.
 
@@ -4704,6 +4769,159 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
         "--input",
         "-",
     ]
+
+
+def test_recover_current_head_startup_failures_restamps_only_latest_failed_workflows(monkeypatch):
+    calls = []
+    head_sha = "a" * 40
+
+    def fake_read(args):
+        if args == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]:
+            return head_sha
+        assert args == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/runs",
+            "-f",
+            f"head_sha={head_sha}",
+            "-F",
+            "per_page=100",
+        ]
+        return json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 90,
+                        "workflow_id": 10,
+                        "name": "Security Scan",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:00:00Z",
+                    },
+                    {
+                        "id": 91,
+                        "workflow_id": 11,
+                        "name": "SAST Semgrep",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 2,
+                        "created_at": "2026-09-04T01:01:00Z",
+                    },
+                    {
+                        "id": 92,
+                        "workflow_id": 12,
+                        "name": "CodeQL PR",
+                        "path": ".github/workflows/codeql-pr.yml",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:02:00Z",
+                    },
+                    {
+                        "id": 93,
+                        "workflow_id": 13,
+                        "name": "Dependency Review",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:03:00Z",
+                    },
+                    {
+                        "id": 94,
+                        "workflow_id": 13,
+                        "name": "Dependency Review",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "queued",
+                        "conclusion": None,
+                        "run_attempt": 1,
+                        "created_at": "2026-09-04T01:04:00Z",
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(sched, "run_github_read", fake_read)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda repo, pr, **kwargs: calls.append((repo, pr["headRefOid"], kwargs)),
+    )
+
+    recovered = sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    )
+
+    assert recovered == [90, 91]
+    assert calls == [
+        (
+            "owner/repo",
+            head_sha,
+            {"dry_run": False},
+        )
+    ]
+
+
+def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatch):
+    head_sha = "a" * 40
+    pr = make_pr(headRefOid=head_sha)
+    pr["commits"]["nodes"][0]["commit"]["messageHeadline"] = (
+        sched.STARTUP_FAILURE_RESTAMP_MESSAGE
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 90,
+                        "workflow_id": 10,
+                        "name": "Security Scan",
+                        "event": "pull_request",
+                        "head_sha": head_sha,
+                        "status": "completed",
+                        "conclusion": "startup_failure",
+                        "created_at": "2026-09-04T01:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda *_args, **_kwargs: pytest.fail("a recovery restamp must not repeat"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", pr, dry_run=False
+    ) == []
+
+
+def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        sched,
+        "recover_current_head_startup_failures",
+        lambda repo, pr, *, dry_run: [90],
+    )
+
+    decision = inspect(make_pr(headRefOid="a" * 40), dry_run=False)
+
+    assert decision.action == "check_rerun"
+    assert "90" in decision.reason
 
 
 def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):

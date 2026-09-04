@@ -542,6 +542,33 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
     assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
 
 
+def test_codeql_gap_bootstrap_uses_trusted_opencode_identity_without_pr_head_execution() -> None:
+    """Backlog item 38 stays on trusted main and treats installation tokens as opaque."""
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    bootstrap_step = workflow.split(
+        "- name: Exchange OpenCode app token for CodeQL setup writes\n", 1
+    )[1]
+
+    assert "id-token: write" in workflow
+    assert "audience=${OIDC_AUDIENCE}" in bootstrap_step
+    assert "/exchange_github_app_token" in bootstrap_step
+    assert "token<<OPENCODE_TOKEN" in bootstrap_step
+    assert "bootstrap_codeql_pull_requests.py" in bootstrap_step
+    assert '"scripts/ci/bootstrap_codeql_pull_requests.py"' in workflow
+    assert "pull_request_target:" not in workflow
+    assert "pull_request:" not in workflow
+    assert "refs/pull/" not in bootstrap_step
+    assert "ghs_" not in bootstrap_step
+    assert "length" not in bootstrap_step
+    assert (
+        "central-required-workflow-ruleset-audit-${{ github.event_name == "
+        "'repository_dispatch' && github.event.action || github.event_name }}"
+        in workflow
+    )
+
+
 def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
     """Devin finding: 'Private repositories disappear from audit'.
 
