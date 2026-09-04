@@ -35,7 +35,14 @@ permissions:
 jobs:
   cancel-closed-pr-runs:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Bound this job well short of GitHub's 360-minute platform default. Its
+    # only step is a single-repository, status-filtered gh api --paginate
+    # list-and-cancel sweep (up to 3 passes x 5 statuses), no branch update
+    # or merge -- lighter than pr-review-merge-scheduler.yml's scan-pr-queue
+    # job (PR #1702), which got timeout-minutes: 30 for a comparable
+    # single-repo scan that also dispatches a review and updates a branch.
+    timeout-minutes: 20
     permissions:
       actions: write
       contents: read
@@ -179,7 +186,23 @@ jobs:
 
   noema-review:
     name: noema-review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # No job-level timeout-minutes here, deliberately. This job's "Prepare
+    # Noema model verdict" step calls two_phase.py's call_llm synchronously
+    # via the contextual-orchestrator gateway and blocks on the model's own
+    # response -- a job-level wall-clock bound here would cap the model's
+    # reasoning/tool-use time directly, which docs/product-goal-directive.md
+    # #8 prohibits ("Model timeout은 application·Agent·Gateway 공통 상한 없이
+    # 기본 null이다"; "OpenCode·Strix·Noema의 모델당 2시간 이상을 수용한다"). An
+    # earlier version of this job set timeout-minutes: 210, reasoning it gave
+    # that step "the same ~180-minute allowance" PR #1707 gave an unrelated
+    # step -- that reasoning was wrong: #1707's poll_deadline_epoch bounds a
+    # step that polls GitHub for whether a *separately triggered* review
+    # process has posted a verdict yet (an async external wait), not a step
+    # that itself runs the model synchronously. Any fixed cap on a job whose
+    # body IS the synchronous model call is exactly the fixed inference-time
+    # cap the policy forbids. See
+    # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
       github.event_name == 'repository_dispatch'
       || (
@@ -582,8 +605,9 @@ jobs:
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
-      - name: Run Noema LLM review and submit verdict
+      - name: Prepare Noema model verdict
         if: env.PR_NUMBER != ''
+        id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
@@ -593,10 +617,11 @@ jobs:
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "No pull request number was available for this event; skipping."
+            echo "prepared=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot submit a verdict."
+            echo "::error::Noema reviewer credential selection succeeded but no token was minted; review cannot prepare a verdict."
             exit 1
           fi
           if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
@@ -608,7 +633,50 @@ jobs:
           export NOEMA_LLM_MODEL="orchestrator/free"
           export NOEMA_LLM_API_KEY="${CONTEXTUAL_ORCHESTRATOR_TOKEN}"
           export NOEMA_LLM_VIA_ORCHESTRATOR=1
-          python3 -m scripts.ci.noema_review_gate \
-            --repo "$TARGET_REPOSITORY" \
-            --pr-number "$PR_NUMBER" \
-            --expected-head "$EXPECTED_HEAD_SHA"
+          verdict_file="${RUNNER_TEMP}/noema-verdict-envelope.json"
+          rm -f "$verdict_file"
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --prepare-verdict-file "$verdict_file"
+          if [ -f "$verdict_file" ]; then
+            echo "prepared=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "prepared=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
+          fi
+
+      - name: Refresh repository-scoped Noema GitHub App token for publication
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
+        id: noema_github_app_publication_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_credential.outputs.repository }}
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: write
+          permission-security-events: read
+          permission-statuses: read
+          permission-vulnerability-alerts: read
+
+      - name: Publish prepared Noema verdict on the exact live head
+        if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true'
+        env:
+          GH_TOKEN: ${{ steps.noema_credential.outputs.source == 'pat' && secrets.NOEMA_REVIEW_TOKEN || steps.noema_credential.outputs.source == 'github-app' && steps.noema_github_app_publication_token.outputs.token || steps.noema_credential.outputs.source == 'oidc' && steps.noema_oidc_token.outputs.token || '' }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app-refresh' || steps.noema_credential.outputs.source == 'oidc' && 'noema-review-app-oidc' || '' }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_publication_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_publication_token.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_publication_token.outputs['installation-id'] }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Noema publication has no credential for the explicitly selected reviewer source; refusing any GITHUB_TOKEN or author fallback."
+            exit 1
+          fi
+          verdict_file="${RUNNER_TEMP}/noema-verdict-envelope.json"
+          if [ ! -f "$verdict_file" ]; then
+            echo "::error::Noema prepared-verdict output claimed success but its private envelope is missing."
+            exit 1
+          fi
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --publish-verdict-file "$verdict_file"
