@@ -25,11 +25,11 @@ def _workflow_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_review_fix_caller_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair caller on the approved hourly cadence."""
+def test_review_fix_caller_keeps_the_github_daily_recovery_slot() -> None:
+    """Keep the GitHub review repair caller on its distributed daily slot."""
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in caller
-    assert 'cron: "23 */2 * * *"' not in caller
+    assert 'cron: "23 7 * * *"' in caller
+    assert 'cron: "23 * * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
