@@ -254,7 +254,7 @@ mutation($threadId: ID!) {
 SENSITIVE_DATA_SCRUB_PATTERNS = (
     (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
     (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
-    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|ghs_[A-Za-z0-9.\-_]+|gh[pour]_[A-Za-z0-9_]+)\b'), '***'),
     (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
     (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
     (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
