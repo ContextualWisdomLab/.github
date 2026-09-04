@@ -1,12 +1,20 @@
+"""Runtime-budget contracts for consolidated Strix quality validation."""
+
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_PATH = (
+    REPOSITORY_ROOT
+    / ".github"
+    / "workflows"
+    / "agent-review-runtime-quality-ci.yml"
+)
 
 
 def _named_step(workflow: str, name: str) -> str:
     """Return one exact named workflow step without loading workflow YAML tags."""
+
     marker = f"      - name: {name}\n"
     start = workflow.index(marker)
     try:
@@ -18,6 +26,7 @@ def _named_step(workflow: str, name: str) -> str:
 
 def test_strix_quality_uses_short_fake_process_timeouts() -> None:
     """Keep deterministic timeout fixtures well inside the quality-job budget."""
+
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     step = _named_step(workflow, "Verify exact-head path policy and syntax")
 
@@ -28,15 +37,19 @@ def test_strix_quality_uses_short_fake_process_timeouts() -> None:
 
 def test_strix_quality_trigger_includes_fixture_contract_paths() -> None:
     """Keep fixture behavior and doctoring changes inside the quality trigger."""
+
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     trigger = workflow[: workflow.index("\njobs:")]
 
     assert "docs/doctoring/strix-quality-timeout-fixtures.md" in trigger
     assert "tests/test_strix_quality_timeout_fixture_budget.py" in trigger
+    assert "docs/doctoring/strix-model-behavior-error.md" in trigger
+    assert "tests/test_strix_model_behavior_error.py" in trigger
 
 
 def test_strix_quality_keeps_real_scanner_budgets_out_of_fixture_overrides() -> None:
     """Fixture acceleration must not weaken production Strix scanner timeouts."""
+
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     step = _named_step(workflow, "Verify exact-head path policy and syntax")
 

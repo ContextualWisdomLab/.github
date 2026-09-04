@@ -1,11 +1,12 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // NOT switched to "contextual-orchestrator/contextual-orchestrator" yet:
-  // that requires CONTEXTUAL_ORCHESTRATOR_BASE_URL/_TOKEN to be provisioned
-  // first (see the "contextual-orchestrator" provider block below).
-  "model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-  "small_model": "nvidia-nim/meta/llama-3.3-70b-instruct",
-  "enabled_providers": ["nvidia-nim", "github-models", "contextual-orchestrator"],
+  // Default routed through the vendored contextual-orchestrator gateway
+  // (orchestrator/free: fail-closed zero-cost pool, ZDR-first). The gateway
+  // must be provisioned before a review starts; there is no direct-provider
+  // fallback for review content.
+  "model": "contextual-orchestrator/orchestrator/free",
+  "small_model": "contextual-orchestrator/orchestrator/free",
+  "enabled_providers": ["contextual-orchestrator"],
   "lsp": false,
   "mcp": {},
   "permission": {
@@ -285,105 +286,15 @@
         }
       }
     },
-    "nvidia-nim": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "NVIDIA NIM",
-      "options": {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "{env:NVIDIA_API_KEY}"
-      },
-      "models": {
-        "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
-          "name": "NVIDIA Llama 3.3 Nemotron Super 49B v1.5",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "nvidia/llama-3.1-nemotron-ultra-253b-v1": {
-          "name": "NVIDIA Llama 3.1 Nemotron Ultra 253B",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "nvidia/nemotron-3-super-120b-a12b": {
-          "name": "NVIDIA Nemotron 3 Super 120B",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "nvidia/nemotron-3-ultra-550b-a55b": {
-          "name": "NVIDIA Nemotron 3 Ultra 550B",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "meta/llama-3.3-70b-instruct": {
-          "name": "Meta Llama 3.3 70B Instruct (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "meta/llama-3.1-70b-instruct": {
-          "name": "Meta Llama 3.1 70B Instruct (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "deepseek-ai/deepseek-v4-pro": {
-          "name": "DeepSeek V4 Pro (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "mistralai/mistral-large-2-instruct": {
-          "name": "Mistral Large 2 Instruct (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        },
-        "mistralai/codestral-22b-instruct-v0.1": {
-          "name": "Codestral 22B Instruct (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 32768,
-            "output": 8192
-          }
-        },
-        "google/gemma-4-31b-it": {
-          "name": "Gemma 4 31B IT (NIM)",
-          "tool_call": true,
-          "limit": {
-            "context": 131072,
-            "output": 8192
-          }
-        }
-      }
-    },
-    // Added (not yet the default -- see model/small_model above): the org's
-    // contextual-orchestrator LLM gateway. It auto-discovers models across
-    // Bytez/NVIDIA NIM (x2 keys)/OpenRouter/OpenAI from KV-registered
-    // credentials and auto-optimizes routing by cost, so pointing OpenCode at
-    // one model id here delegates upstream selection to the gateway. Requires
-    // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN to be
-    // provisioned as repo/org Actions variables before switching the default
-    // model/small_model above to "contextual-orchestrator/contextual-orchestrator";
-    // until then this provider is defined but unused, so OpenCode keeps working.
+    // Org default (org policy 2026-08-18): OpenCode reviews route through the
+    // vendored contextual-orchestrator LLM gateway. It auto-discovers models
+    // across Bytez/NVIDIA NIM (x2 keys)/OpenRouter/OpenAI from KV-registered
+    // credentials and serves the fail-closed zero-cost pool under the virtual
+    // model id `orchestrator/free`, with ZDR-compliant (zero-data-retention)
+    // routes prioritized by scripts/ci/zdr_policy.py. Requires
+    // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN,
+    // which scripts/ci/contextual_orchestrator_review_sidecar.sh provisions on
+    // each runner before OpenCode starts.
     "contextual-orchestrator": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Contextual Orchestrator",
@@ -392,10 +303,18 @@
         "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
       },
       "models": {
-        "contextual-orchestrator": {
-          "name": "Contextual Orchestrator (auto-routed)",
+        "orchestrator/free": {
+          "name": "Orchestrator Free (ZDR-first zero-cost pool)",
           "tool_call": true,
           "reasoning": true,
+          "options": {
+            "reasoningEffort": "high"
+          },
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            }
+          },
           "limit": {
             "context": 200000,
             "output": 32768

@@ -21,8 +21,13 @@ stage changes, commit, push, install dependencies, mutate branches, or touch
 production state. Blocking findings must be source-backed, severity-labeled,
 impactful, remediable, and include suggested verification.
 
-The OpenCode review job does not widen its own `pull_request_target` job token
-to repository-write permission. The scheduler's `GH_TOKEN` merge/read fallback
+The OpenCode `pull_request_target` bootstrap does not widen its own token to
+repository-write permission. After a formal receipt, the privileged
+`repository_dispatch` job grants `actions: write` only so its `github.token`
+can rerun a native failed required job. A sibling wake instead requires
+`PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`; it fails closed without
+either and never substitutes the review-only OpenCode app token or the central
+repository's workflow token. The scheduler's `GH_TOKEN` merge/read fallback
 order is `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, the exchanged
 OpenCode app token, then the receiving workflow's `github.token`. For
 repository-dispatch calls that target another repository, the
@@ -73,6 +78,14 @@ Old approvals and old checks are not merge evidence after the head SHA
 changes. OpenCode review evidence must be internally same-head as well as
 GitHub-attached same-head. If the review body includes `Gate evidence` with
 `Head SHA: <sha>`, that SHA must match the PR current `headRefOid`.
+
+A current-head OpenCode `CHANGES_REQUESTED` review normally blocks the PR. The
+only retry exception is the exact automation review stating that approval was
+withheld because GitHub Checks failed and listing those failed checks. After
+the live rollup is empty, the scheduler may dispatch a fresh same-head
+OpenCode review when review dispatch is enabled and no native auto-merge
+request is active. It never treats the recovered checks as approval, dismisses
+the existing review, or merges until a new exact-head OpenCode approval exists.
 
 ## Do-not-merge and DIRTY / CONFLICTING repair
 
@@ -132,6 +145,18 @@ OpenCode for the same PR head when review evidence is missing or stale. This
 avoids running PR-head review, CodeGraph, coverage, or PoC code as an
 unbounded local workflow copy.
 
+The required OpenCode workflow does not poll for the multi-hour model run on a
+hosted runner. It dispatches once, checks for an existing exact-head formal
+receipt, and otherwise fails closed. After the privileged dispatch publishes
+an `APPROVED` or `CHANGES_REQUESTED` receipt, it selects the latest matching
+`pull_request_target` run by exact head and reruns only its failed job. Thus the
+ruleset-required workflow becomes successful only after the receipt exists,
+without reserving a runner while the model works.
+
+The central dispatch title and validated metadata remain bound to the requested
+head. If the pull request advances while queued, validation fails closed and the
+scheduler dispatches a new current-head run; publication is exact-head guarded.
+
 Scheduled review-feedback autofix is also centralized. The
 `PR Review Fix Scheduler` dispatches the central `PR Review Autofix` worker
 in `ContextualWisdomLab/.github` and passes the target repository, PR number,
@@ -145,6 +170,25 @@ longer the default contract.
 Strix keeps `cancel-in-progress: false` so old evidence is not cancelled by a
 force-push, but PR-scoped concurrency includes the head SHA so an obsolete
 scan does not serialize newer current-head evidence.
+
+Noema keeps head-specific native concurrency so a delayed workflow event or a
+manual rerun of an older attempt cannot cancel the current head. After a
+`pull_request_target` run proves its payload SHA still equals the live PR head,
+live-head validation explicitly cancels active Noema runs for the same PR's
+other heads before credential or model setup, limited to older run ids and a
+fresh live-head check before each cancellation. That fresh check fails safe:
+an API error stops further cancellation instead of failing the job, so a
+transient lookup failure cannot block a live-head review over a housekeeping
+hiccup. Each run also compares its
+immutable trigger head with the live PR before model work, before a repair
+retry, and immediately before publication; a stale run cannot review or
+publish against a newer head.
+
+The trigger mapping is explicit: `pull_request_target` uses `pull_request.head.sha`,
+`workflow_run` uses `workflow_run.pull_requests[0].head.sha`, and
+`repository_dispatch` uses `client_payload.pr_head_sha`. Missing or malformed
+HEAD identity fails closed before reviewer credentials or model capacity are
+used.
 
 ## Approve-gate evidence
 
