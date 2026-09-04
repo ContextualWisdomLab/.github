@@ -248,9 +248,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
-        "osv-scanner-pr.yml",
         "security-scan.yml",
-        "scorecard-pr.yml",
     ):
         workflow = workflow_text(filename)
         concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -307,7 +305,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "github.event.action == 'synchronize'" in concurrency_contract
             assert "github.event.action == 'closed'" in concurrency_contract
         else:
-            if filename in {"codeql-pr.yml", "osv-scanner-pr.yml", "scorecard-pr.yml"}:
+            if filename == "codeql-pr.yml":
                 assert "github.event_name == 'pull_request'" in concurrency_contract
             else:
                 assert (
@@ -624,11 +622,9 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
-        "osv-scanner-pr.yml",
         "pr-review-merge-scheduler.yml",
         "python-security.yml",
         "sast-semgrep.yml",
-        "scorecard-pr.yml",
         "secret-scan.yml",
         "security-scan.yml",
         "strix.yml",
@@ -672,11 +668,9 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         elif filename in {
             "close-empty-pr.yml",
             "codeql-pr.yml",
-            "osv-scanner-pr.yml",
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
-            "scorecard-pr.yml",
             "secret-scan.yml",
             "security-scan.yml",
         }:
@@ -1906,27 +1900,6 @@ def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
     assert "unrelated remote refs are excluded" in workflow
 
 
-def test_osv_pr_workflow_has_one_startup_safe_scan_args_block() -> None:
-    """Keep the standalone OSV workflow's resolver settings singular and safe."""
-    workflow = workflow_text("osv-scanner-pr.yml")
-    concurrency_contract = workflow.split("permissions:", 1)[0]
-
-    assert (
-        "github.event_name == 'pull_request' && github.event.pull_request.base.repo.full_name"
-        in concurrency_contract
-    )
-    assert (
-        "github.event_name == 'pull_request' && github.event.pull_request.number"
-        in concurrency_contract
-    )
-    assert workflow.count("scan-args: |-") == 1
-    assert "--no-resolve" in workflow
-    assert (
-        "--maven-registry=https://maven-central.storage-download.googleapis.com/maven2"
-        in workflow
-    )
-
-
 def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_failure() -> (
     None
 ):
@@ -2079,19 +2052,6 @@ def test_pr_sarif_upload_rate_limits_do_not_mask_scanner_gates() -> None:
         assert warning_text in warning_step
 
 
-def test_standalone_osv_scan_delegates_sarif_upload_to_central_gate() -> None:
-    """The supplemental OSV diff must not duplicate the central SARIF upload."""
-    standalone = workflow_text("osv-scanner-pr.yml")
-    central = workflow_text("security-scan.yml")
-
-    assert "upload-sarif: false" in standalone
-    assert "pinned upstream reusable workflow declares this permission" in standalone
-    assert "security-events: write" in standalone
-    assert "--fail-on-vuln=true" in central
-    assert "Print OSV findings being compared" in central
-    assert "Upload OSV SARIF to code scanning" in central
-
-
 def test_osv_findings_log_accepts_null_results_for_manifestless_repos(
     tmp_path: Path,
 ) -> None:
@@ -2184,37 +2144,23 @@ def test_pr_scorecard_sarif_delegates_sast_and_vulnerability_posture_to_hard_gat
     None
 ):
     """PR Scorecard SARIF should not duplicate CodeQL/OSV/Trivy hard gates."""
-    for filename in ("scorecard-pr.yml", "security-scan.yml"):
-        workflow = workflow_text(filename)
+    workflow = workflow_text("security-scan.yml")
 
-        assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
-        assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
-        assert (
-            "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS"
-            in workflow
-        )
-        assert "Delegated " in workflow
-        assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
-        assert "default-branch governance tracking" in workflow
+    assert 'PR_HARD_GATE_RULE_IDS = {"SASTID", "VulnerabilitiesID"}' in workflow
+    assert 'PR_GOVERNANCE_RULE_IDS = {"FuzzingID"}' in workflow
+    assert (
+        "PR_DELEGATED_RULE_IDS = PR_HARD_GATE_RULE_IDS | PR_GOVERNANCE_RULE_IDS"
+        in workflow
+    )
+    assert "Delegated " in workflow
+    assert "CodeQL, OSV, Trivy, and dependency-review hard gates" in workflow
+    assert "default-branch governance tracking" in workflow
 
     default_branch_scorecard = workflow_text("scorecard-analysis.yml")
 
     assert "PR_DELEGATED_RULE_IDS" not in default_branch_scorecard
     assert "FuzzingID" not in default_branch_scorecard
     assert "VulnerabilitiesID" not in default_branch_scorecard
-
-
-def test_standalone_scorecard_delegates_code_scanning_upload_to_central_gate() -> None:
-    """The supplemental Scorecard run must not duplicate the central SARIF upload."""
-    standalone = workflow_text("scorecard-pr.yml")
-    central = workflow_text("security-scan.yml")
-
-    assert "security-events: write" not in standalone
-    assert "github/codeql-action/upload-sarif" not in standalone
-    assert "Preserve Scorecard PR SARIF evidence" in standalone
-    assert "actions/upload-artifact" in standalone
-    assert "Upload Scorecard SARIF to code scanning" in central
-    assert "category: scorecard" in central
 
 
 @pytest.mark.parametrize(
