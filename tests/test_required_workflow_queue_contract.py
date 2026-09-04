@@ -45,6 +45,20 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
+    """Keep each run bounded without treating immutable cache snapshots as locks."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert "actions/cache/restore" not in workflow
+    assert "actions/cache/save" not in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -254,7 +268,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert re.search(r"(?m)^concurrency:", workflow)
+        if filename != "noema-review.yml":
+            assert re.search(r"(?m)^concurrency:", workflow)
         assert "cancel-in-progress: true" in concurrency_contract
         if filename == "security-scan.yml":
             assert (
@@ -265,6 +280,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "required-opencode-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
+            assert not re.search(r"(?m)^concurrency:", workflow)
+            assert re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
             assert "required-noema-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
@@ -466,14 +483,16 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     assert result.stdout.splitlines() == ["1"]
 
 
-def _run_strix_cleanup(tmp_path: Path, pull_states: list[dict[str, object]]) -> str:
+def _run_strix_cleanup(
+    tmp_path: Path, pull_states: list[dict[str, object]], *, action: str = "synchronize"
+) -> str:
     """Execute the production cleanup step against a stateful fake ``gh``."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup")
     step = workflow_step(
         workflow_text("strix.yml"),
-        "Cancel queued and running scans for superseded or closed pull request heads",
+        "Cancel queued and running scans for superseded or inactive pull requests",
     )
     run_block = step.split("        run: |\n", 1)[1].split("\n  strix:", 1)[0]
     script = textwrap.dedent(run_block)
@@ -520,7 +539,7 @@ exit 0
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
         "TARGET_PR_HEAD_SHA": "current",
-        "PR_ACTION": "synchronize",
+        "PR_ACTION": action,
         "CURRENT_RUN_ID": "999",
     }
     subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
@@ -547,15 +566,26 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     calls = _run_strix_cleanup(
         tmp_path,
         [
-            {"state": "open", "head": {"sha": "current"}},
-            {"state": "open", "head": {"sha": "newer"}},
+            {"state": "open", "draft": False, "head": {"sha": "current"}},
+            {"state": "open", "draft": False, "head": {"sha": "newer"}},
         ]
-        + [{"state": "open", "head": {"sha": "newer"}}] * 4,
+        + [{"state": "open", "draft": False, "head": {"sha": "newer"}}] * 4,
     )
 
     assert "actions/runs?status=queued" in calls
     assert "/actions/runs/100/cancel" not in calls
     assert "/actions/runs/100/force-cancel" not in calls
+
+
+def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
+    """A verified Draft transition retires the current expensive Strix run."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": True, "head": {"sha": "current"}}] * 6,
+        action="converted_to_draft",
+    )
+
+    assert "/actions/runs/100/cancel" in calls
 
 
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
@@ -576,7 +606,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         assert "closed" in workflow
         if filename == "strix.yml":
             assert "cancel-superseded-pr-runs:" in workflow
-            assert "Cancel queued and running scans for superseded or closed pull request heads" in workflow
+            assert "Cancel queued and running scans for superseded or inactive pull requests" in workflow
             assert (
                 "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN "
                 "|| github.token"
@@ -597,7 +627,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )[0]
         elif filename == "noema-review.yml":
             assert "cancel-closed-pr-runs:" in workflow
-            assert "Cancel queued and running Noema reviews for the closed pull request" in workflow
+            assert "Cancel queued and running Noema reviews for the inactive pull request" in workflow
             assert "leaving runs unchanged" in workflow
             cleanup_job = workflow.split("  cancel-closed-pr-runs:", 1)[1].split(
                 "  noema-review:", 1
@@ -622,6 +652,8 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
+        if filename in {"noema-review.yml", "strix.yml"}:
+            assert "github.event.action != 'converted_to_draft'" in workflow
 
     opencode_bootstrap = workflow_text("opencode-review.yml")
     assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" in (
@@ -685,8 +717,8 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
     noema_job = workflow.split("\n  noema-review:\n", 1)[1]
-    concurrency_contract = workflow.split("\nconcurrency:\n", 1)[1].split(
-        "\npermissions:\n", 1
+    concurrency_contract = noema_job.split("    concurrency:\n", 1)[1].split(
+        "    permissions:\n", 1
     )[0]
 
     assert "workflow_run:" not in concurrency_contract
@@ -698,7 +730,10 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
         "cancel-in-progress:", 1
     )[0]
     assert "cancel-in-progress: true" in concurrency_contract
-    assert "    concurrency:" not in noema_job.split("    permissions:", 1)[0]
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert workflow.index("  admit-current-head:") < workflow.index(
+        "    concurrency:", workflow.index("  noema-review:")
+    )
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
