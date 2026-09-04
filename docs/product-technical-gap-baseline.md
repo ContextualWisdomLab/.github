@@ -4615,3 +4615,33 @@ login replacement") — removing it now would be pure churn (re-adding the ident
 entry later) with no present security benefit, since nothing can reach it either way while the flag is
 `False`. Replied explaining the verification and the reasoning for deferring, then resolved the thread —
 this is a documented, understood, ADR-tracked tradeoff, not a silently-ignored gap.
+
+## Four more `noema-review` failures found org-wide — a distinct, still-open issue, retried speculatively, not confirmed-fixed — 2026-09-04
+
+**Trigger.** Continued the CI-independent-work sweep with a different technique this time: `gh search prs
+--owner ContextualWisdomLab --state open "status:failure"` (GitHub's search `status:` qualifier), rather than
+the earlier repo-by-repo Dependabot walk. Checked `noema-review`'s conclusion directly on several results not
+already covered by this doc's tracked PRs or the bandscope batch: `keyverse#137`, `keyverse#136`,
+`appguardrail#1091`, `aFIPC#322` all showed `FAILURE`.
+
+**Important distinction from the bandscope/newsdom-api batch above: these are NOT the same confirmed-fixed
+bug.** All 4 jobs ran on `2026-09-03`, entirely *after* `a28fc2f` (the `2026-09-02T14:25:37Z` fix) landed —
+so the earlier "ran on stale pre-fix code" explanation does not apply here. Read each log directly:
+
+- `keyverse#136`, `appguardrail#1091`, `aFIPC#322`: `Noema gateway transport failed: HTTPError: HTTP Error
+  502: Bad Gateway; caller attempts=1, ... phase=connecting` — the same shape as the still-open item 4
+  gateway stall (`project_item4_gateway_stall_ephemeral_process_root_cause`), just without the
+  now-removed "gateway owns repair/failover" caller-side deadline wrapper. Durations varied wildly
+  (`189.7s`, `374.0s`, `1861.0s`) with no discernible pattern — consistent with genuine connect-phase
+  instability under load, not a deterministic bug with a known fix.
+- `keyverse#137`: a different signature again — `Noema model output failed local validation: ... cites
+  path='.github/workflows/codeql.yml' line=26 side='RIGHT', which is not an exact changed-side line` — a
+  model reasoning/citation error, not a transport failure.
+
+**Retried anyway, but documented as speculative, not as a fix.** Unlike the earlier batch, there is no
+known landed fix backing this retry — gateway 502s are sometimes genuinely transient, and re-running a
+failed required job costs nothing extra (queue slots are consumed either way under the current org-wide
+congestion). Triggered via the same `rerun-failed-jobs` endpoint for all 4 (`keyverse` runs `33677340761`,
+`33677266132`; `appguardrail` run `33708861663`; `aFIPC` run `33651273481`); all confirmed `run_attempt: 2`,
+`status: queued`. If any of these fail again with the same signature on retry, that is fresh, valuable
+evidence for the still-open item 4 investigation — not something this pass resolved.
