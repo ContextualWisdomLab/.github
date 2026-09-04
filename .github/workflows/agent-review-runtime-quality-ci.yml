@@ -35,6 +35,55 @@ on:
       - ".github/workflows/current-head-run-coalescer.yml"
       - "scripts/ci/current_head_run_coalescer.py"
       - "tests/test_org_sweep_queue_hygiene_owner.py"
+      - ".github/workflows/pr-review-fix-scheduler.yml"
+      - "scripts/ci/pr_review_fix_scheduler.py"
+      - ".github/workflows/pr-review-autofix.yml"
+      - ".github/workflows/hourly-review-repair.yml"
+      - "scripts/ci/pr_review_conflict_scope.py"
+      - "scripts/ci/pr_review_autofix_context.py"
+      - "scripts/ci/zdr_policy.py"
+      - "scripts/ci/contextual_orchestrator_review_policy.py"
+      - "scripts/ci/contextual_orchestrator_review_launcher.py"
+      - "scripts/ci/contextual_orchestrator_review_sidecar.sh"
+      - "tests/test_zdr_policy.py"
+      - "tests/test_contextual_orchestrator_review_policy.py"
+      - "tests/test_contextual_orchestrator_review_sidecar_contract.py"
+      - "tests/test_hourly_review_repair_callers.py"
+      - "tests/test_github_hourly_conflict_repair.py"
+      - "tests/test_hourly_scheduler_runtime_budget.py"
+      - "tests/test_hourly_autofix_context_quality_gate.py"
+      - "tests/test_pr_review_conflict_scope.py"
+      - "tests/test_pr_review_conflict_scope_control_files.py"
+      - "tests/test_pr_review_conflict_scope_git_executable.py"
+      - "tests/test_pr_review_conflict_scope_ignored_paths.py"
+      - "tests/test_pr_review_conflict_scope_symlink_targets.py"
+      - "tests/test_pr_review_fix_hourly_contract.py"
+      - "tests/test_pr_review_fix_scheduler.py"
+      - "tests/test_pr_review_fix_scheduler_source_pin.py"
+      - "tests/test_pr_review_autofix_context_head_binding.py"
+      - "tests/test_pr_review_autofix_nvidia_nim_contract.py"
+      - "tests/test_pr_review_autofix_writer_security_contract.py"
+      - "docs/automation/hourly-review-repair.md"
+      - "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
+      - "docs/doctoring/contextual-orchestrator-vendored-sidecar.md"
+      - "docs/doctoring/hourly-review-repair-registry-retirement.md"
+      - "docs/doctoring/bandscope-hourly-review-caller.md"
+      - "docs/doctoring/clearfolio-hourly-review-caller.md"
+      - "docs/doctoring/conflict-control-evidence-isolation.md"
+      - "docs/doctoring/disksage-hourly-review-caller.md"
+      - "docs/doctoring/inkspan-hourly-review-caller.md"
+      - "docs/doctoring/lineageweave-hourly-review-caller.md"
+      - "docs/doctoring/fast-mlsirm-hourly-review-caller.md"
+      - "docs/doctoring/github-hourly-conflict-repair.md"
+      - "docs/doctoring/governance-risk-compliance-hourly-review-caller.md"
+      - "docs/doctoring/hourly-nvidia-nim-autofix.md"
+      - "docs/doctoring/nonnest2-hourly-review-caller.md"
+      - "docs/doctoring/orgmetra-hourly-review-caller.md"
+      - "docs/doctoring/originweave-hourly-review-caller.md"
+      - "docs/doctoring/quarantine-sandbox-hourly-review-caller.md"
+      - "docs/doctoring/contextual-orchestrator-hourly-review-caller.md"
+      - "docs/doctoring/afipc-hourly-review-caller.md"
+      - "docs/doctoring/review-repair-quality-workflow-identity.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
 
@@ -86,6 +135,7 @@ jobs:
           opencode_suite=false
           strix_suite=false
           queue_suite=false
+          review_repair_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
@@ -94,6 +144,15 @@ jobs:
                 opencode_suite=true
                 strix_suite=true
                 queue_suite=true
+                review_repair_suite=true
+                ;;
+              tests/test_pr_review_autofix_nvidia_nim_contract.py)
+                opencode_suite=true
+                review_repair_suite=true
+                ;;
+              docs/product-technical-gap-baseline.md)
+                noema_suite=true
+                review_repair_suite=true
                 ;;
               .github/workflows/noema-review.yml|\
               .github/actions/noema-review/two_phase.py|\
@@ -101,14 +160,12 @@ jobs:
               tests/test_noema_two_phase_handoff.py|\
               tests/test_noema_refreshed_app_identity.py|\
               tests/test_noema_token_lifetime_stale_run_contract.py|\
-              docs/doctoring/noema-review-token-lifetime.md|\
-              docs/product-technical-gap-baseline.md)
+              docs/doctoring/noema-review-token-lifetime.md)
                 noema_suite=true
                 ;;
               .github/workflows/opencode-review-dispatch.yml|\
               scripts/ci/ensure_rust_llvm19.sh|\
               tests/test_opencode_rust_coverage_toolchain_contract.py|\
-              tests/test_pr_review_autofix_nvidia_nim_contract.py|\
               docs/doctoring/opencode-rust-coverage-runtime-boundary.md)
                 opencode_suite=true
                 ;;
@@ -136,6 +193,56 @@ jobs:
               tests/test_org_sweep_queue_hygiene_owner.py)
                 queue_suite=true
                 ;;
+              .github/workflows/pr-review-fix-scheduler.yml|\
+              scripts/ci/pr_review_fix_scheduler.py|\
+              .github/workflows/pr-review-autofix.yml|\
+              .github/workflows/hourly-review-repair.yml|\
+              scripts/ci/pr_review_conflict_scope.py|\
+              scripts/ci/pr_review_autofix_context.py|\
+              scripts/ci/zdr_policy.py|\
+              scripts/ci/contextual_orchestrator_review_policy.py|\
+              scripts/ci/contextual_orchestrator_review_launcher.py|\
+              scripts/ci/contextual_orchestrator_review_sidecar.sh|\
+              tests/test_zdr_policy.py|\
+              tests/test_contextual_orchestrator_review_policy.py|\
+              tests/test_contextual_orchestrator_review_sidecar_contract.py|\
+              tests/test_hourly_review_repair_callers.py|\
+              tests/test_github_hourly_conflict_repair.py|\
+              tests/test_hourly_scheduler_runtime_budget.py|\
+              tests/test_hourly_autofix_context_quality_gate.py|\
+              tests/test_pr_review_conflict_scope.py|\
+              tests/test_pr_review_conflict_scope_control_files.py|\
+              tests/test_pr_review_conflict_scope_git_executable.py|\
+              tests/test_pr_review_conflict_scope_ignored_paths.py|\
+              tests/test_pr_review_conflict_scope_symlink_targets.py|\
+              tests/test_pr_review_fix_hourly_contract.py|\
+              tests/test_pr_review_fix_scheduler.py|\
+              tests/test_pr_review_fix_scheduler_source_pin.py|\
+              tests/test_pr_review_autofix_context_head_binding.py|\
+              tests/test_pr_review_autofix_writer_security_contract.py|\
+              docs/automation/hourly-review-repair.md|\
+              docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md|\
+              docs/doctoring/contextual-orchestrator-vendored-sidecar.md|\
+              docs/doctoring/hourly-review-repair-registry-retirement.md|\
+              docs/doctoring/bandscope-hourly-review-caller.md|\
+              docs/doctoring/clearfolio-hourly-review-caller.md|\
+              docs/doctoring/conflict-control-evidence-isolation.md|\
+              docs/doctoring/disksage-hourly-review-caller.md|\
+              docs/doctoring/inkspan-hourly-review-caller.md|\
+              docs/doctoring/lineageweave-hourly-review-caller.md|\
+              docs/doctoring/fast-mlsirm-hourly-review-caller.md|\
+              docs/doctoring/github-hourly-conflict-repair.md|\
+              docs/doctoring/governance-risk-compliance-hourly-review-caller.md|\
+              docs/doctoring/hourly-nvidia-nim-autofix.md|\
+              docs/doctoring/nonnest2-hourly-review-caller.md|\
+              docs/doctoring/orgmetra-hourly-review-caller.md|\
+              docs/doctoring/originweave-hourly-review-caller.md|\
+              docs/doctoring/quarantine-sandbox-hourly-review-caller.md|\
+              docs/doctoring/contextual-orchestrator-hourly-review-caller.md|\
+              docs/doctoring/afipc-hourly-review-caller.md|\
+              docs/doctoring/review-repair-quality-workflow-identity.md)
+                review_repair_suite=true
+                ;;
             esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
@@ -144,6 +251,7 @@ jobs:
             echo "opencode=$opencode_suite"
             echo "strix=$strix_suite"
             echo "queue=$queue_suite"
+            echo "review_repair=$review_repair_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -166,7 +274,7 @@ jobs:
             -r "${RUNNER_TEMP}/strix-quality-requirements.txt"
 
       - name: Install exact review dependencies
-        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true'
+        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true'
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
@@ -224,6 +332,48 @@ jobs:
           set -euo pipefail
           python -m pytest -q tests/test_org_sweep_queue_hygiene_owner.py
           python -m compileall -q tests/test_org_sweep_queue_hygiene_owner.py
+
+      - name: Verify scheduler and contextual-orchestrator review-repair contracts
+        if: steps.affected_suites.outputs.review_repair == 'true'
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            --cov=scripts.ci.pr_review_conflict_scope \
+            --cov=scripts.ci.pr_review_autofix_context \
+            --cov=scripts.ci.zdr_policy \
+            --cov=scripts.ci.contextual_orchestrator_review_policy \
+            --cov-branch \
+            --cov-fail-under=100
+          python -m interrogate --fail-under 100 \
+            scripts/ci/pr_review_conflict_scope.py \
+            scripts/ci/pr_review_autofix_context.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py
+          python -m compileall -q \
+            scripts/ci/pr_review_conflict_scope.py \
+            scripts/ci/pr_review_autofix_context.py \
+            tests/test_pr_review_conflict_scope.py \
+            scripts/ci/zdr_policy.py \
+            scripts/ci/contextual_orchestrator_review_policy.py \
+            scripts/ci/contextual_orchestrator_review_launcher.py \
+            tests/test_zdr_policy.py \
+            tests/test_contextual_orchestrator_review_policy.py \
+            tests/test_contextual_orchestrator_review_sidecar_contract.py \
+            tests/test_hourly_review_repair_callers.py \
+            tests/test_github_hourly_conflict_repair.py \
+            tests/test_hourly_scheduler_runtime_budget.py \
+            tests/test_pr_review_conflict_scope_control_files.py \
+            tests/test_hourly_autofix_context_quality_gate.py \
+            tests/test_pr_review_conflict_scope_git_executable.py \
+            tests/test_pr_review_conflict_scope_ignored_paths.py \
+            tests/test_pr_review_conflict_scope_symlink_targets.py \
+            tests/test_pr_review_fix_hourly_contract.py \
+            tests/test_pr_review_fix_scheduler.py \
+            tests/test_pr_review_fix_scheduler_source_pin.py \
+            tests/test_pr_review_autofix_context_head_binding.py \
+            tests/test_pr_review_autofix_nvidia_nim_contract.py \
+            tests/test_pr_review_autofix_writer_security_contract.py
 
       - name: Verify consolidated workflow contract
         run: |
