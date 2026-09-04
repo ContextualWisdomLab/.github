@@ -7,9 +7,9 @@ import ipaddress
 import json
 import os
 import platform
-import signal
-import shutil
 import shlex
+import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -26,7 +26,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ci import sandboxed_verify
-
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
 SANDBOX_MOUNT = "/workspace"
@@ -584,7 +583,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
                 if 200 <= response.status < 500:
                     return True
                 time.sleep(1)
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
             time.sleep(1)
     return False
 

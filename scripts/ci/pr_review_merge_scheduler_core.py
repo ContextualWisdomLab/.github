@@ -47,6 +47,7 @@ class SchedulerAdmissionGate:
     """Persist and bound review-worker leases for one scheduler execution."""
 
     def __init__(self, state_path: Path, *, sequence: int, dispatch_budget: int) -> None:
+        """Bind this gate to one durable state file, run sequence, and worker budget."""
         if sequence < 1:
             raise ValueError("admission sequence must be positive")
         if dispatch_budget < 0:
@@ -68,6 +69,7 @@ class SchedulerAdmissionGate:
         selected: list[DispatchLease] = []
 
         def lease(state):
+            """Apply this request to `state` and record any lease it wins."""
             plan = plan_dispatches(
                 state,
                 [request],
@@ -88,6 +90,7 @@ class SchedulerAdmissionGate:
         live_prs = {int(pr["number"]): pr for pr in prs}
 
         def reconcile_state(state):
+            """Mark exact-head dispatched leases complete and superseded ones stale."""
             records = dict(state.records)
             latest = dict(state.latest_sequences)
             for identity, record in tuple(records.items()):

@@ -30,6 +30,7 @@ def test_review_fix_caller_keeps_the_github_daily_recovery_slot() -> None:
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
     assert 'cron: "23 7 * * *"' in caller
     assert 'cron: "23 * * * *"' not in caller
+    assert 'cron: "23 */2 * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 

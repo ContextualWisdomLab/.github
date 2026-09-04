@@ -8,7 +8,6 @@ import pytest
 
 from scripts.ci import pr_review_merge_scheduler as sched
 
-
 TOKEN_SEPARATOR = "_"
 GITHUB_TOKEN_PREFIXES = {
     "classic": "g" + "hp",
@@ -2349,6 +2348,15 @@ def test_central_coverage_retry_ignores_failed_required_workflow_placeholder(
         "current-head OpenCode coverage blocker is cleared; "
         "same-head OpenCode re-dispatched"
     )
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda *args, **kwargs: "admission_deferred",
+    )
+    deferred = inspect(coverage_request)
+    assert deferred.action == "wait"
+    assert deferred.reason == "bounded admission budget is exhausted"
 
 
 def test_coverage_retry_disables_auto_merge_before_dispatch(monkeypatch):
@@ -10228,3 +10236,282 @@ def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
 
     record = next(iter(load_state_file(gate.state_path).records.values()))
     assert record.status == "stale"
+
+
+def test_admission_gate_and_rotating_window_reject_invalid_bounds(tmp_path):
+    with pytest.raises(ValueError, match="sequence must be positive"):
+        sched.SchedulerAdmissionGate(tmp_path / "state.json", sequence=0, dispatch_budget=1)
+    with pytest.raises(ValueError, match="budget must not be negative"):
+        sched.SchedulerAdmissionGate(tmp_path / "state.json", sequence=1, dispatch_budget=-1)
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        sched.rotating_pr_window([{"number": 1}], offset=-1, window_size=1)
+    assert sched.rotating_pr_window([], offset=10, window_size=1) == []
+
+
+def test_admission_gate_reconcile_stales_moved_head(tmp_path):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=91, dispatch_budget=1
+    )
+    old = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("opencode", "ContextualWisdomLab/example", old)
+    gate.reconcile(
+        "ContextualWisdomLab/example",
+        [make_pr(number=7, headRefOid="b" * 40)],
+    )
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"
+
+
+def test_admission_reconcile_scans_records_after_live_lease(monkeypatch, tmp_path):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=92, dispatch_budget=2
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    monkeypatch.setattr(
+        sched, "opencode_progress_state", lambda *_args, **_kwargs: "running"
+    )
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    statuses = sorted(
+        record.status for record in load_state_file(gate.state_path).records.values()
+    )
+    assert statuses == ["dispatched", "stale"]
+
+
+def test_admission_deferred_decisions_remain_wait_states(monkeypatch):
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    draft = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert draft.action == "wait" and "admission budget" in draft.reason
+
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    strix_complete = make_pr(
+        isDraft=True,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+    draft_review = inspect(strix_complete, allow_draft_review_dispatch=True)
+    assert draft_review.action == "wait" and "admission budget" in draft_review.reason
+
+    monkeypatch.setattr(sched, "opencode_progress_state", lambda *_args, **_kwargs: "absent")
+    stacked = inspect(make_pr(baseRefName="feature-base"))
+    assert stacked.action == "wait" and "admission budget" in stacked.reason
+
+
+def test_empty_pr_close_continues_when_comment_fails(monkeypatch):
+    head_sha = "a" * 40
+    candidate = make_pr(headRefOid=head_sha, files={"totalCount": 0, "nodes": []})
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda *_args: {"draft": False, "changed_files": 0, "head": {"sha": head_sha}},
+    )
+    calls = []
+
+    def run(args):
+        calls.append(args)
+        if "comment" in args:
+            raise RuntimeError("comment unavailable")
+        return ""
+
+    monkeypatch.setattr(sched, "run", run)
+    assert inspect(candidate, dry_run=False).action == "close_empty"
+    assert calls[-1][2] == "close"
+    calls.clear()
+    assert inspect(candidate, dry_run=True).action == "close_empty"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "message"),
+    (
+        ("--admission-dispatch-budget", "-1", "must not be negative"),
+        ("--admission-sequence", "0", "must be positive"),
+    ),
+)
+def test_main_rejects_invalid_admission_bounds(flag, value, message):
+    with pytest.raises(SystemExit, match=message):
+        sched.main(
+            [
+                "--repo",
+                "owner/repo",
+                "--base-branch",
+                "main",
+                "--project-flow",
+                "github-flow",
+                flag,
+                value,
+            ]
+        )
+
+
+def test_post_update_followup_reports_admission_deferral(monkeypatch):
+    original = make_pr(headRefOid="a" * 40)
+    updated = make_pr(headRefOid="b" * 40)
+    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda *_args: updated)
+    monkeypatch.setattr(sched, "dismiss_stale_opencode_approvals", lambda *_args, **_kwargs: (0, 0))
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    monkeypatch.setattr(sched, "strix_evidence_state", lambda _pr: "missing")
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    assert "admission budget" in sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=30,
+    )
+
+    monkeypatch.setattr(sched, "strix_evidence_state", lambda _pr: "complete")
+    monkeypatch.setattr(sched, "opencode_progress_state", lambda *_args, **_kwargs: "absent")
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    assert "admission budget" in sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=30,
+    )
+
+
+def test_startup_failure_recovery_ignores_unusable_runs(monkeypatch):
+    head_sha = "a" * 40
+    runs = [
+        {"event": "schedule", "workflow_id": 1},
+        {"event": "pull_request"},
+        {
+            "event": "pull_request",
+            "workflow_id": 1,
+            "id": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "success",
+        },
+        {
+            "event": "pull_request",
+            "workflow_id": 1,
+            "id": 2,
+            "created_at": "2026-01-02T00:00:00Z",
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "success",
+        },
+        {
+            "event": "pull_request",
+            "workflow_id": 1,
+            "id": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": "success",
+        },
+        {"event": "schedule", "workflow_id": 2},
+    ]
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": runs}),
+    )
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=True
+    ) == []
+
+
+def test_main_materializes_admission_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda *_args, **_kwargs: [])
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--admission-state-path",
+            str(tmp_path / "admission.json"),
+            "--dry-run",
+        ]
+    ) == 0
+
+
+def test_strix_dispatch_checks_admission_and_live_head_before_rerun(monkeypatch):
+    pr = make_pr(headRefOid="a" * 40)
+    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: "7")
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert sched.dispatch_strix_evidence(
+        "owner/repo", "Strix Security Scan", pr, dry_run=False
+    ) == "admission_deferred"
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert sched.dispatch_strix_evidence(
+        "owner/repo", "Strix Security Scan", pr, dry_run=False
+    ) == "stale_head"
+
+
+def test_strix_dispatch_checks_admission_and_live_head_before_new_run(monkeypatch):
+    pr = make_pr(headRefOid="a" * 40, baseRefOid="b" * 40)
+    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda *_args: None)
+    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(
+        sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], [])
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda repo: repo)
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda _repo: [])
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert sched.dispatch_strix_evidence(
+        "owner/repo", "Strix Security Scan", pr, dry_run=False
+    ) == "admission_deferred"
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert sched.dispatch_strix_evidence(
+        "owner/repo", "Strix Security Scan", pr, dry_run=False
+    ) == "stale_head"
+
+
+@pytest.mark.parametrize("strix_state", ("missing", "complete"))
+def test_ready_pr_admission_deferral_is_a_wait_state(monkeypatch, strix_state):
+    monkeypatch.setattr(sched, "opencode_progress_state", lambda *_args, **_kwargs: "absent")
+    monkeypatch.setattr(sched, "strix_evidence_state", lambda _pr: strix_state)
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    decision = inspect(make_pr())
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
+def test_stale_opencode_admission_deferral_is_a_wait_state(monkeypatch):
+    monkeypatch.setattr(sched, "opencode_progress_state", lambda *_args, **_kwargs: "stale")
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda *_args, **_kwargs: "admission_deferred"
+    )
+    decision = inspect(make_pr())
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
