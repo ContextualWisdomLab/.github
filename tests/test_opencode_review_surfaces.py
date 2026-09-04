@@ -410,11 +410,24 @@ def test_rust_api_symbols_skip_missing_and_symlink_sources(tmp_path: Path) -> No
     )
 
 
-def test_rust_api_symbols_skips_regex_when_pub_absent(tmp_path: Path) -> None:
+def test_rust_api_symbols_skips_regex_when_pub_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Files with no 'pub' substring take the fast path and skip regex scanning."""
     source = tmp_path / "lib.rs"
     source.write_text("fn private_helper() {}\n", encoding="utf-8")
+    call_count = 0
+    real_pattern = surfaces.PUB_ITEM_RE
+
+    class CountingPattern:
+        def finditer(self, text: str):
+            nonlocal call_count
+            call_count += 1
+            return real_pattern.finditer(text)
+
+    monkeypatch.setattr(surfaces, "PUB_ITEM_RE", CountingPattern())
     assert surfaces.rust_api_symbols(tmp_path, ["lib.rs"]) == []
+    assert call_count == 0
 
 
 def test_rust_api_symbols_replace_invalid_utf8(tmp_path: Path) -> None:
