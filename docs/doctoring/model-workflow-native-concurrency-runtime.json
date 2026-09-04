@@ -8,10 +8,16 @@
   },
   "first_full_model_head": "b1c353ecf31978c98251b22640ecd89d17d46c20",
   "first_full_model_runs": {
-    "noema": 33871687610,
-    "opencode": 33871687602,
-    "strix": 33871687583
+    "noema": {"run_id": 33871687610, "conclusion": "cancelled"},
+    "opencode": {"run_id": 33871687602, "conclusion": "cancelled"},
+    "strix": {"run_id": 33871687583, "conclusion": "cancelled"}
   },
-  "expected_after_next_push": "All first_full_model_runs reach conclusion=cancelled while the next head remains authoritative.",
+  "cancelling_head": "9c7fa72d9d6b20ed43c1e8d886b5c3d14a5add25",
+  "cancelling_head_runs": {
+    "noema": 33871729756,
+    "opencode": 33871729781,
+    "strix": 33871729820
+  },
+  "observed_result": "All first_full_model_runs reached conclusion=cancelled while the cancelling head remained queued.",
   "note": "The initial Markdown-only head was intentionally excluded by Strix path filters."
 }
