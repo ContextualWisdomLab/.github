@@ -12,7 +12,8 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths (live-verified 2026-09-04, six entries):
+- Canonical required workflow paths (seven entries):
+  - `.github/workflows/codeql-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
@@ -102,20 +103,18 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
-**Superseded (2026-09-03): `codeql-pr.yml` is deliberately no longer required-workflow-injected.**
-GitHub categorically disallows `github/codeql-action/init` and `github/codeql-action/analyze` inside a
-ruleset-required workflow — every ruleset-injected `codeql-pr.yml` run across every one of the ~71 covered
-repositories concluded `startup_failure` with zero check runs ever created (a platform restriction, not a
-configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
-annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
-ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
-six entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
-from GitHub's native code-scanning default setup, enabled directly per repository
-(`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
-repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
-41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
-"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history. Do not re-add any
-workflow using `github/codeql-action` to a required-workflow ruleset entry.
+**Correction (2026-09-04): restore the dispatch-safe CodeQL entrypoint.**
+The 2026-09-03 removal was correct for the old workflow, which called
+`github/codeql-action` directly and always failed at startup. The current
+`codeql-pr.yml` contains no such action. It validates the exact live head,
+dispatches the scan to the native `codeql-scan-dispatch.yml`, and waits for an
+app-authored `codeql-dispatch/<language>` status. Ruleset `18156473` must require
+this dispatch-safe entrypoint after its audit contract reaches protected main.
+The scheduler may then same-tree restamp a future CodeQL `startup_failure` just
+like any other pre-job failure. Native default setup remains a repository-local
+safety net; it does not replace the central required gate. Do not add any
+workflow that invokes `github/codeql-action` directly to a required-workflow
+ruleset.
 The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
 make this automatic for every newly created repository, but item 41's investigation confirmed it is
 empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
@@ -132,10 +131,10 @@ technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
 `sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
 the ephemeral merge ref OID) before its removal above.
 
-Repository-local `codeql.yml` push/default-branch scans, or GitHub's native
-`code-scanning/default-setup`, are now the only source of CodeQL coverage —
-PR merge gates cannot rely on a central required-workflow CodeQL check for the
-platform reason above.
+Repository-local CodeQL and native default setup may coexist with the central
+gate only when they do not compete to upload the same SARIF. The central native
+dispatch handler analyzes the target head without making the target repository's
+default-setup upload path its source of truth.
 
 ### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
 

@@ -38,11 +38,11 @@ def test_consolidated_security_scan_preserves_osv_and_scorecard_evidence() -> No
     assert "Upload Scorecard SARIF to code scanning" in workflow
 
 
-def test_ruleset_audit_deliberately_excludes_codeql_pr() -> None:
-    """codeql-pr.yml must stay out of the required set (github/codeql-action cannot
+def test_ruleset_requires_dispatch_safe_codeql_pr() -> None:
+    """Restore the central gate without reintroducing forbidden CodeQL actions."""
+    workflow_path = ".github/workflows/codeql-pr.yml"
+    workflow = (REPOSITORY_ROOT / workflow_path).read_text(encoding="utf-8")
 
-    run inside a ruleset-required workflow -- see the 2026-09-03 correction in
-    docs/org-required-workflow-rollout.md). A re-add here would silently
-    re-introduce the 100% startup_failure regression the removal fixed.
-    """
-    assert ".github/workflows/codeql-pr.yml" not in audit.REQUIRED_WORKFLOW_PATHS
+    assert workflow_path in audit.REQUIRED_WORKFLOW_PATHS
+    assert "uses: github/codeql-action" not in workflow
+    assert "event_type:\"codeql-scan\"" in workflow
