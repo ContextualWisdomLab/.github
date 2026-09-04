@@ -268,7 +268,8 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        assert re.search(r"(?m)^concurrency:", workflow)
+        if filename != "noema-review.yml":
+            assert re.search(r"(?m)^concurrency:", workflow)
         assert "cancel-in-progress: true" in concurrency_contract
         if filename == "security-scan.yml":
             assert (
@@ -279,12 +280,6 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
             assert "required-opencode-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
-            # Job-level (scoped to noema-review only), not workflow-level: a
-            # workflow-level block would put the structurally-separate
-            # cancel-superseded-noema-runs job in the very group it exists to
-            # unblock, deadlocking it behind a long-running older-head review
-            # that (by design) has no wall-clock deadline. Mirrors
-            # opencode-review.yml's own job-level restructuring above.
             assert not re.search(r"(?m)^concurrency:", workflow)
             assert re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
@@ -707,11 +702,11 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
     noema_job = workflow.split("\n  noema-review:\n", 1)[1]
-    concurrency_contract = workflow.split("\nconcurrency:\n", 1)[1].split(
-        "\npermissions:\n", 1
+    concurrency_contract = noema_job.split("    concurrency:\n", 1)[1].split(
+        "    permissions:\n", 1
     )[0]
 
-    assert "\n  workflow_run:" not in workflow
+    assert "workflow_run:" not in concurrency_contract
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
@@ -720,7 +715,10 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
         "cancel-in-progress:", 1
     )[0]
     assert "cancel-in-progress: true" in concurrency_contract
-    assert "    concurrency:" not in noema_job.split("    permissions:", 1)[0]
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert workflow.index("  admit-current-head:") < workflow.index(
+        "    concurrency:", workflow.index("  noema-review:")
+    )
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 
