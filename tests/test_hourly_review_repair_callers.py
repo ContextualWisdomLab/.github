@@ -319,8 +319,8 @@ def test_resolve_target_lookup_fails_closed_on_an_unknown_schedule(
     assert output_file.read_text() == ""
 
 
-def test_max_prs_and_max_dispatches_stay_uniform_static_values() -> None:
-    """The two fields that never varied across the 18 originals stay static.
+def test_scan_and_dispatch_bounds_stay_uniform_static_values() -> None:
+    """Discovery stays broad while each deterministic scan remains bounded.
 
     ``max_prs`` was uniformly ``"50"`` across all 18 original per-repository
     files (the reusable scheduler's own default), which was already known to
@@ -334,6 +334,8 @@ def test_max_prs_and_max_dispatches_stay_uniform_static_values() -> None:
 
     assert 'max_prs: "200"' in text
     assert 'max_dispatches: "1"' in text
+    assert 'scan_window_size: "50"' in text
+    assert "rotation_seed: ${{ format('{0}', github.run_number) }}" in text
     # They are static `with:` values, not carried through the per-target
     # lookup table (they never varied, so there is nothing to look up).
     assert '"max_prs"' not in text

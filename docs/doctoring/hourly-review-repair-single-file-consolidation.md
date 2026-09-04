@@ -194,6 +194,15 @@ not a per-target one -- there remains no evidence any one target needs a
 them). `tests/test_hourly_review_repair_callers.py` and the two example
 blocks in `docs/automation/hourly-review-repair.md` were updated to match.
 
+The 200-PR value is a discovery ceiling, not a per-run deep-inspection budget.
+The shared scheduler normalizes the hourly run number over the number of actual
+50-PR windows, so repositories with fewer than 200 open PRs do not rotate into
+empty slots. It hydrates review, check, mergeability, and comment evidence only
+for the selected window. Once `max_dispatches: "1"` is consumed, the loop stops
+without inspecting later PRs. This preserves access to PRs beyond the former
+oldest-first 50-item ceiling without multiplying each hourly run's expensive
+inspection work fourfold.
+
 ## References (APA 7th edition)
 
 GitHub, Inc. (n.d.-a). *Using concurrency*. GitHub Docs. Retrieved

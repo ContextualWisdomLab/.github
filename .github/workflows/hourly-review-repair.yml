@@ -247,6 +247,8 @@ jobs:
       # own chosen bound.
       max_prs: "200"
       max_dispatches: "1"
+      scan_window_size: "50"
+      rotation_seed: ${{ format('{0}', github.run_number) }}
       retry_hours: ${{ matrix.retry_hours }}
       # Explicit for every target: the reusable workflow's own default is
       # already `true`, so this is behaviorally identical to the 17 original

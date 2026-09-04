@@ -1221,13 +1221,37 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None) -> list[dict[str, Any]]:
+def rotating_pr_window(
+    prs: list[dict[str, Any]], *, offset: int = 0, window_size: int | None = None
+) -> list[dict[str, Any]]:
+    """Return one bounded rotating window, wrapping over the actual result count."""
+    if window_size is None:
+        return prs
+    if offset < 0 or window_size < 1:
+        raise ValueError(
+            "PR window offset must be non-negative and size must be positive"
+        )
+    if not prs:
+        return []
+    slot_count = (len(prs) + window_size - 1) // window_size
+    start = ((offset // window_size) % slot_count) * window_size
+    return prs[start : start + window_size]
+
+
+def fetch_open_prs_rest(
+    repo: str,
+    max_prs: int,
+    base_branch: str | None = None,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL is unavailable."""
 
-    prs: list[dict[str, Any]] = []
+    raw_prs: list[dict[str, Any]] = []
     page = 1
-    while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+    while len(raw_prs) < max_prs:
+        page_size = min(100, max_prs - len(raw_prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
             f"&per_page={page_size}&page={page}"
@@ -1237,17 +1261,24 @@ def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None)
         payload = gh_api_json(path)
         if not payload:
             break
-        if len(payload) <= 1:
-            prs.extend(rest_pr_node(repo, pr) for pr in payload)  # pragma: no cover
-        else:
-            max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(payload))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Keep original API sort order
-                prs.extend(list(executor.map(lambda pr: rest_pr_node(repo, pr), payload)))
+        raw_prs.extend(payload)
         if len(payload) < page_size:
             break
         page += 1
-    return prs[:max_prs]
+    selected_prs = rotating_pr_window(
+        raw_prs[:max_prs], offset=offset, window_size=window_size
+    )
+    prs: list[dict[str, Any]] = []
+    if len(selected_prs) <= 1:
+        prs.extend(rest_pr_node(repo, pr) for pr in selected_prs)  # pragma: no cover
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(selected_prs))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Keep original API sort order while hydrating only the selected window.
+            prs.extend(
+                list(executor.map(lambda pr: rest_pr_node(repo, pr), selected_prs))
+            )
+    return prs
 
 
 def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
@@ -1257,7 +1288,13 @@ def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return [rest_pr_node(repo, pr)] if pr else []
 
 
-def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
+def fetch_open_prs(
+    repo: str,
+    max_prs: int,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests from GitHub, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
@@ -1276,13 +1313,17 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             payload = gh_graphql(OPEN_PRS_QUERY, **fields)
         except RuntimeError as exc:
             if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
-                return fetch_open_prs_rest(repo, max_prs)
+                return fetch_open_prs_rest(
+                    repo, max_prs, offset=offset, window_size=window_size
+                )
             raise
         pr_page = payload["data"]["repository"]["pullRequests"]
         prs.extend(pr_page.get("nodes") or [])
         if not pr_page["pageInfo"]["hasNextPage"]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
+
+    prs = rotating_pr_window(prs, offset=offset, window_size=window_size)
 
     # Bulk-scan results feed merge decisions directly (the scheduler's push-
     # triggered and org-queue-sweep runs never re-fetch a single PR before

@@ -8,7 +8,7 @@
 
 ### Hourly review-repair queue-scan bound
 
-- Raised `hourly-review-repair.yml`'s `max_prs` from `"50"` to `"200"` for all 20 targets. All 18 original per-repository callers this file consolidated were uniformly `"50"` only because none had picked up the fix `#1397` proposed for BandScope specifically (root cause: an oldest-first scan capped at 50 never reaches a repository's newer non-draft work once its open-PR queue exceeds that bound -- BandScope's had already reached 136). `#1397` never merged before this consolidation deleted its target file out from under it, leaving the underlying cap live and unfixed for all 20 targets; independently confirmed live for `ContextualWisdomLab/.github` itself, which had 117 open PRs as of 2026-09-03. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
+- Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
 - Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.

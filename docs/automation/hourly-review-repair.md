@@ -45,6 +45,8 @@ target_repository: ContextualWisdomLab/clearfolio
 base_branch: main
 max_prs: "200"
 max_dispatches: "1"
+scan_window_size: "50"
+rotation_seed: github.run_number
 retry_hours: "1"
 ```
 
@@ -53,6 +55,9 @@ concurrency (`cancel-in-progress: false`): a still-running Clearfolio queue
 scan is never preempted by the next heartbeat's dispatch, which instead
 queues behind it in the same `clearfolio-hourly-review-repair` group. At most
 one repair dispatch is created per run.
+The run number rotates across the discovered queue in 50-PR windows. Only the
+selected window receives paginated review/check and comment inspection, and
+inspection stops immediately after the single dispatch budget is consumed.
 
 The caller passes only the established `PR_REVIEW_MERGE_TOKEN` and
 `OPENCODE_APPROVE_TOKEN` scheduler credentials. It does not receive or forward any of the five
@@ -69,6 +74,8 @@ target_repository: ContextualWisdomLab/Orgmetra
 base_branch: develop
 max_prs: "200"
 max_dispatches: "1"
+scan_window_size: "50"
+rotation_seed: github.run_number
 retry_hours: "2"
 ```
 
