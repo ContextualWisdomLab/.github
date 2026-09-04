@@ -114,7 +114,13 @@ def test_needs_info_survives_model_pool_normalizer_and_terminal_gate(
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert selected.read_text(encoding="utf-8") == model_output
+    # ``jq -r`` (scripts/ci/run_opencode_review_model_pool.sh's extraction step)
+    # always appends one trailing newline after printing the assistant text
+    # value; since ``model_output`` itself already ends with ``\n``, the file
+    # legitimately carries one extra trailing blank line. This is harmless —
+    # both the bash pool's own ``is_current_run_needs_info_output`` check and
+    # the Python normalizer below strip blank lines before comparing content.
+    assert selected.read_text(encoding="utf-8") == model_output + "\n"
     outputs = github_output.read_text(encoding="utf-8")
     assert "review_status=no_conclusion" in outputs
     assert "review_status=success" not in outputs
@@ -134,7 +140,10 @@ def test_needs_info_survives_model_pool_normalizer_and_terminal_gate(
         check=False,
     )
     assert normalized.returncode == 0, normalized.stdout + normalized.stderr
-    assert selected.read_text(encoding="utf-8") == model_output
+    # The Python normalizer's needs-info fast path (``main()`` in
+    # opencode_review_normalize_output.py) returns before touching the file,
+    # so the pre-existing jq trailing blank line (see above) survives here too.
+    assert selected.read_text(encoding="utf-8") == model_output + "\n"
 
     gate = subprocess.run(
         [_bash(), str(GATE), HEAD_SHA, RUN_ID, RUN_ATTEMPT, str(selected)],
