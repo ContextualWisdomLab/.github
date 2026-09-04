@@ -84,6 +84,12 @@ on:
       - "docs/doctoring/contextual-orchestrator-hourly-review-caller.md"
       - "docs/doctoring/afipc-hourly-review-caller.md"
       - "docs/doctoring/review-repair-quality-workflow-identity.md"
+      - ".github/workflows/organization-commercial-readiness-loop.yml"
+      - ".github/workflows/exact-head-coverage-quality-gate.yml"
+      - "scripts/ci/organization_commercial_readiness_loop.py"
+      - "organization_commercial_readiness_fixtures.py"
+      - "tests/test_organization_commercial_readiness_loop*.py"
+      - "docs/doctoring/organization-commercial-readiness-loop.md"
       - "requirements-opencode-review-ci-hashes.txt"
       - "CHANGELOG.md"
 
@@ -136,6 +142,7 @@ jobs:
           strix_suite=false
           queue_suite=false
           review_repair_suite=false
+          commercial_readiness_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
@@ -145,6 +152,7 @@ jobs:
                 strix_suite=true
                 queue_suite=true
                 review_repair_suite=true
+                commercial_readiness_suite=true
                 ;;
               tests/test_pr_review_autofix_nvidia_nim_contract.py)
                 opencode_suite=true
@@ -243,6 +251,14 @@ jobs:
               docs/doctoring/review-repair-quality-workflow-identity.md)
                 review_repair_suite=true
                 ;;
+              .github/workflows/organization-commercial-readiness-loop.yml|\
+              .github/workflows/exact-head-coverage-quality-gate.yml|\
+              scripts/ci/organization_commercial_readiness_loop.py|\
+              organization_commercial_readiness_fixtures.py|\
+              tests/test_organization_commercial_readiness_loop*.py|\
+              docs/doctoring/organization-commercial-readiness-loop.md)
+                commercial_readiness_suite=true
+                ;;
             esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
@@ -252,6 +268,7 @@ jobs:
             echo "strix=$strix_suite"
             echo "queue=$queue_suite"
             echo "review_repair=$review_repair_suite"
+            echo "commercial_readiness=$commercial_readiness_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -374,6 +391,22 @@ jobs:
             tests/test_pr_review_autofix_context_head_binding.py \
             tests/test_pr_review_autofix_nvidia_nim_contract.py \
             tests/test_pr_review_autofix_writer_security_contract.py
+
+      - name: Verify organization commercial-readiness contracts
+        if: steps.affected_suites.outputs.commercial_readiness == 'true'
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage run \
+            --branch \
+            -m pytest --import-mode=importlib tests/test_organization_commercial_readiness_loop*.py -q
+          python -m coverage report \
+            --include='scripts/ci/organization_commercial_readiness_loop.py' \
+            --show-missing \
+            --fail-under=100
+          python -m compileall -q \
+            scripts/ci/organization_commercial_readiness_loop.py \
+            organization_commercial_readiness_fixtures.py \
+            tests/test_organization_commercial_readiness_loop*.py
 
       - name: Verify consolidated workflow contract
         run: |

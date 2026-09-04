@@ -15,6 +15,7 @@ WORKFLOW_PATH = (
 )
 RETIRED_WORKFLOWS = (
     "hourly-nvidia-nim-review-repair.yml",
+    "organization-commercial-readiness-loop-quality-ci.yml",
     "noema-token-lifetime-quality-ci.yml",
     "opencode-rust-coverage-toolchain-quality-ci.yml",
     "strix-changed-path-quality-ci.yml",
@@ -96,6 +97,9 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "scripts/ci/contextual_orchestrator_review_launcher.py",
         "tests/test_pr_review_fix_hourly_contract.py",
         "tests/test_pr_review_autofix_writer_security_contract.py",
+        "scripts/ci/organization_commercial_readiness_loop.py",
+        "organization_commercial_readiness_fixtures.py",
+        "tests/test_organization_commercial_readiness_loop*.py",
     ):
         assert required_path in workflow
 
@@ -124,3 +128,18 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
         "if: steps.affected_suites.outputs.review_repair == 'true'" in workflow
     )
     assert workflow.count("runs-on:") == 1
+
+
+def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> None:
+    """Preserve the retired caller's coverage contract in the shared job."""
+
+    workflow = _workflow_text()
+
+    assert "commercial_readiness_suite=false" in workflow
+    assert "echo \"commercial_readiness=$commercial_readiness_suite\"" in workflow
+    assert (
+        "if: steps.affected_suites.outputs.commercial_readiness == 'true'"
+        in workflow
+    )
+    assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in workflow
+    assert "--fail-under=100" in workflow
