@@ -1082,7 +1082,7 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
-def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
+def test_org_queue_sweep_covers_target_repositories_as_daily_recovery() -> None:
     """Guard the org-wide approved-PR fallback sweep contract.
 
     Target repositories only receive scheduler runs on PR events, so a PR that
@@ -1090,18 +1090,17 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     The sweep job must exist, run only from the central repository on its own
     cron, use a cross-repository mutation credential (never the repository
     github.token silently), skip the central repository itself, and fail with a
-    visible reason when it cannot mutate sibling repositories. The sweep runs
-    hourly so an approval that lands after a PR's last event is
-    auto-updated/merged promptly instead of idling indefinitely. Its cron has a
+    visible reason when it cannot mutate sibling repositories. Native events
+    handle the normal path; the daily sweep recovers missed events. Its cron has a
     distinct concurrency key from the separate scan-pr-queue heartbeat, and the
     job has enough runtime headroom to finish a complete organization walk.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert "org-queue-sweep:" in workflow
-    assert '- cron: "0 * * * *"' in workflow
+    assert '- cron: "17 3 * * *"' in workflow
     assert "github.repository == 'ContextualWisdomLab/.github'" in workflow
-    assert "github.event.schedule == '0 * * * *'" in workflow
+    assert "github.event.schedule == '17 3 * * *'" in workflow
     assert "github.event.client_payload.org_sweep == true" in workflow
     assert (
         "github.event_name == 'schedule' && format('schedule-{0}', "
@@ -1118,7 +1117,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     ):
         assert f"{setting}: ${{{{ github.event_name == 'schedule' ||" in workflow
     # The single-repository scan must not double-run on the sweep cron.
-    assert "github.event.schedule != '0 * * * *'" in workflow
+    assert "github.event.schedule != '17 3 * * *'" in workflow
     assert "github.event.client_payload.org_sweep != true" in workflow
     # The sweep must never silently no-op with the repository-scoped token.
     assert (
@@ -1127,6 +1126,7 @@ def test_org_queue_sweep_covers_target_repositories_on_a_heartbeat() -> None:
     )
     assert 'select(.full_name != "ContextualWisdomLab/.github")' in workflow
     assert "select(.archived == false and .disabled == false)" in workflow
+    assert "select((.open_issues_count // 1) > 0)" in workflow
     # The sweep must not silently truncate large/old queues or skip a repository
     # whose only open work is a stacked/non-default-base PR.
     assert "vars.ORG_SWEEP_MAX_PRS || '1000'" in workflow
@@ -1419,7 +1419,7 @@ def test_org_queue_sweep_rotation_index_falls_back_to_wall_clock(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])  # last line: the printed value; earlier: the warning
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1  # tolerate a tick boundary race
     assert "could not read/write" in result.stdout  # a `::warning::` workflow command
 
@@ -1445,7 +1445,7 @@ def test_org_queue_sweep_rotation_index_transient_read_failure_does_not_reset_co
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1
     # Critically: never "1" -- that would mean the failed read was treated
     # as a fresh-start reset rather than an unreadable existing value.
@@ -1468,7 +1468,7 @@ def test_org_queue_sweep_rotation_index_successful_read_but_failed_patch_falls_b
     assert result.returncode == 0, result.stderr
     stdout_lines = result.stdout.strip().splitlines()
     computed_tick = int(stdout_lines[-1])
-    expected_tick = int(time.time()) // 3600
+    expected_tick = int(time.time()) // 86400
     assert abs(computed_tick - expected_tick) <= 1
     assert "read ORG_SWEEP_ROTATION_COUNTER=41 but could not PATCH it" in result.stdout
 
@@ -1513,7 +1513,7 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
 
     assert "ContextualWisdomLab/.github#1219" in workflow
     assert (
-        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 3600 ))'
+        'ORG_SWEEP_ROTATION_INDEX=$(( $(date -u +%s) / 86400 ))'
     ) in workflow
     assert (
         'if ! [[ "$ORG_SWEEP_ROTATION_INDEX" =~ ^[0-9]+$ ]]; then'
@@ -1528,7 +1528,7 @@ def test_org_queue_sweep_documents_rotation_leverage_and_validates_input() -> No
     assert "ORG_SWEEP_ROTATION_INDEX: ${{ github.run_number }}" not in workflow
     # Keep ordinary and stacked review budgets independently configurable so
     # ordinary work cannot starve the only review path for stacked PRs.
-    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0'" in workflow
     assert "vars.ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT || '1'" in workflow
     assert "Stacked PRs have no" in workflow
 
@@ -1539,7 +1539,7 @@ def test_org_queue_sweep_manual_cadence_inputs_reach_the_sweep_job() -> None:
 
     assert (
         "ORG_SWEEP_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || "
-        "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '1' }}"
+        "vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT || '0' }}"
     ) in workflow
     assert (
         "ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT: ${{ github.event.client_payload.stacked_review_dispatch_limit || "
