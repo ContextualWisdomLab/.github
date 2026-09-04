@@ -120,6 +120,15 @@ on:
     # -- semantic-data-portal (formerly semantic-data-portal-hourly-review-repair.yml)
     - cron: "59 * * * *"
 
+# Coalesce admissions before resolve-target needs a runner.
+# GitHub keeps at most one running and one pending workflow per group by default.
+# A newer
+# pending heartbeat replaces the older pending heartbeat; cancel-in-progress
+# stays false, so it does not cancel the running repository scan.
+concurrency:
+  group: hourly-review-repair-${{ github.event.schedule }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

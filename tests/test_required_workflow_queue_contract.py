@@ -240,7 +240,6 @@ def test_no_central_workflow_exposes_branch_selected_manual_dispatch() -> None:
 def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
     """Ensure required pull-request workflows cancel obsolete executions."""
     for filename in (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
@@ -255,38 +254,19 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
         assert "github.repository" in concurrency_contract
         assert "github.event.pull_request.number" in workflow
-        if filename not in {"noema-review.yml", "opencode-review.yml"}:
-            assert "cancel-in-progress: true" in workflow
-        if filename in {
-            "close-empty-pr.yml",
-            "security-scan.yml",
-        }:
+        assert re.search(r"(?m)^concurrency:", workflow)
+        assert "cancel-in-progress: true" in concurrency_contract
+        if filename == "security-scan.yml":
             assert (
                 "github.event_name == 'pull_request_target'" in concurrency_contract
                 or ("github.event_name == 'pull_request'" in concurrency_contract)
             )
         elif filename == "opencode-review.yml":
-            # Job-level (scoped to opencode-review-target only), not
-            # workflow-level: a workflow-level block would capture the
-            # structurally-separate cancel-superseded-opencode-review-runs
-            # job too, deadlocking it behind the very run it exists to
-            # cancel (Devin Review, 2026-09-03).
-            assert not re.search(r"(?m)^concurrency:", workflow)
-            assert re.search(r"(?m)^    concurrency:", workflow)
-            assert "opencode-review-${{" in concurrency_contract
-            assert (
-                "github.event.pull_request.head.sha || github.run_id"
-                not in concurrency_contract
-            )
-            assert "cancel-in-progress: true" in concurrency_contract
+            assert "required-opencode-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
             assert "github.event.workflow_run" not in concurrency_contract
-            assert "noema-review-${{" in concurrency_contract
-            assert "github.event_name" not in concurrency_contract.split(
-                "cancel-in-progress:", 1
-            )[0]
-            assert "cancel-in-progress: true" in concurrency_contract
+            assert "required-noema-review-${{" in concurrency_contract
             assert "outputs.admitted == 'true'" in workflow
         else:
             if filename == "codeql-pr.yml":
@@ -295,8 +275,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
                 assert (
                     "github.event_name == 'pull_request_target'" in concurrency_contract
                 )
-        if filename != "noema-review.yml":
-            assert "github.event.pull_request.head.sha" not in concurrency_contract
+        assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
@@ -378,7 +357,7 @@ def test_central_semgrep_binds_pr_scans_and_sarif_to_the_exact_head() -> None:
 
 
 def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
-    """Scope Strix per repository AND PR, matching every other central workflow.
+    """Scope Strix workflow admission per repository AND PR.
 
     History: from 2026-08-24 through 2026-09-03 the concurrency group was
     deliberately repository-wide (not PR-scoped) because PR-scoping is what
@@ -391,35 +370,30 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
 
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
-    rate limits rather than a shared pool, giving materially more headroom
-    than the single-key 2026-08-23/24 incident had. The concurrency group now
-    scopes the scan job per repository and PR after exact live-head admission.
-    Native and dispatched evidence share one group; non-PR events use a unique
-    run id. The cleanup job is outside that queue so a synchronize event
-    can immediately retire an older exact-head run without allowing sibling
-    scans for *other* PRs to be blocked by it.
+    rate limits rather than a shared pool. The workflow-level group now retires
+    superseded runs before runner admission, including runs still blocked by
+    the organization-wide job ceiling. Native and dispatched evidence share
+    one group; non-PR events use a unique run id.
     """
     workflow = workflow_text("strix.yml")
-    # Isolate the strix: job's own text first: cancel-superseded-pr-runs above
-    # it now carries its own (PR-scoped, dedup-only) concurrency: block, so a
-    # naive first-match split on the bare "concurrency:" literal would grab
-    # that job's block instead of this one.
-    strix_job = workflow.split("\n  strix:\n", 1)[1]
-    concurrency_contract = strix_job.split("concurrency:", 1)[1].split(
+    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
+    strix_job = workflow.split("\n  strix:\n", 1)[1]
 
-    assert "concurrency:" in workflow
+    assert re.search(r"(?m)^concurrency:", workflow)
     assert "needs: [changed-scope, admit-current-head]" in strix_job
     assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
-    assert "needs.admit-current-head.outputs.target_repository" in concurrency_contract
-    assert "needs.admit-current-head.outputs.pr_number" in concurrency_contract
-    assert "github.event_name" not in concurrency_contract
+    assert "strix-security-scan-${{" in concurrency_contract
+    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
+    assert "github.event.client_payload.target_repository" in concurrency_contract
+    assert "github.event.pull_request.number" in concurrency_contract
+    assert "github.event.client_payload.pr_number" in concurrency_contract
+    assert "github.run_id" in concurrency_contract
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    # Only live-admitted jobs can cancel an older scan for the same PR.
     assert "cancel-in-progress: true" in concurrency_contract
-    assert "cancel-in-progress: true" not in workflow.split("jobs:", 1)[0]
+    assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
@@ -587,7 +561,6 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
-        "close-empty-pr.yml",
         "codeql-pr.yml",
         "noema-review.yml",
         "pr-review-merge-scheduler.yml",
@@ -633,7 +606,6 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
         elif filename in {
-            "close-empty-pr.yml",
             "codeql-pr.yml",
             "pr-review-merge-scheduler.yml",
             "python-security.yml",
@@ -666,16 +638,14 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "cancel-in-progress: true" in strix_workflow
 
 
-def test_close_empty_pr_metadata_lookup_retries_and_fails_open() -> None:
-    """Retry invalid close-event metadata and leave the PR open on uncertainty."""
-    workflow = workflow_text("close-empty-pr.yml")
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
 
-    assert "gh_api_json_with_retry()" in workflow
-    assert "jq -e type" in workflow
-    assert "did not return valid JSON; retrying" in workflow
-    assert "did not return valid JSON after 4 attempts" in workflow
-    assert "leaving it open because metadata could not be read" in workflow
-    assert "exit 0" in workflow
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
 
 
 def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
@@ -715,19 +685,20 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     """Noema reviews PRs independently of the other review workflows."""
     workflow = workflow_text("noema-review.yml")
     noema_job = workflow.split("\n  noema-review:\n", 1)[1]
-    concurrency_contract = noema_job.split("    concurrency:", 1)[1].split(
-        "    permissions:", 1
+    concurrency_contract = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
     )[0]
 
     assert "workflow_run:" not in concurrency_contract
     assert "github.event.workflow_run" not in workflow
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "noema-review-${{" in concurrency_contract
+    assert "required-noema-review-${{" in concurrency_contract
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
     assert "cancel-in-progress: true" in concurrency_contract
+    assert "    concurrency:" not in noema_job.split("    permissions:", 1)[0]
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
     assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
 

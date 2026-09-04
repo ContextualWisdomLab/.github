@@ -51,6 +51,7 @@ fragment SchedulerPullRequestFields on PullRequest {
     nodes { id isResolved isOutdated }
   }
   files(first: 20) {
+    totalCount
     nodes { path }
   }
   reviews(last: 100) {
@@ -368,7 +369,7 @@ def contract_decision(decision: Decision) -> str:
         return "UPDATE_BRANCH"
     if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
-    if decision.action in {"skip", "auto_merge", "merge"}:
+    if decision.action in {"skip", "auto_merge", "merge", "close_empty"}:
         return "NO_ACTION"
     if decision.action == "block" and "current-head OpenCode review requested changes" in decision.reason:
         return "REQUEST_CHANGES"
@@ -1200,7 +1201,10 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "headRepository": {"nameWithOwner": head_repo.get("full_name") or repo},
         "autoMergeRequest": pr.get("auto_merge"),
         "reviewThreads": {"nodes": []},
-        "files": {"nodes": [{"path": file.get("filename")} for file in files if file.get("filename")]},
+        "files": {
+            "totalCount": len(files),
+            "nodes": [{"path": file.get("filename")} for file in files if file.get("filename")],
+        },
         "reviews": {"nodes": [rest_review_node(review) for review in reviews]},
         "statusCheckRollup": {
             "contexts": {
@@ -2886,8 +2890,6 @@ def recover_current_head_startup_failures(
         if run.get("head_sha") == head_sha
         and run.get("status") == "completed"
         and run.get("conclusion") == "startup_failure"
-        and run.get("name") != "CodeQL PR"
-        and not str(run.get("path") or "").endswith("/codeql-pr.yml")
     ]
     if (
         retryable
@@ -3997,6 +3999,34 @@ def inspect_pr(
                 stale_opencode_minutes=stale_opencode_minutes,
             )
         return Decision(number, "skip", "draft PR")
+    if (pr.get("files") or {}).get("totalCount") == 0:
+        fresh_pr = _fresh_open_pr_for_cancellation(repo, number)
+        fresh_head = str(((fresh_pr.get("head") or {}).get("sha")) or "")
+        if fresh_head != str(pr.get("headRefOid") or ""):
+            return Decision(number, "wait", "empty PR candidate changed before close")
+        fresh_changed_files = fresh_pr.get("changed_files")
+        if type(fresh_changed_files) is not int or fresh_changed_files < 0:
+            return Decision(number, "wait", "empty PR candidate metadata is incomplete")
+        if fresh_pr["draft"] or fresh_changed_files != 0:
+            return Decision(number, "skip", "empty PR candidate no longer eligible")
+        if not dry_run:
+            try:
+                run(
+                    [
+                        "gh",
+                        "pr",
+                        "comment",
+                        str(number),
+                        "--repo",
+                        repo,
+                        "--body",
+                        "자동 정리: base 대비 실제 변경(diff)이 0건이라 이 PR을 닫습니다. 변경을 추가한 뒤 reopen하세요.",
+                    ]
+                )
+            except RuntimeError:
+                pass
+            run(["gh", "pr", "close", str(number), "--repo", repo])
+        return Decision(number, "close_empty", "base 대비 실제 변경 0건")
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required

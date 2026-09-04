@@ -638,5 +638,7 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "current_head_run_coalescer.py" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block

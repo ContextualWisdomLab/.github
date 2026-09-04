@@ -40,14 +40,15 @@ def test_dispatch_wakes_only_the_exact_failed_current_head_run() -> None:
     assert "rerun-failed-jobs" in wake
 
 
-def test_stale_event_cannot_safely_use_native_cancel_in_progress() -> None:
+def test_native_cancellation_runs_before_runner_admission() -> None:
     required = REQUIRED.read_text(encoding="utf-8")
-    target = required.split("  opencode-review-target:\n", 1)[1].split(
-        "\n  cancel-superseded-opencode-review-runs:", 1
+    concurrency = required.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
     )[0]
 
-    assert "cancel-in-progress: false" in target
-    assert "before any job step can compare" in target
+    assert "required-opencode-review-${{" in concurrency
+    assert "github.event.pull_request.number || github.run_id" in concurrency
+    assert "cancel-in-progress: true" in concurrency
     assert "live_head_matches()" in required
 
 

@@ -25,9 +25,10 @@ current head. When any latest PR run has `startup_failure`, it reuses the
 existing guarded same-tree restamp operation to create one new head and one
 fresh `synchronize` event. A newer queued or completed run suppresses
 recovery, and a head whose latest commit is already the recovery restamp is not
-restamped again. The retired required
-`CodeQL PR` workflow is excluded explicitly; its platform prohibition was
-fixed by the existing dispatch-and-poll architecture and must not be retried.
+restamped again. The former direct-CodeQL required workflow was excluded while
+its platform prohibition remained. The dispatch-and-poll architecture has
+since removed all `github/codeql-action` use from the required entrypoint, so
+CodeQL now uses the same guarded recovery path as every other pre-job failure.
 The PR head is re-read immediately before mutation, and the operation remains
 restricted to same-repository branches plus a credential that GitHub permits to
 start workflows.

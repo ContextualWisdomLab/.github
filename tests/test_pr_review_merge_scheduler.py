@@ -176,6 +176,59 @@ def inspect(pr, **overrides):
     return sched.inspect_pr("owner/repo", pr, **kwargs)
 
 
+def test_inspect_pr_closes_only_fresh_non_draft_empty_pull_request(monkeypatch):
+    head_sha = "a" * 40
+    candidate = make_pr(
+        headRefOid=head_sha,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "draft": False,
+            "changed_files": 0,
+            "head": {"sha": head_sha},
+        },
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action == "close_empty"
+    assert sched.contract_decision(decision) == "NO_ACTION"
+    assert calls[-1] == ["gh", "pr", "close", "1", "--repo", "owner/repo"]
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    (
+        {"draft": True, "changed_files": 0, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": 1, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": None, "head": {"sha": "a" * 40}},
+        {"draft": False, "changed_files": 0, "head": {"sha": "b" * 40}},
+    ),
+)
+def test_inspect_pr_does_not_close_stale_or_ineligible_empty_candidate(
+    monkeypatch, fresh
+):
+    candidate = make_pr(
+        headRefOid="a" * 40,
+        files={"totalCount": 0, "nodes": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: fresh
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action in {"skip", "wait"}
+    assert calls == []
+
+
 def last_push_restamp_candidate(**overrides):
     value = make_pr(
         mergeStateStatus="BLOCKED",
@@ -4863,7 +4916,7 @@ def test_recover_current_head_startup_failures_restamps_only_latest_failed_workf
         "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
     )
 
-    assert recovered == [90, 91]
+    assert recovered == [90, 91, 92]
     assert calls == [
         (
             "owner/repo",
@@ -4908,6 +4961,47 @@ def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatc
     assert sched.recover_current_head_startup_failures(
         "owner/repo", pr, dry_run=False
     ) == []
+
+
+@pytest.mark.parametrize(
+    "workflow_metadata",
+    (
+        {"workflow_id": 12, "name": "CodeQL PR", "path": ".github/workflows/codeql-pr.yml"},
+        {"workflow_id": 12, "name": "Renamed CodeQL", "path": ".github/workflows/codeql-pr.yml"},
+        {"workflow_id": 12, "name": "CodeQL PR"},
+    ),
+)
+def test_recover_current_head_startup_failures_restamps_codeql_alone(
+    monkeypatch, workflow_metadata
+):
+    head_sha = "a" * 40
+    restamps = []
+    run = {
+        "id": 92,
+        "event": "pull_request",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-04T01:02:00Z",
+        **workflow_metadata,
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda repo, pr, **kwargs: restamps.append((repo, pr["headRefOid"], kwargs)),
+    )
+
+    recovered = sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    )
+
+    assert recovered == [92]
+    assert restamps == [("owner/repo", head_sha, {"dry_run": False})]
 
 
 def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
