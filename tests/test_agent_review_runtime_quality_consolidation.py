@@ -17,6 +17,7 @@ RETIRED_WORKFLOWS = (
     "noema-token-lifetime-quality-ci.yml",
     "opencode-rust-coverage-toolchain-quality-ci.yml",
     "strix-changed-path-quality-ci.yml",
+    "queue-ownership-quality-ci.yml",
 )
 
 
@@ -26,8 +27,8 @@ def _workflow_text() -> str:
     return WORKFLOW_PATH.read_text(encoding="utf-8")
 
 
-def test_three_quality_workflows_are_replaced_by_one_owner() -> None:
-    """Retire three independent trigger surfaces after full delta succession."""
+def test_quality_workflows_are_replaced_by_one_owner() -> None:
+    """Retire independent trigger surfaces after full delta succession."""
 
     assert WORKFLOW_PATH.is_file()
     for retired_name in RETIRED_WORKFLOWS:
@@ -86,6 +87,7 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_strix_workflow_dependency_hashes.py",
         "tests/test_strix_quality_timeout_fixture_budget.py",
         "scripts/ci/test_strix_quick_gate.sh",
+        "tests/test_org_sweep_queue_hygiene_owner.py",
     ):
         assert required_path in workflow
 

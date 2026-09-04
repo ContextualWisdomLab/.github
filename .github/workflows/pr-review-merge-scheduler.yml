@@ -626,7 +626,6 @@ jobs:
       ORG_SWEEP_ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false || inputs.enable_auto_merge == true }}
       ORG_SWEEP_MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || 'direct_or_auto' }}
       ORG_SWEEP_UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false || inputs.update_branches == true }}
-      ORG_SWEEP_STALE_QUEUE_HOURS: ${{ vars.ORG_SWEEP_STALE_QUEUE_HOURS || '24' }}
       # The review-dispatch, stacked-review, and branch-update budgets above are organization-wide
       # per sweep tick (sized to bound LLM review-provider cost/rate exposure, not
       # per-repository). Without rotation, `sweep_targets` is walked in a fixed
@@ -1098,7 +1097,7 @@ jobs:
               # the installation bucket is shared by every remaining
               # repository, the current rotation stops after
               # recording the first exhausted request instead of repeating the
-              # same bounded retries and queue-hygiene calls for every target.
+              # same bounded scheduler retries for every target.
               # Deferred work is picked up on a later rotation after reset.
               #
               # Any other non-zero exit is a genuine per-repository failure.
@@ -1118,169 +1117,6 @@ jobs:
               fi
             fi
 
-            # Queue hygiene, part 1: classify queued/in-progress runs against a
-            # bounded PR/default-branch snapshot. The snapshot is intentionally
-            # cheap and may race with a subsequent head move; every destructive
-            # cancellation is therefore revalidated against live run/PR/ref state
-            # immediately before the mutation by the production helper below.
-            queue_hygiene_ready=true
-            open_pr_heads_json="{}"
-            if open_pr_payload_json="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/${repo_full_name}/pulls?state=open&per_page=100" \
-                --paginate \
-                | jq -sc '[.[] | .[]]'
-            )"; then
-              if ! jq -e '
-                all(.[];
-                  (.head.repo.full_name | type) == "string" and (.head.repo.full_name | length) > 0 and
-                  (.head.ref | type) == "string" and (.head.ref | length) > 0 and
-                  (.head.sha | type) == "string" and (.head.sha | test("^[0-9a-fA-F]{40}$"))
-                )
-              ' <<<"$open_pr_payload_json" >/dev/null; then
-                echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: an open PR has malformed head repository/ref/SHA metadata. No run will be cancelled from incomplete evidence."
-                queue_hygiene_ready=false
-              else
-                open_pr_heads_json="$(
-                  jq -c '
-                    reduce .[] as $pr ({};
-                      . + {(($pr.head.repo.full_name + ":" + $pr.head.ref)): $pr.head.sha}
-                    )
-                  ' <<<"$open_pr_payload_json"
-                )"
-              fi
-            else
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: open PR head refs could not be read safely. No run will be cancelled from incomplete evidence."
-              queue_hygiene_ready=false
-            fi
-            if ! current_default_sha="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "/repos/${repo_full_name}/commits/${default_branch}" \
-                --jq '.sha // empty'
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD could not be read safely. No run will be cancelled from incomplete evidence."
-              current_default_sha=""
-              queue_hygiene_ready=false
-            elif ! [[ "$current_default_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: default-branch HEAD is malformed. No run will be cancelled from incomplete evidence."
-              current_default_sha=""
-              queue_hygiene_ready=false
-            fi
-            if ! active_runs_json="$(
-              for active_status in queued in_progress; do
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  "/repos/${repo_full_name}/actions/runs?status=${active_status}&per_page=100" \
-                  --paginate
-              done | jq -sc '[.[] | (.workflow_runs // [])[]]'
-            )"; then
-              echo "::warning::Current-HEAD cancellation skipped for ${repo_full_name}: queued/in-progress Actions runs could not be read. Grant the sweep credential Actions read access; no run will be cancelled from incomplete evidence."
-              active_runs_json="[]"
-              queue_hygiene_ready=false
-            fi
-            superseded_runs_json="[]"
-            if [ "$queue_hygiene_ready" = "true" ]; then
-              superseded_runs_json="$(
-                jq \
-                  --argjson current_pr_heads "$open_pr_heads_json" \
-                  --arg default_branch "$default_branch" \
-                  --arg current_default_sha "$current_default_sha" \
-                  '[
-                    .[]
-                    | ((.head_repository.full_name // "") + ":" + (.head_branch // "")) as $head_key
-                    | ($current_pr_heads[$head_key] // null) as $current_pr_head
-                    | select(
-                        if (.event == "pull_request" or .event == "pull_request_target") then
-                          ($current_pr_head == null or .head_sha != $current_pr_head)
-                        elif (
-                          (.event == "push" or .event == "schedule") and
-                          .head_branch == $default_branch and
-                          $current_default_sha != ""
-                        ) then
-                          .head_sha != $current_default_sha
-                        else
-                          false
-                        end
-                      )
-                    | {
-                        id,
-                        name,
-                        status,
-                        event,
-                        head_branch,
-                        run_head: .head_sha,
-                        current_head: (
-                          if (.event == "pull_request" or .event == "pull_request_target") then
-                            $current_pr_head
-                          else
-                            $current_default_sha
-                          end
-                        ),
-                        created_at
-                      }
-                  ]' <<<"$active_runs_json"
-              )"
-            fi
-            superseded_count="$(jq 'length' <<<"$superseded_runs_json")"
-            if [ "$superseded_count" -gt 0 ]; then
-              echo "Revalidating ${superseded_count} queued/in-progress run(s) classified as not matching an open PR or default-branch Current HEAD:"
-              jq -r '.[] | "  run \(.id) [\(.name)] status=\(.status) event=\(.event) branch=\(.head_branch) run_head=\(.run_head) classified_head=\(.current_head // "closed-or-no-open-pr")"' <<<"$superseded_runs_json"
-              if [ "$DRY_RUN" != "true" ]; then
-                while IFS= read -r run_id; do
-                  scripts/ci/revalidate_queue_cancellation.sh \
-                    "$repo_full_name" \
-                    "$run_id" \
-                    "$default_branch" \
-                    "$current_default_sha" \
-                    "$open_pr_heads_json" \
-                    "superseded"
-                done < <(jq -r '.[].id' <<<"$superseded_runs_json")
-              fi
-            fi
-
-            # Queue hygiene, part 2: retain the legacy age guard only for queued
-            # runs that are not tied to a currently open PR head. This catches
-            # orphaned manual/workflow-chain runs without cancelling a valid
-            # current-head PR check merely because runner capacity was scarce.
-            # The helper re-checks late PR association/live refs before mutation.
-            stale_runs_json="[]"
-            if [ "$queue_hygiene_ready" = "true" ]; then
-              stale_cutoff="$(date -u -d "${ORG_SWEEP_STALE_QUEUE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)"
-              stale_runs_json="$(
-                jq \
-                  --argjson current_pr_heads "$open_pr_heads_json" \
-                  --argjson superseded "$superseded_runs_json" \
-                  --arg stale_cutoff "$stale_cutoff" \
-                  '[
-                    .[]
-                    | .id as $run_id
-                    | ((.head_repository.full_name // "") + ":" + (.head_branch // "")) as $head_key
-                    | select(.status == "queued")
-                    | select(.created_at < $stale_cutoff)
-                    | select($current_pr_heads[$head_key] == null)
-                    | select(([ $superseded[].id ] | index($run_id)) == null)
-                    | {id, name, event, head_branch, head_sha, created_at}
-                  ]' <<<"$active_runs_json"
-              )"
-            fi
-            stale_count="$(jq 'length' <<<"$stale_runs_json")"
-            if [ "$stale_count" -gt 0 ]; then
-              echo "Revalidating ${stale_count} queued run(s) older than ${ORG_SWEEP_STALE_QUEUE_HOURS}h:"
-              jq -r '.[] | "  run \(.id) [\(.name)] on \(.head_branch) queued since \(.created_at)"' <<<"$stale_runs_json"
-              if [ "$DRY_RUN" != "true" ]; then
-                while IFS= read -r run_id; do
-                  scripts/ci/revalidate_queue_cancellation.sh \
-                    "$repo_full_name" \
-                    "$run_id" \
-                    "$default_branch" \
-                    "$current_default_sha" \
-                    "$open_pr_heads_json" \
-                    "aged-orphan"
-                done < <(jq -r '.[].id' <<<"$stale_runs_json")
-              fi
-            fi
             echo "::endgroup::"
           done
 
