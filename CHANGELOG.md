@@ -11,6 +11,13 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Move the organization commercial-readiness contract suite into the existing
+  agent review runtime quality selector and job, removing its standalone thin
+  caller while retaining the reusable exact-head coverage implementation.
+- Consolidate the standalone review-repair contract workflow into the existing
+  agent review runtime quality selector and job. Matching PRs now reuse one
+  checkout and dependency bootstrap while retaining the focused coverage,
+  docstring, compile, and exact-PR concurrency contracts.
 - Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.
 - Retire the standalone OSV and Scorecard pull-request workflows after both scanners moved into the required `security-scan.yml`. The organization ruleset now has seven required workflow paths, and `.github` branch protection no longer requires the duplicate `osv-scan / osv-scan` context.
 
