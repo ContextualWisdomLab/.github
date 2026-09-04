@@ -10,6 +10,12 @@ import pytest
 from scripts.ci import pr_review_fix_scheduler as fix
 
 
+@pytest.fixture(autouse=True)
+def isolate_active_autofix_inventory(monkeypatch: Any) -> None:
+    """Keep RCA unit tests independent of live GitHub Actions inventory."""
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+
+
 def make_pr(*, is_draft: bool = False) -> dict[str, Any]:
     """Return a clean same-repository PR with review and failed-check evidence."""
     head = "a" * 40
