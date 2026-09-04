@@ -1,6 +1,6 @@
 # ContextualWisdomLab central required workflow rollout
 
-Updated: 2026-09-03 KST
+Updated: 2026-09-04 KST
 
 ## Decision
 
@@ -12,17 +12,11 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths (live-verified 2026-09-03, nine entries — this
-  list previously undercounted by omitting `scorecard-pr.yml` and
-  `osv-scanner-pr.yml`, added to the ruleset weeks earlier per the "CodeQL
-  ruleset gap" fix but never reflected here; see the 2026-09-03 entry below for
-  why `codeql-pr.yml` is deliberately absent):
+- Active required workflow paths (live-verified 2026-09-04, seven entries):
   - `.github/workflows/close-empty-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
-  - `.github/workflows/osv-scanner-pr.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
-  - `.github/workflows/scorecard-pr.yml`
   - `.github/workflows/security-scan.yml`
   - `.github/workflows/strix.yml`
   - `.github/workflows/sast-semgrep.yml`
@@ -111,14 +105,13 @@ repositories concluded `startup_failure` with zero check runs ever created (a pl
 configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
 annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
 ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
-9 entries remain, `close-empty-pr.yml` through `osv-scanner-pr.yml`, no CodeQL entry). Coverage now comes
+seven entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
 from GitHub's native code-scanning default setup, enabled directly per repository
 (`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
 repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
 41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
-"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history, and still describe
-`scorecard-pr.yml`/`osv-scanner-pr.yml`'s mechanism accurately, since those two remain required and
-functioning; do not re-add any workflow using `github/codeql-action` to a required-workflow ruleset entry.
+"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history. Do not re-add any
+workflow using `github/codeql-action` to a required-workflow ruleset entry.
 The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
 make this automatic for every newly created repository, but item 41's investigation confirmed it is
 empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
@@ -127,10 +120,9 @@ periodic reconciliation sweep, vs. this org's stated aversion to more scheduled 
 reasons) is recorded as still open in `docs/product-technical-gap-baseline.md`'s item 41 entry, not decided
 here.
 
-The central `.github/workflows/scorecard-pr.yml` and `.github/workflows/osv-scanner-pr.yml` workflows
-supply PR-head and merge-preview code scanning analyses for ruleset `18156473` `code_scanning` (Scorecard,
-osv-scanner). They trigger on pull requests to `main`, `master`, and `develop` so
-Git Flow repositories on `develop` inherit the same merge gate as GitHub Flow repos.
+The central `.github/workflows/security-scan.yml` supplies PR-head OSV and Scorecard evidence in one
+required workflow. The former standalone PR workflows were retired after the live ruleset and `.github`
+classic branch protection stopped requiring their duplicate contexts.
 `.github/workflows/codeql-pr.yml` used the same trigger shape and merge-preview
 technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
 `sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
