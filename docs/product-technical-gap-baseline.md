@@ -4645,3 +4645,44 @@ congestion). Triggered via the same `rerun-failed-jobs` endpoint for all 4 (`key
 `33677266132`; `appguardrail` run `33708861663`; `aFIPC` run `33651273481`); all confirmed `run_attempt: 2`,
 `status: queued`. If any of these fail again with the same signature on retry, that is fresh, valuable
 evidence for the still-open item 4 investigation — not something this pass resolved.
+
+## Org-wide queue congestion appears to be clearing — but the drain itself exhausted the shared GitHub API rate limit, causing a new wave of failures — 2026-09-04
+
+**Trigger.** Routine queue-depth check (`gh api repos/ContextualWisdomLab/.github/actions/runs?status=queued`)
+returned `920` — down from `1911` at the previous tick and roughly `1700`+ for days before that. A second
+check moments later confirmed `924`, then `920` again (small natural fluctuation, not a fluke). `naruon`'s
+own queue dropped to `0` (from `515`). This is the first genuine downward trend this multi-day-tracked
+congestion has shown; treating it as real pending further confirmation next tick, per this doc's own
+"verify org-wide before declaring" discipline — one snapshot is a data point, not yet a settled trend.
+
+**The drain itself created a new, secondary problem.** Checking `.github#1661`'s own checks (`gh pr checks
+1661`) showed real activity for the first time in days — but also a burst of simultaneous failures across
+`Detect changed scope` (×3), `agent-review-runtime-quality`, `scan-pr-queue`, `noema-review`,
+`cancel-superseded-opencode-review-runs`, `cancel-superseded-pr-runs`, and `required-workflow-bootstrap`, all
+completing in a tight 11–15 minute window. Pulling one job's log
+(`required-workflow-bootstrap`, job `100911162376`) to find the real cause hit: `API rate limit exceeded
+for user ID 8172694` — and the harness's own system-reminder confirmed explicitly: *"GitHub API rate limit
+exceeded (5,000/hr shared across all tools and agents)."* `gh api rate_limit` showed this session's own
+token bucket at a fully fresh `5000/5000, used: 0` — the constraining limit is a different, aggregate bucket
+shared across every session/tool/CI-job using the org's credentials, invisible to a per-token check.
+
+**Root cause, plausible and consistent with the evidence: a thundering herd on queue drain.** Days of
+`~1700`–`1900`+ queued runs across the org, once runner capacity freed up, appear to have dispatched in a
+large simultaneous burst. Many of the required-workflow jobs that just failed (`required-workflow-bootstrap`,
+`cancel-superseded-pr-runs`, `scan-pr-queue`, `cancel-superseded-opencode-review-runs`) make their own
+GitHub API calls as part of their normal operation (checking PR state, cancelling superseded runs, dispatch
+bookkeeping) — with potentially thousands of runs starting near-simultaneously org-wide, their combined API
+usage plausibly exhausted the shared 5,000/hr budget within minutes, which is exactly the failure window
+observed (11–15 minutes). This would mean the org's job-concurrency ceiling (root-caused and already
+documented) has a second-order effect nobody had evidence for yet: draining a large backlog doesn't
+gracefully ramp up, it produces a burst that can exhaust an entirely different shared resource (the API rate
+limit) as a side effect — a genuinely new finding, not previously in this doc's item-4/ceiling entries.
+
+**Backing off, not retrying.** Per the harness's own explicit instruction ("sleep until reset before further
+gh calls... use ScheduleWakeup instead of retrying"), stopped further `gh api` calls immediately.
+`gh api rate_limit`'s `reset` timestamp (`1788501503`) is `2026-09-04T05:58:23Z`, roughly 60 minutes from
+this check — the standard hourly window. Scheduling the next tick around that reset rather than the usual
+~1700s cadence, so this session doesn't itself contribute to the exhausted shared budget while it's
+recovering, and so the actual queue-clearing progress (or its reversal) can be verified once calls are safe
+again. Not yet claiming the congestion is resolved — both the recovery and this rate-limit side effect need
+one more confirmed data point next tick before either is treated as settled.
