@@ -64,6 +64,9 @@ def test_rendered_workflow_redetects_stacks_and_pins_every_action() -> None:
     assert '"TypeScript":"javascript-typescript"' in workflow
     assert '"Rust":"rust"' in workflow
     assert "autobuild" not in workflow
+    assert "pull_request:" not in workflow
+    assert "github.event.pull_request" not in workflow
+    assert "github.event_name == 'push' && github.ref || github.event_name" in workflow
     assert "cancel-in-progress: true" in workflow
     assert workflow.count("@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9") == 2
     assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0" in workflow
