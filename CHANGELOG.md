@@ -9,6 +9,7 @@
 ## [Unreleased]
 
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
+- Repointed 10 `scripts/ci/test_strix_quick_gate.sh` self-test assertions that had gone stale after the `pr_review_merge_scheduler.py`/`pr_review_merge_scheduler_core.py` facade/core split (#1803): they checked the now-98-line facade file for content (the exact-head branch-update guard, the squash-fallback retry, the subprocess-safety flags, the same-head Strix/OpenCode dispatch markers, and the `pr_head_ref` repository-dispatch payload) that lives in the core module instead, so they had been silently failing on every run since the split. A coverage/docstring version of the same gap was already fixed via #1810; this bash contract script was missed.
 ## 2026-09-02 — Noema single-request gateway ownership
 
 - Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
