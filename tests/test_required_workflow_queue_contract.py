@@ -45,6 +45,20 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
+    """Keep each run bounded without treating immutable cache snapshots as locks."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    assert workflow.count(
+        '--admission-state-path "${RUNNER_TEMP}/review-admission/state.json"'
+    ) == 2
+    assert workflow.count("--admission-dispatch-budget") == 2
+    assert workflow.count("--admission-sequence \"$GITHUB_RUN_ID\"") == 2
+    assert "actions/cache/restore" not in workflow
+    assert "actions/cache/save" not in workflow
+    assert "actions/upload-artifact" not in workflow
+
+
 def test_organization_readiness_does_not_echo_untrusted_http_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

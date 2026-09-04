@@ -237,3 +237,15 @@ def test_budget_counts_active_leases_and_stale_heads_cannot_poison_sequence() ->
         dispatch_budget=1,
     )
     assert recovered.dispatches[0].request == valid
+
+    retry_state = ControllerState(
+        {valid.identity: RequestRecord(valid, "stale")},
+        {},
+    )
+    retried = plan_dispatches(
+        retry_state,
+        [request("strix", HEAD_2, 2)],
+        live_heads={(valid.repository, valid.pull_request): HEAD_2},
+        dispatch_budget=1,
+    )
+    assert retried.dispatches[0].request.sequence == 2
