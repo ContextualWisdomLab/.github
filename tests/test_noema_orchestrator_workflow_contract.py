@@ -420,7 +420,7 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     )
 
     assert (
-        "모델당 두 시간 이상 걸릴 수 있음을 수용한다"
+        "모델당 2시간 이상을 수용한다"
         in (Path(__file__).resolve().parents[1] / "docs" / "product-goal-directive.md").read_text(
             encoding="utf-8"
         )

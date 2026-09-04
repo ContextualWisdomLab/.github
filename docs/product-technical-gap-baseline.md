@@ -2416,6 +2416,126 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 naruon backend CI Postgres 서비스 컨테이너 부재 — 남겨둔 후속 과제 완료
+
+**Context**: `ContextualWisdomLab/naruon#1486` 작업 중 처음으로 로컬 PostgreSQL 16 +
+pgvector를 설치해 `@pytest.mark.postgres` 표시가 붙은 real-Postgres 테스트를 실제로
+실행해보니, naruon의 `.github/workflows/app-ci.yml` `backend` job에 Postgres 서비스
+컨테이너가 전혀 구성되어 있지 않아 이 마커가 붙은 모든 테스트(수십 개)가 CI에서 단
+한 번도 실행되지 않고 항상 조용히 skip되어 왔다는 사실이 드러났다. 그렇게 처음으로
+실제 실행해 발견한 결함 20건(신선한 DB에 대한 `alembic upgrade head`가 항상
+크래시하던 critical 버그 1건 + ORM 기본값을 우회하는 raw-SQL 시딩 결함 19건)은
+`ContextualWisdomLab/naruon#1486`의 커밋 `b9b02dd0`에서 고쳤지만, **CI 서비스
+컨테이너 자체를 추가하는 일은 그 PR의 범위 밖으로 명시적으로 남겨두고, 이 문서에
+후속 과제로 기록하기로 그 PR의 `CHANGELOG.md` 항목에 적어두었다.** 이 저장소
+(`ContextualWisdomLab/.github`)의 `main`과 그 시점의 열린 PR을 모두 확인했으나 그
+기록이 실제로 커밋된 적은 없었다 — 이 섹션이 그 후속 과제의 최초 기록이자 완료
+기록이다.
+
+**Fix**: `ContextualWisdomLab/naruon#1502`가 `backend` job에
+`pgvector/pgvector:pg16` 서비스 컨테이너(`test`/`test`/`test_db`, `pg_isready`
+헬스체크)와 일치하는 `DATABASE_URL`을 추가했다. 실제 CI 조건과 동일하게(로컬
+PostgreSQL 16 + pgvector) 처음 돌려보자 `#1486`의 20건과는 별개인 잠복 결함 3건이
+추가로 드러났다 — (1) `0011_email_read_state` 마이그레이션이 여전히 rename 이전의
+레거시 `emails` 테이블을 직접 대상으로 해 신선한 DB에 대한 `alembic upgrade head`를
+깨뜨림, (2) `test_bootstrap_db.py`/`test_data_api.py`의 raw SQL `INSERT INTO
+email_records` 4곳이 `is_read`(ORM Python-side 기본값만 있고 DB 서버측 기본값
+없음)를 빠뜨려 real Postgres에서 `NotNullViolationError`, (3)
+`test_bootstrap_db.py`의 로컬 헬퍼가 가드 없는 예전 백필 루프를 그대로 복제. 세 건
+모두 진짜 RED(실제 real-Postgres 실행 실패)를 먼저 확인한 뒤 고쳤다. 전체 백엔드
+스위트를 real PostgreSQL 16(+pgvector)로 검증: **1837 passed, 2 skipped**(남은
+2개는 `LIVE_BASE_URL` 미설정에 따른 무관한 live-API smoke), `ruff check` clean.
+`CLAUDE.md`/`AGENTS.md`에 이 job이 이제 real-Postgres 테스트를 하드 게이트로
+실행한다는 것을 기록해, 향후 best-effort로 오인되지 않게 했다.
+
+**Status**: 닫힘. `ContextualWisdomLab/naruon#1502` 병합 대기 중이며, 이 문서
+자체는 병합 판단에는 재사용하지 않는다.
+
+## 2026-09-02 중앙 리뷰 게이트(`orchestrator/free`) 용량 병목 — 새 Gap
+
+**Context**: `ContextualWisdomLab/naruon#1502`(위 절)와
+`ContextualWisdomLab/.github#1538`을 2026-09-01 하루 동안 직접 지켜보며 발견한,
+`AGENTS.md`의 2026-08-30 owner 결정(`OpenCode`·`Noema`·`Strix` 모두
+`orchestrator/free`로 라우팅) 이후 처음으로 실측된 용량 한계다. 세 가지
+서로 다른 증상이 같은 근본 원인(동시에 push되는 많은 PR이 하나의 zero-cost
+free-tier LLM pool을 공유)을 가리킨다.
+
+1. **`naruon#1502`의 `noema-review`**: 최초 실행이 current head
+   `40ce573b`에서 시작까지 ~80분 대기 후 `Noema reviewed line 2 is not an
+   exact changed-side line`로 실패(free-tier 모델의 line-number 환각으로
+   추정). 재시도는 ~11:07 트리거 후 **6시간 넘게 큐에 머물다** 17:04에야
+   시작해 17:15부터 12개 free-tier 모델 중 6개가 timeout/404로 거부된 뒤
+   `noema_review_gate.py`가 실행되었지만, 이번엔 `noema-review-github-app`
+   설치 토큰이 (모델 preflight로 실행 시간이 길어져) 검증 verdict를 post하기
+   전에 만료되어 `gh: Bad credentials (HTTP 401)`로 실패했다(job
+   `99833722812`). 서로 다른 실패 모드 2건이 같은 PR에서 연속 관측된 것은
+   central 인프라 문제이지 PR 자체의 결함이 아니라는 강한 신호다.
+2. **`naruon#1502`의 `strix`**: 동일 head에서 3회 연속 실패 — 1·2회차는
+   큐에 머무는 중 취소(org 전체 `in_progress` 실행 수가 한동안 0으로 관측),
+   3회차는 실제로 22:15~22:49 34분간 실행된 뒤에도 취소됨(run
+   `33476187490`, `run_attempt: 3`). "큐가 비어있어서"만으로는 3회차를
+   설명할 수 없다 — 실행 중 취소는 다른 매커니즘(timeout, 리소스 한도, 또는
+   운영 sweep)을 시사한다.
+3. **`.github#1538`의 `opencode-review`**: `repository_dispatch`로 리뷰를
+   내보낸 뒤 `opencode-agent`의 current-head verdict를 30초 간격으로 최대
+   660회(=5.5시간) polling하도록 설계된 워크플로가, 이 PR의 한 줄짜리
+   docs-only 변경(`docs/product-technical-gap-baseline.md`)에 대해서도 **정확히
+   5.5시간을 다 채우고** verdict 없이 실패했다(job `99802685605`). 재시도도
+   6시간 넘게 큐에 머문 채였다(`.github` 저장소 자체의 PR).
+
+**추가로 확정한 근본 원인 1건(수정 완료)**: 위 조사 중
+`scripts/ci/test_strix_quick_gate.sh`가 `strix disables the model client
+inference timeout`을 요구하며 `.github/workflows/strix.yml`이
+`export LLM_TIMEOUT=0`을 포함해야 한다고 단언하는데, 실제 `main`
+(`fb02129`)은 `export LLM_TIMEOUT=300`(5분)으로 하드코딩되어 있어 이
+assertion이 **`main` 자체에서** 이미 실패 중이었다 — 같은 스텝의
+`STRIX_MEMORY_COMPRESSOR_TIMEOUT`/`STRIX_PROCESS_TIMEOUT_SECONDS`/`STRIX_TOTAL_TIMEOUT_SECONDS`
+세 변수는 이미 `0`인데 `LLM_TIMEOUT`만 빠져 있었다. `docs/product-goal-directive.md`
+§8("LLM Model에는 획일적 timeout 상한을 두지 않는다... 기본값은
+무제한")과 `strix.yml`의 concurrency 블록 자체 주석("Inference has no
+wall-clock deadline... may take more than two hours per model")에 정면으로
+반하는 상태였다. `ContextualWisdomLab/.github#1658`에서 한 줄 수정(`300`→`0`)
+완료, `ContextualWisdomLab/.github#1612`(Noema exact-changed-line-manifest
+수정 — 위 3개 증상 중 1번의 근본 수정)에 그 발견을 코멘트로 남겼다. 이
+`LLM_TIMEOUT=300` 자체는 이번에 관측한 5.5~6시간대의 대기/재시도 실패와는
+다른 변수(모델 client의 자체 inference timeout, 큐 대기시간이 아님)이므로
+용량 병목의 근본 수정은 아니지만, 같은 "no uniform timeout" 원칙 위반의
+독립된 사례로 함께 기록한다.
+
+**Gap 성격**: 이건 naruon 제품 기능 Gap이 아니라 **조직 전체 개발 속도에
+직접 영향을 주는 CI/개발-인프라 Gap**이다 — 리뷰 게이트가 병목이면 모든
+소비 저장소의 PR 병합 loop가 그만큼 느려진다. `ADR-0003`이 2026-08-30에
+이미 "residual single-outage-domain risk"를 owner가 명시적으로 수용한다고
+기록했는데, 오늘 관측한 것이 바로 그 리스크가 다중 동시 PR 부하 아래서
+실제로 발현한 사례다.
+
+**아직 미결**: (a) 이 문서가 스스로 기록한 `LLM_TIMEOUT=300`→`0` 수정은
+좁은 범위 root-cause 수정 1건일 뿐, `orchestrator/free` pool 자체의
+용량/동시성 한계를 해소하지 않는다 — provider diversity 확대나 pool 분리
+같은 더 큰 설계 변경은 이 문서 하나로 결정할 수 있는 범위 밖이며, 별도
+ADR·owner 판단이 필요하다. (b) `noema-review`의 GitHub App 토큰 TTL이
+"오래 대기 후 오래 실행"되는 잡의 실제 실행시간을 못 버티는 문제는
+`scripts/ci/noema_review_gate.py`/토큰 발급 스텝의 별도 수정이 필요하며
+아직 손대지 않았다. (c) `strix`가 "실행 중" 취소되는 3번째 증상의 정확한
+트리거(타임아웃 vs 리소스 한도 vs sweep)는 로그만으로 확정하지 못했다 —
+`always()` 단계로 업로드되는 `strix-reports` 아티팩트를 다음 발생 시 직접
+받아 확인해야 한다.
+
+**(b) 2026-09-02 재확인 — 이미 해소됨.** `main`의
+`.github/workflows/noema-review.yml`을 직접 읽어 확인: `noema_prepare` 스텝(모델
+단계, 임의로 길어질 수 있음) 이후 `prepared == true`일 때만 별도 스텝이 리뷰어
+credential을 **다시 mint**하고(`REFRESHED_APP_TOKEN_SOURCE`), 그 새 토큰으로만
+publish 스텝이 verdict를 post한다 — 위에서 관측한 "모델 preflight로 실행 시간이
+길어져 토큰이 만료된 뒤 post" 실패 모드를 구조적으로 제거한다. 이 remint는
+`#1616`("Noema reviewer credential-lifetime delta", 위 2690행 항목)이 도입했고,
+`#1648`("fix(noema): validate refreshed App token at publication boundary",
+`83ae03f6`, 2026-09-02T08:00:01+09:00)이 발행 경계에서 그 refreshed 토큰 자체를
+검증하도록 마무리했다. 두 커밋 모두 현재 `main`에 있다. 같은 세션에서 이 문서를
+갱신하며 `naruon#1503`의 실패했던 `noema-review` 잡을 재실행(`rerun_failed_jobs`,
+run `33489389355`)해 두었으니, 그 결과가 이 항목의 실측 재확인 증거가 된다 — 401
+없이 verdict가 나오면 (b) 완전 종결, 여전히 401이면 이 재확인을 되돌리고 재조사할
+것.
+
 ## 2026-09-01 post-#1546 `scripts/ci` coverage regression on protected main: root-caused and closed
 
 **Context**: `#1546` (merged, exact head `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`) reconciled
@@ -2563,11 +2683,28 @@ that PR for its own evidence.
 
 ### 5.1 이번 루프의 다음 개발 increment
 
-1. ContextualWisdomLab/.github#1297 — current-head Strix serialization과 scoped close cleanup의 hosted Checks·독립 승인을 재확인한 뒤 보호된 auto-merge를 기다린다.
-2. ContextualWisdomLab/.github#1345/#1347 — 각각 normalizer 선형 스캔과 web-E2E isolation/SSRF 수정의 terminal Checks·Strix·Noema 증거를 같은 HEAD에서 재확인한다.
-3. ContextualWisdomLab/.github#1326 — Appguardrail/macOS hourly caller를 current CodeRabbit finding 및 APA citation evidence와 함께 재검토한다.
-4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
-5. `scripts/ci/select_nvidia_nim_model.py`(호출자 없음, 위 §5의 여러 항목이 이미 문서화)를 별도의 작은 PR(`fix/remove-orphaned-nim-model-resolver`)로 분리 제거했다 — `#1437` 리뷰 스레드가 명시적으로 요청한 대로 direct-NIM cleanup을 pool-flip 논의와 분리했다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은 git history를 가리키도록 갱신했다.
+(2026-09-02 갱신 — 이전 항목 #1297/#1345/#1347/#1326은 더 이상 열린 PR
+목록에 없어 이미 병합·종료된 것으로 보고 제거했다; 재오픈되면 다시
+추가한다.)
+
+1. `ContextualWisdomLab/.github#1658` — 이 문서 위 절이 기록한
+   `LLM_TIMEOUT=300`→`0` 한 줄 수정. terminal Checks·독립 승인을 확인한 뒤
+   병합한다.
+2. `ContextualWisdomLab/.github#1612` — Noema exact-changed-line-manifest
+   근본 수정. `#1610`(Strix coverage 회귀, 선행 필요)과 위 `#1658`이 먼저
+   반영되어야 이 PR 자체의 `exact-head-path-policy`가 정상적으로 평가된다.
+3. `ContextualWisdomLab/naruon#1502` — Postgres CI 서비스 컨테이너 gap
+   (위 2026-09-01 절). `strix`/`noema-review`/`coverage-evidence`가
+   중앙 리뷰 게이트 병목(위 2026-09-02 절)에 묶여 있으므로, 그 병목이
+   완화되는 대로 재확인한다.
+4. `ContextualWisdomLab/.github#1538` — 이 문서 자체의 2026-09-01 Postgres
+   gap 기록 PR. `opencode-review`가 같은 병목에 묶여 있다.
+5. 열린 PR 인벤토리(§1.3 disclaimer 대상, 병합 판단에는 재사용하지 않음)가
+   `.github` 저장소 한 곳만 50건을 넘는다(2026-09-02 관측, 이 문서 헤더의
+   2026-08-26 스냅샷 값 107은 갱신 대상) — "PR 소진"에는 아직 멀었다;
+   다음 hourly pass는 새 PR을 여는 대신 이 백로그를 review→fix→merge
+   순서로 우선 소진한다. G-01/G-02/G-05/G-06/G-15는 그 백로그 안에서
+   해당하는 소유 저장소 PR로 연결한다.
 
 ## 6. Compliance and data boundary
 
@@ -2649,6 +2786,64 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 §9 core/consumer 저장소 존재·역할 재확인 (28개 저장소 최초 실측)
+
+이 항목은 product-goal-directive §9가 core owner / domain product·composition consumer로 분류한 28개 저장소에 대해 **오늘(2026-09-02) 최초로 수행된 실측 인벤토리**를 기록한다. §9 본문은 스스로를 "ownership and boundary intent, not a verified inventory"라고 명시하는데, 이 패스는 anonymous git-read 접근으로 각 저장소의 존재 여부·README/PRD/ARCHITECTURE 문서 유무·claimed_role과 실제 문서 내용의 일치 여부를 직접 확인했다. 아래 (a) 그룹으로 분류된 16개 저장소에 한해 이 디스클레이머는 "검증된 것으로 대체"된 것으로 취급한다. 나머지 12개 저장소는 여전히 §9의 "intent, not verified" 상태로 남으며, 그 이유는 (b)에 개별적으로 기록한다. 이 패스는 병합 판단이나 거버넌스 조치의 근거가 아니라 문서 상태 스냅샷이다.
+
+**(a) 존재하며 문서가 claimed_role을 확인/부분 확인하는 저장소 (16개).** `contextual-orchestrator`, `noema`, `keyverse`, `EgressWeave`, `OriginWeave`, `pg-llm-batch`, `fast-mlsirm`, `TEPP`, `RankWeave`, `ThreadWeave`, `inkspan`, `DiagramWeave`, `mhtml-etl-gateway`, `wardnet`, `LineageWeave`, `psychometrics-commons`는 모두 README·PRD·ARCHITECTURE(또는 동등 문서) 중 최소 두 가지 이상을 갖추고 있고, 그 문서가 §9의 claimed_role 문구를 문자 그대로 또는 실질적으로 재확인한다. 특히 `noema`/`keyverse`/`psychometrics-commons`는 상대 저장소(`contextual-orchestrator`, Orgmetra, `fast-mlsirm`/`TEPP`/`semantic-data-portal`)를 이름으로 명시하며 경계를 스스로 선언하는 강한 일치 사례이고, `LineageWeave`는 자신의 기존 Python IRT/유사도 코드를 "migration debt"로 명시해 완성도가 아니라 역할 근거로 분류됐음을 뒷받침한다. 다만 `TEPP`(54개 crate의 "foundation slice", 완전한 ESEM/DSEM 미구현)와 `OriginWeave`("browser core"가 아직 실제 Chromium 세션이 아닌 Rust 안전/정책 커널 단계)는 계약은 확립됐으나 구현이 아직 그 계약을 완전히 이행하지 못한 상태임을 문서 스스로 인정한다.
+
+**(b) 존재하지만 역할 불일치 또는 문서 부재/부실이 확인된 저장소 (12개).** 완전 스텁형(코드·PRD·ARCHITECTURE 전무, "minimal protected baseline" 또는 부트스트랩 한 줄 README만 존재)은 `enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`, `pingora-gateway`, `quarantine-sandbox-runtime`, `EmbedRelay`, `PolicyWeave`, `supply-chain-control-plane` 8개다. 이 중 `enterprise-architecture-core`와 `context-graph-contracts`는 §9가 **동일한 claimed_role 문자열**("전사 결정·versioned context 계약 원장")을 부여했음에도 양쪽 다 스텁이라 두 저장소가 이 책임을 어떻게 분담하는지 문서상 근거가 전혀 없다 — 역할 재확인이 아니라 역할 정의 자체가 필요한 사례다. `PolicyWeave`는 한 걸음 더 나아가 README가 존재하지 않는 `docs/PRD.md`, `docs/ADR-0001-policy-as-data.md`를 링크하고 있어 문서 참조 자체가 끊어져 있고, `supply-chain-control-plane`은 `main`에 제품 코드/문서가 전무한 채 미병합 `feat/disruption-impact-foundation` 브랜치에 실제 범위가 있을 것으로 추정될 뿐이다. 나머지 4개는 문서는 있으나 claimed_role과의 정합성에 구체적 문제가 있다: `semantic-data-portal`은 PRD/TRD가 catalog·governance·소비 역할은 뒷받침하지만 자체 "Ontology Service" 플레인(`/ontology/concepts`, `/ontology/resolve` 등)을 운영하면서도 `ConceptWeave`를 문서에서 한 번도 언급하지 않아 ontology 생성/publish 경계가 소비자 쪽에서 미문서화된 상태다; `appguardrail`은 SAST/SARIF 소유는 확인되지만 자체 PRD가 multi-tenant SQLite control plane, 대시보드, CycloneDX SBOM, 유료 서비스 메뉴까지 범위를 명시해 "범위를 과장하지 않는다"는 claim과 긴장 관계에 있다; `disksage`는 `main`에 PRD가 없고(별도 `codex/canonical-prd` 브랜치 미병합) README가 composition consumer가 아니라 자기완결적 독립 제품처럼 읽힌다; `CalendarWeave`는 PRD/ARCHITECTURE가 전무할 뿐 아니라, README 자체가 "`LineageWeave`, `naruon`, Outlook이 CalendarWeave를 소비한다"고 서술해 방향이 §9가 부여한 "composition consumer" 정의와 반대로 읽힌다.
+
+**(c) 클론/접근 불가 저장소.** 이번 패스에서 접근 실패로 확인된 저장소는 0개다 — 28개 전부 anonymous git clone으로 존재를 확인했고 `main`(또는 명시된 기본 브랜치)을 읽을 수 있었다. 다만 이 패스는 **GitHub API가 아닌 anonymous git-read 접근만** 사용했다는 제약이 있다: 모든 항목의 `open_pr_count_hint`가 "not checked (no API access)"로 남아 있어 열린 PR 수·리뷰 상태·이슈는 전혀 검증되지 않았고, `PolicyWeave`의 `develop`, `CalendarWeave`의 `docs/adr-baseline`/`feat/rfc5545-*`/`feat/postgres-calendar-store`/`feat/authorization-admission`, `supply-chain-control-plane`의 `feat/disruption-impact-foundation`, `disksage`의 `codex/canonical-prd`처럼 실제 내용이 미병합 브랜치에 있을 가능성이 있는 저장소는 기본 브랜치만 검사했으므로 그 저장소들의 "문서 부재" 판정은 **"존재하지 않음"이 아니라 "기본 브랜치에서 접근 가능한 범위 밖"**일 수 있다는 점을 남겨 둔다. 즉 이번 패스의 "unknown/partial"은 인증 게이트나 브랜치 가시성의 산물일 수 있으며, GitHub API 재검증 전까지 최종 결론으로 취급하지 않는다.
+
+**Follow-up.** 우선순위가 가장 높은 것은 `enterprise-architecture-core`와 `context-graph-contracts`의 claimed_role 중복 자체를 해소하는 것이다 — 두 저장소 중 하나 또는 둘 다에 "전사 결정 원장"과 "versioned context 계약"을 어떻게 나누는지 명시하는 PRD/ARCHITECTURE를 작성해야 다음 실측 패스가 의미를 가진다. 다음으로 PRD/ARCHITECTURE 저작이 시급한 저장소는 `ConceptWeave`(publish 단계와 `semantic-data-portal`과의 경계), `EmbedRelay`(embedding identity·vector migration과 `pg-llm-batch`의 경계), `PolicyWeave`(끊어진 문서 링크부터 정리), `CalendarWeave`(consumer 방향성 재정의), `supply-chain-control-plane`(미병합 브랜치 내용을 `main`으로 승격) 순이다. `semantic-data-portal`의 Ontology Service와 `appguardrail`의 확장된 제품 범위는 문서 부재가 아니라 **범위 재확인/재승인**이 필요한 사례이므로 §9 담당자의 명시적 판단(경계 재정의 또는 claim 수정)을 요청해야 한다. 마지막으로, 이번 패스가 anonymous git-read로만 수행됐으므로 **어떤 merge/거버넌스 조치를 이 28개 저장소에 적용하기 전에도** GitHub API 접근(정확한 브랜치 목록, 열린 PR/이슈, 최신 커밋 SHA)으로 재검증해야 하며, 특히 미병합 브랜치가 확인된 `PolicyWeave`·`CalendarWeave`·`supply-chain-control-plane`·`disksage`·`enterprise-architecture-core`는 그 브랜치들이 `main`으로 병합되기 전까지 이번 실측 결과가 뒤집힐 수 있다.
+
+## 2026-09-02 follow-up: enterprise-architecture-core / context-graph-contracts role overlap resolved by the owner
+
+The survey entry directly above flagged one specific gap as needing owner clarification rather than a
+docs PR: `enterprise-architecture-core` and `context-graph-contracts` both being stub repos assigned the
+*identical* claimed-role string in `docs/product-goal-directive.md` §9, with no document anywhere
+explaining how the two divide "전사 결정·versioned context 계약 원장." Within the same session, the owner
+sent a second, tightening restatement of the full product-goal directive that resolves this directly:
+`enterprise-architecture-core` = "전사 Context Map·architecture decision" (enterprise Context Map +
+architecture decisions), `context-graph-contracts` = "assertion·event·schema·fixture·conformance"
+(interoperability assertions/events/schemas/fixtures/conformance testing) — two clearly distinct
+responsibilities. See `docs/product-goal-directive.md` §9's current text and its "2026-09-02 second
+pass" reading note for the full record, and `docs/doctoring/product-goal-directive.md`'s matching
+history entry for the superseded wording.
+
+This closes the *directive-level* ambiguity. It does not by itself close the *repo-level* doc gap: as of
+this session's survey pass, neither repo's own README/docs on `main` states this split (both were still
+single-line "minimal protected baseline" stubs) — that remains open follow-up work for whoever develops
+those repos next, now with an unambiguous target to document against.
+
+## 2026-09-02 `orchestrator/free` capacity bottleneck escalation — 8+ hours, zero progress, confirmed org-wide
+
+**Escalating, not superseding, the entry above.** The earlier 2026-09-02 entry documented multi-hour queuing with eventual progress (jobs did start, some completed, `rerun_failed_jobs` eventually succeeded once). This entry records a materially worse data point observed the same day, later: `naruon#1502`'s `strix` run (`33587139914`) has shown **zero state change** — `status: queued`, `updated_at` frozen at `2026-09-02T03:37:14Z` — across repeated checks spanning 03:37 through past 11:53 UTC (8+ hours). `rerun_failed_jobs` against this run still returns `403 This workflow is already running`, the same response as when it was actually running hours earlier, meaning GitHub's own API does not consider the run terminable/rerunnable even after 8 hours of apparent inactivity — this is not merely a long queue, it is a run stuck in a state neither this session's tooling nor a simple retry can clear.
+
+**Confirmed org-wide, not naruon-specific.** `ContextualWisdomLab/.github#1538`'s own required checks, freshly triggered by a push to its own repository at `10:52:04Z`, remained 100% queued an hour later at the time of this check — `.github` is the repo that *hosts* the central required-workflow definitions, so its own CI stalling identically to a consumer repo (`naruon`) rules out a per-repo runner-label or configuration issue and points at the shared GitHub Actions runner pool itself (or the org's runner-minute/concurrency allocation) as the bottleneck.
+
+**Nothing in this session's reach can clear this.** No workflow-level fix (timeout tuning, pool pinning, retry logic — several of which already landed this same day, e.g. `#1707`/`#1711`/`#1712`/`#1713`/`#1715`'s job-level timeout and scheduler hardening) touches GitHub's own runner-assignment layer. This is squarely the "provider diversity 확대나 pool 분리 같은 더 큰 설계 변경... 별도 ADR·owner 판단이 필요하다" case the prior entry already flagged as out of this document's own decision scope — recorded here because the severity materially changed (hours of zero progress, not just slow progress), not because the mitigation direction has.
+
+**No action taken beyond documentation.** Continued periodic re-checks (this session's hourly check-in loop) rather than repeated `rerun_failed_jobs` calls against an already-"already running" run, per this repo's own "flake re-run, at most once" discipline — a second and third retry attempt against the same frozen run would not be a diagnostic re-run, it would be blind retrying.
+
+## 2026-09-02 §9 미병합 브랜치 재검증 (5개 저장소, non-default branch 실측)
+
+이 항목은 바로 위 `2026-09-02 §9 core/consumer 저장소 존재·역할 재확인` 항목의 (c)절이 명시적으로 남긴 재검증 전제조건 — "`PolicyWeave`의 `develop`, `CalendarWeave`의 `docs/adr-baseline`/`feat/rfc5545-*`/`feat/postgres-calendar-store`/`feat/authorization-admission`, `supply-chain-control-plane`의 `feat/disruption-impact-foundation`, `disksage`의 `codex/canonical-prd`처럼 실제 내용이 미병합 브랜치에 있을 가능성이 있는 저장소는 기본 브랜치만 검사했다"는 제약 — 을 그대로 따라간 팔로업이다. `enterprise-architecture-core`는 §9 (b)절에서 완전 스텁으로 분류됐고 별도로 발견된 `develop` 브랜치가 있어 다섯 번째 대상으로 포함했다. 5개 저장소 모두 `git fetch --depth 1`로 해당 브랜치를 직접 실측했으며, fetch·checkout 실패는 없었다.
+
+**`PolicyWeave`(`develop`) — verdict `unknown` → `matches`.** `develop`(tip `6207729`)은 §9가 지적한 "README가 존재하지 않는 `docs/PRD.md`/`docs/ADR-0001-policy-as-data.md`를 링크"하는 문제를 정확히 해소한다: 두 문서 모두 `develop`에 실존하며(각각 45줄, 17줄) 내용도 스텁이 아니라 문제정의·MVP 범위·성공 기준, "policy-as-data" 채택 결정과 근거를 담고 있다. 그 위에 `ARCHITECTURE.md`, `docs/TRD.md`, 자체 `docs/product-technical-gap-baseline.md`(§9 형식과 유사한, 커밋 SHA를 인용하는 살아있는 갭 원장), 실제 React/TypeScript 구현(`src/App.tsx` 218줄, `src/policy.ts` 150줄 등)과 이를 뒷받침하는 5개 테스트 파일(총 약 593줄), `.github/workflows/ci.yml`까지 갖춘 완결된 제품이다. 다만 `git fetch --depth 1`의 shallow 특성상 gap-baseline 문서가 인용하는 과거 커밋 SHA들을 개별적으로 walk하여 검증하지는 못했다 — tip 트리의 파일 내용만 확인됐다.
+
+**`CalendarWeave`(`docs/adr-baseline`, `feat/postgres-calendar-store-v1`, `feat/rfc5545-class-v1`, `feat/authorization-admission-v1`) — verdict `partial` → `mismatch`.** 4개 브랜치 모두 실존하며 스텁이 아니다. `docs/adr-baseline`(`d9393fd`)은 Accepted 상태의 ADR-0001과 "Ownership matrix"를 통해 CalendarWeave 자신을 캘린더 리소스의 **Authoritative owner**로, Naruon/LineageWeave/saju-caldav를 그 **소비자**로 명시한다. `feat/postgres-calendar-store-v1`(`77f8b66`)은 이 주장을 뒷받침하는 실제 Postgres 기반 Rust 구현(테넌트 스코프 Calendar Resource Core)을 담고 있고, 가장 진척된 `feat/rfc5545-class-v1`(`d0a124e`)은 8개 ADR과 RFC 5545 파서, `src/admission.rs`까지 갖췄으며 자체 gap-baseline 문서에서 CalendarWeave를 DDD "Core subdomain"으로, LineageWeave를 "Read-only composition/deep-link" 역할로 명명한다. `feat/authorization-admission-v1`(`9b35006`)은 동일 프레이밍을 공유하는 부분집합이다. 이는 §9가 CalendarWeave에 부여한 "composition consumer" 역할과 정면으로 반대 방향이며 — 이번 재검증으로 드러난 것은 main의 단순한 문서 누락이 아니라, **Accepted ADR로 승인된, 대안까지 명시적으로 기각한 의도적 아키텍처 결정**이 조직 분류와 충돌한다는 점이다. 4개 브랜치 어디에도 이 긴장을 인지하거나 조정한 흔적은 없다.
+
+**`supply-chain-control-plane`(`feat/disruption-impact-foundation`, `docs/master-product-planning-v2-check`) — verdict `unknown` → `matches`.** 두 브랜치는 서로 다른 이름이지만 `git ls-remote`와 각각의 `git rev-parse`로 교차 확인한 결과 **정확히 동일한 커밋**(`350a789144a42b54df387041fb2a05b043dd9bd3`, 작성자 Seongho Bae, 2026-09-02, "docs: add public Pages landing source")을 가리킨다 — 두 개의 서로 다른 내용이 아니라 같은 트리에 붙은 두 개의 ref다. 그 트리는 `README.md`(146줄, 문제정의·quick start·도메인 모델), `ARCHITECTURE.md`, `docs/PRD.md`(48줄), `docs/TRD.md`, `docs/adr/0001-evidence-first-disruption-impact.md`(main의 부트스트랩 README 상태를 스스로 출발점으로 명시하고 이 브랜치를 그 해소책으로 서술), `CHANGELOG.md`, 그리고 실제 Rust 구현 `src/lib.rs`(493줄, SupplyGraph 애그리게이트·BFS 기반 downstream_impacts, `#![forbid(unsafe_code)]`)와 이를 뒷받침하는 4개 테스트 파일(최대 553줄)로 이루어진, main의 스텁과는 완전히 다른 실체 있는 제품이다. `docs/index.md`는 GitHub Pages 콘텐츠가 protected 기본 브랜치에 merge·배포되기 전까지는 "publish된 것"으로 간주하지 않는다는 점을 스스로 명시하고 있어, 이 내용이 아직 main에 없다는 사실을 브랜치 스스로도 인지하고 있다.
+
+**`disksage`(`codex/canonical-prd`) — verdict `partial` → `matches`.** tip `1ebfda4`("docs(cache): mark legacy permanent purge unsupported")에서 §9가 지적한 "`docs/PRD.md` 부재" 문제가 226줄짜리 "Status: Canonical product requirements" 문서로 해소되어 있다. 기능 요구사항·비고정목표·10개 안전 불변식·수용 기준·텔레메트리/프라이버시까지 스텁이 아닌 실체다. 더 중요하게는 README.md(195줄)가 `docs/PRD.md`를 "canonical product contract"로 링크하면서 명시적 소유 경계 문단을 추가했다: "DiskSage owns local storage analysis... It does not own cloud-provider synchronization truth... another ContextualWisdomLab product's data model... Optional ecosystem consumers and providers integrate through explicit contracts." 이는 §9가 지적한 "composition consumer가 아니라 자기완결적 독립 제품처럼 읽힌다"는 모호성을, "의도적으로 로컬퍼스트 독립 데스크톱 제품이며 경계가 명시된 생태계 통합 지점을 갖는다"는 명확한 선언으로 해소한다.
+
+**`enterprise-architecture-core`(`develop`) — verdict `unknown` (변동 없음).** 이 저장소는 재검증 전제 자체가 성립하지 않았다: `develop`은 별도의 미병합 브랜치가 아니라 **이 저장소의 기본 브랜치 그 자체**다(`remotes/origin/HEAD -> origin/develop`). `git fetch --depth 1 origin develop`의 FETCH_HEAD는 기존 체크아웃 HEAD와 완전히 동일한 커밋(`1c0fa8b15ceb9e72186274aeb255d6777eb84ef4`, "chore: initialize repository", 2026-08-16)이며, `git diff HEAD FETCH_HEAD`는 무변화, 트리에는 `README.md` 한 파일(부트스트랩 문구)만 존재한다. 즉 §9가 이미 읽은 것과 정확히 같은 내용을 다른 이름의 브랜치로 다시 읽은 셈이며, 숨겨진 실체가 드러나지 않았다. `enterprise-architecture-core`가 org 표준 `main`이 아니라 `develop`을 기본 브랜치로 쓰고 있다는 점 자체는 이번에 처음 확인된 사실로, org 전역 브랜치 명명 관례와의 편차로 기록해 둘 만하다.
+
+**부수적으로 확인된 사실.** `disksage`의 대상 브랜치 이름이 `codex/canonical-prd`라는 점은, 이 저장소에 대해 (적어도 브랜치 이름 규약상) Codex 계열 도구를 사용한 작업이 별도로 존재했음을 시사한다 — 이번 세션이 만든 브랜치가 아니라는 점만 사실로 기록하며, 조율 여부나 승인 여부에 대해서는 추측하지 않는다. 또한 `supply-chain-control-plane`에서 이름이 다른 두 브랜치(`feat/disruption-impact-foundation`, `docs/master-product-planning-v2-check`)가 동일 커밋 SHA를 가리키는 것은 의도된 중복 ref인지 라벨링 이상 징후인지 확인이 필요한 사안으로 별도 플래그해 둔다.
+
+**Follow-up.** 병합을 우선 검토해야 할 것은 `PolicyWeave`의 `develop`(main에 없는 PRD/ADR 링크 단절을 해소), `supply-chain-control-plane`의 `feat/disruption-impact-foundation`(또는 동일 커밋을 가리키는 `docs/master-product-planning-v2-check`), `disksage`의 `codex/canonical-prd`(main에 없는 PRD와 소유 경계 문서) 세 건이다 — 셋 다 main으로 승격되면 §9 (b)절의 "완전 스텁형"/"partial" 판정을 실질적으로 해소한다. `CalendarWeave`는 병합 판단이 아니라 **조직 차원의 재조정**이 먼저 필요하다: 4개 브랜치 모두가 Accepted ADR로 "CalendarWeave = authoritative owner"를 문서화한 상태이므로, `docs/product-goal-directive.md` §9 관리자가 이 저장소를 composition consumer로 유지할지 core owner로 재분류할지 명시적으로 결정하지 않는 한 이 불일치는 어느 브랜치를 merge해도 저절로 풀리지 않는다. `enterprise-architecture-core`는 여전히 실질적 문서 갭이 완전히 남아 있다 — 재검증 대상이었던 유일한 브랜치가 기본 브랜치와 동일한 이상, PRD/ARCHITECTURE 작성은 여전히 미착수 상태이며 이번 패스로는 전혀 진전되지 않았다.
 ## Noema single-request model-control ownership — PR #1672 (2026-09-02)
 
 **Status:** Merged into protected `main` as `a28fc2f4e185df7847e2f2f5f6ec561d1e84805d`; fresh exact-head hosted evidence remains an operational acceptance item.
