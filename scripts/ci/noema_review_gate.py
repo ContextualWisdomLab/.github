@@ -65,6 +65,38 @@ MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
 MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+# The character class above is intentionally broad enough to cover every
+# legitimate provider/model/phase/reason identifier this module has ever
+# observed (e.g. "github_models/deepseek-v3", "nvidia_nim",
+# "eligible_candidates_exhausted", "response_error") -- but that same
+# breadth also accepts two well-known *secret* shapes built entirely from
+# characters the class already allows: a GitHub PAT
+# ("gh[pousr]_<36+ alnum chars>") and a JWT (three dot-separated
+# base64url segments). Both shapes are checked explicitly and rejected in
+# `_safe_model_identifier`, in addition to (never instead of) the
+# character-class check above, because these telemetry fields
+# (served_model/terminal_reason/provider_name/upstream_phase) are read from
+# an untrusted gateway HTTP error envelope and then printed into this
+# `pull_request_target` workflow's public Actions logs -- CWE-532 (CodeRabbit
+# finding on PR #1503): a compromised or misbehaving upstream could place a
+# real leaked credential in any of these fields to exfiltrate it through the
+# log, and the plain character-class check alone could not have caught that.
+_GITHUB_PAT_SHAPE_RE = re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")
+_JWT_SHAPE_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+
+
+def _looks_like_secret_shape(candidate: str) -> bool:
+    """Return whether candidate structurally resembles a GitHub PAT or a JWT.
+
+    A GitHub PAT is matched anywhere inside ``candidate`` (``search``, not
+    ``fullmatch``) because a token could be embedded as a substring of an
+    otherwise plausible-looking identifier; a JWT's three-dot-segment shape
+    is matched against the whole value (``fullmatch``) since that shape is
+    only meaningful end to end. Neither pattern needs a minimum overall
+    length beyond what each shape itself already implies -- a short
+    JWT-shaped value is exactly as unsafe to log as a long one.
+    """
+    return bool(_GITHUB_PAT_SHAPE_RE.search(candidate) or _JWT_SHAPE_RE.fullmatch(candidate))
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -142,6 +174,55 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     },
     "required": ["severity", "file", "line", "side", "message"],
 }
+def _noema_decision_requirement(decision: str, adversarial_status: str, *, require_findings: bool) -> dict[str, Any]:
+    """Return one ``allOf`` branch requiring exact-line evidence for one decision.
+
+    Fires only when the verdict's ``decision`` equals this branch's exact
+    literal value (``if.properties.decision.const``); a non-matching
+    decision leaves the branch's ``then`` unevaluated, per JSON Schema's own
+    ``if``/``then`` semantics. When it does fire, ``then`` demands a non-null,
+    non-empty ``reviewed_lines`` array and a non-null ``adversarial_validation``
+    object whose ``status`` is this decision's exact required value -- and,
+    only when ``require_findings`` is set, a non-empty ``findings`` array.
+
+    This mirrors ``validate_substantive_verdict`` and ``call_llm`` field for
+    field rather than in the aggregate: both already reject a decision !=
+    "comment" verdict with a null/empty ``reviewed_lines``, a missing
+    ``adversarial_validation``, or the wrong ``adversarial_validation.status``
+    for the decision (``"passed"`` for approve, ``"failed"`` for
+    request_changes); ``call_llm`` additionally rejects an empty ``findings``
+    array specifically for ``request_changes`` (not ``approve``, which may
+    legitimately have none). Encoding exactly this -- no more, no less -- at
+    the schema level means a response that would fail either Python check is
+    now already schema-invalid, so it is caught by the gateway's own
+    schema-repair/correction path instead of reaching ``call_llm`` and
+    failing the whole review outright after a single request (CodeRabbit
+    finding on PR #1503).
+    """
+    then_properties: dict[str, Any] = {
+        "reviewed_lines": {"type": "array", "minItems": 1},
+        "adversarial_validation": {
+            "type": "object",
+            "properties": {"status": {"const": adversarial_status}},
+            "required": ["status"],
+        },
+    }
+    then_required = ["reviewed_lines", "adversarial_validation"]
+    if require_findings:
+        then_properties["findings"] = {"type": "array", "minItems": 1}
+        then_required.append("findings")
+    return {
+        "if": {
+            "properties": {"decision": {"const": decision}},
+            "required": ["decision"],
+        },
+        "then": {
+            "properties": then_properties,
+            "required": then_required,
+        },
+    }
+
+
 def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     """Build the verdict JSON Schema with this request's exact probe floor.
 
@@ -150,6 +231,19 @@ def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     -- so the gateway-enforced structural floor and the Python-side backstop
     can never silently diverge. The static per-field schemas above are safe
     to share by reference here since nothing in this module mutates them.
+
+    The base per-property schemas below stay permissive on their own
+    (``reviewed_lines``/``adversarial_validation`` remain nullable, and
+    ``findings`` has no ``minItems``) because that is the correct, and only,
+    shape for a ``comment`` decision -- ``validate_substantive_verdict``
+    returns immediately for ``comment`` without checking any of these
+    fields, and ``call_llm`` never requires findings for it either. The two
+    ``allOf`` branches from ``_noema_decision_requirement`` layer the
+    additional, decision-specific requirements on top for ``approve`` and
+    ``request_changes`` only, so a schema-valid ``comment`` response is
+    unaffected while an ``approve``/``request_changes`` response now carries
+    exactly the same requirements ``validate_substantive_verdict``/
+    ``call_llm`` already enforce.
     """
     return {
         "type": "object",
@@ -186,6 +280,10 @@ def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
             "reviewed_lines",
             "adversarial_validation",
             "findings",
+        ],
+        "allOf": [
+            _noema_decision_requirement("approve", "passed", require_findings=False),
+            _noema_decision_requirement("request_changes", "failed", require_findings=True),
         ],
     }
 
@@ -1313,11 +1411,24 @@ def _extract_served_model(raw: str) -> str | None:
 
 
 def _safe_model_identifier(value: Any) -> str | None:
-    """Accept only a conservative, bounded model identifier safe for public logs."""
+    """Accept only a conservative, bounded model identifier safe for public logs.
+
+    Rejects both a value outside the conservative character-class allowlist
+    and a value that, despite passing that allowlist, structurally matches a
+    GitHub PAT or a JWT (see ``_looks_like_secret_shape``). Either rejection
+    drops the field entirely rather than emitting a redacted placeholder in
+    its place -- matching this module's existing "unsafe input is omitted,
+    never partially reflected" idiom for these bounded gateway-telemetry
+    fields (the caller falls back to a fixed "unknown" placeholder for
+    ``served_model``, and simply omits the field from
+    ``_format_gateway_error_telemetry`` otherwise).
+    """
     if not isinstance(value, str):
         return None
     candidate = value.strip()
     if not SAFE_MODEL_IDENTIFIER_RE.fullmatch(candidate):
+        return None
+    if _looks_like_secret_shape(candidate):
         return None
     return candidate
 
