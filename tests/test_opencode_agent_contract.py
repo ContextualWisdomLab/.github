@@ -472,12 +472,12 @@ def test_opencode_ignores_superseded_cancelled_rollup_checks():
 def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     """Keep PR-controlled test execution off the pull_request_target path."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    assert "required-workflow-bootstrap:" in workflow
-    assert "OpenCode repository-dispatch review run materialized." in workflow
-    bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
-    bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
-    bootstrap_job = workflow[bootstrap_start:bootstrap_end]
-    assert "\n    if:" not in bootstrap_job
+    # required-workflow-bootstrap is the trusted-source-resolution sentinel needed
+    # only where the org ruleset targets a pull_request_target entrypoint
+    # (opencode-review.yml). This repository_dispatch-only workflow is not itself
+    # a required-workflow path, so it must not carry a copy-pasted, need-less
+    # orphan of that job.
+    assert "required-workflow-bootstrap:" not in workflow
     assert (
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
@@ -1117,9 +1117,9 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         "ALLOWED_DISPATCH_TARGETS": (
             "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
         ),
-        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
-        "PR_NUMBER": "1085",
-    }
+            "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+            "PR_NUMBER": "1085",
+        }
 
     authorized = subprocess.run(
         ["bash", "-c", shell],
@@ -2094,11 +2094,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "is_context_overflow_failure" in model_pool_runner
     assert "tokens_limit_reached" in model_pool_runner
     assert "skipping remaining attempts for this model" in model_pool_runner
-    assert "using %ss run timeout with %ss retry budget remaining" in model_pool_runner
-    assert (
-        "timed out after %ss; falling through within the remaining retry budget"
-        in model_pool_runner
-    )
+    assert "has no model inference timeout" in model_pool_runner
+    assert "timed out after %ss" not in model_pool_runner
     assert "emit_sanitized_opencode_failure_detail" in model_pool_runner
     assert "OpenCode provider failure metadata" in model_pool_runner
     assert "provider-controlled content suppressed" in model_pool_runner
@@ -2176,20 +2173,11 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Install central adversarial harness runtime" not in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_ELIGIBLE" in workflow
     assert "CENTRAL_REVIEW_PROCESS_FALLBACK_SCOPE_LABEL" in workflow
-    assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS: "5400"'
-        in workflow
-    )
-    assert (
-        'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS: "11700"'
-        in workflow
-    )
+    assert "OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_RUN_TIMEOUT_SECONDS" not in workflow
+    assert "OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_TOTAL_BUDGET_SECONDS" not in workflow
     assert 'OPENCODE_CENTRAL_REVIEW_PROCESS_FALLBACK_MAX_CYCLES: "1"' in workflow
     assert "Central review-process evidence fallback eligible" in model_pool_runner
-    assert (
-        "provider delay is logged before the publish fallback evaluates current-head peer evidence"
-        in model_pool_runner
-    )
+    assert "limiting OpenCode model pool by cycle count only" in model_pool_runner
     assert "model pool was intentionally skipped" not in workflow
     assert (
         "current-head deterministic central review-process evidence is clean"
@@ -2255,23 +2243,15 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Prepare bounded OpenCode review evidence[\s\S]{0,120}timeout-minutes: 12",
         workflow,
     )
-    assert re.search(r"opencode-review-target:[\s\S]*?timeout-minutes: 325", workflow)
+    assert not re.search(r"opencode-review-target:[\s\S]{0,4000}?timeout-minutes: 325", workflow)
     assert "timeout-minutes: 12" in workflow
-    assert re.search(
+    assert not re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
-    assert (
-        'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS:-3600}s"'
-        in workflow
-    )
-    assert "OpenCode model pool exceeded the outer" in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' not in workflow
+    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' not in workflow
+    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' not in workflow
+    assert "OpenCode model pool exceeded the outer" not in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,280}continue-on-error: true",
@@ -2281,7 +2261,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         r"Publish central OpenCode fast approval[\s\S]{0,900}timeout-minutes: 34",
         workflow,
     )
-    assert re.search(
+    assert not re.search(
         r"Publish OpenCode review outcome[\s\S]{0,900}timeout-minutes: 36", workflow
     )
     assert workflow.count('APPROVAL_CHECK_WAIT_ATTEMPTS: "36"') == 2
@@ -2293,35 +2273,21 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         workflow.count("current-head package/GPU build checks are still running") == 2
     )
     assert 'CHECK_LOOKUP_GH_API_TIMEOUT_SECONDS: "15"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in workflow
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' not in workflow
     assert (
         "Skipping publish-step failed-check OpenCode diagnosis for central review-process self-repair"
         in workflow
     )
     assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
     assert 'OPENCODE_MODEL_ATTEMPTS: "1"' in workflow
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
     assert 'OPENCODE_EXPORT_TIMEOUT_SECONDS: "180"' in workflow
-    assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' in workflow
     assert 'OPENCODE_POOL_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_DYNAMIC_REVIEW_CADENCE: "true"' in workflow
     assert (
         "OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt"
         in workflow
     )
-    assert 'OPENCODE_SMALL_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_SMALL_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_MEDIUM_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_RUN_TIMEOUT_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_UNKNOWN_CHANGE_TOTAL_BUDGET_SECONDS: "11700"' in workflow
-    assert 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS: "5400"' in workflow
-    assert 'OPENCODE_DYNAMIC_TOTAL_BUDGET_CAP_SECONDS: "11700"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES_CAP: "1"' in workflow
-    assert 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' in workflow
     assert 'OPENCODE_DYNAMIC_MAX_CYCLES: "1"' in workflow
     assert 'OPENCODE_BACKOFF_MAX_SECONDS: "30"' in workflow
     publish_step = workflow.split("      - name: Publish OpenCode review outcome", 1)[
@@ -2350,8 +2316,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         not in publish_step
     )
     assert "MODEL: contextual-orchestrator/orchestrator/free" in publish_step
-    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' in publish_step
-    assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" in publish_step
+    assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' not in publish_step
+    assert "${OPENCODE_RUN_TIMEOUT_SECONDS:-120}s" not in publish_step
     assert (
         'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"'
         in publish_step
@@ -2397,8 +2363,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     )
     assert "while :" in model_pool_runner
     assert "should_skip_model_candidate" in model_pool_runner
-    assert "cap_model_run_timeout" in model_pool_runner
-    assert "bounded failover window" in model_pool_runner
+    assert "cap_model_run_timeout" not in model_pool_runner
+    assert "bounded failover window" not in model_pool_runner
     assert "run_central_adversarial_harness" not in model_pool_runner
     assert "finish_pool_without_model" in model_pool_runner
     assert "central-current-head-adversarial-harness" not in model_pool_runner
@@ -2406,19 +2372,16 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "mini/nano review models are disabled" in model_pool_runner
     assert "OPENAI_API_KEY is not configured" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
-    assert (
-        "OpenCode dynamic review cadence selected %ss per attempt" in model_pool_runner
-    )
-    assert "count_changed_files_for_cadence" in model_pool_runner
+    assert "OpenCode dynamic review cadence selected %ss per attempt" not in model_pool_runner
     assert (
         "OpenCode model pool has no configured model candidates." in model_pool_runner
     )
-    assert "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500" in model_pool_runner
+    assert "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500" not in model_pool_runner
     assert (
         "completed a full model-candidate cycle without a valid control conclusion"
         in model_pool_runner
     )
-    assert "retry budget/GitHub Actions job timeout" in model_pool_runner
+    assert "retry budget/GitHub Actions job timeout" not in model_pool_runner
     assert (
         "OpenCode model pool exhausted before producing a valid control conclusion."
         in model_pool_runner
@@ -2575,52 +2538,13 @@ def test_opencode_excludes_queue_self_check_from_every_failed_check_path():
     assert retained == [{"name": "real-peer-check", "conclusion": "FAILURE"}]
 
 
-def test_opencode_job_timeout_contains_full_sequential_review_budget():
-    """Keep the outer job alive through evidence, review, and publication."""
+def test_opencode_job_has_no_model_inference_timeout():
+    """Generating review work must be cancellable, not killed by a clock."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-
-    def timeout_minutes(pattern: str) -> int:
-        """Extract a required workflow timeout and fail if it is absent."""
-        match = re.search(pattern, workflow, re.MULTILINE)
-        assert match, f"missing timeout contract: {pattern}"
-        return int(match.group(1))
-
-    job_timeout = timeout_minutes(
-        r"^  opencode-review-target:\n[\s\S]{0,4000}?^    timeout-minutes: (\d+)$"
-    )
-    evidence_timeout = timeout_minutes(
-        r"^      - name: Prepare bounded OpenCode review evidence\n"
-        r"[\s\S]{0,200}?^        timeout-minutes: (\d+)$"
-    )
-    model_pool_timeout = timeout_minutes(
-        r"^      - name: Run OpenCode PR Review model pool\n"
-        r"[\s\S]{0,300}?^        timeout-minutes: (\d+)$"
-    )
-    fast_publish_timeout = timeout_minutes(
-        r"^      - name: Publish central OpenCode fast approval\n"
-        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
-    )
-    normal_publish_timeout = timeout_minutes(
-        r"^      - name: Publish OpenCode review outcome\n"
-        r"[\s\S]{0,1200}?^        timeout-minutes: (\d+)$"
-    )
-    noema_handoff_timeout = timeout_minutes(
-        r"^      - name: Dispatch Noema after current-head OpenCode approval\n"
-        r"[\s\S]{0,500}?^        timeout-minutes: (\d+)$"
-    )
-    setup_and_cleanup_margin = 30
-    required_timeout = (
-        evidence_timeout
-        + model_pool_timeout
-        + max(fast_publish_timeout, normal_publish_timeout)
-        + noema_handoff_timeout
-        + setup_and_cleanup_margin
-    )
-
-    assert job_timeout >= required_timeout, (
-        "opencode-review-target can terminate before publishing the bounded "
-        f"current-head result: job={job_timeout}m required={required_timeout}m"
-    )
+    target = workflow.split("  opencode-review-target:\n", 1)[1]
+    assert "timeout-minutes: 325" not in target.split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 205" not in target
+    assert 'timeout --kill-after=30s "${OPENCODE_POOL_STEP_TIMEOUT_SECONDS' not in target
 
 
 def test_opencode_approval_gate_shell_is_parseable():
@@ -2755,11 +2679,17 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "      - name: Dispatch Noema after current-head OpenCode approval", 1
     )[0]
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
         "github.token }}"
     ) in status_step
-    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert (
+        "OPENCODE_STATUS_TOKEN_SOURCE: ${{ "
+        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "
+        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN'"
+    ) in status_step
     assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
     assert "OPENCODE_CHANGED_FILES_FILE" in status_step
     assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
@@ -2941,7 +2871,12 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
+    assert '[ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")' in metadata_step
+    assert '[ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")' in metadata_step
+    assert "proceeding with the live head" not in metadata_step
+    assert "head_sha=%s\\n' \"$live_head_sha\"" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''
     ) in metadata_step
@@ -3405,10 +3340,9 @@ def test_peer_check_wait_budget_fits_publication_step_timeouts():
     assert slow_image_attempts == [60, 60]
     assert sleeps == [10, 10]
     assert fast_timeout is not None
-    assert publish_timeout is not None
+    assert publish_timeout is None
     wait_seconds = (max(slow_build_attempts[0], slow_image_attempts[0]) - 1) * sleeps[0]
     assert int(fast_timeout.group(1)) * 60 - wait_seconds >= 120
-    assert int(publish_timeout.group(1)) * 60 - wait_seconds >= 240
 
 
 def test_slow_peer_wait_matches_only_image_validation_checks():

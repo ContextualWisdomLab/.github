@@ -8,7 +8,7 @@ import pytest
 from scripts.ci import pr_review_fix_scheduler as scheduler
 
 
-_CALLER = Path(".github/workflows/github-hourly-review-repair.yml")
+_CALLER = Path(".github/workflows/hourly-review-repair.yml")
 _REUSABLE_SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
 
 
@@ -60,6 +60,11 @@ def test_scheduler_dispatches_conflict_mode_for_unreviewed_head(
         captured.update(kwargs)
 
     monkeypatch.setattr(scheduler, "dispatch_autofix", capture_dispatch)
+    monkeypatch.setattr(
+        scheduler,
+        "prepare_autofix_slot",
+        lambda *_args, **_kwargs: False,
+    )
     monkeypatch.setattr(
         scheduler,
         "create_fix_marker",
@@ -116,11 +121,15 @@ def test_central_repository_has_hourly_self_caller() -> None:
 
     assert 'cron: "21 * * * *"' in workflow
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in workflow
-    assert "target_repository: ContextualWisdomLab/.github" in workflow
-    assert "base_branch: main" in workflow
+    # The consolidated file resolves per-repository parameters through a
+    # github.event.schedule lookup table rather than flat `key: value`
+    # lines; the github/.github entry's JSON literal carries the same
+    # values the former dedicated caller passed literally.
+    assert '"target_repository":"ContextualWisdomLab/.github"' in workflow
+    assert '"base_branch":"main"' in workflow
+    assert '"retry_hours":"1"' in workflow
     assert "resolve_unreviewed_conflicts: true" in workflow
     assert 'max_dispatches: "1"' in workflow
-    assert 'retry_hours: "1"' in workflow
     assert "\n    permissions:\n      contents: read\n      id-token: write\n" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
 
