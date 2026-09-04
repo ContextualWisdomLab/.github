@@ -4566,3 +4566,21 @@ log blob already expired) — consistent with the already-tracked, deliberately-
 `gh api repos/.../branches/main/protection/required_status_checks` that `strix` is not in this repo's
 required-check list, so it isn't actually blocking this PR's mergeability — out of scope for a proportionate
 triage pass.
+
+**Checked sibling PRs from the same dependency-bump batch, found the same pattern at scale, retried all.**
+bandscope had 8 open Dependabot PRs (#1132–#1139) from the same 2026-09-02 batch; 6 showed `noema-review:
+FAILURE` (only #1135/#1136 had already succeeded). Spot-checked 3 of the 6 logs directly rather than
+assuming uniformity:
+- `#1139`, `#1132`: same `NoemaRepairDeadlineExceeded` signature as `#1141` above, each confirmed to have
+  run and completed *before* `a28fc2f` landed at `14:25:37Z` (`#1139`: `13:51:38Z`–`14:46:34Z`; `#1132`
+  likewise pre-fix) — the same stale-code explanation.
+- `#1137` showed a *different* signature: `Noema model-output repair remained invalid; ... Noema LLM
+  response was not valid JSON` on both the initial attempt and the repair attempt (not a
+  `NoemaRepairDeadlineExceeded`) — a genuinely distinct failure mode (malformed model output, not a caller
+  timeout), not confirmed to be fixed by `a28fc2f`. Its run also predates the fix (`04:08:15Z`–`13:55:27Z`),
+  so retrying costs nothing and may or may not resolve it — if the same malformed-JSON signature recurs on
+  the retry, that is a fresh, distinct finding worth its own investigation, not evidence this entry's
+  diagnosis was wrong.
+
+Retried all 6 (`#1132`, `#1133`, `#1134`, `#1137`, `#1138`, `#1139`) via the same `rerun-failed-jobs`
+endpoint; all confirmed `run_attempt: 2`, `status: queued`. Left the 2 already-`SUCCESS` PRs untouched.
