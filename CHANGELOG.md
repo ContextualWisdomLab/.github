@@ -1,6 +1,6 @@
 ### Contextual-orchestrator pin refresh
 
-- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying the shared no-default-timeout transport and current `orchestrator/free` gateway fixes into Strix, OpenCode, and Noema. All callers still consume an exact SHA; no branch or tag is introduced.
+- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
 
 ### Scheduler target admission
 
