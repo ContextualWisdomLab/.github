@@ -85,28 +85,67 @@ def _on_block(workflow: str) -> str:
     return match.group(1)
 
 
+def _strip_if_condition(block: str) -> str:
+    """Drop the `if:` line and, for a folded/literal scalar, its continuation lines.
+
+    A workflow's `if:` condition can span multiple lines (``if: >-`` or ``if: |``
+    followed by more-indented continuation lines) rather than a single line.
+    Comparing gate copies must ignore the whole condition, not just its first
+    line, since each copy is allowed its own admission condition independent
+    of how many source lines that condition takes.
+    """
+    kept: list[str] = []
+    skip_indent: int | None = None
+    for line in block.splitlines():
+        if skip_indent is not None:
+            indent = len(line) - len(line.lstrip(" "))
+            if not line.strip() or indent > skip_indent:
+                continue
+            skip_indent = None
+        if line.strip().startswith("if:"):
+            skip_indent = len(line) - len(line.lstrip(" "))
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
     """The `changed-scope` block must not drift between its five copies."""
     normalized_blocks = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized_lines = []
-        skip_indent = None
-        for line in block.splitlines():
-            indent = len(line) - len(line.lstrip(" "))
-            if skip_indent is not None and line.strip() and indent > skip_indent:
-                continue
-            skip_indent = None
-            if line.strip().startswith("if:"):
-                skip_indent = indent
-                continue
-            normalized_lines.append(line)
-        normalized_blocks.add("\n".join(normalized_lines))
+        normalized_blocks.add(_strip_if_condition(block))
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
         "from the 'if:' condition (which may itself span multiple lines, e.g. "
         "a YAML block scalar)"
+    )
+
+
+def test_strip_if_condition_keeps_skipping_across_a_blank_continuation_line():
+    """A blank line inside a folded/literal `if:` scalar must not end the skip.
+
+    YAML's `if: >-`/`if: |` block scalars can carry a blank line as part of
+    the same condition; a blank line is not itself an "if:"-less, less-
+    indented line that should end the skip, and one falsely resetting
+    `skip_indent` would leave that scalar's later indented lines in the
+    normalized output, making an otherwise byte-identical body compare as
+    drifted.
+    """
+    block = (
+        "    steps:\n"
+        "      - name: example\n"
+        "        if: >-\n"
+        "          first line ||\n"
+        "\n"
+        "          second line after a blank\n"
+        "        runs-on: ubuntu-24.04\n"
+    )
+    assert _strip_if_condition(block) == (
+        "    steps:\n"
+        "      - name: example\n"
+        "        runs-on: ubuntu-24.04"
     )
 
 
