@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
-from collections.abc import Iterable, Mapping
+import stat
+import tempfile
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -63,6 +68,10 @@ class AdmissionRequest:
         component: str,
         sequence: int,
     ) -> AdmissionRequest:
+        if isinstance(pull_request, bool) or not isinstance(pull_request, int):
+            raise TypeError("pull request must be an integer")
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise TypeError("sequence must be an integer")
         normalized_head = head_sha.lower()
         if not REPOSITORY_RE.fullmatch(repository):
             raise ValueError("repository is outside ContextualWisdomLab")
@@ -128,8 +137,24 @@ class ControllerState:
             payload.get("latest_sequences", {}), dict
         ):
             raise TypeError("durable admission state has invalid collections")
+        if set(payload) - {"records", "latest_sequences"}:
+            raise ValueError("durable admission state has unknown fields")
         records = {}
         for identity, raw in payload.get("records", {}).items():
+            if not isinstance(identity, str) or not isinstance(raw, dict):
+                raise TypeError("durable admission record has invalid shape")
+            if set(raw) != {"request", "status"} or not isinstance(
+                raw["request"], dict
+            ):
+                raise ValueError("invalid durable admission record")
+            if set(raw["request"]) != {
+                "repository",
+                "pull_request",
+                "head_sha",
+                "component",
+                "sequence",
+            }:
+                raise ValueError("invalid durable admission request")
             request = AdmissionRequest.create(**raw["request"])
             if identity != request.identity or raw["status"] not in {
                 "queued",
@@ -139,14 +164,120 @@ class ControllerState:
             }:
                 raise ValueError("invalid durable admission record")
             records[identity] = RequestRecord(request, raw["status"])
-        latest = {
-            str(key): int(sequence)
-            for key, sequence in payload.get("latest_sequences", {}).items()
-        }
-        for record in records.values():
+        latest = {}
+        for key, sequence in payload.get("latest_sequences", {}).items():
+            if (
+                not isinstance(key, str)
+                or isinstance(sequence, bool)
+                or not isinstance(sequence, int)
+                or sequence < 1
+            ):
+                raise ValueError("invalid durable admission sequence")
+            latest[key] = sequence
+        active_records = [
+            record for record in records.values() if record.status != "stale"
+        ]
+        for record in active_records:
             if latest.get(record.request.stream, 0) < record.request.sequence:
                 raise ValueError("durable admission sequence regressed")
+        expected_streams = {record.request.stream for record in active_records}
+        if set(latest) != expected_streams:
+            raise ValueError("durable admission state has unknown streams")
+        for stream in expected_streams:
+            if latest[stream] != max(
+                record.request.sequence
+                for record in active_records
+                if record.request.stream == stream
+            ):
+                raise ValueError("durable admission sequence is inconsistent")
         return cls(records, latest)
+
+
+def _open_regular_nofollow(path: Path, flags: int, mode: int = 0o600) -> int:
+    """Open one trusted local state file without following a symlink."""
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags | nofollow, mode)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise ValueError("admission state path is not a regular file")
+    return descriptor
+
+
+def _read_state(path: Path) -> ControllerState:
+    descriptor = _open_regular_nofollow(path, os.O_RDONLY)
+    try:
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            return ControllerState.from_json(stream.read())
+    except UnicodeDecodeError as exc:
+        raise ValueError("durable admission state is not UTF-8") from exc
+
+
+def load_state_file(path: Path) -> ControllerState:
+    """Load state, recovering only from the last atomically replaced snapshot."""
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError("admission state path must not be a symlink")
+    try:
+        return _read_state(path)
+    except FileNotFoundError:
+        return ControllerState.empty()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        backup = path.with_name(f"{path.name}.bak")
+        if backup.is_symlink():
+            raise ValueError("admission state backup must not be a symlink")
+        try:
+            return _read_state(backup)
+        except FileNotFoundError:
+            raise ValueError("durable admission state is corrupt and has no backup") from None
+
+
+def _atomic_write(path: Path, value: str) -> None:
+    """Replace one state snapshot atomically in its existing directory."""
+    if path.is_symlink():
+        raise ValueError("admission state path must not be a symlink")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def update_state_file(
+    path: Path,
+    update: Callable[[ControllerState], ControllerState],
+) -> ControllerState:
+    """Serialize concurrent read-modify-write transactions with recovery."""
+    path = Path(path)
+    lock_path = path.with_name(f"{path.name}.lock")
+    if lock_path.is_symlink():
+        raise ValueError("admission state lock must not be a symlink")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = _open_regular_nofollow(lock_path, os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        state = load_state_file(path)
+        updated = update(state)
+        if not isinstance(updated, ControllerState):
+            raise TypeError("state update must return ControllerState")
+        _atomic_write(path, updated.to_json())
+        _atomic_write(path.with_name(f"{path.name}.bak"), updated.to_json())
+        return updated
+    finally:
+        os.close(descriptor)
 
 
 @dataclass(frozen=True)
@@ -188,7 +319,6 @@ def plan_dispatches(
         ).lower()
         if request.head_sha != live_head:
             records[request.identity] = RequestRecord(request, "stale")
-            latest[request.stream] = max(prior_sequence, request.sequence)
             rejections[request.identity] = "stale_head"
             continue
         for identity, record in tuple(records.items()):
@@ -211,8 +341,13 @@ def plan_dispatches(
         ),
     )
     dispatches = []
+    available_budget = max(
+        0,
+        dispatch_budget
+        - sum(record.status == "dispatched" for record in records.values()),
+    )
     for record in queued:
-        if len(dispatches) >= dispatch_budget:
+        if len(dispatches) >= available_budget:
             break
         request = record.request
         live_head = str(
@@ -230,6 +365,8 @@ def plan_dispatches(
 
 def require_publishable(lease: DispatchLease, *, live_head: str) -> None:
     """Fail closed immediately before a worker publishes its result."""
+    if lease.boundary != WORKER_BOUNDARIES.get(lease.request.component):
+        raise ValueError("dispatch lease crossed its worker boundary")
     if lease.request.head_sha != live_head.lower():
         raise ValueError("live head changed before publication")
 
