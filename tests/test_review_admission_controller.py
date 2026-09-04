@@ -158,6 +158,8 @@ def test_state_file_is_atomic_recovers_and_serializes_concurrent_writers(tmp_pat
     assert state_path.stat().st_mode & 0o777 == 0o600
     state_path.write_text("{truncated", encoding="utf-8")
     assert load_state_file(state_path) == persisted
+    state_path.unlink()
+    assert load_state_file(state_path) == persisted
 
 
 def test_state_rejects_unsafe_paths_shapes_and_secret_fields(tmp_path) -> None:

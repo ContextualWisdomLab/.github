@@ -219,15 +219,15 @@ def load_state_file(path: Path) -> ControllerState:
         raise ValueError("admission state path must not be a symlink")
     try:
         return _read_state(path)
-    except FileNotFoundError:
-        return ControllerState.empty()
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError) as error:
         backup = path.with_name(f"{path.name}.bak")
         if backup.is_symlink():
             raise ValueError("admission state backup must not be a symlink")
         try:
             return _read_state(backup)
         except FileNotFoundError:
+            if isinstance(error, FileNotFoundError):
+                return ControllerState.empty()
             raise ValueError("durable admission state is corrupt and has no backup") from None
 
 
