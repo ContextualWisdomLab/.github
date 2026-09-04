@@ -8,9 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GATE_WORKFLOW = ROOT / ".github/workflows/exact-head-coverage-quality-gate.yml"
 JS_CALLER = ROOT / ".github/workflows/javascript-coverage-quality-ci.yml"
-ORG_LOOP_CALLER = (
-    ROOT / ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
-)
+AGENT_QUALITY_WORKFLOW = ROOT / ".github/workflows/agent-review-runtime-quality-ci.yml"
 
 
 SELF_TEST_PATH = "tests/test_exact_head_coverage_quality_gate_contract.py"
@@ -98,29 +96,27 @@ def test_gate_never_interpolates_caller_inputs_directly_into_shell() -> None:
         )
 
 
-def test_javascript_and_organization_loop_callers_wire_distinct_subsystem_inputs() -> None:
-    """Each caller delegates to the shared gate with its own subsystem scope."""
+def test_javascript_caller_keeps_using_the_reusable_gate() -> None:
+    """Retain the reusable implementation for its remaining JavaScript caller."""
     js_caller = _text(JS_CALLER)
-    org_caller = _text(ORG_LOOP_CALLER)
-
-    for caller in (js_caller, org_caller):
-        assert (
-            "uses: ./.github/workflows/exact-head-coverage-quality-gate.yml" in caller
-        )
+    assert "uses: ./.github/workflows/exact-head-coverage-quality-gate.yml" in js_caller
 
     assert "coverage_include: scripts/ci/javascript_coverage_gate.py" in js_caller
     assert "pytest_target: tests" in js_caller
     assert "timeout_minutes: 15" in js_caller
 
-    assert (
-        "coverage_include: scripts/ci/organization_commercial_readiness_loop.py"
-        in org_caller
-    )
-    assert (
-        'pytest_target: "tests/test_organization_commercial_readiness_loop*.py"'
-        in org_caller
-    )
-    assert "timeout_minutes: 10" in org_caller
+
+
+def test_organization_loop_contract_moves_to_agent_quality_job() -> None:
+    """Retire only the thin caller while preserving its exact coverage scope."""
+    workflow = _text(AGENT_QUALITY_WORKFLOW)
+
+    assert not (
+        ROOT / ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
+    ).exists()
+    assert "tests/test_organization_commercial_readiness_loop*.py" in workflow
+    assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in workflow
+    assert "--fail-under=100" in workflow
 
 
 def test_js_caller_trigger_covers_this_contract_test_file() -> None:
