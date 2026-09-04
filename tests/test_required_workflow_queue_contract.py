@@ -320,9 +320,6 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
     groups = {
         "agent-mention-router-quality-ci.yml": "agent-mention-router-quality",
         "cloudflare-dns.yml": "cloudflare-dns",
-        "hourly-nvidia-nim-review-repair.yml": (
-            "contextual-orchestrator-review-repair-quality"
-        ),
         "javascript-coverage-quality-ci.yml": "javascript-coverage-quality",
         "organization-commercial-readiness-loop-quality-ci.yml": (
             "organization-commercial-readiness-loop-quality"

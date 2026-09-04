@@ -14,6 +14,7 @@ WORKFLOW_PATH = (
     / "agent-review-runtime-quality-ci.yml"
 )
 RETIRED_WORKFLOWS = (
+    "hourly-nvidia-nim-review-repair.yml",
     "noema-token-lifetime-quality-ci.yml",
     "opencode-rust-coverage-toolchain-quality-ci.yml",
     "strix-changed-path-quality-ci.yml",
@@ -88,6 +89,13 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_strix_quality_timeout_fixture_budget.py",
         "scripts/ci/test_strix_quick_gate.sh",
         "tests/test_org_sweep_queue_hygiene_owner.py",
+        "scripts/ci/pr_review_conflict_scope.py",
+        "scripts/ci/pr_review_autofix_context.py",
+        "scripts/ci/zdr_policy.py",
+        "scripts/ci/contextual_orchestrator_review_policy.py",
+        "scripts/ci/contextual_orchestrator_review_launcher.py",
+        "tests/test_pr_review_fix_hourly_contract.py",
+        "tests/test_pr_review_autofix_writer_security_contract.py",
     ):
         assert required_path in workflow
 
@@ -102,3 +110,17 @@ def test_exact_head_is_verified_before_selected_suites_run() -> None:
 
     assert 'test "$(git rev-parse HEAD)" = "$HEAD_SHA"' in selector
     assert 'git diff --name-only "$BASE_SHA...$HEAD_SHA"' in selector
+
+
+def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
+    """Run review-repair contracts only when their owned paths change."""
+
+    workflow = _workflow_text()
+
+    assert "review_repair_suite=false" in workflow
+    assert "echo \"review_repair=$review_repair_suite\"" in workflow
+    assert "scripts/ci/pr_review_fix_scheduler.py" in workflow
+    assert (
+        "if: steps.affected_suites.outputs.review_repair == 'true'" in workflow
+    )
+    assert workflow.count("runs-on:") == 1
