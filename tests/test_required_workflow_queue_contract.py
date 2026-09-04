@@ -319,6 +319,39 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
 
+def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None:
+    """Quality runs from different repositories must never share a PR queue."""
+    groups = {
+        "agent-mention-router-quality-ci.yml": "agent-mention-router-quality",
+        "cloudflare-dns.yml": "cloudflare-dns",
+        "hourly-nvidia-nim-review-repair.yml": (
+            "contextual-orchestrator-review-repair-quality"
+        ),
+        "javascript-coverage-quality-ci.yml": "javascript-coverage-quality",
+        "organization-commercial-readiness-loop-quality-ci.yml": (
+            "organization-commercial-readiness-loop-quality"
+        ),
+        "trusted-uv-materializer-quality-ci.yml": (
+            "trusted-uv-materializer-quality"
+        ),
+    }
+
+    for filename, group_name in groups.items():
+        workflow = workflow_text(filename)
+        concurrency = workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+        assert (
+            f"group: {group_name}-${{{{ github.repository }}}}-"
+            "${{ github.event.pull_request.number || github.ref }}"
+        ) in concurrency
+        if filename == "cloudflare-dns.yml":
+            assert (
+                "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
+                in concurrency
+            )
+        else:
+            assert "cancel-in-progress: true" in concurrency
+
+
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
     """Keep Semgrep finding output distinct from scanner-engine failures."""
     workflow = workflow_text("sast-semgrep.yml")

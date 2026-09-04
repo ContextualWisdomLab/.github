@@ -62,6 +62,7 @@ def test_quality_gate_close_event_retires_prior_pr_run_without_runner() -> None:
     assert "    types: [opened, synchronize, reopened, closed]\n" in pull_request_trigger
     assert (
         "  group: contextual-orchestrator-review-repair-quality-"
+        "${{ github.repository }}-"
         "${{ github.event.pull_request.number || github.ref }}\n"
     ) in quality
     assert "  cancel-in-progress: true\n" in quality
