@@ -74,6 +74,17 @@ on:
   repository_dispatch:
     types: [strix-scan]
 
+concurrency:
+  # Workflow-level admission is required: job-level groups are never evaluated
+  # while the whole run is queued behind the organization job ceiling.
+  group: >-
+    strix-security-scan-${{
+    github.event.pull_request.base.repo.full_name ||
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.pull_request.number ||
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
 permissions:
@@ -321,13 +332,6 @@ jobs:
   strix:
     needs: [changed-scope, admit-current-head]
     if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
-    concurrency:
-      # Admission runs before this queue. A delayed stale event is skipped and
-      # therefore cannot cancel newer evidence for the live pull request head.
-      group: >-
-        strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{
-        needs.admit-current-head.outputs.pr_number }}
-      cancel-in-progress: true
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
     # legitimately require well over two hours to scan -- this org's own
     # standing operating directive accepts that central OpenCode/Strix/Noema
