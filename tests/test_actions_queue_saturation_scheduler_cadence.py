@@ -31,7 +31,7 @@ def test_repository_scheduler_keeps_event_driven_wakes() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request_target:" in workflow
     assert "pull_request_review:" in workflow
-    assert "workflow_run:" in workflow
+    assert "workflow_run:" not in workflow
     assert "repository_dispatch:" in workflow
 
 
@@ -53,17 +53,8 @@ def test_scan_pr_queue_keeps_offset_daily_missed_event_recovery() -> None:
     assert schedule_block.count('- cron:') == 2
 
 
-def test_required_check_completions_wake_the_scheduler_natively() -> None:
-    """The last security gate should not wait for the daily recovery sweep."""
+def test_required_check_completions_are_owned_by_auto_merge() -> None:
+    """Required-check completion must not fan out another scheduler run."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    workflow_run = workflow.split("  workflow_run:\n", 1)[1].split(
-        "  workflow_call:\n", 1
-    )[0]
-
-    for name in (
-        "Required OpenCode Review",
-        "Strix Security Scan",
-        "Security Scan",
-        "SAST Semgrep",
-    ):
-        assert f'"{name}"' in workflow_run
+    assert "workflow_run:" not in workflow
+    assert "auto-merge handles required-check completion" in workflow

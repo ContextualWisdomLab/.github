@@ -46,8 +46,11 @@ def test_stale_event_cannot_safely_use_native_cancel_in_progress() -> None:
         "\n  cancel-superseded-opencode-review-runs:", 1
     )[0]
 
-    assert "cancel-in-progress: false" in target
-    assert "before any job step can compare" in target
+    assert "cancel-in-progress: true" in target
+    assert "first privileged action re-fetches the live PR metadata" in target
+    assert (
+        "separate cleanup job rejects an out-of-order stale synchronize event" in target
+    )
     assert "live_head_matches()" in required
 
 
