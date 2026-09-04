@@ -4403,8 +4403,45 @@ landed yet — so no CodeRabbit reply was sent; replying before the peer's fix i
 describe stale state. Left `naruon#1532` to the peer session entirely rather than racing a second
 implementation onto the same file.
 
-**Lesson reinforced.** `[[feedback_verify_transitive_peer_citations]]`-style discipline paid off in a new
-direction: checking the *actual remote state* (not just this session's own plan) before pushing caught an
-in-progress duplicate before it became a real push conflict. `git fetch`/`git log origin/branch..HEAD` can
-itself go stale seconds after a peer's push — `gh api repos/<owner>/<repo>/git/refs/heads/<branch>` is the
-transport-independent way to confirm a branch's real current tip.
+**Lesson reinforced.** Verifying claims against a different vantage point than the one that produced them
+paid off in a new direction: checking the *actual remote state* (not just this session's own plan) before
+pushing caught an in-progress duplicate before it became a real push conflict. `git fetch`/`git log
+origin/branch..HEAD` can itself go stale seconds after a peer's push — `gh api
+repos/<owner>/<repo>/git/refs/heads/<branch>` is the transport-independent way to confirm a branch's real
+current tip.
+
+## `naruon#1532` follow-up — the peer's UI-removal fix landed; a real bug found in its own new test, fixed — 2026-09-04
+
+**Trigger.** Two more ci-monitor-events on the same PR, both auto-generated CodeRabbit confirmation replies
+(not new findings) on the peer's follow-up commits (`768b29a`..`a09ad45f`): restoring ADR-0005 to
+`Proposed`/`BLOCKED-UPSTREAM`, removing the dormant ROPC/password-registration authority, and finally
+removing `SettingsLayout.tsx`'s entire password login/signup UI in favor of a static "비밀번호 로그인과
+가입은 현재 사용할 수 없습니다." notice — exactly the scope this session had itself deferred as a larger,
+separate decision. CodeRabbit's own comments explicitly confirmed each step and auto-resolved the thread
+("This finding is addressed... ✅ Review thread resolved."); none asked for further code changes.
+
+**Verified independently rather than trusting the bot's resolution, and found a real bug.** CodeRabbit's own
+verification script is grep/`rg`/`sed`-based — it inspects file contents, never actually runs the test
+suite. Cloning the peer's final head (`a09ad45f`) and running `vitest` for real surfaced a genuine failure
+CodeRabbit's confirmation missed: `ropc-policy.test.ts`'s `"does not retain dormant ROPC or
+password-registration authority"` test (added by the peer's own `ff18d276f`) called `sourceFile("../../oidc/
+shared.ts")`. Relative paths there resolve against the test file's own location
+(`frontend/src/app/auth/password/`) — two levels up lands at `frontend/src/app/oidc/shared.ts`, which does
+not exist (the real file is one level up, at `frontend/src/app/auth/oidc/shared.ts`). Every run of this test
+threw `ENOENT`, so its actual `expect()` assertions never executed — a silently broken regression check for
+the exact ROPC-authority-must-stay-removed contract the whole thread was about.
+
+**Fixed and verified.** One-character-class fix: `../../oidc/shared.ts` → `../oidc/shared.ts`. Confirmed the
+other two `sourceFile()`/`access()` relative paths in the same file resolve correctly (they did — only this
+one call was wrong). Full verification (`typecheck`, `lint`, `build --webpack`, 457/457 tests) passed;
+re-checked the remote tip via `gh api` immediately before pushing (unchanged since the peer's last push, no
+conflict). Pushed `330c662d` directly to `feat/naruon-owned-password-login` — a minimal, isolated,
+independently-verified one-line test fix, not a competing implementation, so no coordination conflict with
+the peer's now-apparently-concluded work on this PR (their last commit was a small unrelated POP3-field
+rename cleanup, `a09ad45f`).
+
+**Lesson.** An LLM reviewer's "verification confirmed" is only as strong as what it actually executes. A
+grep-based check can confirm a string is present/absent while missing that the test containing that
+assertion never runs at all. Actually running the suite, not just reading CodeRabbit's confirmation text,
+is what caught this — reinforcing the standing discipline of treating even a bot's own "resolved" state as a
+claim to verify, not a fact to inherit.
