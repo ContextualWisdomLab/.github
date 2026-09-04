@@ -4491,3 +4491,44 @@ submission, popup success/closure/blocked-popup fallback) per repo guidance. Gen
 pass — no E2E tests were added, only the unit-level regression test above. Left unresolved and unreplied,
 per the standing instruction to skip replies/resolves for findings not actually acted on; a real fix needs
 browser-level E2E infrastructure this pass didn't scope in.
+
+## `newsdom-api#784` — fresh evidence for the still-unresolved item 4 gateway stall, retried (not "fixed") — 2026-09-04
+
+**Trigger.** Autofix flagged `newsdom-api#784`'s required `noema-review` check as failing.
+
+**Confirmed a recurrence of the already-tracked item 4/39 gap, not a new bug.** Pulled the job log directly
+(`gh api repos/.../actions/jobs/<id>/logs`, since `gh run view --log-failed` 404s on this run — see the CLI
+gap below). The actual failure: `Noema gateway transport failed: HTTPError: HTTP Error 502: Bad Gateway;
+caller attempts=1, duration=902.6s, phase=connecting, served_model=unknown`, with a companion warning
+`gateway owns repair/failover` confirming the calling script deliberately makes exactly one attempt and
+trusts `contextual-orchestrator`'s gateway to internally fail over across providers before returning — which
+it did not do here, timing out at ~902s in the `connecting` phase before surfacing a bare 502 with no
+indication of which upstream provider/model it was even trying to reach. This is the same shape already
+recorded under item 4 (`project_item4_gateway_stall_ephemeral_process_root_cause` — the gateway's circuit
+breaker and race-of-members logic both need same-process history that an ephemeral, single-request review
+sidecar invocation structurally cannot provide) and item 39 (the org's own complaint about opaque ~900s
+timeouts with no actionable detail for telemetry). Not attempting the underlying architectural fix here —
+prior investigation already concluded it needs either state persistence across sidecar invocations or an
+explicit accepted tradeoff, not a quick patch, and this session's job right now is triage, not that redesign.
+
+**Retried the failed job — the correct, proportionate action for this occurrence.** No automatic
+scheduler-driven retry had happened in the ~9 hours since the job failed (plausibly itself stuck behind the
+same org-wide queue congestion tracked elsewhere in this doc). This is a required-workflow infrastructure
+failure, not a defect in PR #784's own diff, so re-running it is the standard, low-risk, correct remedy —
+distinct from the merge scheduler's own "DIRTY/CONFLICTING PRs get repair guidance, never a synthesized
+fix" boundary, since here nothing about the PR's *content* needs repairing. Triggered via
+`gh api -X POST repos/ContextualWisdomLab/newsdom-api/actions/runs/33759750624/rerun-failed-jobs`; confirmed
+`run_attempt` incremented to 2 and the run re-entered `queued` (naturally still gated by the same org-wide
+capacity ceiling as everything else right now).
+
+**Operational gap found and worked around: `gh run rerun`/`gh run view --log-failed` 404 on required-workflow
+runs.** Both CLI wrappers failed with `HTTP 404: Not Found (.../actions/workflows/318478027)` on this run,
+even though the run and its logs are fully readable via the raw `actions/runs/<id>` and
+`actions/runs/<id>/jobs` REST endpoints. Root cause is plausibly the same one already documented for
+required-workflow rulesets: the run's workflow definition lives in the central `.github` repo, injected into
+`newsdom-api`'s context by the org ruleset, with no corresponding workflow *file* in `newsdom-api`'s own
+`actions/workflows` listing for `gh`'s CLI to resolve metadata against — matching the confirmed
+"`bandscope` has no local `codeql-pr.yml`/`strix.yml`/`security-scan.yml`, yet ruleset-injected runs of all
+three exist" pattern already in this repo's own CLAUDE.md. Workaround: use the raw `gh api` REST endpoints
+(`.../actions/jobs/<id>/logs` for logs, `.../actions/runs/<id>/rerun-failed-jobs` POST for reruns) directly
+instead of the `gh run` subcommands whenever the target run belongs to a ruleset-injected required workflow.
