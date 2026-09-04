@@ -56,6 +56,13 @@ as this repair decided, but `codeql-pr.yml` is now deliberately excluded, with
 as the permanent regression guard against re-adding it. See ADR-0027's own "Update" section and
 `docs/org-required-workflow-rollout.md`'s "Audit tool coverage" section for the full current-state record.
 
+## Update — 2026-09-04: standalone OSV and Scorecard PR runs retired
+
+Ruleset `18156473` now requires seven workflows. OSV and Scorecard remain in the required
+`security-scan.yml`; the duplicate `osv-scanner-pr.yml` and `scorecard-pr.yml` triggers were removed.
+The `.github` default branch no longer requires the duplicate `osv-scan / osv-scan` context, while all
+remaining required checks retain their GitHub Actions app binding.
+
 ## References
 
 GitHub. (n.d.-a). *REST API endpoints for rules*. GitHub Docs. https://docs.github.com/rest/repos/rules
