@@ -85,16 +85,39 @@ def _on_block(workflow: str) -> str:
     return match.group(1)
 
 
+def _without_if_condition(block: str) -> str:
+    """Strip the job's `if:` line, including any folded/block-scalar continuation lines.
+
+    A workflow-specific admission condition may span multiple lines (e.g. an
+    `if: >-` folded scalar), whose continuation lines are indented deeper than
+    the `if:` key itself and carry no `if:` prefix of their own -- a plain
+    per-line ``startswith("if:")`` filter leaves those continuation lines in
+    place and reports spurious drift.
+    """
+    lines = block.splitlines()
+    result = []
+    skip_indent = None
+    for line in lines:
+        stripped = line.strip()
+        if skip_indent is not None:
+            current_indent = len(line) - len(line.lstrip())
+            if stripped and current_indent > skip_indent:
+                continue
+            skip_indent = None
+        if stripped.startswith("if:"):
+            skip_indent = len(line) - len(line.lstrip())
+            continue
+        result.append(line)
+    return "\n".join(result)
+
+
 def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
     """The `changed-scope` block must not drift between its five copies."""
     normalized_blocks = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
-        )
-        normalized_blocks.add(normalized)
+        normalized_blocks.add(_without_if_condition(block))
     assert len(normalized_blocks) == 1, (
         "changed-scope gate copies drifted; keep them byte-identical apart "
         "from the single 'if:' line"
