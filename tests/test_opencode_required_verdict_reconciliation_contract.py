@@ -29,7 +29,7 @@ def _admission_jq_filter() -> str:
     text = OPENCODE.read_text(encoding="utf-8")
     anchor = text.index('verdict="$(printf')
     start = text.index("            (add // [])", anchor)
-    end_marker = '              then "APPROVED" else empty end'
+    end_marker = "\n              end\n"
     end = text.index(end_marker, start) + len(end_marker)
     return textwrap.dedent(text[start:end])
 

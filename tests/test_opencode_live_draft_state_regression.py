@@ -35,13 +35,8 @@ def _write_live_state_gh(
     the convenience ``live_draft``/``live_head``/``live_state`` parameters
     cannot express.
 
-    Also stubs ``sleep`` to return instantly: ``fail_closed_script()``'s
-    transport-failure retry path really does ``sleep "$poll_interval_seconds"``
-    (60s) between attempts, and this fixture's later-call sentinel exit code
-    drives that path to its 3-failure fail-closed threshold in
-    ``test_stale_draft_verdict_event_does_not_exempt_live_ready_pr`` -- without
-    this stub that test performs two genuine 60s sleeps (~120s real
-    wall-clock time per run) instead of running fast.
+    The later-call sentinel proves the verdict step performs at most one
+    Reviews API request after live-state admission.
     """
     payload = json.dumps(
         live_payload_override
@@ -145,23 +140,11 @@ def test_stale_draft_request_event_does_not_exempt_live_ready_pr(
 def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
     tmp_path: Path,
 ) -> None:
-    """A stale draft verdict snapshot cannot publish a success for a ready PR.
-
-    Unlike ``request_review_script()``'s single unguarded live-PR fetch, this
-    step's post-draft-check Reviews API poll retries a transport failure up
-    to ``max_poll_transport_failures`` times (with a stubbed, instant backoff
-    "sleep" between attempts -- see ``_write_live_state_gh``) before failing
-    closed with its own exit 1 and diagnostic -- so the fixture's synthetic
-    unmocked-call sentinel exit code never reaches this script's own exit
-    status, unlike the sibling test above. The "stale" continuation message
-    is still emitted first, proving the step did not silently exempt the
-    live-ready PR from verdict polling.
-    """
+    """A stale draft snapshot checks once and cannot exempt a live-ready PR."""
     result = _run_step(tmp_path, fail_closed_script(), live_draft=False)
 
-    assert result.returncode == 1
+    assert result.returncode == 19
     assert "Event draft snapshot is stale" in result.stdout
-    assert "Reviews API read failed during one-shot current-head verdict admission" in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))

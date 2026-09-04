@@ -8,17 +8,15 @@ on:
   repository_dispatch:
     types: [agent-mention-noema]
 
-concurrency:
-  group: agent-mention-noema-${{ github.event.client_payload.agent_invocation_key || github.run_id }}
-  cancel-in-progress: false
-  queue: max
-
 permissions:
   contents: read
 
 jobs:
   validate-and-forward:
     if: github.repository == 'ContextualWisdomLab/.github'
+    concurrency:
+      group: agent-mention-noema-${{ github.event.client_payload.target_repository }}-${{ github.event.client_payload.pr_number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

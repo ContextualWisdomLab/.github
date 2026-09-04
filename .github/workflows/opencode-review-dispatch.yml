@@ -11,15 +11,6 @@ on:
   repository_dispatch:
     types: [opencode-review]
 
-concurrency:
-  # PR-number scope keeps stale dispatches replaced for the current head.
-  group: >-
-    opencode-review-repository-dispatch-${{
-    github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number) ||
-    github.run_id }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -2299,6 +2290,12 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-evidence.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
+    concurrency:
+      group: >-
+        opencode-review-${{
+        needs.validate-pr-metadata.outputs.target_repository }}-${{
+        needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
