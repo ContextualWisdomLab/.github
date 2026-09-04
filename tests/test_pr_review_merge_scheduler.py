@@ -9007,7 +9007,8 @@ def test_scrub_sensitive_data_and_run_error():
         + "."
         + ("B" * 300)
         + "."
-        + ("C" * 128)
+        + ("C" * 127)
+        + "-"
     )
     assert len(stateless_installation_token) == 520
     assert sched.scrub_sensitive_data(stateless_installation_token) == "***"
