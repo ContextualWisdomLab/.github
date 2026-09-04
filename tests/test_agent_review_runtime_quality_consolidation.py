@@ -72,6 +72,14 @@ def test_consolidated_workflow_materializes_one_runner_job() -> None:
     assert re.search(r"(?m)^[ \t]*sleep[ \t]+", workflow) is None
 
 
+def test_changelog_only_edits_do_not_boot_the_consolidated_runner() -> None:
+    """A release-note-only change needs no agent runtime contract suite."""
+
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+
+    assert '      - "CHANGELOG.md"' not in trigger
+
+
 def test_consolidated_workflow_preserves_all_contract_suites() -> None:
     """Keep the retired Noema, OpenCode, and Strix evidence in one job."""
 

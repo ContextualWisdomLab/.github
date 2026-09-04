@@ -100,7 +100,6 @@ on:
       - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
       - "requirements-opencode-review-ci-hashes.txt"
-      - "CHANGELOG.md"
 
 # PR validation only: a new head cancels only an older run of this workflow
 # for the same repository and pull request.
@@ -156,7 +155,7 @@ jobs:
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
-              .github/workflows/agent-review-runtime-quality-ci.yml|CHANGELOG.md)
+              .github/workflows/agent-review-runtime-quality-ci.yml)
                 noema_suite=true
                 opencode_suite=true
                 strix_suite=true
