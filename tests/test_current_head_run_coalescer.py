@@ -454,13 +454,38 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
 
 
 def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -> None:
-    """Cancellation shares the token/timeout transport and never uses force-cancel."""
+    """Cancellation uses the ordinary endpoint and proves terminal state."""
     module = load_module()
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_run_json", lambda args: calls.append(list(args)))
+    states = iter(
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ]
+    )
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
     module._cancel_run("o/r", 123)
     assert calls == [["gh", "api", "-X", "POST", "repos/o/r/actions/runs/123/cancel"]]
     assert "force-cancel" not in " ".join(calls[0])
+    assert sleeps == [module.CANCELLATION_POLL_INTERVAL_SECONDS]
+
+
+def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
+    """An accepted cancellation is not reported complete while GitHub stays active."""
+    module = load_module()
+    monkeypatch.setattr(module, "_run_json", lambda _args: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, _run_id: {"status": "in_progress", "conclusion": None},
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="did not reach completed/cancelled"):
+        module._cancel_run("o/r", 123)
 
 
 def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) -> None:
