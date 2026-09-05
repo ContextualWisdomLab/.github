@@ -65,3 +65,31 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
+- `cancel-in-progress: true` is safe on a PR-scoped group only when an earlier
+  job in the same workflow re-fetches the PR's live head and gates every later
+  job on it matching the trigger's head. With that admission gate, a stale or
+  out-of-order trigger never reaches the guarded job, so the group needs no
+  SHA suffix and no `cancel-in-progress: false` workaround. Without it, a
+  delayed event can cancel a newer head's run.
+
+## Verifying a "superseded — closing" claim
+
+Closure requires explicit owner instruction, an empty diff, a malicious change,
+or **verified** full succession. Verify the fourth against the tree, never
+against how convincing the closing comment reads.
+
+- Read the accumulated diff, not the title: `git diff --stat origin/main <head>`.
+  A PR's title records what it was opened for; a long-lived branch's real scope
+  is whatever its commits since then actually contain.
+- Prove each claimed-inherited piece is really on `main`. For a distinctive
+  symbol, job name, or constant:
+  `git grep -l "<symbol>" origin/main --` — no output means that delta is **not**
+  on `main`, whatever the successor PR claims. For each cited file:
+  `git show origin/main:<path> >/dev/null` — a non-zero exit means it never landed.
+- Narrowing a PR into successors is the same claim and needs the same proof.
+  Diff the union of the successors' file lists against the original's before
+  calling the narrowing complete; a slice silently dropped during narrowing looks
+  identical to one deliberately excluded.
+- When verification fails, reopen (`gh api repos/<owner>/<repo>/pulls/<n> -X PATCH
+  -f state=open`) and comment the exact commands and their output. Do not leave
+  real, tested delta discarded because the closure sounded well-reasoned.

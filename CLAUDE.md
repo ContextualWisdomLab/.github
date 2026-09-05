@@ -127,6 +127,12 @@ repeatable compile command.
   workflow files (e.g. `test_pr_governance_audit_contract.py`, `test_codeql_pr_workflow_contract.py`,
   `test_opencode_workflow_shell_syntax.py`, `test_opencode_agent_contract.py`). Editing those files
   without running the test suite will break CI.
+- **A "superseded" closure is a claim to verify, not accept.** `AGENTS.md`'s "Verifying a
+  'superseded — closing' claim" section gives the exact commands (`git grep -l "<symbol>"
+  origin/main --`, `git show origin/main:<path>`, `git diff --stat origin/main <head>`). Several
+  PRs here carry a stale title from when they were opened, so the title tells you nothing about
+  what the branch now contains — and narrowing a PR into successors needs the same proof as
+  closing it outright.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
