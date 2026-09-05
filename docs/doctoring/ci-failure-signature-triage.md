@@ -513,6 +513,33 @@ help, and the branch is already being updated more often than the queue can abso
 
 ---
 
+## 11. Checks are green, no review ever appears, and the scheduler never picks the PR up — it is a draft
+
+**Symptom.** Every check on the head completes, CodeRabbit posts "Draft PR not reviewed", no
+`opencode-agent` or `cwl-noema-review` review ever appears, the auto-rebase never touches the branch,
+and the PR is never named in a scheduler candidate list. Nothing on the PR says why.
+
+**Mechanism.** Four independent gates treat a draft as out of scope, and none of them reports it on
+the PR: `scripts/ci/opencode_review_receipt_gate.py` ("draft must never receive bot APPROVE" — an
+approval on a draft is not a formal receipt), `scripts/ci/noema_review_gate.py` ("PR is draft; Noema
+review skipped"), `scripts/ci/pr_auto_rebase.py` (`"draft PR"` disqualifies the candidate), and
+CodeRabbit's default `auto_review.drafts: false`. Every agent harness in this fleet creates pull
+requests as drafts by default, so the mismatch is systemic, not a one-off: measured 2026-09-05T16:20Z,
+33 of 138 open `.github` PRs, **16 of 16** open `noema` PRs, and 17 of 64 open `contextual-orchestrator`
+PRs were drafts — each un-approvable until someone flips it, however green its checks.
+
+**Do.** Convert your own PR to ready-for-review the moment its local gates pass. The MCP
+`update_pull_request` tool takes `draft: false`; REST `PATCH /pulls/{n}` cannot change draft state
+(it needs GraphQL `markPullRequestReadyForReview`, which the MCP tool wraps). The `ready_for_review`
+event re-fans the required workflows on the same head, so flip before the head accumulates checks you
+would rather keep, and never in the middle of a push you are still batching.
+
+**Never.** Never flip a PR you did not open — a draft may be deliberate work in progress, and the
+ownership rule is the same as everywhere else in this catalog (the PR body decides). Send the list to
+its owners instead.
+
+---
+
 ## Absence of data flow is not evidence that an edge is safe to cut
 
 Under queue saturation every serial `needs:` hop costs a full queue round (measured at 1.89–2.76 h
