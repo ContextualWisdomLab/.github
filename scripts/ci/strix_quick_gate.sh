@@ -236,6 +236,120 @@ PY
 	done
 }
 
+strix_report_has_authoritative_recovered_transient_completion() {
+	local report_root="$1"
+	local extra_log="${2:-}"
+	local run_record="$report_root/run.json"
+	local digest
+
+	if [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		return 1
+	fi
+
+	# A recovered in-process provider turn is not terminal infrastructure
+	# failure when (and only when) the same current attempt produced Strix's
+	# complete structured terminal evidence. Keep the raw warning in the
+	# published artifact; this validator changes classification, not evidence.
+	digest="$(python3 - "$report_root" "$extra_log" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import sys
+
+root = Path(sys.argv[1])
+extra_log = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+run_record = root / "run.json"
+sarif_record = root / "findings.sarif"
+
+
+def read_regular(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(1)
+    try:
+        return path.read_bytes()
+    except OSError:
+        raise SystemExit(1)
+
+
+try:
+    run_bytes = read_regular(run_record)
+    run_data = json.loads(run_bytes)
+    sarif_data = json.loads(read_regular(sarif_record))
+except (ValueError, UnicodeDecodeError):
+    raise SystemExit(1)
+
+scan_results = run_data.get("scan_results") if isinstance(run_data, dict) else None
+if (
+    not isinstance(run_data, dict)
+    or run_data.get("status") != "completed"
+    or not isinstance(scan_results, dict)
+    or scan_results.get("scan_completed") is not True
+    or scan_results.get("success") is not True
+):
+    raise SystemExit(1)
+
+if not isinstance(sarif_data, dict) or sarif_data.get("version") != "2.1.0":
+    raise SystemExit(1)
+sarif_runs = sarif_data.get("runs")
+if not isinstance(sarif_runs, list) or not sarif_runs:
+    raise SystemExit(1)
+for sarif_run in sarif_runs:
+    if not isinstance(sarif_run, dict) or not isinstance(sarif_run.get("results"), list):
+        raise SystemExit(1)
+
+signal = re.compile(
+    r"(?i)(?<![A-Za-z])(fatal|denied|warn|warning|timeout)(?![A-Za-z])"
+    r"|RateLimitError|RESOURCE_EXHAUSTED|Too Many Requests|"
+    r"(?:^|[^0-9])429(?:[^0-9]|$)|provider.{0,80}(?:unavailable|exhausted|rate.?limit)|"
+    r"APIConnectionError|ServiceUnavailableError|MidStreamFallbackError|"
+    r"ModelBehaviorError|loginAsGuest failed after"
+)
+recovered = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"\S+ - strix\.core\.execution: transient model/provider error for [0-9a-fA-F]+; "
+    r"replaying turn \(attempt ([1-9][0-9]*)/([1-9][0-9]*), "
+    r"backoff [0-9]+(?:\.[0-9]+)?s\): .+$"
+)
+
+logs = []
+for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
+    current = Path(current_root)
+    dir_names[:] = [name for name in dir_names if not (current / name).is_symlink()]
+    for name in file_names:
+        path = current / name
+        if path.suffix == ".log" and path.is_file() and not path.is_symlink():
+            logs.append(path)
+if extra_log and extra_log.is_file() and not extra_log.is_symlink():
+    logs.append(extra_log)
+
+saw_recovered = False
+for log_path in logs:
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        raise SystemExit(1)
+    for line in lines:
+        if not signal.search(line):
+            continue
+        match = recovered.fullmatch(line)
+        if match is None or int(match.group(1)) >= int(match.group(2)):
+            raise SystemExit(1)
+        saw_recovered = True
+
+if not saw_recovered:
+    raise SystemExit(1)
+print(hashlib.sha256(run_bytes).hexdigest())
+PY
+)" || return 1
+
+	if [ -z "$digest" ] || [ "${ATTEMPT_START_RUN_RECORD_DIGESTS[$run_record]:-}" = "$digest" ]; then
+		return 1
+	fi
+	return 0
+}
+
 has_strix_report_failure_signal() {
 	local report_root
 	local report_log
@@ -254,6 +368,9 @@ has_strix_report_failure_signal() {
 				continue
 			fi
 			report_root="$newest_report_root"
+		fi
+		if strix_report_has_authoritative_recovered_transient_completion "$report_root" "$STRIX_LOG"; then
+			continue
 		fi
 		while IFS= read -r -d '' report_log; do
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
@@ -3399,6 +3516,13 @@ is_llm_token_limit_error() {
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
 has_detected_infrastructure_error() {
+	local newest_report_root=""
+	newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+	if [ -n "$newest_report_root" ] &&
+		strix_report_has_authoritative_recovered_transient_completion "$newest_report_root" "$STRIX_LOG"; then
+		return 1
+	fi
+
 	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
 		return 0
 	fi

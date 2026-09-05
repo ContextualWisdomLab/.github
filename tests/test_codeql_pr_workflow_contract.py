@@ -14,7 +14,7 @@ WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-pr.yml"
 
 
 def test_codeql_pr_workflow_structure() -> None:
-    """codeql-pr.yml stays required-workflow-safe: no codeql-action, dispatch+poll instead.
+    """codeql-pr.yml stays required-workflow-safe: dispatch, release, then exact wake-up.
 
     See docs/adr/0025-codeql-required-workflow-dispatch-architecture.md.
     codeql-action/init and codeql-action/analyze are categorically disallowed
@@ -53,26 +53,17 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "refs/pull/{0}/merge" not in workflow
     assert "event_type:\"codeql-scan\"" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
-    # Polls for the context codeql-scan-dispatch.yml publishes; doesn't
-    # publish it itself (that happens on the .github side only).
+    # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
+    # never publishes that status from the required workflow.
     assert '--arg ctx "codeql-dispatch/${LANGUAGE}"' in workflow
-    assert "commits/${HEAD_SHA}/statuses" in workflow
+    assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
 def test_codeql_pr_dispatches_one_language_per_shard_not_the_full_matrix() -> None:
     """Every shard dispatches, but only its own language, not the full matrix.
 
-    Two designs were tried and rejected before this one (see
-    docs/adr/0025-codeql-required-workflow-dispatch-architecture.md history
-    and .github#1778's review thread): (a) only the first shard dispatches
-    with the full matrix, which leaves every OTHER shard blind to that one
-    shard's dispatch failure -- each polls the full 3-hour deadline before
-    self-timing-out for a scan that was never requested; (b) every shard
-    dispatches the full matrix, which triggers N redundant full-matrix scans
-    on the .github side. Dispatching one shard's own single language avoids
-    both: N dispatches total (same real work as one N-language dispatch),
-    and each shard can read its own steps.dispatch.outcome for the poll step
-    below to fail closed immediately, not after 3 hours.
+    Each shard carries its own run, job, language, and head identity so the
+    trusted dispatcher can wake only that intentionally failed job.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -81,16 +72,16 @@ def test_codeql_pr_dispatches_one_language_per_shard_not_the_full_matrix() -> No
     assert "needs.detect-languages.outputs.matrix).include[0]" not in workflow
     assert "DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}" in workflow
     assert workflow.count("- name: Request current-head CodeQL scan dispatch") == 1
-    assert workflow.count("- name: Fail closed without a current-head CodeQL dispatch verdict") == 1
+    assert workflow.count("- name: Release runner or enforce current-head CodeQL verdict") == 1
 
 
 RUN_BLOCK_STEP_NAMES = (
     "Request current-head CodeQL scan dispatch",
-    "Fail closed without a current-head CodeQL dispatch verdict",
+    "Release runner or enforce current-head CodeQL verdict",
 )
 
 
-def test_codeql_pr_dispatch_and_poll_run_blocks_are_valid_bash() -> None:
+def test_codeql_pr_dispatch_and_release_run_blocks_are_valid_bash() -> None:
     """Both run: blocks in analyze-head must be syntactically valid Bash."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -112,17 +103,21 @@ def test_codeql_pr_dispatch_and_poll_run_blocks_are_valid_bash() -> None:
         assert result.returncode == 0, f"{step_name}: {result.stderr}"
 
 
-POLL_STEP_NAME = "Fail closed without a current-head CodeQL dispatch verdict"
+DISPATCH_STEP_NAME = "Request current-head CodeQL scan dispatch"
+VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
 
 
-def _run_poll_step(tmp_path: Path, statuses: list[dict]) -> subprocess.CompletedProcess[str]:
-    """Execute the real poll shell block against a fake `gh api` returning a fixed live PR and status list."""
+def _run_verdict_read(
+    tmp_path: Path, statuses: list[dict]
+) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
+    """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
 
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
-    script = _extract_run_block(workflow_text, POLL_STEP_NAME)
+    dispatch_script = _extract_run_block(workflow_text, DISPATCH_STEP_NAME)
+    verdict_script = _extract_run_block(workflow_text, VERDICT_STEP_NAME)
 
     head_sha = "b" * 40
     live_pr = {"head": {"sha": head_sha}, "state": "open"}
@@ -143,7 +138,8 @@ def _run_poll_step(tmp_path: Path, statuses: list[dict]) -> subprocess.Completed
     )
     fake_gh.chmod(0o755)
 
-    env = {
+    output = tmp_path / "github-output"
+    dispatch_env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(live_pr),
@@ -151,28 +147,50 @@ def _run_poll_step(tmp_path: Path, statuses: list[dict]) -> subprocess.Completed
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
-        "HEAD_SHA": head_sha,
+        "PR_HEAD_SHA": head_sha,
+        "LANGUAGE": "python",
+        "BUILD_MODE": "none",
+        "BASE_REF": "main",
+        "BASE_SHA": "a" * 40,
+        "HEAD_REF": "feature",
+        "RUN_ATTEMPT": "2",
+        "REQUIRED_RUN_ID": "42",
+        "REQUIRED_JOB_ID": "43",
+        "GITHUB_OUTPUT": str(output),
+    }
+    dispatch_result = subprocess.run(
+        [bash], input=dispatch_script, text=True, capture_output=True, check=False,
+        env=dispatch_env, timeout=60,
+    )
+    output_values = dict(
+        line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
+    )
+    verdict_env = {
+        **os.environ,
         "LANGUAGE": "python",
         "DISPATCH_OUTCOME": "success",
+        "VERDICT_STATE": output_values["verdict"],
     }
-    return subprocess.run(
-        [bash], input=script, text=True, capture_output=True, check=False, env=env, timeout=60
+    verdict_result = subprocess.run(
+        [bash], input=verdict_script, text=True, capture_output=True, check=False,
+        env=verdict_env, timeout=60,
     )
+    return dispatch_result, verdict_result
 
 
-def test_codeql_pr_poll_step_ignores_a_status_forged_by_a_non_opencode_creator(tmp_path: Path) -> None:
+def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:
     """A PR-forged 'codeql-dispatch/<language>: success' status must not stand in for the real verdict.
 
     Only a status published by codeql-scan-dispatch.yml's own app identity
     (opencode-agent[bot], minted via the same OIDC exchange
-    opencode-review-dispatch.yml uses) may satisfy the poll -- matching the
+    opencode-review-dispatch.yml uses) may satisfy the verdict read -- matching the
     context string alone is not enough, since anyone with statuses:write on
     the repository can publish an arbitrary context (ADR 0025, "Poll target
     cannot be spoofed by the PR author"). This proves the forged success is
     skipped in favor of the legitimate (here, failing) verdict rather than
     accepted.
     """
-    result = _run_poll_step(
+    dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
             {"context": "codeql-dispatch/python", "state": "success", "creator": {"login": "attacker"}},
@@ -183,13 +201,14 @@ def test_codeql_pr_poll_step_ignores_a_status_forged_by_a_non_opencode_creator(t
             },
         ],
     )
-    assert result.returncode == 1, result.stderr
-    assert "did not pass (state=failure)" in result.stdout
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == 1, verdict_result.stderr
+    assert "did not pass (state=failure)" in verdict_result.stdout
 
 
-def test_codeql_pr_poll_step_accepts_the_opencode_agent_creator(tmp_path: Path) -> None:
+def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Path) -> None:
     """The legitimate handler's own success status is accepted once creator identity matches."""
-    result = _run_poll_step(
+    dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
             {
@@ -199,8 +218,9 @@ def test_codeql_pr_poll_step_accepts_the_opencode_agent_creator(tmp_path: Path) 
             }
         ],
     )
-    assert result.returncode == 0, result.stderr
-    assert "Current-head CodeQL dispatch verdict for python: success." in result.stdout
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == 0, verdict_result.stderr
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
@@ -216,3 +236,29 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
     )
 
     assert len(refs) == 1, f"scheduled-security-scan.yml mixes CodeQL action refs: {sorted(refs)}"
+
+
+def test_codeql_shard_releases_runner_and_dispatches_exact_wake_identity() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    shard = workflow.split("  analyze-head:\n", 1)[1]
+
+    assert "while :; do" not in shard
+    assert "poll_interval_seconds" not in shard
+    assert "sleep " not in shard
+    assert "job.check_run_id" in shard
+    assert "required_run_id:$required_run_id" in shard
+    assert "required_job_id:$required_job_id" in shard
+    assert "required_language:$required_language" in shard
+    assert "The dispatch workflow will rerun this exact failed CodeQL job" in shard
+    assert "commits/${PR_HEAD_SHA}/statuses" in shard
+
+
+def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    permissions = workflow.split("permissions:\n", 1)[1].split("\njobs:\n", 1)[0]
+    shard_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
+        "    strategy:\n", 1
+    )[0]
+
+    assert "actions: write" not in permissions
+    assert "actions: write" not in shard_permissions
