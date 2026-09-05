@@ -7,24 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
-def test_org_queue_sweep_is_explicit_recovery_not_scheduled_polling() -> None:
-    """Native events own normal progress; the expensive org sweep is manual-only."""
+def test_org_queue_sweep_is_removed() -> None:
+    """Native events own progress without an organization-wide polling job."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert '- cron: "17 3 * * *"' not in workflow
-    assert "github.event.client_payload.org_sweep == true" in workflow
-    assert '- cron: "0 * * * *"' not in workflow
-    assert '*/15 * * * *' not in workflow
-
-
-def test_org_queue_sweep_wall_clock_fallback_matches_manual_recovery() -> None:
-    """An explicit sweep still rotates fairly when requested."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert workflow.count("$(date -u +%s) / 86400") == 2
-    assert "$(date -u +%s) / 3600" not in workflow
-    assert "$(date -u +%s) / 900" not in workflow
-    assert "900s window" not in workflow
-    assert "900s)" not in workflow
-    assert "pending */15 sweep" not in workflow
+    assert "  org-queue-sweep:" not in workflow
+    assert "github.event.client_payload.org_sweep != true" in workflow
+    assert "ORG_SWEEP" not in workflow
 
 
 def test_repository_scheduler_keeps_event_driven_wakes() -> None:
