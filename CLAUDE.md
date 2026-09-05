@@ -164,6 +164,18 @@ repeatable compile command.
   required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
   job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
   `docs/doctoring/required-workflow-path-filter-boundary.md`.
+- **Narrowing a PR does not carry its delta automatically.** When a large PR is split into
+  successors, diff the union of the successors against the original before treating the supersession
+  as complete — each successor passing its own tests does not prove the union still covers the
+  original's scope. `#1871` → `#1877` + `#1879` silently dropped the coverage/docstring delta and
+  left the required gate broken on `main` until `#1883`. See AGENTS.md's "Supersession and
+  constant-change review".
+- **Model-path timeouts are policy-fixed, not an engineering judgment call.** `docs/product-goal-directive.md`
+  section 8 accepts that central OpenCode/Strix/Noema may take more than two hours per model and states
+  that speed is not a core consideration. `#1889`/`#1890`/`#1892` each added a 900-second cap on genuine
+  multi-hour-hang evidence and were all reverted (`#1891`, `#1895`). Fix runner occupancy at the
+  admission/continuation boundary instead; never convert elapsed inference time into a model-failure
+  verdict.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
@@ -184,3 +196,26 @@ repeatable compile command.
   longer than it is. Querying `status=success` and `status=failure` directly cuts through the churn
   to the most recent real conclusion of each kind. Those are historical signals about pipeline
   liveness only — they never substitute for exact-current-head evidence on the PR you are acting on.
+- **Do not assume `interrogate` skips private helpers.** `[tool.interrogate]` here sets no
+  `ignore-*` flags and the tool defaults them off, so a docstring-less `_helper` or `__helper` in
+  `scripts/ci/` counts against the 100% gate — it is the stricter docstring check, not the laxer
+  one. Sibling repositories configure this differently (`contextual-orchestrator` enables six
+  `ignore-*` flags and does skip them), so read the target repo's `pyproject.toml` rather than
+  carrying a docstring habit across repositories. Note also that `ignore-private` would cover only
+  double-underscore names; single-underscore needs `ignore-semiprivate`.
+- **A stale PR's conflict scope is a snapshot, not a property of the PR.** Any advance of the base
+  between measuring the conflicts and resolving them invalidates the list, and base advances land in
+  the same directories conflicts do (`.github/workflows/`, `scripts/ci/`, `docs/doctoring/`). Scope
+  grows as often as it shrinks — a branch that merged cleanly can become conflicted with no change
+  to the branch at all — so re-run the merge yourself immediately before resolving and treat any
+  earlier measurement, including your own from minutes ago, as expired. Resolving against a stale
+  smaller scope silently leaves conflicts unhandled.
+- **No test parses fenced code blocks.** The doc-contract tests match exact prose in specific files;
+  none of them check Markdown structure, and `ARCHITECTURE.md` (five mermaid diagrams) is read by no
+  test at all. A conflict resolution that splits a fenced block into two fragments therefore ships
+  green, rendering the diagram source as a plain code block. After resolving a conflict in a
+  document containing fenced blocks, re-read the whole enclosing section rather than the diff hunk,
+  and confirm each block has one opening fence carrying its language tag and one matching closing
+  fence. Do not check by counting fences — a split leaves four where there were two, so an even
+  count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
+  branch or from the autofix flow's conflict-marker resolution.
