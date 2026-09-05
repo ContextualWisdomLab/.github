@@ -56,7 +56,7 @@ jobs:
   detect-languages:
     name: Detect CodeQL languages
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -148,7 +148,7 @@ jobs:
     # dependency exactly; the only case where it's genuinely skipped is a
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
