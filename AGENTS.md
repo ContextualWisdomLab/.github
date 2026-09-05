@@ -133,6 +133,42 @@ them alone proves succession.
   succession: if the check is merely inconclusive, say so and ask, rather than
   reopening or letting the closure stand unexamined.
 
+## Supersession and constant-change review
+
+- When a large PR is narrowed into successors, verify the **union** of those
+  successors against the original's full diff — not merely that each successor's
+  own tests pass. `#1871` was closed in favor of `#1877` plus `#1879`; both
+  successors were green, but neither carried `#1871`'s coverage/docstring delta,
+  so the required 100% gate stayed broken on `main` until `#1883` recovered it.
+  "Each piece works" and "the pieces together still cover the original's scope"
+  are different questions, and only the second one needs a diff against the
+  original.
+- Use the per-delta commands in "Verifying a 'superseded — closing' claim" above
+  against **each** successor, then ask the question those commands cannot: does
+  anything in the original's scope survive in none of them? A split fails
+  differently from a single bad closure — no individual successor looks wrong.
+- A closure or narrowing is not self-verifying, and neither is a note recording
+  it. Git-level checks show whether the text moved; they do not show whether the
+  behaviour is restored. Finish by re-running the gate the original PR existed to
+  fix and confirming it passes on `main` itself from a fresh clone.
+- Never endorse a timeout, retry budget, or other numeric constant on a
+  model-invocation path without first reading
+  [`docs/product-goal-directive.md`](docs/product-goal-directive.md) section 8,
+  which states that central OpenCode, Strix, and Noema accept taking more than two
+  hours per model ("중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을
+  수용한다") and that speed is not a core consideration, accuracy is
+  ("속도는 핵심 고려사항이 아니며 정확성을 우선한다"). `#1889`, `#1890`, and `#1892`
+  each capped a model step at 900 seconds on real evidence of a multi-hour hang,
+  and all three were reverted (`#1891`, `#1895`). Compelling hang evidence does not
+  exempt a change from that contract: runner occupancy is repaired at the
+  admission/continuation boundary or by an explicit provider terminal signal, never
+  by converting elapsed inference time into a model-failure verdict.
+- Verify a citation before you rely on it, including your own. The first draft of
+  the bullet above cited a section number that does not exist in that file and
+  attributed a "timeout defaults to null" sentence to it that appears only in
+  `#1891`'s PR body — both caught by grepping the file instead of trusting the
+  summary that introduced them.
+
 ## Test-gate regressions and stale-PR merges
 
 - A red `tests`, coverage, or `interrogate` gate on your pull request is not proof that your
