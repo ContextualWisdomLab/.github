@@ -11,7 +11,7 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
-- **Fix two pre-existing `tests/` failures that blocked the unscoped
+- **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and
   runs the full `tests/` directory with no positional arguments).** First,
@@ -47,6 +47,11 @@
   [pr])` alongside the existing `rerun_actions_job` mock so the live-head
   check observes the same fixture `pr` as authoritative, matching how every
   other call in this test path is already isolated from real GitHub state.
+  Fourth, the Strix shell contract still expected job-level concurrency after
+  PR #1878 moved same-PR coalescing to workflow admission; it now asserts the
+  admission-level key and rejects the obsolete delayed key. Fifth, the
+  consolidated review-recovery fixtures now use the 17 daily UTC schedules
+  adopted by main instead of the retired hourly expressions.
 - Remove the central `org-queue-sweep` runner and its organization-wide
   repository walk. Native PR/review events, auto-merge, trigger-aware
   same-PR cancellation, and each repository's daily `scan-pr-queue` recovery
