@@ -127,6 +127,13 @@ repeatable compile command.
   workflow files (e.g. `test_pr_governance_audit_contract.py`, `test_codeql_pr_workflow_contract.py`,
   `test_opencode_workflow_shell_syntax.py`, `test_opencode_agent_contract.py`). Editing those files
   without running the test suite will break CI.
+- **A "superseded" closure is a claim to verify, not accept.** See `AGENTS.md`'s "Verifying a
+  'superseded — closing' claim" section. Two traps specific to this repo: use a **three-dot**
+  diff (`git diff --stat origin/main...<head>`) — two-dot reports `main`'s own newer commits as
+  phantom deletions by a stale PR; and do not use `git merge-base --is-ancestor` as the test,
+  because this repo mixes squash merges with real merge commits, so it answers a different
+  question than "is this content on `main`". Narrowing a PR into successors is the same claim and
+  needs the same evidence.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
@@ -157,7 +164,35 @@ repeatable compile command.
   required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
   job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
   `docs/doctoring/required-workflow-path-filter-boundary.md`.
+- **Narrowing a PR does not carry its delta automatically.** When a large PR is split into
+  successors, diff the union of the successors against the original before treating the supersession
+  as complete — each successor passing its own tests does not prove the union still covers the
+  original's scope. `#1871` → `#1877` + `#1879` silently dropped the coverage/docstring delta and
+  left the required gate broken on `main` until `#1883`. See AGENTS.md's "Supersession and
+  constant-change review".
+- **Model-path timeouts are policy-fixed, not an engineering judgment call.** `docs/product-goal-directive.md`
+  section 8 accepts that central OpenCode/Strix/Noema may take more than two hours per model and states
+  that speed is not a core consideration. `#1889`/`#1890`/`#1892` each added a 900-second cap on genuine
+  multi-hour-hang evidence and were all reverted (`#1891`, `#1895`). Fix runner occupancy at the
+  admission/continuation boundary instead; never convert elapsed inference time into a model-failure
+  verdict.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+- **Agent sessions here share one GitHub identity, so they cannot approve each other's PRs.** Every
+  session pushes and reviews as the same account, and GitHub refuses a review with `event=APPROVE` on
+  a PR that account authored (`POST /repos/{owner}/{repo}/pulls/{n}/reviews` → 422 "Can not approve
+  your own pull request"). This is not a formality to route around: `merge_approval_block_reason` in
+  `scripts/ci/pr_review_merge_scheduler_core.py` fails closed unless GitHub's `reviewDecision` is
+  `APPROVED` *and* `has_independent_current_head_approval` finds a non-author formal APPROVED review
+  on the exact current head. A verification comment documents evidence but satisfies neither
+  condition, so a peer session's review cannot unblock a merge — that needs a different identity or
+  the documented bypass path. Relatedly, `git log`/`merged_by` cannot attribute work to a session, so
+  read the diff before treating an unexplained commit on your branch as an intrusion.
+- **`actions/runs?status=completed` is a misleading sample while the queue is churning.** When
+  cancelled/skipped runs are produced in bulk, a page of completed runs (default 30, so pass
+  `per_page=100`) can contain zero `success`/`failure` results and make the pipeline look dead far
+  longer than it is. Querying `status=success` and `status=failure` directly cuts through the churn
+  to the most recent real conclusion of each kind. Those are historical signals about pipeline
+  liveness only — they never substitute for exact-current-head evidence on the PR you are acting on.
