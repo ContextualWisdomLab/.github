@@ -10,8 +10,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 def test_org_queue_sweep_is_removed() -> None:
     """Native events own progress without an organization-wide polling job."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "org-queue-sweep" not in workflow
-    assert "org_sweep" not in workflow
+    assert "  org-queue-sweep:" not in workflow
+    assert "github.event.client_payload.org_sweep != true" in workflow
     assert "ORG_SWEEP" not in workflow
 
 

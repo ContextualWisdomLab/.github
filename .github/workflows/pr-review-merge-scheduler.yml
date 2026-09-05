@@ -102,8 +102,14 @@ jobs:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
     if: >-
-      github.event_name != 'pull_request_target' ||
-      github.event.action != 'closed'
+      (
+        github.event_name != 'pull_request_target' ||
+        github.event.action != 'closed'
+      ) &&
+      (
+        github.event_name != 'repository_dispatch' ||
+        github.event.client_payload.org_sweep != true
+      )
     runs-on: ubuntu-24.04
     # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
     # 360-minute platform default. This is a single-repository queue scan
