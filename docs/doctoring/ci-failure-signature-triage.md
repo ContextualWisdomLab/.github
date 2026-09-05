@@ -337,6 +337,21 @@ switch it to `false`: **62% of the cancelled jobs had not been assigned a runner
 cancellation costs nothing real, and forcing them to run would return all 62% to a queue that is
 already at the ceiling.
 
+**What actually holds the slots — measured 2026-09-05T14:27Z.** Occupancy is a property of *jobs*,
+not runs: list every in-progress run's jobs (`/actions/runs/{id}/jobs`) and read `started_at` and
+`runner_name`. A run "in progress for 10 hours" turned out to be 8 hours of queue plus 2 hours of slot —
+`run.created_at` is queue entry, `job.started_at` is slot acquisition. Across the three repositories 18
+jobs held runners; 10 were `strix`, and 5 of those were `push`-on-`main` scans of `.github` commits
+already superseded (created 04:09–08:44Z, jobs started 12:31–14:25Z, oldest past 2 hours against a
+10–30 minute normal scan), with 4 more `push`/`main` scans queued behind them. Mechanism: `strix.yml`'s
+workflow-level concurrency key fell back to `github.run_id` for every non-PR event, so each `main` push
+was its own group and no newer `main` head ever retired an older scan — the exact coalescing PR heads
+get, missing for the branch that moves most (50 pushes in 24 hours, half within 17 minutes of the
+previous). Fix: `.github` #1938 scopes `push` events as `push-<ref_name>`. The general lesson: a
+`run_id` fallback in a concurrency key is "never coalesce", and it is safe only for events that
+genuinely cannot supersede one another (`schedule`, PR-less dispatch); check every event class the
+workflow accepts before accepting that fallback.
+
 **Do.** Read each check's actual conclusion. Truly `queued` → leave it and work elsewhere. A workflow
 that was never assigned a runner → escalate on `.github` #712, #1531, #1219. If a PR of yours has
 never completed a review cycle, count your own pushes to it before blaming the queue: batch your
