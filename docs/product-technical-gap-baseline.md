@@ -2850,13 +2850,13 @@ product/operational decision this record surfaces rather than makes.
 
 **Status:** Investigated with a 9-agent workflow (4 independent file audits + 1 direct-evidence pull against the item's own cited example + 4 adversarial re-verification passes) plus a 4-agent follow-up (2 investigate + 2 adversarial verify) triggered by Devin Review findings, per `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`. Item 13 asks that Strix/OpenCode Review/Noema reliably cancel a PR's previous-head run when a new push supersedes it, citing `ContextualWisdomLab/naruon#1528` (run `33581213829`) as evidence of a gap.
 
-**Verdict: the hypothesis is refuted for the item's own cited evidence, but `noema-review.yml` has a separate, confirmed, unfixed concurrency bug.** `strix.yml`, `opencode-review.yml`, and `pr-review-merge-scheduler.yml` already reliably retire a stale prior-head run on a new push — via correctly SHA-scoped native `concurrency:` groups where that's the right tool (`opencode-review.yml`, fixed after a real prior incident, `#1568`), and purpose-built same-file jobs that call the GitHub Actions API directly to find and cancel stale-head runs by exact `head_sha` match where native concurrency alone can't reach (`strix.yml`'s `cancel-superseded-pr-runs`, `pr-review-merge-scheduler.yml`'s hourly `org-queue-sweep`). `noema-review.yml` does not: its concurrency group has no head-SHA component, so if GitHub ever processes an older push's `synchronize` event after a newer one's (GitHub does not guarantee delivery order), native `cancel-in-progress` cancels the newer, valid, current-head run immediately — before the older run's own stale-trigger check ever executes, and nothing in the file can prevent this since GitHub evaluates `concurrency:` before any job step runs. Confirmed via two independent adversarial re-verification passes, neither of which found a refutation; corroborated by `strix.yml` and `opencode-review.yml` both deliberately using different patterns specifically to avoid this exact hazard. Not fixed here — a live CI concurrency-scoping change deserves its own dedicated PR with a regression test, not a same-breath edit to documentation. See the doctoring record for the full mechanism and evidence.
+**Implementation pending protected merge in #1878.** Live pushes to #1878 showed that most workflows retired the prior HEAD automatically, while Required Noema Review and Current Head Run Coalescer each left one prior-HEAD run queued because their effective admission groups did not supersede by stable repository-and-PR identity. #1878 moves Noema concurrency to workflow admission, removes the coalescer's HEAD component, and keeps exact live-HEAD revalidation inside each trusted job before mutation. The same PR removes `org-queue-sweep`; stale-head retirement therefore has one owner at workflow admission instead of depending on an organization-wide runner and repository walk. The older out-of-order-event concern remains bounded by the mandatory live-HEAD gate: a stale event may replace a queued attempt, but it cannot publish review or cancellation evidence after its event HEAD stops matching the live PR.
 
 **The cited evidence shows a different, real problem instead: pure queue starvation, not a cancellation gap.** `ContextualWisdomLab/naruon#1528`'s full 17-run history (pulled live) shows every run sharing one unchanged head SHA — no multi-SHA race ever occurred. This corroborates `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`'s plan-level-ceiling finding with a concrete, individually-named example rather than aggregate counts — the fix is capacity (a plan decision or added runner capacity), not a workflow-config bug.
 
 **Correction (2026-09-04, evidence audit):** the specific "cited Strix run sat 23h22m queued before it even started running" claim above is wrong, disproven by direct re-verification. Both attempts of the cited Strix job (`33581213829`) show `created_at == started_at` — attempt 1 (2026-09-02T01:54:46Z→01:56:44Z, 2 min) and attempt 2 (2026-09-03T01:17:10Z→01:31:18Z, 14 min) both started **immediately** and were **cancelled mid-run**, not after a long queue wait. This pattern (prompt start, cancel during execution) is the opposite of queue starvation and is consistent with `strix.yml`'s own `cancel-superseded-pr-runs` mechanism (already documented above as working correctly) firing on this run — though the exact trigger for canceling a run against an unchanged head SHA was not further traced here. The paired OpenCode Review run for the same commit (`33581213805`) tells a different, worse story than "still queued 24+ hours later with no job started": its 5 sequential dependent jobs each queued for hours — `required-workflow-bootstrap` ~7h57m, `coverage-source-tree` ~9h40m, `coverage-evidence` ~13h1m, `opencode-review` ~12h13m — before `opencode-review` finally started 2026-09-03T20:46:49Z, ran for ~6 hours, and was itself cancelled 2026-09-04T02:47:05Z, roughly two full days after the original push. **Net effect on this entry's conclusion: unchanged, if anything understated.** The specific "23h22m" number attached to the wrong run doesn't survive scrutiny, but the underlying severe-queue-congestion finding this entry uses it to support is corroborated more strongly by the OpenCode Review run's real multi-stage delays than the original single figure conveyed. Found via a user-initiated adversarial evidence audit of 6 cited CI runs (5 of 6 confirmed accurate; this was the one exception).
 
-**Not acted on further, deliberately, except for the confirmed `noema-review.yml` bug which is deferred to its own PR.** No fix was applied to item 13's own hypothesis or the (also-refuted) `strix.yml` paths-ignore claim, because no fixable bug was found there — forcing one would have meant inventing a problem the evidence does not support. The `noema-review.yml` concurrency bug is real and confirmed, but a live security-critical CI concurrency-scoping change was deliberately not bundled into this documentation PR; the standing chicken-and-egg bypass-merge authorization remains available for whichever PR carries that fix, once it exists. A peer session's lead on `naruon`'s `pr-governance.yml` (six runs on PR #1528's one unchanged SHA) was investigated further by fetching and reading the workflow and its gate script in full: a `check_run`-triggered job-slot-waste claim was corrected (the job's own `if:` restricts that path to CodeRabbit checks only — GitHub Actions requests no runner for a skipped job), and a proposed same-head debounce fix was found to be unsafe rather than implemented — `scripts/ci/pr_governance_gate.sh` evaluates live required-check/review-thread/CodeRabbit state on every run, not a pure function of head SHA, so skipping re-evaluation whenever the SHA is unchanged would leave the gate reporting a stale blocker list after a check finishes or a review lands. See `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md` for the full trace; recorded as still open, not fixed.
+**Current status:** implementation exists on #1878 but is not complete until exact-head required checks, independent review, protected merge, and post-merge workflow evidence succeed. No fix was applied to the refuted `strix.yml` paths-ignore claim. A peer session's lead on `naruon`'s `pr-governance.yml` (six runs on PR #1528's one unchanged SHA) was investigated further by fetching and reading the workflow and its gate script in full: a `check_run`-triggered job-slot-waste claim was corrected (the job's own `if:` restricts that path to CodeRabbit checks only — GitHub Actions requests no runner for a skipped job), and a proposed same-head debounce fix was found to be unsafe rather than implemented — `scripts/ci/pr_governance_gate.sh` evaluates live required-check/review-thread/CodeRabbit state on every run, not a pure function of head SHA, so skipping re-evaluation whenever the SHA is unchanged would leave the gate reporting a stale blocker list after a check finishes or a review lands. See `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md` for the full trace.
 
 ## `codeql-pr.yml` required-workflow hard limit closed org-wide — 2026-09-03
 
@@ -3203,29 +3203,31 @@ others) — this fix deliberately stayed scoped to the one file with direct, con
 starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
 if queuing symptoms recur on them specifically.
 
-**Separately found while validating this fix, now fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
-failed on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
-"Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
-repository), but this test still asserted the old single hourly `cron: "23 * * * *"`. Same bug class as the
-`test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
-behind by a workflow redesign. This PR's own follow-up commit renamed it to
-`test_review_fix_caller_keeps_the_github_daily_recovery_slot` and repointed it at Clearfolio's actual
-`cron: "23 7 * * *"`. Understanding the new staggered-daily design's actual intended contract in full (to
-avoid guessing) turned up two more stale files with the same root cause, never updated for the same
-redesign: `tests/test_hourly_review_repair_callers.py` (`_EXPECTED_TARGETS`' 17 schedule keys, and the
-schedule-list assertion, still used the old hourly `<minute> * * * *` shape instead of the actual daily
-`<minute> <hour> * * *` cron strings — 1 + 16 failing cases) and
+**Update, now fixed on `main`:** the `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+staleness noted directly above (`hourly-review-repair.yml` renamed to "Daily Review Recovery" and redesigned
+from one hourly cron to 17 staggered daily crons, one per target repository) was fixed by `#1870` itself —
+renamed to `test_review_fix_caller_keeps_the_github_daily_recovery_slot` and repointed at Clearfolio's actual
+`cron: "23 7 * * *"` — even though this note's own text lagged behind that fix. Investigating the new
+staggered-daily design's full intended contract turned up two more files stale for the same root cause,
+never updated for the same redesign: `tests/test_hourly_review_repair_callers.py` (`_EXPECTED_TARGETS`' 17
+schedule keys, and the schedule-list assertion, used the old hourly `<minute> * * * *` shape instead of the
+actual daily `<minute> <hour> * * *` cron strings — 1 + 16 failing cases) and
 `tests/test_github_hourly_conflict_repair.py::test_central_repository_has_hourly_self_caller` (asserted
-`cron: "21 * * * *"` instead of the central `.github` self-caller's actual `cron: "21 6 * * *"`). All three
-files were corrected together, preserving each test's original protective intent (every distinct schedule
-maps to the right repository exactly once; the central self-caller entry exists; the caller still dispatches
-to the reusable, product-neutral `pr-review-fix-scheduler.yml` engine) rather than weakening any of them.
-This closes the confirmed live required-check failure on `ContextualWisdomLab/.github#1870`:
-`agent-review-runtime-quality-ci.yml`'s "Verify scheduler and contextual-orchestrator review-repair
-contracts" step runs `pytest` with no positional test path (full default `tests/` discovery), so it was
-picking up all 19 of these stale assertions; with them fixed, the exact unscoped `pytest` command the
-workflow runs passes cleanly (100% branch coverage across `pr_review_conflict_scope`,
-`pr_review_autofix_context`, `zdr_policy`, and `contextual_orchestrator_review_policy` — the only remaining
-local failures are two pre-existing, unrelated test/workflow-drift bugs and one `gh`-CLI-missing sandbox
-limitation, none introduced or resolved by this change), so `agent-review-runtime-quality-ci.yml` itself
-needed no workflow-level change.
+`cron: "21 * * * *"` instead of the central `.github` self-caller's actual `cron: "21 6 * * *"`). Both were
+fixed on `main` via `#1877` (the latter renamed to `test_central_repository_has_daily_self_caller`),
+preserving each test's original protective intent (every distinct schedule maps to the right repository
+exactly once; the central self-caller entry exists; the caller still dispatches to the reusable,
+product-neutral `pr-review-fix-scheduler.yml` engine). Together with `#1870`'s fix, this closes the
+confirmed live required-check failure on `ContextualWisdomLab/.github#1870`: `agent-review-runtime-quality-ci.yml`'s
+"Verify scheduler and contextual-orchestrator review-repair contracts" step runs `pytest` with no positional
+test path (full default `tests/` discovery), so it was picking up all of these stale assertions; with them
+fixed, the exact unscoped `pytest` command the workflow runs passes cleanly (100% branch coverage across
+`pr_review_conflict_scope`, `pr_review_autofix_context`, `zdr_policy`, and
+`contextual_orchestrator_review_policy`).
+
+**Residual scope actually closed by `#1875`:** two regression assertions on the nvidia-nim contract test
+that neither `#1870` nor `#1877` added — a negative check that the retired `cron: "23 */2 * * *"` cadence
+never reappears, and a product-neutrality check that the reusable `pr-review-fix-scheduler.yml` engine never
+hard-codes `ContextualWisdomLab/clearfolio` (enforcing this repo's thin-caller convention with a real
+regression test rather than only code review) — plus this doc correction and the matching `CHANGELOG.md`
+entry recording the investigation.

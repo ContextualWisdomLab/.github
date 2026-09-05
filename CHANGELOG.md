@@ -11,7 +11,56 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
-- **Fix three test files left stale by the hourly-review-repair daily-cadence redesign, found while investigating a live required-check failure on `.github#1870`.** `hourly-review-repair.yml`'s consolidation into 17 distinct daily cron entries (one minute-hour per repository, staggered across UTC hours 0-16, rather than one minute shared by an hourly cron) was never reflected in `tests/test_hourly_review_repair_callers.py` (`_EXPECTED_TARGETS`' 17 schedule keys, and the schedule-list assertion, still used the old `"<minute> * * * *"` hourly shape), `tests/test_github_hourly_conflict_repair.py::test_central_repository_has_hourly_self_caller` (still asserted `cron: "21 * * * *"` instead of the central `.github` self-caller's actual `cron: "21 6 * * *"`), and `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour` (asserted a single hourly `cron: "23 * * * *"` that no longer exists; renamed to `test_review_fix_caller_runs_once_each_day` and repointed at Clearfolio's actual `cron: "23 7 * * *"` entry, keeping its original protective intent -- dispatch reaches the reusable, product-neutral `pr-review-fix-scheduler.yml` engine). `agent-review-runtime-quality-ci.yml`'s unscoped `pytest` coverage step (no positional test path, so it runs full default `tests/` discovery) was picking up these 19 stale-assertion failures on every PR; with the assertions corrected, that step's coverage gate (100% branch coverage across `pr_review_conflict_scope`, `pr_review_autofix_context`, `zdr_policy`, and `contextual_orchestrator_review_policy`) passes cleanly again with no workflow-level change needed.
+- **Two extra hourly-review-repair contract assertions closed after `#1870`/`#1877` fixed the shared daily-cadence drift.** `#1870` already repaired `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s core Clearfolio cron assertion (`test_review_fix_caller_keeps_the_github_daily_recovery_slot`, `cron: "23 7 * * *"`), and `#1877` independently repaired the remaining stale `_EXPECTED_TARGETS`/self-caller assertions in `tests/test_hourly_review_repair_callers.py` and `tests/test_github_hourly_conflict_repair.py`. This PR (`#1875`) adds the two assertions neither of those covered: `test_review_fix_caller_keeps_the_github_daily_recovery_slot` now also asserts the negative `cron: "23 */2 * * *"` never reappears, and asserts the reusable `pr-review-fix-scheduler.yml` engine never hard-codes `ContextualWisdomLab/clearfolio`, keeping the product-hourly-caller-neutral convention (`CLAUDE.md`) enforced by a real regression test rather than only code review. Also corrects `docs/product-technical-gap-baseline.md`'s matching entry, which still described the cron-staleness follow-up as "not yet fixed."
+- **Fix current-main contract drift that blocked the unscoped
+  `agent-review-runtime-quality-ci.yml` "Verify scheduler and
+  contextual-orchestrator review-repair contracts" step (which discovers and
+  runs the full `tests/` directory with no positional arguments).** First,
+  `strix.yml`'s `changed-scope` job had drifted from its byte-identical
+  siblings in `security-scan.yml`/`sast-semgrep.yml`: PR #1869's
+  `converted_to_draft` generalization folded its `if:` condition onto a
+  multi-line `>-` block scalar, and the extra continuation lines survived
+  `test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if`'s
+  `if:`-line-only normalization. Collapsed it back to one physical `if:` line
+  with the same expression -- no semantic change. Second,
+  `test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles`
+  still looked up a step named "...for the closed pull request" and passed
+  `CLOSED_PR_NUMBER`, both retired by the same PR #1869 when it generalized
+  `noema-review.yml`'s `cancel-closed-pr-runs` cleanup step to "...for the
+  inactive pull request" (env renamed to `INACTIVE_PR_NUMBER`/
+  `INACTIVE_PR_HEAD_SHA`/`PR_ACTION`) and added a `live_target_matches`
+  live-PR re-verification before every cancellation pass (mirroring
+  `strix.yml`'s identical job) -- `tests/test_noema_review_gate.py`'s
+  equivalent tests were already updated for this at the time, but this one
+  was missed. Updated the test to the current step name and env vars and
+  taught its fake `gh` to answer the new `pulls/<number>` live-state lookup;
+  the PR #1507 "sibling Noema runs evade cancellation" `pull_requests[]`
+  matching invariant it protects is unchanged and still correctly
+  implemented in production. Third,
+  `test_dispatch_strix_reruns_scan_job_not_sibling_publisher` only mocked
+  `rerun_actions_job`, so in any environment with a real `gh` CLI on `PATH`
+  its `dispatch_strix_evidence` call still ran the genuine
+  `live_dispatch_head_matches` re-read, which invoked the unmocked `fetch_pr`
+  against the real GitHub API for a synthetic PR that does not exist there --
+  returning a live/head mismatch and `"stale_head"` instead of the expected
+  `"rerun"` (and, absent `gh` entirely, failing even earlier with a missing
+  executable). Added `monkeypatch.setattr(sched, "fetch_pr", lambda *_args:
+  [pr])` alongside the existing `rerun_actions_job` mock so the live-head
+  check observes the same fixture `pr` as authoritative, matching how every
+  other call in this test path is already isolated from real GitHub state.
+  Fourth, the Strix shell contract still expected job-level concurrency after
+  PR #1878 moved same-PR coalescing to workflow admission; it now asserts the
+  admission-level key and rejects the obsolete delayed key. Fifth, the
+  consolidated review-recovery fixtures now use the 17 daily UTC schedules
+  adopted by main instead of the retired hourly expressions.
+- Remove the central `org-queue-sweep` runner and its organization-wide
+  repository walk. Native PR/review events, auto-merge, trigger-aware
+  same-PR cancellation, and each repository's daily `scan-pr-queue` recovery
+  remain the bounded queue owners.
+- Move Noema's repository-and-PR concurrency group to workflow admission so a
+  new HEAD cancels its stale queued run before either consumes a job slot.
+- Scope the current-head coalescer's workflow admission to repository and PR,
+  while retaining exact-HEAD revalidation inside the trusted job.
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.

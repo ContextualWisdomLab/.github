@@ -49,17 +49,6 @@ _FORMER_CALLERS = (
 # was raised to "200" here -- see test_max_prs_and_max_dispatches_stay_uniform_static_values)
 # and both are asserted separately as static `with:` values rather than
 # carried per-target.
-#
-# Each schedule key is a full 5-field daily cron string (minute, then a
-# distinct hour 0-16), not the hourly `"<minute> * * * *"` shape the original
-# 18 per-repository files used. The redesign (see
-# docs/doctoring/hourly-review-repair-single-file-consolidation.md and
-# docs/adr/0021-hourly-review-repair-single-file-consolidation.md) turned the
-# single shared hourly cron into 17 distinct once-per-day schedules,
-# staggered across UTC hours 0-16, so this control plane admits at most one
-# recovery workflow per hour instead of seventeen every hour. Each
-# repository's original minute is preserved verbatim as the new cron's
-# minute field; only the hour field is new.
 _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     "2 0 * * *": [
         {
@@ -173,7 +162,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     # independent files (fast-mlsirm, metering-billing-platform) had each
     # chosen minute 49 without knowing about the other. The consolidated
     # lookup makes that sharing explicit and still dispatches each
-    # repository exactly once per day (hour 12 UTC), via the matrix in
+    # repository exactly once per hour, via the matrix in
     # dispatch-review-repair.
     "49 12 * * *": [
         {
@@ -288,15 +277,7 @@ def test_all_eighteen_former_callers_are_deleted() -> None:
 
 
 def test_schedule_list_has_every_distinct_minute_exactly_once() -> None:
-    """The 17 distinct daily cron entries (minute 49 is intentionally shared
-    by two repositories at hour 12) each appear exactly once.
-
-    Each entry is a full ``<minute> <hour> * * *`` daily schedule, not an
-    hourly ``<minute> * * * *`` one: the redesign spreads the 17 (18
-    repository) recoveries across distinct UTC hours 0-16 so this control
-    plane admits at most one recovery workflow per hour instead of
-    seventeen every hour.
-    """
+    """The 17 distinct minutes (49 is intentionally shared) each appear once."""
     text = _read(_CALLER)
     cron_lines = re.findall(r'- cron: "([^"]+)"', text)
 
