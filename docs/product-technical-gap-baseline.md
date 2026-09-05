@@ -3232,3 +3232,48 @@ repository), but this test still asserts the old single hourly `cron: "23 * * * 
 `test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
 behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
 intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+
+## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
+
+**Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
+this measurement partly refuted.
+
+**Why measured.** Items 15/16/17 ask to remove needlessly-triggered workflows, consolidate workflow files
+("bootup에도 시간이 듦"), and cut redundant steps; the standing complaint is the org's 60-concurrent-job
+ceiling ([`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`](doctoring/actions-plan-concurrency-ceiling-20260903.md)).
+Reducing *jobs per PR* attacks that ceiling directly, so jobs-per-PR was taken as the metric.
+
+**Baseline, measured live.** One completed `.github` PR head (`#1829`) produced **57 check runs across 2 run
+attempts — roughly 28 per attempt**. `Detect changed scope` was the single most repeated job name (10 total,
+**5 per attempt**), well ahead of anything else.
+
+**The intuition ("5 duplicate gates = 5 wasted runners") is wrong; the corrected finding is narrower.** Each
+gate job allocates a full `ubuntu-24.04` runner and makes a retrying paginated `gh api .../pulls/N/files`
+call purely to compute two booleans (`code`, `deps`). Whether that cost is waste depends entirely on how many
+consumers `needs:` it — which differs per file:
+
+| Workflow | Gate consumers (`needs: changed-scope`) | Verdict |
+| --- | --- | --- |
+| `security-scan.yml` | 4 (`osv-scan`, `dependency-review`, `trivy-fs`, `scorecard`) | **Legitimate.** One runner amortized across 4 gated jobs; self-gating each consumer would trade 1 runner for 4 redundant API calls. Keep. |
+| `sast-semgrep.yml` | 1 (`semgrep`) | **Pure overhead.** Two runner allocations where one suffices. |
+| `strix.yml` | 1 (`strix`, which also needs `admit-current-head`) | **Pure overhead.** Same shape. |
+
+**Quantified opportunity.** Folding the gate into its single consumer as an early-exit first step saves
+exactly **1 runner allocation per workflow per PR** in the two single-consumer cases — **2 slots per PR** —
+with no extra API calls (the same lone consumer computes the same booleans it already waited on). The saving
+lands on code-touching PRs; a doc-only PR allocates one runner either way (gate-then-skip vs. run-then-exit).
+Both files are org-ruleset required workflows dispatched into ~74 repositories, so this is 2 slots per PR
+**org-wide**, against a 60-slot ceiling.
+
+**Constraint any fix must preserve.** The gate exists because the org ruleset ignores every `on:` filter when
+it dispatches these workflows into another repository, and a trigger-level skip leaves `.github`'s classic
+required contexts Pending forever — the job-level decision is load-bearing, not incidental
+([`docs/doctoring/required-workflow-path-filter-boundary.md`](doctoring/required-workflow-path-filter-boundary.md)).
+Early-exit-inside-the-consumer keeps that property (the job still runs and concludes `success`), but any fix
+must be checked against it explicitly rather than assumed.
+
+**Not fixed here, deliberately.** These are live org-wide required workflows and the org's CI pipeline is
+currently unable to complete runs at all (see the pipeline-stall entry), so the change cannot be validated
+end-to-end right now, and ~30 PRs are already queued behind the same stall. The measurement is recorded now
+because it is the part that is durable and currently unclaimed; the edit belongs in its own PR with the
+local workflow-contract tests run against it.
