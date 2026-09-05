@@ -10858,3 +10858,50 @@ def test_reconcile_leaves_a_still_running_lease_dispatched(tmp_path):
     record = next(iter(load_state_file(gate.state_path).records.values()))
     assert record.status == "dispatched"
     assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is False
+
+
+def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
+    """A behind, unreviewed head keeps its queued checks instead of being updated (#1935).
+
+    Under a saturated queue the PR's own delayed scheduler run used to merge
+    ``main`` into the head before review dispatch, cancelling every queued
+    check on the old head and requeueing the PR behind them. The hold has no
+    age cap on purpose: a check that never finishes keeps the head in place
+    rather than restarting that loop, and the update resumes as soon as every
+    newest check run has a terminal status.
+    """
+
+    def behind_with(nodes):
+        return make_pr(
+            mergeStateStatus="BEHIND",
+            statusCheckRollup={"contexts": {"nodes": nodes}},
+        )
+
+    held = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "QUEUED", "conclusion": None},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "IN_PROGRESS", "conclusion": None},
+                {"__typename": "CheckRun", "name": "osv-scan", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ]
+        )
+    )
+    assert held.action == "wait"
+    assert "branch is outdated before review dispatch" in held.reason
+    assert "checks are still queued or running" in held.reason
+
+    resumed = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "COMPLETED", "conclusion": "SKIPPED"},
+            ]
+        )
+    )
+    assert resumed.action == "update_branch"
+    assert resumed.reason.startswith(
+        "current head has no OpenCode approval; branch is outdated before review dispatch"
+    )
+    assert "checks are still queued or running" not in resumed.reason
+
+    assert sched.has_in_flight_check_runs(behind_with([])) is False
