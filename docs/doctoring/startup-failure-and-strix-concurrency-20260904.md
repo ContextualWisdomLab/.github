@@ -43,6 +43,20 @@ another. Workflow-level concurrency was deliberately not used because GitHub
 applies it before any live-head admission job can run and does not guarantee
 concurrency ordering.
 
+**Amendment (2026-09-05).** "nor one another" no longer holds for `push`
+events on the same branch. Measured at 14:27Z in `.github`: nine `push`/`main`
+Strix runs were outstanding at once (five running, jobs started 12:31-14:25Z,
+one already past two hours; four queued), each holding one slot under the
+shared 60-job ceiling, against a 10-30 minute normal scan. The run-id fallback
+in the workflow-level group made every main push its own group, so no newer
+main head ever retired an older scan. The workflow-level group now scopes
+`push` events as `push-<ref_name>`: a newer head of the same protected branch
+supersedes the older scan exactly as a newer PR head does. This loses nothing
+the gate consumes: a push scan covers the whole tree (`STRIX_TARGET_PATH` is
+`./` outside PR scope) and publishes no `strix` commit status. `schedule` and
+PR-less `repository_dispatch` runs still receive a unique run id. The
+`pr_number=${GITHUB_RUN_ID}` admission output is unchanged.
+
 ## Verification
 
 - `python -m pytest -q tests/test_pr_review_merge_scheduler.py -k 'startup_failures or startup_failure'`

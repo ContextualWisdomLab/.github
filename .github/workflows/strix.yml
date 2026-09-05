@@ -77,12 +77,24 @@ on:
 concurrency:
   # Workflow-level admission is required: job-level groups are never evaluated
   # while the whole run is queued behind the organization job ceiling.
+  # Push scans coalesce per protected branch: a newer head of the same branch
+  # supersedes the older scan exactly as a newer PR head does. A push scan
+  # covers the whole tree (STRIX_TARGET_PATH is './' outside PR scope) and
+  # publishes no 'strix' commit status, so the newest head subsumes every
+  # older one. With the run-id fallback every main push was its own group and
+  # nothing ever retired a superseded main scan: on 2026-09-05 nine push/main
+  # runs were outstanding at once in this repository (five running for up to
+  # two hours, four queued) against a 10-30 minute normal scan, each holding a
+  # slot under the shared 60-job ceiling. schedule and repository_dispatch
+  # without a PR number keep a unique run id.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number ||
+    (github.event_name == 'push' && format('push-{0}', github.ref_name)) ||
+    github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token

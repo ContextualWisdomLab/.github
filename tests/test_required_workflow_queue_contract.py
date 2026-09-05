@@ -382,6 +382,17 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     superseded runs before runner admission, including runs still blocked by
     the organization-wide job ceiling. Native and dispatched evidence share
     one group; non-PR events use a unique run id.
+
+    2026-09-05: push events are scoped per protected branch (``push-<ref>``)
+    instead of a unique run id. Measured that morning in this repository:
+    nine ``push``/``main`` Strix runs were outstanding at once (five running
+    for up to two hours, four queued) against a 10-30 minute normal scan,
+    because the run-id fallback made every main push its own group and
+    nothing ever retired a superseded main scan. A push scan covers the whole
+    tree (``STRIX_TARGET_PATH`` is ``./`` outside PR scope) and publishes no
+    ``strix`` commit status, so the newest branch head subsumes every older
+    one. ``schedule`` and ``repository_dispatch`` without a PR number keep a
+    unique run id.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -398,6 +409,10 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.event.pull_request.number" in concurrency_contract
     assert "github.event.client_payload.pr_number" in concurrency_contract
     assert "github.run_id" in concurrency_contract
+    assert (
+        "(github.event_name == 'push' && format('push-{0}', github.ref_name)) ||"
+        in concurrency_contract
+    )
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert "cancel-in-progress: true" in concurrency_contract

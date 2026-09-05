@@ -203,6 +203,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "needs: [changed-scope, admit-current-head]" "strix provider queue waits for live-head admission"
 	assert_file_contains "$workflow_file" 'strix-security-scan-${{' "strix workflow coalesces by repository and PR before job admission"
 	assert_file_not_contains "$workflow_file" 'strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{' "strix concurrency is not delayed until job admission"
+	assert_file_contains "$workflow_file" "format('push-{0}', github.ref_name)" "strix push scans coalesce per protected branch instead of one group per run id"
 	assert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow runs superseded-head cleanup outside the provider scan queue"
 	assert_file_not_contains "$workflow_file" "format('closed-pr-{0}-{1}'" "strix cleanup does not need a second concurrency queue"
 	assert_file_contains "$workflow_file" 'echo "pr_number=${GITHUB_RUN_ID}"' "strix workflow preserves independent push and schedule evidence"
