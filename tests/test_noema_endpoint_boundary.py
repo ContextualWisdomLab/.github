@@ -63,7 +63,11 @@ class FakeOpener:
         timeout: int | None = None,
     ) -> FakeResponse:
         """Record the request and return the configured response."""
-        assert timeout == 120
+        # This org forbids a fixed model wall-clock deadline on the LLM path
+        # (CLAUDE.md; #1889/#1890/#1892 each added one and were reverted by
+        # #1891/#1895). The gateway owns model timeouts, so the caller passes
+        # none. The byte cap below is the bound this test really pins.
+        assert timeout is None
         if self.capture is not None:
             self.capture(request)
         return FakeResponse(self.payload)
@@ -79,6 +83,10 @@ def _configure(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
     monkeypatch.setenv("NOEMA_LLM_API_URL", url)
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "unit-test-key")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "review-model")
+    # This module pins the credential egress boundary, not verdict content.
+    # main validates changed-line evidence after inference, which the synthetic
+    # "diff" here cannot satisfy; main's own call_llm tests stub it the same way.
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
 
 
 def _addrinfo(address: str, port: int) -> list[tuple[Any, ...]]:
@@ -339,7 +347,7 @@ def test_public_endpoint_requires_https_and_stable_global_dns(
         lambda *_args, **_kwargs: _addrinfo("8.8.8.8", 80),
     )
     with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
     _configure(monkeypatch, "https://model.example.test/v1/chat/completions")
     resolutions = iter(
@@ -354,7 +362,7 @@ def test_public_endpoint_requires_https_and_stable_global_dns(
     )
 
     with pytest.raises(ValueError, match="DNS addresses changed during the request"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
     assert len(sent) == 1
 
 
@@ -371,7 +379,7 @@ def test_public_endpoint_accepts_stable_global_dual_stack_dns(
         lambda *_args: FakeOpener(APPROVAL_RESPONSE),
     )
 
-    verdict = noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
     assert verdict["decision"] == "approve"
 
 
@@ -407,7 +415,7 @@ def test_trusted_loopback_sidecar_keeps_the_narrow_http_exception(
         lambda *_args: FakeOpener(APPROVAL_RESPONSE, observed.append),
     )
 
-    verdict = noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
     assert verdict["decision"] == "approve"
     assert observed[0].full_url == url
 
@@ -425,7 +433,7 @@ def test_loopback_exception_requires_literal_and_loopback_only_dns(
     )
 
     with pytest.raises(ValueError, match="left loopback"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 def test_non_sidecar_loopback_port_requires_https_even_with_sidecar_configured(
@@ -436,7 +444,7 @@ def test_non_sidecar_loopback_port_requires_https_even_with_sidecar_configured(
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:43123")
 
     with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 def test_loopback_exception_rejects_other_loopback_literals(
@@ -446,7 +454,7 @@ def test_loopback_exception_rejects_other_loopback_literals(
     _configure(monkeypatch, "http://127.0.0.2:43123/v1/chat/completions")
 
     with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 def test_endpoint_rejects_url_user_information(
@@ -456,7 +464,7 @@ def test_endpoint_rejects_url_user_information(
     _configure(monkeypatch, "https://user:pass@model.example.test/v1/chat/completions")
 
     with pytest.raises(ValueError, match="cannot contain user information"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize(
@@ -500,7 +508,7 @@ def test_non_loopback_hostname_rejects_every_special_address(
         lambda *_args: UnexpectedOpener(),
     )
     with pytest.raises(ValueError, match="globally routable unicast"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize("failure", ["dns_error", "empty", "malformed"])
@@ -521,7 +529,7 @@ def test_dns_failure_is_closed_before_request_construction(
 
     monkeypatch.setattr(socket, "getaddrinfo", fail_resolution)
     with pytest.raises(ValueError, match="DNS resolution"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")
 
 
 def test_response_body_is_bounded_before_json_decoding(
@@ -546,4 +554,4 @@ def test_response_body_is_bounded_before_json_decoding(
     )
 
     with pytest.raises(RuntimeError, match="response exceeded the byte limit"):
-        noema.call_llm("owner/repo", 1, _pr(), "diff", False)
+        noema.call_llm("owner/repo", 1, _pr(), "diff", False, "head")

@@ -121,6 +121,7 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_MODEL", "orchestrator/free")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:18080")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:18080/v1/chat/completions")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
 
     seen = {}
 
@@ -137,7 +138,7 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
             return self.call_func(request, timeout)
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    verdict = noema.call_llm("owner/repo", 1, pr, "diff", False)
+    verdict = noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
     assert verdict["decision"] == "approve"
     assert seen["url"] == "http://127.0.0.1:18080/v1/chat/completions"
     assert seen["model"] == "orchestrator/free"
@@ -147,7 +148,7 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     # non-loopback path and is rejected for using plaintext HTTP.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:9/evil")
     with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # The via-orchestrator marker never widens the allowlist on its own; with
     # no CONTEXTUAL_ORCHESTRATOR_BASE_URL configured this is not the sidecar
@@ -156,11 +157,11 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://[::1]:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost:18080/v1/chat/completions")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
-        noema.call_llm("owner/repo", 1, pr, "diff", False)
+        noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
 
 def test_reject_private_llm_url_scheme_hostname_and_public_dns(monkeypatch):
