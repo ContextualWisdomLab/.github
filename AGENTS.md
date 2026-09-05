@@ -61,7 +61,9 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   lifecycle-specific group so it cannot preempt current-head evidence; compare
   the live PR state and head immediately before every cancellation. After a
   cancellation reaches its terminal state, re-read both the PR and target run;
-  if the cancelled run now matches the live head, enqueue replacement evidence
+  only if the PR is still open and non-draft and the cancelled target still
+  matches its live head, enqueue at most one replacement keyed by PR, workflow,
+  and target head. Revalidate that exact head again during replacement admission
   instead of treating cleanup as successful.
 - Keep cleanup repository-local and event-driven. Do not restore an
   organization-wide queue sweep, unbounded sleep-based polling, or another
