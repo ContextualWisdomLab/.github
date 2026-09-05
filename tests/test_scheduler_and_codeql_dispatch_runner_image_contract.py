@@ -12,9 +12,8 @@ symptom), were still requesting the unpinned image.
 
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 PR_REVIEW_AUTOFIX = Path(".github/workflows/pr-review-autofix.yml")
 PR_REVIEW_FIX_SCHEDULER = Path(".github/workflows/pr-review-fix-scheduler.yml")
