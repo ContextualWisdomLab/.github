@@ -12,14 +12,12 @@ from scripts.ci import pr_review_conflict_scope as scope
 
 AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
 FIX_SCHEDULER_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
-HOURLY_CALLER_WORKFLOW = Path(
-    ".github/workflows/clearfolio-hourly-review-repair.yml"
-)
+HOURLY_CALLER_WORKFLOW = Path(".github/workflows/hourly-review-repair.yml")
 AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "ea13d12a3771f7bb2550736185730f61ae0b766d"
+REVIEW_DISPATCH_BLOB_SHA = "d7f7c18d9fc520e3ae91d58d808ccca9d8e57771"
 
 
 def _workflow_text(path: Path) -> str:
@@ -27,11 +25,11 @@ def _workflow_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_review_fix_caller_runs_once_each_hour() -> None:
-    """Keep the actionable-review repair caller on the approved hourly cadence."""
+def test_review_fix_caller_keeps_the_github_daily_recovery_slot() -> None:
+    """Keep the GitHub review repair caller on its distributed daily slot."""
     caller = _workflow_text(HOURLY_CALLER_WORKFLOW)
-    assert 'cron: "23 * * * *"' in caller
-    assert 'cron: "23 */2 * * *"' not in caller
+    assert 'cron: "23 7 * * *"' in caller
+    assert 'cron: "23 * * * *"' not in caller
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in caller
 
 
