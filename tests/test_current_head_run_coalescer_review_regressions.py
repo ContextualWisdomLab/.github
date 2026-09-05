@@ -11,7 +11,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
 def load_module():
@@ -289,13 +289,19 @@ def test_transport_is_token_bound_and_individually_timeout_bounded(monkeypatch) 
 
     def success(args, **kwargs):
         calls.append((list(args), dict(kwargs)))
-        stdout = "{}" if "/cancel" not in " ".join(args) else ""
+        command = " ".join(args)
+        if "/cancel" in command:
+            stdout = ""
+        elif command.endswith("actions/runs/123"):
+            stdout = '{"status":"completed","conclusion":"cancelled"}'
+        else:
+            stdout = "{}"
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(module.subprocess, "run", success)
     assert module._run_json(["gh", "api", "repos/owner/repo"]) == {}
     module._cancel_run("owner/repo", 123)
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert all(call_kwargs.get("timeout") == module.API_TIMEOUT_SECONDS for _, call_kwargs in calls)
 
 

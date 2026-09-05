@@ -90,6 +90,17 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert "pull_request_target:" not in workflow
 
 
+def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
+    """A current-head language scan cannot cancel its sibling language scans."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    concurrency = workflow.split("concurrency:\n", 1)[1].split("\n\npermissions:", 1)[0]
+
+    assert "github.event.client_payload.target_repository" in concurrency
+    assert "github.event.client_payload.pr_number" in concurrency
+    assert "github.event.client_payload.required_language" in concurrency
+    assert "cancel-in-progress: true" in concurrency
+
+
 def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_request: dict) -> subprocess.CompletedProcess[str]:
     """Execute the real validate-dispatch shell block against a fake `gh api`."""
     bash = shutil.which("bash")
@@ -167,6 +178,52 @@ def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
 
     assert result.returncode == 1
     assert "authorization rejected actor=" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_any_listed_dispatcher(tmp_path):
+    """ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared by all three
+    dispatch consumers; each listed identity passes when actor and sender both
+    equal it, an unlisted one is rejected, and actor/sender that are two
+    *different* listed identities are still rejected."""
+    # _run_validate_step creates tmp_path/bin, so each invocation needs its
+    # own directory.
+    allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        result = _run_validate_step(
+            tmp_path / identity.replace("[", "").replace("]", ""),
+            {
+                "ALLOWED_DISPATCH_ACTOR": allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            _matching_pull_request(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"Authorized repository_dispatch actor={identity}" in result.stdout
+
+    unlisted = _run_validate_step(
+        tmp_path / "unlisted",
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "seonghobae",
+            "DISPATCH_SENDER": "seonghobae",
+        },
+        _matching_pull_request(),
+    )
+    assert unlisted.returncode == 1
+    assert "authorization rejected actor=seonghobae" in unlisted.stdout
+
+    mismatched = _run_validate_step(
+        tmp_path / "mismatched",
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "opencode-agent[bot]",
+            "DISPATCH_SENDER": "github-actions[bot]",
+        },
+        _matching_pull_request(),
+    )
+    assert mismatched.returncode == 1
+    assert "authorization rejected actor=opencode-agent[bot]" in mismatched.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
@@ -432,3 +489,27 @@ def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path
 
     assert result.returncode == 0, result.stderr
     assert post_log.exists()
+
+
+def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
+    """The dispatched matrix reaches `env:` as JSON text, never as a raw sequence.
+
+    `codeql-pr.yml` sends `client_payload.matrix` as an array. An `env:` value must be
+    a scalar, so assigning the array directly makes GitHub reject that step when its
+    `env:` is evaluated -- "A sequence was not expected" -- after the runner has been
+    assigned and the earlier steps have already run. That shipped in #1776 and left this
+    workflow at 0 successes across 136 attempts.
+
+    No local tool catches it: `yaml.safe_load` parses the file and `actionlint` 1.7.12
+    reports it clean, because it is an Actions template rule rather than YAML syntax.
+    Only GitHub's own validator rejects it, so this string contract is the only guard
+    that runs before a dispatch does. The validate step consumes the value through
+    `jq`, so JSON text is what it already expects.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert (
+        "SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}" in workflow
+    ), "SUPPLIED_MATRIX must be serialised with toJSON(); a bare array breaks template validation"
+    assert (
+        "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
+    ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
