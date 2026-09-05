@@ -430,8 +430,8 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
-def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
-    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+def test_gateway_preflight_has_no_inference_timeout() -> None:
+    """The end-to-end gateway check must not cap real completion latency.
 
     Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
     evidence reproduction (Strix run 33306775025 on
@@ -440,22 +440,51 @@ def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> No
     identical gateway request against that same healthy route being cut off
     at exactly curl's configured bound -- "gateway preflight request could
     not reach the local sidecar" was that timeout, not a real connectivity
-    failure. This asserts the bound is generous enough to tolerate a real
-    reasoning generation (well above the routing probe's own 10s
-    per-candidate budget) rather than the previous 30s, which rejected a
-    route the routing probe had just proven healthy.
+    failure. The request therefore has no wall-clock bound.
     """
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
-    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
-    gateway_preflight_timeout_seconds = int(match.group(1))
+    request_block = sidecar.rsplit("curl -sS", 1)[1].split(
+        '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"', 1
+    )[0]
+    assert "--max-time" not in request_block
 
-    assert gateway_preflight_timeout_seconds >= 120, (
-        "gateway preflight curl --max-time "
-        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
-        "completion latency; 30s was observed cutting off a route the routing probe "
-        "had just proven ready"
+
+def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    lines = sidecar.splitlines()
+
+    def curl_command(url: str) -> tuple[str, int]:
+        index = next(index for index, line in enumerate(lines) if url in line)
+        start = index
+        while start and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        command = " ".join(line.strip().removesuffix("\\") for line in lines[start : end + 1])
+        assert re.search(r"\bcurl\b", command)
+        return command, end
+
+    timeout_option = re.compile(
+        r"(?:^|\s)(?:-m(?:\s|$)|--[a-z-]*(?:time|timeout)[a-z-]*(?:=|\s|$))"
+    )
+    zdr_command, _ = curl_command("https://openrouter.ai/api/v1/endpoints/zdr")
+    health_command, health_command_end = curl_command(
+        'http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz'
+    )
+    for command in (zdr_command, health_command):
+        assert timeout_option.search(command) is None
+        assert re.search(r"(?:^|\s)timeout(?:\s|$)", command) is None
+
+    health_loop = "\n".join(lines[health_command_end + 1 :]).split("\ndone", 1)[0]
+    assert 'kill -0 "$sidecar_pid"' in health_loop
+    assert health_loop.count("fail ") == 1
+    assert health_loop.index('kill -0 "$sidecar_pid"') < health_loop.index("fail ")
+    assert not re.search(
+        r"\b(?:break|exit|timeout)\b|\s-(?:ge|gt|le|lt)\s|\bif\s+\(\(",
+        health_loop,
     )
 
 
@@ -1402,7 +1431,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
     max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    timeout_seconds = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
     primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
     total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
     fallback_limit = total_route_limit - primary_limit
@@ -1430,12 +1458,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    worst_case_seconds = total_attempts * timeout_seconds
-    assert worst_case_seconds <= 160, (
-        f"worst-case preflight time ({worst_case_seconds}s across "
-        f"{total_attempts} attempts) must stay within the 160s the ADR "
-        "computes and the 180s healthz-readiness watchdog allows"
-    )
     # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
     # candidate across both stages) + 4 escalations (the shared cap) = 16.
     assert total_attempts == total_route_limit + max_escalations
@@ -1452,6 +1474,57 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     )
     assert (primary, fallback) == (8, 4)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+
+
+def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-account cap falls back to ``policy.DEFAULT_ACCOUNT_CAP``, not the total budget.
+
+    Regression for a real, observed failure mode
+    (ContextualWisdomLab/.github#1415, reported as "빈 깡통 경로 너무 많다"): a
+    sibling helper (``_catalog_family_cap()``) fell back to
+    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` -- the *total* preflight budget --
+    instead of the intended per-account cap whenever its env var was unset.
+    That silently disabled per-account diversification: in a live production
+    run, two NVIDIA NIM credentials sharing one rate-limited upstream jointly
+    consumed all 12 preflight slots, of which 10 (83%) were then rejected via
+    429/404/timeout. This module's own equivalent helper must never resolve
+    to the same value as the total-routes budget when given the real
+    ``policy.DEFAULT_ACCOUNT_CAP``, which is strictly smaller.
+    """
+    namespace = _load_launcher()
+    monkeypatch.delenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", raising=False)
+    cap = namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP)
+    assert cap == policy.DEFAULT_ACCOUNT_CAP
+    assert cap != namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    assert cap < namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+
+
+def test_catalog_account_cap_honors_an_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator-set ``ORCHESTRATOR_CATALOG_ACCOUNT_CAP`` still takes effect."""
+    namespace = _load_launcher()
+    monkeypatch.setenv("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "6")
+    assert namespace["_catalog_account_cap"](policy.DEFAULT_ACCOUNT_CAP) == 6
+
+
+def test_main_sources_the_account_cap_default_from_policy_not_a_magic_number() -> None:
+    """``main()`` must wire the cap default from ``policy.DEFAULT_ACCOUNT_CAP``.
+
+    A hand-typed literal (or, worse, a total-routes-scale constant) can
+    silently drift out of sync with ``policy.DEFAULT_ACCOUNT_CAP`` with no
+    test catching it -- the exact drift that produced
+    ContextualWisdomLab/.github#1415's real preflight-budget waste. This
+    source-level contract test pins both ``build_zdr_prioritized_catalog``
+    call sites in ``main()`` to the single source of truth and forbids the
+    total-routes constant from ever reappearing as the account-cap fallback.
+    """
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    assert source.count("account_cap=_catalog_account_cap(DEFAULT_ACCOUNT_CAP)") == 2
+    assert "ORCHESTRATOR_CATALOG_FAMILY_CAP" not in source
+    assert 'os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", "4")' not in source
 
 
 def test_zdr_admission_selects_priced_tier_when_free_routes_are_not_private() -> None:
@@ -1542,14 +1615,13 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
     assert not path.exists()
 
 
-def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
-    """Sequential route probes must fit inside the sidecar startup budget."""
+def test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
     assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
     assert "REVIEW_TEMPERATURE = 1.0" in launcher
-    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10" in launcher
-    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
+    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
+    assert "ModelClient(\n        timeout=" not in launcher
     assert "max_retries=0" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 

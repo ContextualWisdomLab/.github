@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-c107e3e52371993aa9c326fcc245e01c41fc3850}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-2e414d15ba58f28597751b625a8a2f00fc9fadcf}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -108,7 +108,9 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
+import contextlib
 import http.client
+import io
 import json
 import threading
 
@@ -127,7 +129,9 @@ class CaptureClient(ModelClient):
 
     def proxy_send(self, agent, endpoint, payload):
         self.proxy_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
-        return super().proxy_send(agent, endpoint, payload)
+        # This contract exercises the loopback gateway only; provider egress
+        # would turn an offline startup check into an availability dependency.
+        return self._mock_raw(agent, endpoint, payload)
 
 
 client = CaptureClient()
@@ -145,19 +149,25 @@ thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    connection.request(
-        "POST",
-        "/v1/chat/completions",
-        body=b"",
-        headers={
-            "Authorization": "Bearer contract",
-            "Content-Type": "application/json",
-            "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
-        },
+    expected_rejection_log = io.StringIO()
+    with contextlib.redirect_stderr(expected_rejection_log):
+        connection.request(
+            "POST",
+            "/v1/chat/completions",
+            body=b"",
+            headers={
+                "Authorization": "Bearer contract",
+                "Content-Type": "application/json",
+                "Content-Length": str(REVIEW_MAX_BODY_BYTES + 1),
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 413, response.status
+        response.read()
+    assert (
+        "request_failed status=413 code=request_too_large"
+        in expected_rejection_log.getvalue()
     )
-    response = connection.getresponse()
-    assert response.status == 413, response.status
-    response.read()
     connection.close()
 
     def post_payload(payload):
@@ -246,7 +256,7 @@ publish_sidecar_evidence() {
 
 # Optional authoritative ZDR route feed. Failure is non-fatal: the policy falls
 # back to the dated static attestation table in scripts/ci/zdr_policy.py.
-if curl -fsSL --max-time 15 "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
+if curl -fsSL "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
   log "using live OpenRouter ZDR endpoint feed"
   zdr_args=(--zdr-endpoints "$zdr_feed")
 else
@@ -269,11 +279,17 @@ esac
 
 orchestrator_pool="${CONTEXTUAL_ORCHESTRATOR_POOL:-free}"
 case "$orchestrator_pool" in
-  free|auto)
+  free)
     pool_args=(--pool "$orchestrator_pool")
     ;;
   *)
-    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free or auto"
+    # GitHub Actions Workflow usage of contextual-orchestrator is pinned to
+    # orchestrator/free: the org has not solved cost-safe free+ZDR routing
+    # well enough yet to justify a priced-inclusive "auto" pool in central CI,
+    # so "auto" is rejected here even though the launcher's own --pool flag
+    # (a general-purpose CLI also used outside GitHub Actions) still accepts
+    # it.
+    fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"
     ;;
 esac
 
@@ -330,7 +346,7 @@ cleanup_sidecar_on_error() {
 trap cleanup_sidecar_on_error EXIT
 
 i=0
-until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
+until curl -fsSL "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz" >/dev/null 2>&1; do
   if ! kill -0 "$sidecar_pid" 2>/dev/null; then
     sidecar_status=0
     wait "$sidecar_pid" || sidecar_status=$?
@@ -355,18 +371,6 @@ until curl -fsSL --max-time 2 "http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/
     fail "sidecar exited before healthz (status ${sidecar_status}); stderr: $(sed -n '1,20p' "$sidecar_stderr")"
   fi
   i=$((i + 1))
-  # KNOWN GAP, tracked as ContextualWisdomLab/.github#1455 (not yet fixed):
-  # this 180s covers the launcher's ENTIRE startup sequence -- discovery,
-  # catalog build, AND preflight probing -- not just probing. Layer 1's own
-  # "160s worst case" comment
-  # (contextual_orchestrator_review_launcher.py's REVIEW_PREFLIGHT_MAX_ESCALATIONS)
-  # accounts only for probing; discover_all_models() runs first, inside this
-  # same 180s, and can itself take up to ~105s worst case (verified against
-  # the vendored contextual_orchestrator.model_discovery source: ~7
-  # sequential HTTP calls at up to 15s each).
-  if [ "$i" -ge 180 ]; then
-    fail "sidecar did not become healthy; stderr: $(sed -n '1,20p' "$sidecar_stderr")"
-  fi
   sleep 1
 done
 if [ ! -s "$preflight_report" ]; then
@@ -421,25 +425,13 @@ gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # ContextualWisdomLab/contextual-orchestrator#912 run 33304076516).
 printf '{"model":"%s","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Reply with just '\''OK'\''."}],"temperature":1.0,"max_tokens":4096,"stream":false}\n' \
   "$gateway_virtual_model" > "$gateway_preflight_request"
-# 30s (this check's previous bound) is too tight for a real completion from a
-# reasoning-capable free-tier model: exact-evidence reproduction (Strix run
-# 33306775025 on ContextualWisdomLab/contextual-orchestrator#921, job
-# 99244624298) shows the routing probe marking a DeepSeek NIM route "ready"
-# in 18s, then this identical request against that same healthy route being
-# cut off by curl's own timeout at exactly 30.0s -- "gateway preflight
-# request could not reach the local sidecar" is this curl failure, not an
-# actual connectivity problem. This required-workflow job already budgets
-# 120 minutes (see timeout-minutes in strix.yml/noema-review.yml), and the
-# org's own stated policy accepts multi-hour central review latency in
-# favor of accuracy over speed -- a 30s bound on one preflight self-check
-# contradicted that policy and rejected a route the routing probe had just
-# proven healthy. 120s keeps this a bounded, fail-closed check while giving
-# a real reasoning generation room to finish. This value is deliberately kept
-# unchanged by ADR-0005 -- shortening it would regress the fix just described.
+# This completion is model inference, so ADR-0003 forbids a wall-clock timeout.
+# A slow reasoning model may legitimately take hours after routing proves it
+# healthy; transport failures still fail closed through curl's exit status.
 #
 # ADR-0005 Trigger A: this request goes to the virtual pool, not one pinned
 # candidate, so a transport failure or non-2xx status here (unreachable
-# process, timeout, upstream error) is retried with a fresh attempt at the
+# process, upstream error) is retried with a fresh attempt at the
 # SAME budget, up to REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS total attempts --
 # a same-budget retry may or may not land on a different underlying candidate
 # (route diversity here is a best-effort hope, not a verified guarantee: the
@@ -481,7 +473,7 @@ gateway_attempt=1
 gateway_http_status=""
 while :; do
   if gateway_http_status="$(
-    curl -sS --max-time 120 \
+    curl -sS \
       -o "$gateway_preflight_response" \
       -w '%{http_code}' \
       -X POST \
