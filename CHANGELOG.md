@@ -14,8 +14,8 @@
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
-  suite, including edits to the selector's own regression tests. Changelog-only
-  edits still do not start this runner; no job is added.
+  suite. Selector-only test edits use the existing unconditional contract step;
+  changelog-only edits still do not start this runner. No job is added.
 - Complete the scheduler test isolation introduced by #1896 for the two
   remaining fixtures that invoke `inspect_pr(..., dry_run=False)` or
   `main(...)`. Both now stub the environment-gated startup-failure recovery

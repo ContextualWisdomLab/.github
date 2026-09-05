@@ -73,6 +73,9 @@ def test_consolidated_workflow_materializes_one_runner_job() -> None:
     assert "workflow_dispatch:" not in workflow
     assert "gh api" not in workflow
     assert re.search(r"(?m)^[ \t]*sleep[ \t]+", workflow) is None
+    self_test_step = workflow.split("- name: Verify consolidated workflow contract", 1)[1]
+    assert "if:" not in self_test_step
+    assert "python -m pytest -q tests/test_agent_review_runtime_quality_consolidation.py" in self_test_step
 
 
 def test_changelog_only_edits_do_not_boot_the_consolidated_runner() -> None:
@@ -147,23 +150,24 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
 
 
 @pytest.mark.parametrize(
-    ("changed_path", "should_run"),
+    ("changed_path", "starts_runner", "review_repair", "queue"),
     (
-        ("scripts/ci/pr_review_merge_scheduler.py", True),
-        ("scripts/ci/pr_review_merge_scheduler_core.py", True),
-        ("tests/test_pr_review_merge_scheduler.py", True),
-        ("tests/test_agent_review_runtime_quality_consolidation.py", True),
-        (".github/workflows/pr-review-merge-scheduler.yml", True),
-        ("CHANGELOG.md", False),
+        ("scripts/ci/pr_review_merge_scheduler.py", True, True, False),
+        ("scripts/ci/pr_review_merge_scheduler_core.py", True, True, False),
+        ("tests/test_pr_review_merge_scheduler.py", True, True, False),
+        ("tests/test_agent_review_runtime_quality_consolidation.py", True, False, False),
+        (".github/workflows/pr-review-merge-scheduler.yml", True, True, True),
+        ("scripts/ci/current_head_run_coalescer.py", True, False, True),
+        ("CHANGELOG.md", False, False, False),
     ),
 )
 def test_merge_scheduler_changes_start_and_select_contracts(
-    changed_path: str, should_run: bool
+    changed_path: str, starts_runner: bool, review_repair: bool, queue: bool
 ) -> None:
     """Bind scheduler changes to both runner admission and the real selector."""
     workflow = _workflow_text()
     trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
-    assert (f'      - "{changed_path}"' in trigger) is should_run
+    assert (f'      - "{changed_path}"' in trigger) is starts_runner
 
     selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
         "            esac", 1
@@ -171,16 +175,16 @@ def test_merge_scheduler_changes_start_and_select_contracts(
     result = subprocess.run(
         [
             "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
-            'IFS= read -r changed_path\nreview_repair_suite=false\n'
+            'IFS= read -r changed_path\nreview_repair_suite=false\nqueue_suite=false\n'
             'case "$changed_path" in\n' + selector
-            + 'esac\nprintf "%s" "$review_repair_suite"\n',
+            + 'esac\nprintf "%s,%s" "$review_repair_suite" "$queue_suite"\n',
         ],
         input=changed_path + "\n",
         text=True,
         capture_output=True,
         check=True,
     )
-    assert result.stdout == str(should_run).lower()
+    assert result.stdout == f"{str(review_repair).lower()},{str(queue).lower()}"
     assert result.stderr == ""
 
 
