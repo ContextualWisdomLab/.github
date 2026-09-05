@@ -3984,6 +3984,7 @@ jobs:
         id: opencode_review_model_pool
         if: needs.coverage-evidence.result == 'success'
         continue-on-error: true
+        timeout-minutes: 15
         env:
           SHARE: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
