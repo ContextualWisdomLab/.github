@@ -62,8 +62,8 @@ def test_noema_public_dns_result_reaches_valid_model_response(
     class Opener:
         """Open one deterministic provider response."""
 
-        def open(self, _request: Any, timeout: int) -> Response:
-            assert timeout == noema.NOEMA_LLM_TIMEOUT_SECONDS
+        def open(self, _request: Any, timeout: int | None = None) -> Response:
+            assert timeout is None
             return Response()
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
@@ -80,6 +80,7 @@ def test_noema_handoff_returns_current_terminal_state() -> None:
             "commit_id": head,
             "user": {"login": handoff.NOEMA_REVIEW_AUTHOR},
             "body": (
+                f"{handoff.NOEMA_REVIEW_FOOTER_MARKER}\n"
                 f"- Head SHA: `{head}`\n"
                 f"<!-- noema-review-gate head_sha={head} decision=approve -->"
             ),
@@ -138,7 +139,9 @@ def test_fix_scheduler_queue_includes_eligible_pr_without_fix_need(
         "baseRefName": "main",
         "headRepository": {"nameWithOwner": "owner/repo"},
     }
-    monkeypatch.setattr(fix_scheduler, "fetch_open_prs", lambda *_args: [pr])
+    monkeypatch.setattr(
+        fix_scheduler, "fetch_open_prs", lambda *_args, **_kwargs: [pr]
+    )
     monkeypatch.setattr(fix_scheduler, "same_repository_head", lambda *_args: True)
     monkeypatch.setattr(fix_scheduler, "needs_autofix", lambda _pr: (False, ()))
     monkeypatch.setattr(
@@ -153,6 +156,8 @@ def test_fix_scheduler_queue_includes_eligible_pr_without_fix_need(
         repo="owner/repo",
         pr_number=None,
         max_prs=10,
+        scan_window_size=50,
+        rotation_seed=0,
         base_branch="main",
         max_dispatches=1,
         dry_run=True,

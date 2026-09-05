@@ -47,8 +47,17 @@ if __name__ == "__main__":
 # that object as well: standard module runners consult ``__spec__`` and its
 # loader after import, and the core's private identity cannot load this public
 # module name.
-_core.__name__ = __name__
-_core.__package__ = __package__
-_core.__loader__ = __loader__
-_core.__spec__ = __spec__
+# Only the FIRST public name to adopt the core may stamp its identity on it.
+# This module is importable both as ``scripts.ci.organization_commercial_readiness_loop``
+# and, when ``scripts/ci`` is on ``sys.path``, as the bare
+# ``organization_commercial_readiness_loop``. Both aliases resolve to the same core
+# object, so an unconditional restamp lets the second import overwrite the first
+# one's ``__spec__`` and leaves that name unable to load itself
+# (``runpy.run_module`` then raises "loader for X cannot handle Y").
+_core_spec = getattr(_core, "__spec__", None)
+if _core_spec is None or _core_spec.name == _CORE_MODULE_NAME:
+    _core.__name__ = __name__
+    _core.__package__ = __package__
+    _core.__loader__ = __loader__
+    _core.__spec__ = __spec__
 sys.modules[__name__] = _core

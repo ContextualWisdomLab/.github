@@ -10,6 +10,12 @@ import pytest
 from scripts.ci import pr_review_fix_scheduler as fix
 
 
+@pytest.fixture(autouse=True)
+def isolate_active_autofix_inventory(monkeypatch: Any) -> None:
+    """Keep RCA unit tests independent of live GitHub Actions inventory."""
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+
+
 def make_pr(*, is_draft: bool = False) -> dict[str, Any]:
     """Return a clean same-repository PR with review and failed-check evidence."""
     head = "a" * 40
@@ -150,7 +156,7 @@ def test_process_queue_completes_check_pages_before_rca_decision(
         order.append("dispatch")
         captured.update(kwargs)
 
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr])
     monkeypatch.setattr(fix, "fetch_pr", lambda repo, number: [pr])
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
@@ -191,7 +197,7 @@ def test_process_queue_isolates_one_pagination_failure(
     monkeypatch.setattr(
         fix,
         "fetch_open_prs",
-        lambda repo, max_prs: [blocked, repairable],
+        lambda repo, max_prs, **kwargs: [blocked, repairable],
     )
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
@@ -243,7 +249,7 @@ def test_process_queue_does_not_paginate_out_of_scope_pr(
     monkeypatch.setattr(
         fix,
         "fetch_open_prs",
-        lambda repo, max_prs: [out_of_scope, in_scope],
+        lambda repo, max_prs, **kwargs: [out_of_scope, in_scope],
     )
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])

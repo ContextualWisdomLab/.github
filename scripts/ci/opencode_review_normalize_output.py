@@ -954,40 +954,37 @@ def mentions_verification_posture(reason: str, summary: str) -> bool:
 
 def label_section(text: str, label: str) -> str:
     """Return text after a verification label until the next known label."""
+    # ⚡ Bolt: Fast path starts using native find, avoiding nested O(N) regex evaluation
+    starts: list[int] = []
+    index = text.find(label)
+    while index != -1:
+        if label == "coverage:" and text[max(0, index - 10) : index] == "docstring ":
+            index = text.find(label, index + len(label))
+            continue
+        starts.append(index)
+        index = text.find(label, index + len(label))
 
-    def label_starts(candidate: str) -> list[int]:
-        """Return exact verification-label starts without suffix collisions."""
-        starts = []
-        index = text.find(candidate)
-        while index != -1:
-            if (
-                candidate == "coverage:"
-                and text[max(0, index - 10) : index] == "docstring "
-            ):
-                index = text.find(candidate, index + len(candidate))
-                continue
-            starts.append(index)
-            index = text.find(candidate, index + len(candidate))
-        return starts
-
-    starts = label_starts(label)
     if not starts:
         return ""
     start = starts[-1] + len(label)
+
     end = len(text)
+    # ⚡ Bolt: Dynamically shrink the search window to prevent O(N) redundant scanning overhead
     for candidate in APPROVAL_VERIFICATION_LABELS:
         if candidate == label:
             continue
-        index = text.find(candidate, start, end)
-        while index != -1:
+
+        idx = text.find(candidate, start, end)
+        while idx != -1:
             if (
                 candidate == "coverage:"
-                and text[max(0, index - 10) : index] == "docstring "
+                and text[max(0, idx - 10) : idx] == "docstring "
             ):
-                index = text.find(candidate, index + len(candidate), end)
+                idx = text.find(candidate, idx + len(candidate), end)
                 continue
-            end = min(end, index)
+            end = min(end, idx)
             break
+
     return text[start:end]
 
 

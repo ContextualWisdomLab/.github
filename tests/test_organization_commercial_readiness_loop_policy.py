@@ -171,8 +171,10 @@ def test_workflow_and_doctoring_contracts() -> None:
         ROOT / ".github/workflows/organization-commercial-readiness-loop.yml"
     ).read_text()
     quality = (
-        ROOT
-        / ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
+        ROOT / ".github/workflows/agent-review-runtime-quality-ci.yml"
+    ).read_text()
+    quality_gate = (
+        ROOT / ".github/workflows/exact-head-coverage-quality-gate.yml"
     ).read_text()
     doctoring = (
         ROOT / "docs/doctoring/organization-commercial-readiness-loop.md"
@@ -192,10 +194,20 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert "COPILOT_GITHUB_TOKEN" not in workflow_source
     assert "github.run_number" in workflow_source
     assert "persist-credentials: false" in workflow_source
-    assert "--branch" in quality and "--fail-under=100" in quality
-    assert "--import-mode=importlib" in quality
+    # The reusable gate remains for its other caller; this suite now reuses the
+    # existing agent-review quality job's checkout and dependency bootstrap.
+    assert "commercial_readiness_suite=false" in quality
+    assert "outputs.commercial_readiness == 'true'" in quality
+    # loop.py is now a facade over _core.py and _ddd_contract.py, so the gate
+    # measures the whole module family; pinning the facade alone would leave
+    # the coordinator implementation ungated.
+    assert "--include='scripts/ci/organization_commercial_readiness_*.py'" in quality
+    assert "scripts/ci/organization_commercial_readiness_core.py" in quality
+    assert "scripts/ci/organization_commercial_readiness_ddd_contract.py" in quality
     assert "organization_commercial_readiness_fixtures.py" in quality
-    assert "github.event.pull_request.head.sha" in quality
+    assert "--branch" in quality_gate and "--fail-under=100" in quality_gate
+    assert "--import-mode=importlib" in quality_gate
+    assert "github.event.pull_request.head.sha" in quality_gate
     assert "disabled workflow does not hold a lease" in doctoring
     assert "manual-only, explicitly marked" in doctoring
     assert "# cwl-ddd-architecture-audit: required" in doctoring
