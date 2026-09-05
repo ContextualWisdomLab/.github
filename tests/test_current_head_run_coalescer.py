@@ -14,7 +14,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
 def load_module():
@@ -599,7 +599,7 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
 def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> None:
     """A stale, superseded run must exit 0, matching the workflow's documented design.
 
-    `current-head-run-coalescer.yml`'s own comment states `CoalescingRefused` is
+    The merge scheduler's coalescing step treats `CoalescingRefused` as
     "a safe no-op" whenever a queued instance's remembered head no longer matches
     the live head. `coalesce()`'s own top-level live-state check (before any
     per-candidate loop even starts) raises exactly that exception in this case --
@@ -624,17 +624,27 @@ def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> 
     assert "pull request head moved before duplicate classification" in capsys.readouterr().out
 
 
-def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
-    """The production workflow uses trusted source and a shell-safe mutation scope."""
-    assert WORKFLOW.is_file(), "current-head duplicate coalescer workflow is not implemented"
+def test_workflow_is_integrated_into_trusted_scheduler_job() -> None:
+    """The production step reuses trusted source and scheduler permissions."""
+    assert WORKFLOW.is_file(), "current-head duplicate coalescer step is not implemented"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request_target:" in text
-    assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]" in text
+    trigger_line = next(
+        line.strip() for line in text.splitlines() if line.strip().startswith("types:")
+    )
+    for event_name in (
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "converted_to_draft",
+    ):
+        assert event_name in trigger_line
     assert "actions: write" in text
     assert "contents: read" in text
-    assert "pull-requests: read" in text
-    assert "persist-credentials: false" in text
-    assert "ref: ${{ github.workflow_sha }}" in text
+    assert "pull-requests: write" in text
+    assert "Materialize trusted scheduler" in text
+    assert "TRUSTED_SOURCE_REF" in text
     assert "current_head_run_coalescer.py" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
