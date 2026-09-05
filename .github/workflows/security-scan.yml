@@ -7,7 +7,12 @@
 #   osv-scan          HARD  diff-scoped — fails on NEW vulns the PR introduces
 #   dependency-review HARD  diff-scoped — fails on vulnerable/denied deps the PR adds
 #   trivy-fs          HARD  repo-wide   — fails on FIXABLE MEDIUM/HIGH/CRITICAL findings
+#   gitleaks          HARD  commit-range — blocks secrets in ContextualWisdomLab/.github PRs
 #   scorecard         SOFT  repo posture — uploaded for visibility, never blocks
+#
+# This is the sole organization-required owner for OSV and Scorecard PR work.
+# The standalone workflows remain local to this repository because its classic
+# branch protection still requires their historical check contexts.
 #
 # Gating is by the JOB result (a failed job fails this required workflow ->
 # merge blocked), NOT by the code_scanning ruleset rule. The code_scanning rule
@@ -25,6 +30,13 @@
 # MEDIUM/HIGH/CRITICAL finding blocks every PR in that repo until it is fixed.
 # Trivy itself exits 0 so SARIF is always available; the following parser prints
 # exact findings and then fails the job.
+#
+# NOTE on the changed-scope gate: each job below now runs only when the
+# `changed-scope` job's diff-scoped output says it is in scope (`code` for
+# trivy-fs/scorecard, `deps` for osv-scan/dependency-review). A doc/image-only
+# PR skips every one of these jobs, and `scheduled-security-scan.yml` (push +
+# default-branch schedule) and `scorecard-analysis.yml` (push + weekly cron)
+# remain the full repo-wide backstops that make those skips safe.
 name: Security Scan
 
 on:
@@ -49,15 +61,72 @@ permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-latest
+  changed-scope:
+    name: Detect changed scope
+    # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
+    # runs this workflow in another repository, and a trigger-level skip would
+    # leave `.github`'s classic required contexts Pending forever. Both
+    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
+    # here and consumed through `needs`. See
+    # docs/doctoring/required-workflow-path-filter-boundary.md.
+    # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      deps: ${{ steps.scope.outputs.deps }}
     steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
+      - name: Classify changed paths
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
 
   osv-scan:
-    if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       actions: read
@@ -475,7 +544,7 @@ jobs:
               if len(findings) > 50:
                   print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
       - name: Report PR-introduced OSV findings
-        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        uses: google/osv-scanner-action/osv-reporter-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.3.8
         with:
           scan-args: |
             --output-files=sarif:results.sarif
@@ -512,7 +581,7 @@ jobs:
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: results.sarif
           # results.sarif is produced after checkout of the pull request head.
@@ -539,8 +608,9 @@ jobs:
           retention-days: 5
 
   dependency-review:
-    if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -616,9 +686,105 @@ jobs:
           fail-on-severity: moderate
           comment-summary-in-pr: never
 
+  # Keep the existing central-repository Gitleaks PR gate inside the required
+  # security bundle. It deliberately does not depend on changed-scope: secrets
+  # in Markdown or other document-only changes must still fail the PR. The
+  # repository condition preserves the standalone workflow's previous scope;
+  # push, schedule, and manual backstops remain in secret-scan.yml.
+  gitleaks:
+    name: gitleaks (secret scan)
+    if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - name: Checkout PR commit range
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install gitleaks (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL "$url" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+          ./gitleaks version
+      - name: Run gitleaks on PR commit range
+        id: gitleaks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          config_args=()
+          if [ -f .gitleaks.toml ]; then
+            config_args=(--config .gitleaks.toml)
+          fi
+          log_opts="${BASE_SHA}..${HEAD_SHA}"
+          echo "::notice::gitleaks scanning pull request commit range ${log_opts}."
+          ./gitleaks git . \
+            "${config_args[@]}" \
+            --log-opts="${log_opts}" \
+            --redact \
+            --report-format sarif \
+            --report-path gitleaks-results.sarif \
+            --exit-code 2
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+      - name: Summarize redacted gitleaks findings
+        if: always() && hashFiles('gitleaks-results.sarif') != ''
+        run: |
+          set -euo pipefail
+          count="$(jq '[.runs[].results[]?] | length' gitleaks-results.sarif)"
+          if [ "$count" = "0" ]; then
+            echo "::notice::gitleaks completed with no findings."
+            exit 0
+          fi
+          echo "::error::gitleaks reported ${count} redacted finding(s). Rule, path, and line summary follows; secret values are not printed."
+          jq -r '
+            .runs[].results[]?
+            | "- rule: `" + (.ruleId // "unknown") + "`"
+              + ", path: `" + (.locations[0].physicalLocation.artifactLocation.uri // "unknown") + "`"
+              + ", line: `" + ((.locations[0].physicalLocation.region.startLine // "unknown") | tostring) + "`"
+          ' gitleaks-results.sarif | sort | uniq -c
+      - name: Filter test-classified Gitleaks SARIF results
+        if: always() && hashFiles('gitleaks-results.sarif') != ''
+        run: |
+          python3 scripts/ci/filter_gitleaks_sarif.py \
+            gitleaks-results.sarif \
+            gitleaks-results.upload.sarif
+      - name: Upload gitleaks SARIF to code scanning
+        if: always() && hashFiles('gitleaks-results.upload.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: gitleaks-results.upload.sarif
+          category: gitleaks
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          sha: ${{ github.event.pull_request.head.sha }}
+          wait-for-processing: false
+      - name: Enforce secret-scan gate
+        if: steps.gitleaks.outputs.rc != '0'
+        run: |
+          echo "::error::gitleaks detected potential secrets (exit ${{ steps.gitleaks.outputs.rc }}). Rotate any exposed credential and scrub history."
+          exit 1
+
   trivy-fs:
-    if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
@@ -710,7 +876,7 @@ jobs:
         if: always() && hashFiles('trivy-results.sarif') != ''
         # The parser above fails on every fixable Medium+ finding independently.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
@@ -723,8 +889,9 @@ jobs:
           echo "::warning::Trivy SARIF upload to code scanning failed after the filesystem scan. The Trivy finding log above remains the hard gate, so upload rate limits cannot hide CRITICAL/HIGH/MEDIUM findings."
 
   scorecard:
-    if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
+    runs-on: ubuntu-24.04
     # SOFT: posture findings are unrelated to the PR diff, so never block merge.
     continue-on-error: true
     permissions:
@@ -800,7 +967,7 @@ jobs:
         id: upload_scorecard_sarif
         # Scorecard is soft repository-posture evidence; upload quota is external.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: results.sarif
           category: scorecard

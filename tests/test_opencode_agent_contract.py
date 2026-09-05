@@ -469,12 +469,12 @@ def test_opencode_ignores_superseded_cancelled_rollup_checks():
 def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     """Keep PR-controlled test execution off the pull_request_target path."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    assert "required-workflow-bootstrap:" in workflow
-    assert "OpenCode repository-dispatch review run materialized." in workflow
-    bootstrap_start = workflow.index("  required-workflow-bootstrap:\n")
-    bootstrap_end = workflow.index("\n  validate-pr-metadata:", bootstrap_start)
-    bootstrap_job = workflow[bootstrap_start:bootstrap_end]
-    assert "\n    if:" not in bootstrap_job
+    # required-workflow-bootstrap is the trusted-source-resolution sentinel needed
+    # only where the org ruleset targets a pull_request_target entrypoint
+    # (opencode-review.yml). This repository_dispatch-only workflow is not itself
+    # a required-workflow path, so it must not carry a copy-pasted, need-less
+    # orphan of that job.
+    assert "required-workflow-bootstrap:" not in workflow
     assert (
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
@@ -1777,18 +1777,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
-    assert (
-        "format('pr-{0}', github.event.client_payload.pr_number)"
-        in concurrency_contract
-    )
+    assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "opencode-review-repository-dispatch-" in concurrency_contract
+    assert "github.event.client_payload.pr_number" not in concurrency_contract
     assert "github.event.pull_request" not in concurrency_contract
-    assert (
-        "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)"
-        in workflow
-    )
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"
@@ -2352,7 +2346,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
-    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
@@ -2373,7 +2366,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'select(.name == "opencode-review")' in workflow
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
-    assert "The scheduled organization sweep remains authoritative." in workflow
+    assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
     assert (
         "github.event_name == 'pull_request_review' || "
         "github.event_name == 'repository_dispatch'" in workflow
@@ -2399,11 +2392,17 @@ def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch(
         "      - name: Dispatch Noema after current-head OpenCode approval", 1
     )[0]
     assert (
-        "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || "
+        "GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == "
+        "github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || "
         "secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || "
         "github.token }}"
     ) in status_step
-    assert "OPENCODE_STATUS_TOKEN_SOURCE" in status_step
+    assert (
+        "OPENCODE_STATUS_TOKEN_SOURCE: ${{ "
+        "needs.validate-pr-metadata.outputs.target_repository == github.repository && "
+        "'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && "
+        "'PR_REVIEW_MERGE_TOKEN'"
+    ) in status_step
     assert "steps.opencode_app_token.outputs.available == 'true' && 'opencode-app'" in status_step
     assert "OPENCODE_CHANGED_FILES_FILE" in status_step
     assert "OPENCODE_ARTIFACT_MANIFEST_SHA256" in status_step
@@ -2585,10 +2584,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
-    assert 'mismatches+=("head_sha")' in metadata_step
+    assert '[ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")' in metadata_step
+    assert '[ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")' in metadata_step
     assert "proceeding with the live head" not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ]' in metadata_step
     assert "head_sha=%s\\n' \"$live_head_sha\"" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''

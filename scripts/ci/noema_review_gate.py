@@ -15,6 +15,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,15 +30,211 @@ PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent",
 }
 GITHUB_APP_BOT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\[bot\]$")
+# Wraps the start of the fixed-format footer submit_review() writes below the
+# LLM-generated summary/findings text. This lets noema_review_handoff.py
+# locate the footer by *position* (the trusted, machine-emitted span between
+# this marker and the closing "<!-- noema-review-gate head_sha=... -->"
+# comment) instead of by scanning for a content pattern that the LLM's own
+# unsanitized output could coincidentally reproduce. Keep this literal in
+# exact sync with NOEMA_REVIEW_FOOTER_MARKER in noema_review_handoff.py.
+NOEMA_REVIEW_FOOTER_MARKER = "<!-- noema-review-gate-footer -->"
+# Must stay byte-for-byte identical to NOEMA_REVIEW_MARKER in
+# noema_review_handoff.py. Used only to isolate the closing marker's
+# position, not as a content-pattern check — see
+# _noema_review_footer_and_marker_tail().
+NOEMA_REVIEW_CLOSING_MARKER_PREFIX = "<!-- noema-review-gate "
+# Must stay byte-for-byte identical to NOEMA_MARKER_HEAD_RE in
+# noema_review_handoff.py, so existing_noema_review() applies the exact same
+# exact-head structural validation noema_review_state() requires before a
+# review can suppress republication.
+NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
+    r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->"
+)
+# Must stay byte-for-byte identical to NOEMA_BODY_HEAD_RE in
+# noema_review_handoff.py.
+NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
+MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
+# OpenAI Chat Completions structured-output envelope for the verdict shape
+# ``validate_substantive_verdict`` enforces. contextual-orchestrator's
+# ``orchestrator/free`` sidecar is proven (ADR-0003) to be an OpenAI-
+# COMPATIBLE endpoint, so the outer envelope (``type`` /
+# ``json_schema.name`` / ``json_schema.strict`` / ``json_schema.schema``)
+# must be OpenAI's specific wrapping convention -- not bare JSON Schema and
+# not Claude's tool-forcing convention. Only the inner ``schema`` value is
+# the general JSON Schema document. Whether the gateway correctly translates
+# this OpenAI-shaped request for a non-OpenAI-compatible backend it may
+# route to is contextual-orchestrator's own translation responsibility, not
+# this caller's: adding per-provider format detection here would recreate
+# the layering violation the repo owner already rejected in PR #1602 one
+# level down. ``strict: true`` requires every property to be listed in
+# ``required`` (a conditionally-absent field is expressed as a nullable
+# type, e.g. ``["array", "null"]``, never an omitted key) and every object
+# to set ``additionalProperties: false``.
+#
+# ``adversarial_validation.probes`` carries a ``minItems`` floor built fresh
+# per request from ``_required_probe_count`` rather than a fixed number: per
+# ADR-0035 (`contextual-orchestrator`), the gateway parses the returned
+# content and validates it against this exact declared schema -- provider
+# acceptance of ``response_format`` is not proof of conformance -- and makes
+# one governed same-provider repair call on a violation before this ever
+# reaches Noema's own ``validate_substantive_verdict`` second pass. Without
+# this floor, an insufficient-probe verdict (schema-valid JSON, just too few
+# probes) reaches that second pass and fails the whole review outright with
+# no earlier, cheaper structural catch -- exactly what happened in
+# `ContextualWisdomLab/ConceptWeave` run `33527145686`, job `99920767480`
+# ("Noema adversarial validation requires at least 2 concrete probe(s)").
+_NOEMA_REVIEWED_LINE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string"},
+        "line": {"type": "integer"},
+        "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
+        "analysis": {"type": "string"},
+    },
+    "required": ["path", "line", "side", "analysis"],
+}
+_NOEMA_PROBE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string"},
+        "line": {"type": "integer"},
+        "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
+        "hypothesis": {"type": "string"},
+        "attack_or_counterexample": {"type": "string"},
+        "evidence": {"type": "string"},
+        "outcome": {"type": "string", "enum": ["falsified", "confirmed"]},
+    },
+    "required": [
+        "path",
+        "line",
+        "side",
+        "hypothesis",
+        "attack_or_counterexample",
+        "evidence",
+        "outcome",
+    ],
+}
+_NOEMA_FINDING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+        "file": {"type": "string"},
+        "line": {"type": "integer"},
+        "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
+        "message": {"type": "string"},
+    },
+    "required": ["severity", "file", "line", "side", "message"],
+}
+def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
+    """Build the verdict JSON Schema with this request's exact probe floor.
+
+    ``required_probes`` must come from ``_required_probe_count(diff,
+    changed_paths)`` -- the same call ``validate_substantive_verdict`` uses
+    -- so the gateway-enforced structural floor and the Python-side backstop
+    can never silently diverge. The static per-field schemas above are safe
+    to share by reference here since nothing in this module mutates them.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["approve", "request_changes", "comment"],
+            },
+            "summary": {"type": "string"},
+            "reviewed_lines": {
+                "type": ["array", "null"],
+                "items": _NOEMA_REVIEWED_LINE_SCHEMA,
+            },
+            "adversarial_validation": {
+                "type": ["object", "null"],
+                "additionalProperties": False,
+                "properties": {
+                    "status": {"type": "string", "enum": ["passed", "failed"]},
+                    "residual_risk": {"type": "string"},
+                    "probes": {
+                        "type": "array",
+                        "minItems": required_probes,
+                        "items": _NOEMA_PROBE_SCHEMA,
+                    },
+                },
+                "required": ["status", "residual_risk", "probes"],
+            },
+            "findings": {"type": "array", "items": _NOEMA_FINDING_SCHEMA},
+        },
+        "required": [
+            "decision",
+            "summary",
+            "reviewed_lines",
+            "adversarial_validation",
+            "findings",
+        ],
+    }
+
+
+def _noema_verdict_response_format(required_probes: int) -> dict[str, Any]:
+    """Build the OpenAI ``response_format`` envelope for this request's probe floor."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "noema_review_verdict",
+            "strict": True,
+            "schema": _noema_verdict_json_schema(required_probes),
+        },
+    }
+
+
+class NoemaModelOutputError(RuntimeError):
+    """Raised when untrusted model output violates the trusted verdict contract."""
+
+
+class NoemaTransportError(RuntimeError):
+    """Raised when the bounded review transport cannot produce usable evidence."""
+
+
+
+def _stable_failure_diagnostic(exc: BaseException) -> str:
+    """Return actionable trusted diagnostics without reflecting model values."""
+    message = scrub_sensitive_data(str(exc)) or type(exc).__name__
+    if not isinstance(exc, NoemaModelOutputError):
+        return message
+
+    # Model-output exceptions are raised only by deterministic parsing and
+    # validation code. Preserve those static/structural diagnostics because
+    # they tell the corrective model and operators exactly which contract was
+    # violated. The one validator that embeds an untrusted model value is the
+    # unsupported-decision check; redact that value. Unknown model-output
+    # exception text fails closed to a stable code rather than being reflected.
+    if message.startswith("Noema LLM returned unsupported decision:"):
+        return "Noema LLM returned unsupported decision"
+    trusted_prefixes = (
+        "Noema LLM response ",
+        "Noema LLM request_changes ",
+        "Noema formal verdict ",
+        "Noema reviewed line ",
+        "Noema adversarial validation ",
+        "Noema adversarial probe ",
+        "Noema approve ",
+        "Noema request_changes ",
+    )
+    if message.startswith(trusted_prefixes):
+        return message
+    return "model-output-contract-invalid"
 
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
@@ -108,6 +305,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       isDraft
       state
       headRefOid
+      baseRefOid
       reviewDecision
       reviewThreads(first: 100) {
         nodes {
@@ -193,21 +391,58 @@ def review_commit(review: dict[str, Any]) -> str:
     return ((review.get("commit") or {}).get("oid") or "").strip()
 
 
+def _noema_review_footer_and_marker_tail(body: str) -> tuple[str, str]:
+    """Return the trusted footer span and marker tail of a Noema review body.
+
+    Mirrors ``noema_review_handoff.py``'s ``_isolate_trusted_footer()`` and
+    ``_isolate_trusted_marker_tail()`` exactly: both spans are located by
+    *position*, strictly between the machine-emitted
+    ``NOEMA_REVIEW_FOOTER_MARKER`` and (for the footer span) the closing
+    ``<!-- noema-review-gate head_sha=... decision=... -->`` comment, never by
+    scanning for a content pattern the LLM's own unsanitized summary/findings
+    text could coincidentally reproduce. Returns ``("", "")`` when the footer
+    marker is absent, so the caller's exact-one-match check fails closed.
+    """
+    marker_tail_parts = body.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    marker_tail = marker_tail_parts[1] if len(marker_tail_parts) == 2 else ""
+
+    before_closing_marker = body.rsplit(NOEMA_REVIEW_CLOSING_MARKER_PREFIX, 1)[0]
+    footer_parts = before_closing_marker.rsplit(NOEMA_REVIEW_FOOTER_MARKER, 1)
+    footer_text = footer_parts[1] if len(footer_parts) == 2 else ""
+    return footer_text, marker_tail
+
+
 def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
-    """Return whether Noema already reviewed the current head."""
+    """Return whether Noema already posted a trusted verdict for the current head.
+
+    Applies the exact same exact-head structural validation
+    ``noema_review_handoff.py``'s ``noema_review_state()`` requires before
+    accepting a review as a valid current-head verdict — not just marker
+    presence. A review whose markers are both present but whose body-side
+    bullet or closing-marker SHA is missing, malformed, or duplicated (for
+    example a hand-edited or corrupted review, or one predating the footer
+    marker) is a review ``noema_review_state()`` can never recognize as a
+    valid current-head verdict; treating it as "already reviewed" here would
+    let it silently suppress every future publish attempt for an otherwise
+    unchanged head, stalling the PR forever.
+    """
     head_sha = str(pr.get("headRefOid") or "")
-    marker = "<!-- noema-review-gate"
     for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if review_commit(review) != head_sha:
             continue
         if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
-        if (
-            actor
-            and review_author(review) == actor
-            and marker in str(review.get("body") or "")
-        ):
-            return True
+        if not actor or review_author(review) != actor:
+            continue
+        body = str(review.get("body") or "")
+        footer_text, marker_tail = _noema_review_footer_and_marker_tail(body)
+        marker_heads = NOEMA_REVIEW_CLOSING_MARKER_RE.findall(marker_tail)
+        body_heads = NOEMA_REVIEW_BODY_HEAD_RE.findall(footer_text)
+        if len(marker_heads) != 1 or len(body_heads) != 1:
+            continue
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
+            continue
+        return True
     return False
 
 
@@ -313,10 +548,53 @@ def parse_diff_path(raw: str, prefix: str) -> str:
     return value.removeprefix(prefix)
 
 
+def _required_probe_count(diff: str, changed_paths: Sequence[str] = ()) -> int:
+    """Return the minimum adversarial-probe count a formal verdict must carry.
+
+    This is the single source of truth shared by the structured-output schema
+    and deterministic local validator. Executable/test/workflow changes require
+    two distinct probes; other diffs require one. The bound is cardinality-
+    based and independent of repository path count, so a near-MAX_DIFF_CHARS
+    review remains representable within the gateway output budget.
+    """
+    locations = changed_diff_locations(diff)
+    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
+    return 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
+
+
+def _entry_ordinal(position: int, total: int) -> str:
+    """Return an unambiguous 1-based array-position label for diagnostics."""
+    return f"entry {position}/{total} (array index {position - 1}, not a source line)"
+
+
+def _format_location(path: Any, line: Any, side: Any) -> str:
+    """Format one rejected path/line/side citation without coercing its types."""
+    return f"path={path!r} line={line!r} side={side!r}"
+
+
+def _nearby_changed_locations(
+    locations: set[tuple[str, int, str]], path: Any, line: Any, *, limit: int = 5
+) -> str:
+    """Return a bounded nearest-line hint for the rejected path."""
+    if not isinstance(path, str):
+        return ""
+    same_path = [location for location in locations if location[0] == path]
+    if not same_path:
+        return ""
+    if isinstance(line, int):
+        same_path.sort(key=lambda location: (abs(location[1] - line), location[1], location[2]))
+    else:
+        same_path.sort(key=lambda location: (location[1], location[2]))
+    sample = ", ".join(f"{p}:{ln} ({s})" for p, ln, s in same_path[:limit])
+    remaining = len(same_path) - limit
+    more = f", +{remaining} more" if remaining > 0 else ""
+    return f"; nearest changed lines for {path}: {sample}{more}"
+
+
 def validate_substantive_verdict(
     verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
 ) -> None:
-    """Reject formal verdicts without changed-line and adversarial evidence."""
+    """Reject formal verdicts without exact changed-line/adversarial evidence."""
     decision = str(verdict.get("decision") or "").lower()
     if decision == "comment":
         return
@@ -326,57 +604,78 @@ def validate_substantive_verdict(
 
     reviewed_lines = verdict.get("reviewed_lines")
     if not isinstance(reviewed_lines, list) or not reviewed_lines:
-        raise RuntimeError("Noema formal verdict requires at least one reviewed changed line")
-    for index, reviewed in enumerate(reviewed_lines, start=1):
+        raise NoemaModelOutputError("Noema formal verdict requires at least one reviewed changed line")
+    reviewed_total = len(reviewed_lines)
+    for position, reviewed in enumerate(reviewed_lines, start=1):
+        entry = _entry_ordinal(position, reviewed_total)
         if not isinstance(reviewed, dict):
-            raise RuntimeError(f"Noema reviewed line {index} must be an object")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema reviewed line {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema reviewed line {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
-            raise RuntimeError(f"Noema reviewed line {index} requires concrete analysis")
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} requires concrete analysis")
 
     validation = verdict.get("adversarial_validation")
     if not isinstance(validation, dict):
-        raise RuntimeError("Noema formal verdict requires adversarial_validation")
+        raise NoemaModelOutputError("Noema formal verdict requires adversarial_validation")
     status = validation.get("status")
     expected_status = "passed" if decision == "approve" else "failed"
     if status != expected_status:
-        raise RuntimeError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
+        raise NoemaModelOutputError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
     residual_risk = validation.get("residual_risk")
     if not isinstance(residual_risk, str) or not residual_risk.strip():
-        raise RuntimeError("Noema adversarial validation requires residual_risk")
+        raise NoemaModelOutputError("Noema adversarial validation requires residual_risk")
     probes = validation.get("probes")
-    all_changed_paths = set(changed_paths) or {path for path, _line, _side in locations}
-    required_probes = 2 if any(changed_file_is_material(path) for path in all_changed_paths) else 1
+    required_probes = _required_probe_count(diff, changed_paths)
     if not isinstance(probes, list) or len(probes) < required_probes:
-        raise RuntimeError(f"Noema adversarial validation requires at least {required_probes} concrete probe(s)")
+        raise NoemaModelOutputError(
+            f"Noema adversarial validation requires at least {required_probes} concrete probe(s)"
+        )
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
-    for index, probe in enumerate(probes, start=1):
+    probes_total = len(probes)
+    for position, probe in enumerate(probes, start=1):
+        entry = _entry_ordinal(position, probes_total)
         if not isinstance(probe, dict):
-            raise RuntimeError(f"Noema adversarial probe {index} must be an object")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
-            raise RuntimeError(f"Noema adversarial probe {index} is not an exact changed-side line")
+            path, line, side = location
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} cites {_format_location(path, line, side)}, "
+                f"which is not an exact changed-side line"
+                f"{_nearby_changed_locations(locations, path, line)}"
+            )
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
-                raise RuntimeError(f"Noema adversarial probe {index} requires {field}")
+                raise NoemaModelOutputError(f"Noema adversarial probe {entry} requires {field}")
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
-            raise RuntimeError(f"Noema adversarial probe {index} outcome must be falsified or confirmed")
-        identity = (*location, probe["hypothesis"].strip().casefold(), probe["attack_or_counterexample"].strip().casefold())
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} outcome must be falsified or confirmed"
+            )
+        identity = (
+            *location,
+            probe["hypothesis"].strip().casefold(),
+            probe["attack_or_counterexample"].strip().casefold(),
+        )
         if identity in identities:
-            raise RuntimeError(f"Noema adversarial probe {index} duplicates an earlier probe")
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
-        raise RuntimeError("Noema approve cannot contain a confirmed adversarial probe")
+        raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
     if decision == "request_changes":
         finding_locations = {
             (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
@@ -384,7 +683,9 @@ def validate_substantive_verdict(
             if isinstance(finding, dict)
         }
         if not confirmed or not confirmed.intersection(finding_locations):
-            raise RuntimeError("Noema request_changes requires a confirmed probe on a published finding")
+            raise NoemaModelOutputError(
+                "Noema request_changes requires a confirmed probe on a published finding"
+            )
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -395,8 +696,14 @@ def truncate_text(text: str, limit: int) -> str:
     return f"{text[:limit]}\n[truncated {omitted} characters]"
 
 
-def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
-    """Fetch changed file paths for the pull request."""
+def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
+    """Fetch changed paths and statuses without corrupting whitespace in paths.
+
+    The Files API is projected to one JSON-encoded two-element array per file.
+    JSON escaping preserves tabs, newlines, and edge spaces inside ``filename``
+    while keeping pagination output line-delimited and parseable. Malformed
+    records fail closed instead of being reinterpreted as another path/status.
+    """
     output = run(
         [
             "gh",
@@ -404,16 +711,34 @@ def fetch_changed_file_paths(repo: str, number: int) -> list[str]:
             f"repos/{repo}/pulls/{number}/files",
             "--paginate",
             "--jq",
-            ".[].filename",
+            r'.[] | [.filename, .status] | @json',
         ]
     )
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    files: list[tuple[str, str]] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("GitHub changed-file response was malformed") from exc
+        if (
+            not isinstance(record, list)
+            or len(record) != 2
+            or type(record[0]) is not str
+            or not record[0]
+            or type(record[1]) is not str
+            or not record[1]
+        ):
+            raise RuntimeError("GitHub changed-file response was malformed")
+        files.append((record[0], record[1]))
+    return files
 
 
-def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
-    """Fetch a changed file's current-head text content through the GitHub API."""
+def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
+    """Fetch one repository text file at an exact Git ref through GitHub."""
     encoded_path = urllib.parse.quote(path, safe="/")
-    encoded_ref = urllib.parse.quote(head_sha, safe="")
+    encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
         [
             "gh",
@@ -429,17 +754,102 @@ def fetch_head_file_content(repo: str, path: str, head_sha: str) -> str:
     return base64.b64decode(compact).decode("utf-8", errors="replace")
 
 
-def changed_file_context(repo: str, number: int, head_sha: str) -> str:
-    """Build bounded changed-file context for cross-file review reasoning."""
+def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
+    """Return the immutable merge-base SHA for the current base/head pair."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", base_sha):
+        raise RuntimeError("PR base SHA was unavailable or malformed")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
+        raise RuntimeError("PR head SHA was unavailable or malformed")
+    merge_base = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/compare/{base_sha}...{head_sha}",
+            "--jq",
+            ".merge_base_commit.sha // empty",
+        ]
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", merge_base):
+        raise RuntimeError("GitHub compare response did not contain a valid merge-base SHA")
+    return merge_base.lower()
+
+
+def removed_file_context_section(
+    repo: str,
+    path: str,
+    merge_base_sha: str,
+    merge_base_error: str = "",
+) -> str:
+    """Build review context for a file deleted relative to the merge base.
+
+    A deleted path does not exist at the PR head. Its relevant pre-deletion
+    evidence is therefore the immutable merge base shared by the current base
+    and reviewed head, not the moving tip of the base branch. When merge-base
+    discovery or content retrieval is unavailable, the context records that
+    bounded evidence failure explicitly rather than inventing head content.
+    """
+    if merge_base_error:
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Merge-base lookup unavailable: {merge_base_error}"
+        )
+    if not merge_base_sha:
+        return (
+            f"### {path}\n[File removed in this PR — no head-side content applicable; "
+            "merge-base SHA unavailable for pre-deletion content.]"
+        )
+    try:
+        content = fetch_file_content_at_ref(repo, path, merge_base_sha)
+    except RuntimeError as exc:
+        reason = scrub_sensitive_data(str(exc)) or "unknown error"
+        return (
+            f"### {path}\n[File removed in this PR.] "
+            f"Unavailable from merge-base content API: {reason}"
+        )
+    if not content:
+        return (
+            f"### {path}\n[File removed in this PR — no UTF-8 text content "
+            "available from merge-base content API.]"
+        )
+    return (
+        f"### {path}\n[File removed in this PR. Pre-deletion content at merge base "
+        f"`{merge_base_sha}`:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+    )
+
+
+def changed_file_context(
+    repo: str,
+    number: int,
+    head_sha: str,
+    base_sha: str = "",
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded changed-file context from one status-preserving snapshot."""
     if not head_sha:
         return "Changed file context unavailable: missing PR head SHA."
-    paths = fetch_changed_file_paths(repo, number)
-    if not paths:
+    files = list(changed_files) if changed_files is not None else fetch_changed_files(repo, number)
+    if not files:
         return "Changed file context unavailable: PR reported no changed files."
-    sections: list[str] = []
-    for path in paths[:MAX_CONTEXT_FILES]:
+
+    merge_base_sha = ""
+    merge_base_error = ""
+    if any(status == "removed" for _path, status in files[:MAX_CONTEXT_FILES]):
         try:
-            content = fetch_head_file_content(repo, path, head_sha)
+            merge_base_sha = fetch_merge_base_sha(repo, base_sha, head_sha)
+        except RuntimeError as exc:
+            merge_base_error = scrub_sensitive_data(str(exc)) or "unknown error"
+
+    sections: list[str] = []
+    for path, status in files[:MAX_CONTEXT_FILES]:
+        if status == "removed":
+            sections.append(
+                removed_file_context_section(
+                    repo, path, merge_base_sha, merge_base_error
+                )
+            )
+            continue
+        try:
+            content = fetch_file_content_at_ref(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
             sections.append(f"### {path}\nUnavailable from head content API: {reason}")
@@ -448,8 +858,8 @@ def changed_file_context(repo: str, number: int, head_sha: str) -> str:
             sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
-    if len(paths) > MAX_CONTEXT_FILES:
-        sections.append(f"[{len(paths) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
+    if len(files) > MAX_CONTEXT_FILES:
+        sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
 
 
@@ -475,28 +885,24 @@ def review_thread_context(pr: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def load_codegraph_context() -> str:
-    """Load optional precomputed CodeGraph context for structural review evidence."""
-    path = os.environ.get("NOEMA_CODEGRAPH_CONTEXT_PATH", "").strip()
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return truncate_text(handle.read(), MAX_REVIEW_CONTEXT_CHARS)
-    except OSError as exc:
-        return f"CodeGraph context unavailable: {exc}"
-
-
-def build_review_context(repo: str, number: int, pr: dict[str, Any]) -> str:
-    """Build bounded non-diff context for the Noema reviewer."""
+def build_review_context(
+    repo: str,
+    number: int,
+    pr: dict[str, Any],
+    changed_files: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build bounded non-diff context from review threads and changed files."""
     sections: list[str] = []
-    codegraph = load_codegraph_context()
-    if codegraph:
-        sections.append("## CodeGraph context\n" + codegraph)
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
-    files = changed_file_context(repo, number, str(pr.get("headRefOid") or ""))
+    files = changed_file_context(
+        repo,
+        number,
+        str(pr.get("headRefOid") or ""),
+        str(pr.get("baseRefOid") or ""),
+        changed_files,
+    )
     if files:
         sections.append("## Changed file context\n" + files)
     return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
@@ -580,10 +986,80 @@ def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
 MAX_JSON_NESTING_DEPTH = 100
 
 
+def _strip_trailing_commas_outside_strings(text: str) -> str:
+    """Remove only a genuine trailing comma after a complete JSON value.
+
+    Missing-value forms such as ``[,]``, ``{,}``, ``[1,,]`` and ``{"a":,}``
+    remain malformed and therefore fail closed. String contents are untouched.
+    """
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < length and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            previous = len(result) - 1
+            while previous >= 0 and result[previous] in " \t\r\n":
+                previous -= 1
+            prior = result[previous] if previous >= 0 else ""
+            value_ending = prior in {'"', '}', ']'} or prior.isdigit() or prior in {'e', 'l'}
+            if lookahead < length and text[lookahead] in "}]" and value_ending:
+                index += 1
+                continue
+        result.append(char)
+        index += 1
+    return "".join(result)
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
+    """Extract a JSON object, retrying once through a lossless local repair.
+
+    Delegates to ``_extract_json_object_once``. If that fails, this makes
+    exactly one additional attempt against
+    ``_strip_trailing_commas_outside_strings(text)`` -- a deterministic,
+    semantically lossless fixup for the single well-known trailing-comma
+    malformation class -- before giving up. This is a local, non-network
+    second chance: it can resolve some malformed-JSON cases without ever
+    spending the bounded repair path's network round trip and wall-clock
+    budget, and it emits a ``::notice::`` (no raw content) when it is what
+    actually rescued the response, since that is itself useful repair-path
+    telemetry. It does not attempt to guess-repair any other malformation
+    shape; those still fail closed exactly as before.
+    """
+    try:
+        return _extract_json_object_once(text)
+    except NoemaModelOutputError:
+        repaired = _strip_trailing_commas_outside_strings(text.strip())
+        if repaired == text.strip():
+            raise
+        verdict = _extract_json_object_once(repaired)
+        return verdict
+
+
+def _extract_json_object_once(text: str) -> dict[str, Any]:
     """Extract a JSON object from a strict or lightly wrapped LLM response.
 
-    Fails closed with ``RuntimeError`` — the same "no usable verdict" failure
+    Fails closed with ``NoemaModelOutputError`` — the same "no usable verdict" failure
     path ``call_llm`` already raises for an unsupported decision, a missing
     summary, or a malformed finding — instead of letting a malformed or
     truncated LLM response's ``json.JSONDecodeError`` propagate as an
@@ -709,7 +1185,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         return candidate
 
     if "{" not in stripped:
-        raise RuntimeError("Noema LLM response did not contain a JSON object")
+        raise NoemaModelOutputError("Noema LLM response did not contain a JSON object")
 
     exc = decode_error or json.JSONDecodeError(
         "No JSON object could be decoded", stripped, 0
@@ -720,7 +1196,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         fingerprint = hashlib.sha256(
             stripped.encode("utf-8", errors="surrogatepass")
         ).hexdigest()[:16]
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response was not valid JSON ({exc}). Raw model output "
             "is not logged here (this pull_request_target workflow's logs "
             "are public and a finite secret-scrub pattern list cannot "
@@ -752,21 +1228,21 @@ def extract_llm_message_content(raw: str) -> str:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Noema LLM response body was not valid JSON: {exc}") from exc
+        raise NoemaModelOutputError(f"Noema LLM response body was not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
         )
     choices = data.get("choices")
     if not choices:
         choices = [{}]
     elif not isinstance(choices, list):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'choices' was not a list (got {type(choices).__name__})"
         )
     first_choice = choices[0]
     if not isinstance(first_choice, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             "Noema LLM response choices[0] was not a JSON object "
             f"(got {type(first_choice).__name__})"
         )
@@ -774,14 +1250,14 @@ def extract_llm_message_content(raw: str) -> str:
     if not message:
         message = {}
     elif not isinstance(message, dict):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'message' was not a JSON object (got {type(message).__name__})"
         )
     content = message.get("content")
     if not content:
         content = ""
     elif not isinstance(content, str):
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response 'content' was not a string (got {type(content).__name__})"
         )
     return content.strip()
@@ -812,7 +1288,7 @@ def decode_llm_response_body(raw_bytes: bytes) -> str:
         return raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
-        raise RuntimeError(
+        raise NoemaModelOutputError(
             f"Noema LLM response body was not valid UTF-8 ({exc}). Raw "
             "response bytes are not logged here (this pull_request_target "
             "workflow's logs are public and a finite secret-scrub pattern "
@@ -820,6 +1296,125 @@ def decode_llm_response_body(raw_bytes: bytes) -> str:
             "in an unrecognized byte sequence is caught): response "
             f"length={len(raw_bytes)} bytes, sha256={fingerprint}."
         ) from exc
+
+
+def _extract_served_model(raw: str) -> str | None:
+    """Return a bounded, scrubbed, single-line UTF-8-printable serving model id."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return _safe_model_identifier(data.get("model"))
+
+
+def _safe_model_identifier(value: Any) -> str | None:
+    """Accept only a conservative, bounded model identifier safe for public logs."""
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not SAFE_MODEL_IDENTIFIER_RE.fullmatch(candidate):
+        return None
+    return candidate
+
+
+def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str | int]:
+    """Read bounded, allowlisted gateway failure telemetry without raw diagnostics.
+
+    The response body is never returned or logged. Only the canonical
+    ``error.detail`` receipt fields are allowed; malformed, oversized, or
+    unexpected envelopes fail closed to no telemetry.
+    """
+    try:
+        raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
+    except (AttributeError, OSError, ValueError, http.client.HTTPException):
+        return {}
+    if len(raw_bytes) > MAX_HTTP_ERROR_BODY_BYTES:
+        return {}
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return {}
+    detail = error.get("detail")
+    if not isinstance(detail, dict):
+        return {}
+    telemetry: dict[str, str | int] = {}
+    model = _safe_model_identifier(detail.get("model"))
+    terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
+    attempts = detail.get("attempts")
+    if model is not None:
+        telemetry["served_model"] = model
+    if terminal_reason is not None:
+        telemetry["terminal_reason"] = terminal_reason
+    if isinstance(attempts, list) and attempts and len(attempts) <= 64:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict):
+            provider_name = _safe_model_identifier(last_attempt.get("provider_name"))
+            phase = _safe_model_identifier(last_attempt.get("phase"))
+            attempt_number = last_attempt.get("attempt_number")
+            provider_status = last_attempt.get("provider_status")
+            if provider_name is not None:
+                telemetry["provider_name"] = provider_name
+            if phase is not None:
+                telemetry["upstream_phase"] = phase
+            if type(attempt_number) is int and 1 <= attempt_number <= 64:
+                telemetry["attempt_number"] = attempt_number
+            if type(provider_status) is int and 100 <= provider_status <= 599:
+                telemetry["upstream_status"] = provider_status
+    return telemetry
+
+
+def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
+    """Return the safe served model from one bounded gateway error envelope."""
+    model = _extract_http_error_telemetry(exc).get("served_model")
+    return model if isinstance(model, str) else None
+
+
+def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
+    """Format only allowlisted scalar receipt fields for a public Actions log."""
+    ordered_keys = (
+        "provider_name",
+        "upstream_phase",
+        "attempt_number",
+        "upstream_status",
+        "terminal_reason",
+    )
+    return " ".join(
+        f"{key}={telemetry[key]}" for key in ordered_keys if key in telemetry
+    )
+
+
+def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
+    """Serialize the largest location prefix that fits the prompt byte budget."""
+    total_count = len(allowed_locations)
+
+    def render(count: int) -> str:
+        """Serialize the first `count` locations, flagged as truncated if fewer than all."""
+        return json.dumps(
+            {
+                "total_count": total_count,
+                "truncated": count < total_count,
+                "locations": list(allowed_locations[:count]),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    low = 0
+    high = total_count
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(render(midpoint).encode("utf-8")) <= MAX_ALLOWED_LOCATIONS_JSON_BYTES:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return render(low)
 
 
 def _truthy_env(name: str) -> bool:
@@ -909,10 +1504,6 @@ def reject_private_llm_url(api_url: str) -> None:
             raise ValueError("URL cannot target internal IP addresses")
 
 
-class StaleHeadDuringRepairRetryError(RuntimeError):
-    """Raised when the PR head moves before ``call_llm``'s repair-retry request fires."""
-
-
 def call_llm(
     repo: str,
     number: int,
@@ -922,94 +1513,44 @@ def call_llm(
     expected_head: str,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
-    repair_error: str = "",
-    is_retry: bool = False,
 ) -> dict[str, Any]:
-    """Call the configured OpenAI-compatible LLM endpoint for a review verdict.
+    """Issue exactly one structured-output request through contextual-orchestrator.
 
-    ``expected_head`` is the same normalized (lowercase) SHA
-    ``inspect_and_review`` already checks before model work and before
-    publication. It is threaded through here so the one-time repair-retry
-    request below — fired only after the first attempt's verdict was
-    malformed — can also confirm the PR head has not moved before spending a
-    second, potentially multi-hour model call on a
-    review that ``inspect_and_review``'s own post-call stale-head check would
-    discard anyway once this function returns. See ``fetch_pr`` for the live
-    lookup and ``StaleHeadDuringRepairRetryError`` for how that stale
-    condition is reported distinctly to the caller.
-
-    ``is_retry`` tracks retry state independently of ``repair_error``'s text:
-    several transport exceptions (a bare ``OSError``/``TimeoutError`` or
-    ``http.client.HTTPException`` raised with no message) stringify to an
-    empty string, so gating on ``repair_error``'s truthiness alone would let
-    an empty-message failure retry unboundedly instead of failing closed
-    after one attempt.
+    The gateway owns provider discovery, schema repair, candidate exclusion,
+    failover, and model timeouts. This caller therefore performs one request,
+    carries no fixed model wall-clock deadline or sampling temperature, and
+    fails closed if the gateway does not return a locally valid verdict.
+    Publication still performs a fresh exact-head check after model work.
     """
     api_url = os.environ.get("NOEMA_LLM_API_URL", "").strip()
     api_key = os.environ.get("NOEMA_LLM_API_KEY", "").strip()
-    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "noema-default"
+    model = os.environ.get("NOEMA_LLM_MODEL", "").strip() or "orchestrator/free"
     if not api_url or not api_key:
-        raise RuntimeError("Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured.")
+        raise RuntimeError(
+            "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
+        )
     reject_private_llm_url(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
         for path, line, side in sorted(changed_diff_locations(diff))
     ]
-    location_example = (
-        allowed_locations[0]
-        if allowed_locations
-        else {"path": "path", "line": 0, "side": "RIGHT"}
-    )
-
+    location_example = allowed_locations[0] if allowed_locations else {
+        "path": "path", "line": 0, "side": "RIGHT"
+    }
+    allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
     prompt = {
         "role": "user",
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff plus the additional changed-file, review-thread, and CodeGraph context for correctness, security, maintainability, and behavioral regressions.",
-                "Return only JSON with this shape:",
-                json.dumps(
-                    {
-                        "decision": "approve|request_changes|comment",
-                        "summary": "...",
-                        "reviewed_lines": [{**location_example, "analysis": "..."}],
-                        "adversarial_validation": {
-                            "status": "passed|failed",
-                            "residual_risk": "...",
-                            "probes": [
-                                {
-                                    **location_example,
-                                    "hypothesis": "...",
-                                    "attack_or_counterexample": "...",
-                                    "evidence": "observed or source-traced result",
-                                    "outcome": "falsified|confirmed",
-                                }
-                            ],
-                        },
-                        "findings": [
-                            {
-                                "severity": "high|medium|low",
-                                "file": location_example["path"],
-                                "line": location_example["line"],
-                                "side": location_example["side"],
-                                "message": "...",
-                            }
-                        ],
-                    },
-                    separators=(",", ":"),
-                ),
+                "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
+                "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
+                f"Allowed changed-side locations: {allowed_locations_json}",
+                f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
-                *(
-                    [
-                        "Your prior verdict was rejected by the trusted validator: "
-                        f"{repair_error or 'no diagnostic message was available'}",
-                        "Return one corrected JSON verdict using only exact changed-side locations from the supplied diff.",
-                    ]
-                    if is_retry
-                    else []
-                ),
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -1024,7 +1565,9 @@ def call_llm(
     }
     payload = {
         "model": model,
-        "temperature": 0,
+        "response_format": _noema_verdict_response_format(
+            _required_probe_count(diff, changed_paths)
+        ),
         "messages": [
             {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
             prompt,
@@ -1040,21 +1583,36 @@ def call_llm(
         method="POST",
     )
     opener = urllib.request.build_opener(NoRedirectHandler())
+    attempt_started = time.monotonic()
+    active_phase = "connecting"
+    served_model: str | None = None
     try:
         with opener.open(request) as response:  # nosec B310
+            active_phase = "reading"
             raw_bytes = response.read()
+        active_phase = "decoding"
         raw = decode_llm_response_body(raw_bytes)
+        served_model = _extract_served_model(raw)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
+        active_phase = "validating"
         decision = str(verdict.get("decision") or "").strip().lower()
         if decision not in {"approve", "request_changes", "comment"}:
-            raise RuntimeError(f"Noema LLM returned unsupported decision: {decision!r}")
+            raise NoemaModelOutputError(
+                f"Noema LLM returned unsupported decision: {decision!r}"
+            )
         summary = verdict.get("summary")
         if not isinstance(summary, str) or not summary.strip():
-            raise RuntimeError("Noema LLM response did not contain a substantive summary")
+            raise NoemaModelOutputError(
+                "Noema LLM response did not contain a substantive summary"
+            )
         findings = verdict.get("findings")
-        if not isinstance(findings, list) or any(not isinstance(finding, dict) for finding in findings):
-            raise RuntimeError("Noema LLM response findings must be a list of objects")
+        if not isinstance(findings, list) or any(
+            not isinstance(finding, dict) for finding in findings
+        ):
+            raise NoemaModelOutputError(
+                "Noema LLM response findings must be a list of objects"
+            )
         for finding in findings:
             if (
                 finding.get("severity") not in {"high", "medium", "low"}
@@ -1066,31 +1624,53 @@ def call_llm(
                 or not isinstance(finding.get("message"), str)
                 or not finding["message"].strip()
             ):
-                raise RuntimeError("Noema LLM response contained a malformed finding")
+                raise NoemaModelOutputError(
+                    "Noema LLM response contained a malformed finding"
+                )
         if decision == "request_changes" and not findings:
-            raise RuntimeError("Noema LLM request_changes response did not contain a substantive finding")
+            raise NoemaModelOutputError(
+                "Noema LLM request_changes response did not contain a substantive finding"
+            )
         validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
-        if is_retry:
-            if isinstance(exc, RuntimeError):
-                raise
-            raise RuntimeError(str(exc)) from exc
-        if str(fetch_pr(repo, number).get("headRefOid") or "").lower() != expected_head:
-            raise StaleHeadDuringRepairRetryError(
-                "Pull request head changed during review; stale before repair retry."
-            ) from exc
-        return call_llm(
-            repo,
-            number,
-            pr,
-            diff,
-            truncated,
-            expected_head,
-            review_context,
-            changed_paths,
-            str(exc),
-            is_retry=True,
+        gateway_telemetry: dict[str, str | int] = {}
+        if isinstance(exc, urllib.error.HTTPError):
+            active_phase = "response_error"
+            gateway_telemetry = _extract_http_error_telemetry(exc)
+            model_value = gateway_telemetry.get("served_model")
+            served_model = model_value if isinstance(model_value, str) else None
+        elapsed = time.monotonic() - attempt_started
+        current_failure = _stable_failure_diagnostic(exc)
+        model_note = served_model or "unknown"
+        gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
+        print(
+            f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
+            f"duration={elapsed:.1f}s served_model={model_note}; "
+            "caller attempts=1 (gateway owns repair/failover)."
+            + (f" gateway {gateway_note}" if gateway_note else "")
         )
+        suffix = (
+            f"; caller attempts=1, duration={elapsed:.1f}s, "
+            f"phase={active_phase}, served_model={model_note}"
+            + (f", gateway {gateway_note}" if gateway_note else "")
+        )
+        if isinstance(exc, NoemaModelOutputError):
+            raise NoemaModelOutputError(
+                f"Noema model output failed local validation: {current_failure}{suffix}"
+            ) from None
+        if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
+            raise NoemaTransportError(
+                f"Noema gateway transport failed: {type(exc).__name__}: {current_failure}{suffix}"
+            ) from exc
+        raise RuntimeError(
+            f"Noema review failed closed: {current_failure}{suffix}"
+        ) from exc
+    elapsed = time.monotonic() - attempt_started
+    print(
+        f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
+        f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
+        "caller attempts=1."
+    )
     return verdict
 
 
@@ -1154,6 +1734,7 @@ def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdic
             "### Findings",
             *(findings or ["- No blocking findings."]),
             "",
+            NOEMA_REVIEW_FOOTER_MARKER,
             f"- Result: {event}",
             f"- Head SHA: `{head_sha}`",
             f"- Reviewer credential: `{source}`",
@@ -1178,8 +1759,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     """Inspect PR state and submit Noema's independent LLM review.
 
     ``expected_head`` is normalized defensively before the stale-head
-    comparisons below, and before the one ``call_llm`` performs on its own
-    repair-retry path (see ``StaleHeadDuringRepairRetryError``). The CLI and
+    comparisons below and the post-model publication check. The CLI and
     workflow require canonical lowercase SHA input so equivalent casing
     cannot split the workflow concurrency group.
     """
@@ -1205,13 +1785,10 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    changed_paths = fetch_changed_file_paths(repo, number)
-    review_context = build_review_context(repo, number, pr)
-    try:
-        verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
-    except StaleHeadDuringRepairRetryError:
-        print("Pull request head changed during review; Noema review skipped before repair retry.")
-        return 0
+    changed_files = fetch_changed_files(repo, number)
+    changed_paths = tuple(path for path, _status in changed_files)
+    review_context = build_review_context(repo, number, pr, changed_files)
+    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
     try:
         require_expected_head(current_pr, expected_head)

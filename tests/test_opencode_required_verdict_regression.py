@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -29,6 +30,64 @@ def request_review_script() -> str:
         "\n      - name: Fail closed", 1
     )[0]
     return textwrap.dedent(block)
+
+
+def fail_closed_script() -> str:
+    """Extract the production "Fail closed without a current-head OpenCode verdict" run block."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Fail closed without a current-head OpenCode verdict\n", 1
+    )[1]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+def admission_script() -> str:
+    """Extract the exact-head admission shell that precedes concurrency."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split("      - name: Admit only the exact live OpenCode head\n", 1)[1]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n  coverage-source-tree:", 1)[0])
+
+
+def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
+    """A delayed old synchronize event is retired by live-head admission."""
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", admission_script()],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_TOKEN": "synthetic-token",
+            "GITHUB_OUTPUT": str(output),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD_SHA": HEAD,
+            "EXPECTED_ACTION": "synchronize",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
+    assert "retired a stale event" in result.stdout
+
+
+def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
+    """PR and repository_dispatch review jobs compute the same group text."""
+    required = WORKFLOW.read_text(encoding="utf-8")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    assert "opencode-review-${{" in required
+    assert "opencode-review-${{" in dispatched
+    assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
+    assert "cancel-in-progress: true" in dispatched
+    assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
 
 
 def review(*, state: str, commit_id: str = HEAD, body: str = "") -> dict[str, object]:
@@ -102,6 +161,129 @@ def test_runtime_required_verdict_rejects_other_actor() -> None:
     assert runtime_verdict([human]) == ""
 
 
+def cleanup_candidate_run_ids(
+    runs: list[dict[str, object]],
+    *,
+    pr_number: str = "1437",
+    head_sha: str = HEAD,
+    repository: str = "ContextualWisdomLab/example",
+    current_run_id: str = "999",
+) -> list[str]:
+    """Execute the jq program embedded in the superseded-run cleanup job."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup filter")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    marker = (
+        'jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \\\n'
+        '              --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \''
+    )
+    start = workflow.index(marker) + len(marker)
+    end = workflow.index("\n              ' <<<\"$runs_json\")", start)
+    result = subprocess.run(
+        [
+            jq,
+            "-r",
+            "--arg",
+            "pr",
+            pr_number,
+            "--arg",
+            "head_sha",
+            head_sha,
+            "--arg",
+            "repo",
+            repository,
+            "--arg",
+            "current",
+            current_run_id,
+            workflow[start:end],
+        ],
+        input=json.dumps({"workflow_runs": runs}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _cleanup_run(
+    *,
+    run_id: int,
+    head_sha: str = HEAD,
+    name: str = "Required OpenCode Review",
+    event: str = "pull_request_target",
+    display_title: str | None = None,
+    pr_number: int = 1437,
+) -> dict[str, object]:
+    """Build one synthetic workflow-run record for the cleanup filter."""
+    title = (
+        display_title
+        if display_title is not None
+        else f"Required OpenCode Review ContextualWisdomLab/example#{pr_number}@{head_sha}"
+    )
+    return {
+        "id": run_id,
+        "name": name,
+        "event": event,
+        "display_title": title,
+        "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
+    }
+
+
+def test_cleanup_selects_a_superseded_older_head_run() -> None:
+    """An older run for a different, no-longer-live head is selected."""
+    stale = _cleanup_run(run_id=1, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
+
+
+def test_cleanup_excludes_the_current_live_head_run() -> None:
+    """A run already on the live exact head is never selected."""
+    current_head_run = _cleanup_run(run_id=1, head_sha=HEAD)
+    assert cleanup_candidate_run_ids([current_head_run], current_run_id="999") == []
+
+
+def test_cleanup_excludes_the_currently_executing_run_itself() -> None:
+    """The cleanup job's own run is never a cancellation candidate."""
+    self_run = _cleanup_run(run_id=999, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([self_run], current_run_id="999") == []
+
+
+def test_cleanup_excludes_a_different_pull_request() -> None:
+    """A stale-head run for an unrelated PR is left untouched."""
+    other_pr = _cleanup_run(run_id=1, head_sha="b" * 40, pr_number=9999)
+    assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
+
+
+def test_cleanup_excludes_a_differently_named_or_triggered_run() -> None:
+    """A same-PR run for another workflow or trigger is left untouched."""
+    other_workflow = _cleanup_run(run_id=1, head_sha="b" * 40, name="Strix Security Scan")
+    other_event = _cleanup_run(run_id=2, head_sha="b" * 40, event="workflow_dispatch")
+    assert (
+        cleanup_candidate_run_ids([other_workflow, other_event], current_run_id="999")
+        == []
+    )
+
+
+def test_cleanup_matches_by_pull_requests_metadata_when_title_omits_the_suffix() -> None:
+    """A run whose display_title never rendered the head suffix still resolves."""
+    metadata_only = _cleanup_run(
+        run_id=1, head_sha="b" * 40, display_title="Required OpenCode Review"
+    )
+    assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == ["1"]
+
+
+def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
+    """The cleanup job only fires on synchronize and can cancel runs."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow.split("  cancel-superseded-opencode-review-runs:\n", 1)[1]
+    assert (
+        "if: github.event_name == 'pull_request_target' && "
+        "github.event.action == 'synchronize'"
+    ) in job
+    assert "actions: write" in job.split("steps:", 1)[0]
+
+
 def test_required_verdict_has_one_executable_owner() -> None:
     """Tests must execute the workflow gate, not a test-only Python mirror."""
     status_source = STATUS_HELPER.read_text(encoding="utf-8")
@@ -123,8 +305,8 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
     target_job = workflow.split("  opencode-review-target:\n", 1)[1]
     assert "timeout-minutes:" not in target_job.split("    steps:\n", 1)[0]
     assert "id-token: write" in target_job.split("    steps:\n", 1)[0]
-    assert 'event_type:"merge-scheduler"' in workflow
-    assert "trigger_reviews:true" in workflow
+    assert 'event_type:"opencode-review"' in workflow
+    assert "required_run_id:$required_run_id" in workflow
     dispatch_step = target_job.split(
         "      - name: Request current-head OpenCode review execution", 1
     )[1].split("      - name: Fail closed", 1)[0]
@@ -135,16 +317,351 @@ def test_required_workflow_cannot_succeed_with_an_echo_only_placeholder() -> Non
         "exchange_github_app_token"
     )
     assert "Current-head substantive OpenCode verdict already exists; scheduler wake skipped." in dispatch_step
-    assert "while :; do" in target_job
-    assert "sleep 30" in target_job
-    assert "enable_auto_merge:false" in workflow
-    assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews"' in workflow
+    assert "while :; do" not in target_job
+    assert "poll_interval_seconds" not in target_job
+    assert "180 minutes of polling" not in target_job
+    assert 'gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"' in workflow
     assert "github.event.pull_request.head.sha" in workflow
-    assert "This required check is not a review and must not succeed" in workflow
+    assert "will rerun this failed job" in workflow
     assert (
         "Review approval remains a separate current-head PR review requirement"
         not in workflow
     )
+
+
+def _write_live_pr_then_refusing_gh(bin_dir: Path) -> None:
+    """Serve the authoritative live PR lookup, then reject further GitHub I/O."""
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"$*\" == \"api repos/ContextualWisdomLab/example/pulls/1437\" ]]; then\n"
+        "  printf '%s' \"$LIVE_PR_JSON\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'unexpected gh invocation after live-state validation' >&2\n"
+        "exit 17\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
+
+
+def _run_fail_closed_step(
+    tmp_path: Path,
+    *,
+    pr_action: str = "",
+    pr_draft: str = "false",
+    pr_number: str = "1437",
+    head_sha: str = HEAD,
+    live_head_sha: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Fail closed without a current-head OpenCode verdict" step body.
+
+    A fake ``gh`` fails loudly if a closed or draft early exit reaches the
+    single Reviews API request.
+
+    ``live_head_sha`` defaults to ``head_sha`` (an exact-head snapshot) but
+    can be set independently to simulate a push landing between the event
+    snapshot (``HEAD_SHA``) and this step's own live re-fetch.
+    """
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_live_pr_then_refusing_gh(bin_dir)
+    return subprocess.run(
+        [bash, "-c", fail_closed_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": pr_number,
+            "HEAD_SHA": head_sha,
+            "PR_ACTION": pr_action,
+            "PR_DRAFT": pr_draft,
+            "LIVE_PR_JSON": json.dumps(
+                {
+                    "draft": pr_draft.lower() == "true",
+                    "head": {"sha": live_head_sha if live_head_sha is not None else head_sha},
+                    "state": "open",
+                }
+            ),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_fail_closed_step_exempts_a_draft_pr_before_review_lookup(tmp_path: Path) -> None:
+    """A draft PR's required check passes without reading Reviews API.
+
+    `#1546` added `PR_DRAFT` to the dispatch step's receipt-gate check
+    (`evaluate_receipts(..., is_draft=...)`), but that only narrows which
+    reviews the gate accepts -- it never exempts a draft PR from needing one,
+    and the scheduler's own draft path
+    (`scripts/ci/pr_review_merge_scheduler.py`'s `inspect_pr`) skips
+    dispatching a review for an ordinary draft entirely (no
+    `@opencode-agent` mention).
+    """
+    result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout
+
+
+def _run_request_review_step(
+    tmp_path: Path,
+    *,
+    pr_draft: str = "false",
+    live_head_sha: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the "Request current-head OpenCode review execution" step body.
+
+    A fake ``gh`` that fails loudly is installed on ``PATH`` so a draft
+    early exit that reaches any API call at all -- fetching the receipt-gate
+    helper source, or the Reviews API it wraps -- fails the test
+    immediately.
+
+    ``live_head_sha`` defaults to the fixed ``HEAD_SHA`` event snapshot but
+    can be set independently to simulate a push landing between the event
+    snapshot and this step's own live re-fetch.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_live_pr_then_refusing_gh(bin_dir)
+    return subprocess.run(
+        [bash, "-c", request_review_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "OIDC_AUDIENCE": "opencode-github-action",
+            "OPENCODE_API_BASE_URL": "https://api.opencode.ai",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "1437",
+            "HEAD_SHA": HEAD,
+            "PR_DRAFT": pr_draft,
+            "BASE_BRANCH": "main",
+            "WORKFLOW_SHA": "c" * 40,
+            "LIVE_PR_JSON": json.dumps(
+                {
+                    "draft": pr_draft.lower() == "true",
+                    "head": {"sha": live_head_sha if live_head_sha is not None else HEAD},
+                    "state": "open",
+                }
+            ),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_request_review_step_exempts_a_pr_converted_to_draft_before_any_api_call(
+    tmp_path: Path,
+) -> None:
+    """A PR converted to draft must not dispatch a new review request either.
+
+    Devin Review on `#1568` found that `converted_to_draft` firing this
+    workflow only fixed the "Fail closed" step's own poll -- the sibling
+    "Request current-head OpenCode review execution" step (which runs first)
+    had no draft exemption at all, so it still fetched the receipt-gate
+    helper source and queried the Reviews API, and could reach OIDC token
+    exchange and a `repository_dispatch` scheduler wake, before the "Fail
+    closed" step's exemption ever ran. This proves the request step now performs only the authoritative live-state lookup, then
+    exits before helper-source, review, token, or dispatch API calls when
+    `PR_DRAFT` is `"true"` (the value GitHub sends for `converted_to_draft`),
+    while `ready_for_review` and explicit draft-review dispatch paths
+    elsewhere (`pr_review_merge_scheduler.py`'s own draft handling) are
+    untouched by this step-body change.
+    """
+    result = _run_request_review_step(tmp_path, pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR is still a draft on the live exact head; a current-head OpenCode review is not requested" in result.stdout
+
+
+def test_request_review_step_still_dispatches_for_a_non_draft_pr(
+    tmp_path: Path,
+) -> None:
+    """A non-draft PR must still reach the receipt-gate helper fetch."""
+    result = _run_request_review_step(tmp_path, pr_draft="false")
+    assert result.returncode == 17, result.stderr
+    assert "unexpected gh invocation after live-state validation" in result.stderr
+
+
+def test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved(
+    tmp_path: Path,
+) -> None:
+    """Reproduces the production failure this fix targets, verbatim.
+
+    contextual-orchestrator PR #1000 was -- and remained -- a draft the
+    whole time, but a push landed between the `pull_request_target` event
+    snapshot and this step's own live re-fetch, so the live head no longer
+    matched `HEAD_SHA`. The old check order ran the head-SHA-match check
+    before the draft exemption, so it failed hard with `::error::Pull
+    request head moved while validating live review state.` and exit 1
+    (https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33548447878/job/100066104033)
+    even though no review was ever actually being requested against a
+    stable target. Draft/closed must be checked before head-match so a
+    still-iterating draft PR always exits 0, no matter how many pushes
+    race the event snapshot.
+    """
+    result = _run_request_review_step(
+        tmp_path, pr_draft="true", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "PR is still a draft on the live exact head; a current-head OpenCode review is not requested"
+        in result.stdout
+    )
+    assert "head moved" not in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_request_review_step_exits_gracefully_when_open_nondraft_head_moved(
+    tmp_path: Path,
+) -> None:
+    """An open, ready PR whose live head has already advanced must not error.
+
+    A newer push already fired its own fresh `pull_request_target` event and
+    its own fresh run of this workflow, which will validate *that* head
+    correctly -- failing this now-superseded dispatch attempt would only add
+    red-X noise for a benign race, not prevent anything.
+    """
+    result = _run_request_review_step(
+        tmp_path, pr_draft="false", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Pull request head moved on the live open, ready-for-review PR; "
+        "a fresh dispatch will fire for the current head." in result.stdout
+    )
+    assert "::error::" not in result.stdout
+
+
+def test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved(
+    tmp_path: Path,
+) -> None:
+    """The sibling "Fail closed" gate has the identical production race.
+
+    This step independently re-fetches live PR state right after the
+    "Request current-head OpenCode review execution" step exits, so a draft
+    PR whose head moves between the two steps' own live lookups must still
+    exempt here too, not just in the sibling step above.
+    """
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="synchronize", pr_draft="true", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required"
+        in result.stdout
+    )
+    assert "head moved" not in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_fail_closed_step_exits_gracefully_when_open_nondraft_head_moved(
+    tmp_path: Path,
+) -> None:
+    """An open, ready PR whose live head has advanced retires quietly."""
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="synchronize", pr_draft="false", live_head_sha="f" * 40
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Pull request head moved on the live open, ready-for-review PR; "
+        "a fresh run will check the current head." in result.stdout
+    )
+    assert "::error::" not in result.stdout
+
+
+def test_fail_closed_step_exempts_a_pr_converted_to_draft(
+    tmp_path: Path,
+) -> None:
+    """A PR converted to draft exits before reading Reviews API.
+
+    Devin Review on `#1568` found that `converted_to_draft` was missing from
+    this workflow's `pull_request_target.types`, so converting a PR to draft
+    while an earlier event was running could leave an unnecessary required
+    check. Including `converted_to_draft` creates an exempting run. This test
+    proves the step-level exemption exits before ever
+    reaching the Reviews API for the exact `PR_ACTION=converted_to_draft`
+    value GitHub sends for that event (`PR_DRAFT` is always `"true"` on that
+    event, mirroring GitHub's own payload).
+    """
+    result = _run_fail_closed_step(
+        tmp_path, pr_action="converted_to_draft", pr_draft="true"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required" in result.stdout
+
+
+def test_opencode_review_trigger_reacts_to_draft_conversion() -> None:
+    """The workflow's own trigger set -- not just the step body -- covers it.
+
+    A step-level test alone cannot prove the draft exemption above is
+    actually reachable in production: GitHub only re-invokes this workflow
+    for event types listed in `pull_request_target.types`. This pins that
+    `converted_to_draft` is present there, so a draft conversion fires a fresh
+    exempting run.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    trigger_block = workflow.split("  pull_request_target:\n", 1)[1].split(
+        "\n\nconcurrency:", 1
+    )[0]
+    assert "converted_to_draft" in trigger_block
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, "
+        "converted_to_draft, closed]"
+    ) in trigger_block
+    assert "cancel-in-progress: true" in workflow.split("\npermissions:\n", 1)[0]
+
+
+def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> None:
+    """Cancel an obsolete queued head before any job needs a runner."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert re.search(r"(?m)^concurrency:", workflow)
+    target_job = workflow.split("\n  opencode-review-target:\n", 1)[1].split(
+        "\n  cancel-superseded-opencode-review-runs:", 1
+    )[0]
+    concurrency_block = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:\n", 1
+    )[0]
+    assert "required-opencode-review-${{" in concurrency_block
+    assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
+    assert "github.event.pull_request.number || github.run_id" in concurrency_block
+    assert "cancel-in-progress: true" in concurrency_block
+    assert "    concurrency:" not in target_job.split("    permissions:", 1)[0]
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  coverage-source-tree:", 1
+    )[0]
+    assert "live_head" in admission
+    assert "live_state" in admission
+    assert 'echo "admitted=false"' in admission
+    assert 'echo "admitted=true"' in admission
+    assert "outputs.admitted == 'true'" in target_job
+
+
+def test_fail_closed_step_closed_still_takes_precedence_over_draft(tmp_path: Path) -> None:
+    """The pre-existing ``closed`` early exit still runs before the new draft check."""
+    result = _run_fail_closed_step(tmp_path, pr_action="closed", pr_draft="true")
+    assert result.returncode == 0, result.stderr
+    assert "PR closed; a current-head OpenCode verdict is not required." in result.stdout
+    assert "PR is a draft" not in result.stdout
+
+
+def test_fail_closed_step_checks_once_for_a_non_draft_pr(tmp_path: Path) -> None:
+    """A non-draft PR performs one Reviews API read and never holds the runner."""
+    result = _run_fail_closed_step(tmp_path, pr_action="synchronize", pr_draft="false")
+    assert result.returncode == 17, result.stderr
+    assert "unexpected gh invocation after live-state validation" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -168,7 +685,9 @@ def test_scheduler_wake_reuses_trusted_receipt_predicate(
     fake_gh.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
+if [[ "$*" == "api repos/owner/repo/pulls/7" ]]; then
+  printf '%s' "$LIVE_PR_JSON"
+elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
@@ -203,8 +722,14 @@ fi
         "HEAD_SHA": HEAD,
         "PR_DRAFT": "false",
         "BASE_BRANCH": "main",
+        "BASE_SHA": "b" * 40,
+        "HEAD_REF": "feature-branch",
         "WORKFLOW_SHA": "c" * 40,
         "GH_TOKEN": "token",
+        "GITHUB_RUN_ID": "123456789",
+        "LIVE_PR_JSON": json.dumps(
+            {"draft": False, "head": {"sha": HEAD}, "state": "open"}
+        ),
     }
     result = subprocess.run(
         ["bash", "-c", request_review_script()], env=env, text=True, capture_output=True
@@ -214,12 +739,14 @@ fi
     assert actual == dispatches
 
 
-def test_formal_receipt_wake_remains_available_without_bounding_runner_polling() -> None:
-    """The receipt wake path coexists with the unbounded required review wait."""
+def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> None:
+    """The dispatch receipt wakes the exact failed run without runner polling."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "for attempt in" not in required
-    assert "while :; do" in required
+    assert "while :; do" not in required
+    assert "poll_interval_seconds" not in required
+    assert "180 minutes of polling" not in required
     assert "rerun-failed-jobs" in dispatched
     assert "id: formal_review_receipt" in dispatched
     assert "steps.formal_review_receipt.outcome == 'success'" in dispatched
