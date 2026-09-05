@@ -2875,6 +2875,31 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
+
+**Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
+
+**Task.** A peer session flagged `org-queue-sweep` (`.github/workflows/pr-review-merge-scheduler.yml`) as a suspected contributor to the organization's shared GitHub API rate-limit pressure (this session independently hit the GraphQL secondary rate limit repeatedly the same day, corroborating the general symptom) and asked whether it can be replaced with GitHub Actions' own native scheduling/filter/condition primitives instead of its current custom bash implementation.
+
+**What the job actually does.** `org-queue-sweep` walks every organization repository once per hourly tick, exchanging an OIDC-derived OpenCode app token, then re-running the same trusted, guarded scheduler contract used for event-driven per-repository runs against each one — updating branches, dispatching reviews, or merging, bounded by explicit per-tick budgets (`ORG_SWEEP_REVIEW_DISPATCH_LIMIT`, `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`, `ORG_SWEEP_BRANCH_UPDATE_LIMIT`) and a rotation index so a fixed repository-list order does not starve later repositories (`ContextualWisdomLab/.github#1219`). It exists because GitHub Actions has no event that fires when a PR *becomes* mergeable without a corresponding webhook — a PR approved, or whose required checks land, after its own last triggering event (or whose base branch advances after approval, making it merge-blocked as "behind") sits in that state indefinitely with no later trigger; only a fixed heartbeat notices it. This job's sibling, `scan-pr-queue`, does the same thing scoped to `ContextualWisdomLab/.github`'s own queue (org-queue-sweep explicitly excludes `.github` itself from its target list via `select(.full_name != "ContextualWisdomLab/.github")`).
+
+**Already fixed twice, very recently, by the same lever.** Both crons were already lengthened for exactly this rate-limit/Actions-capacity reason:
+- `org-queue-sweep`: 15 min → hourly (`docs/doctoring/actions-queue-saturation-hourly-sweep.md`, `#1630`, 2026-09-01), after an observed 822-run Actions backlog.
+- `scan-pr-queue`: 30 min → hourly, offset 30 minutes from `org-queue-sweep`'s tick so the two heartbeats do not collide (`#1704`, merged 2026-09-02).
+
+Both changes explicitly documented, in the workflow file itself and in doctoring, *why* the job cannot simply be removed (see below) — this investigation re-checked whether that reasoning still holds, rather than assuming it does.
+
+**Alternatives considered and rejected.**
+
+1. *Replace the custom org-wide walk with a native `strategy: matrix` job, one shard per repository.* Rejected: this does not reduce the number of GitHub API calls (still one queue-inspection pass per repository per tick) — it only parallelizes them across up to ~74 concurrent runners. The gap-baseline entry immediately above this one documents an already-observed, already-fixed floating-runner-image starvation incident causing multi-hour queuing across the org's required review workflows. Requesting dozens of concurrent hosted runners for one job, every hour, would make that class of incident more likely, not less — this is a regression risk, not an improvement.
+2. *Remove the schedule trigger entirely and rely only on event-driven wakes (`pull_request_target`, `pull_request_review`, `workflow_run`, `repository_dispatch`).* Rejected: GitHub Actions has no native event for "a PR's mergeability changed because time passed or the base branch advanced." At the time, `workflow_run` listened only for OpenCode and Strix, not every required check, which made the scheduled recovery more—not less—necessary. Removing the schedule would silently reintroduce PRs stuck "approved but unmerged" with no operator signal — the same failure class `#1630`'s own root-cause section describes.
+3. *Rely on GitHub's built-in auto-merge instead of a polling sweep.* Partially relevant, not a full replacement: native auto-merge (if enabled per-PR) does retry a merge automatically once required checks pass, which would reduce reliance on the sweep for the "waiting on a check that just went green" case specifically. It does **not** cover the "base branch advanced, PR is now behind and requires an explicit branch update" case (this repository's governance model requires an explicit `UPDATE_BRANCH` action per `docs/pr-review-and-merge-procedure.md`, not a bare auto-merge-on-green), and does not run the guarded scheduler's own review-dispatch/stacked-PR logic. Adopting org-wide auto-merge as a *complement* to (not replacement for) the sweep is a legitimate future lever, but is a merge-policy decision affecting every sibling repository's branch protection settings — out of scope for this investigation and not something to change without the owner's explicit sign-off.
+4. *Reduce `ORG_SWEEP_MAX_PRS` (then 1000) or the per-tick dispatch/update budgets to cut API calls per tick.* Rejected because lowering the coverage bound would reintroduce the BandScope queue-omission incident. The investigation understated the cost, however: active repositories also incurred GraphQL pagination and per-PR REST reads. PR #1821 removed the separate Actions-run inventory/cancellation cost instead of shrinking PR recovery coverage.
+
+**Historical conclusion, now superseded.** The cadence and mergeability-recovery reasoning remains valid, but it incorrectly treated run cancellation as inseparable from that recovery. PR #1821 separated those responsibilities and deleted the API-heavy portion while keeping the necessary scheduled recovery.
+
+**Residual / follow-up.** Continue measuring total job creation across central required workflows and product-local duplicates. The 2026-09-04 consolidation wave moved OSV, Scorecard, Gitleaks, review-repair, and commercial-readiness checks into existing owners; queued-run counts still require live observation rather than configuration-only claims.
+
 ## Noema single-request model-control ownership — PR #1672 (2026-09-02)
 
 **Status:** Merged into protected `main` as `a28fc2f4e185df7847e2f2f5f6ec561d1e84805d`; fresh exact-head hosted evidence remains an operational acceptance item.
@@ -2977,7 +3002,18 @@ prose" convention already stated in `CLAUDE.md`.
 
 **Formerly open, gateway-owned — now fixed, PR open.** The missing model/provider attribution on the real-call failure path (`served_model=unknown` where preflight proves the sidecar can report this detail) is root-caused and fixed: `ContextualWisdomLab/contextual-orchestrator#1037` (branch `fix/invoke-failover-attempt-telemetry`, based on `main` @ `f4e5fc67`, open, not yet merged). Root cause: `TaskOrchestrator._invoke`'s failover loop (`contextual_orchestrator/orchestrator.py:7660-7893`) tracked only the single most recent candidate's failure (`last_upstream_error`/`last_provider_response_error`, overwritten on every new candidate), discarding every earlier candidate's `agent_id`/`model`/`provider_name`/failure reason the moment the loop moved on — so a fully-exhausted pool's raised exception could only ever describe the last agent tried, exactly matching the `served_model=unknown` symptom above. Fix: `ProviderUpstreamError.detail` now conditionally surfaces `attempts` (one record per candidate: `agent_id`/`model`/`provider`/`error_code`/`provider_status`/`retryable`/`retry_attempt`, reusing the existing `_record_tool_fallback` shape — never raw exception text) and `stop_reason`, populated at all 3 of `_invoke`'s existing "candidate exhausted" exit points; `server.py`'s error-message helper surfaces the count/reason; a second, compounding bug (the 413 `request_too_large` handler silently dropping `exc.detail` via a missing 4th `_send_error` argument) was fixed alongside it since it shares the same attribution-loss shape. RED-then-GREEN on 3 new tests, regression guards (`test_detail_and_transport_are_preserved_for_callers`, `test_invoke_preserves_final_classified_failure_across_candidates`, `test_all_agents_failing_raises_after_trying_every_candidate`) confirmed unmodified, full suite green. Zero line-range overlap with the concurrently-active PR #1032 (confirmed via diff comparison — #1032 touches `_orchestrated_provider_completion`'s schema-repair accounting; this touches `_invoke`'s failover loop, a different code path), branched from `main` directly rather than stacked. `.github`-side follow-up still needed once both #1661 and #1037 land: `scripts/ci/noema_review_gate.py`'s `call_llm` catches `urllib.error.HTTPError` without calling `exc.read()`, so it cannot see the response body CO now sends on failure, and `_extract_served_model` only reads a top-level `data.get("model")` while CO nests everything under `error.detail`/`error_detail` — the caller needs its own small patch to actually surface what the gateway now provides.
 
-## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — existing-repo gap closed, future-repo gap open
+**Confirmed landed and working in production — 2026-09-05.** The `.github`-side follow-up named above shipped: `ContextualWisdomLab/.github#1831` ("ground verdicts and classify gateway errors," merged 2026-09-04), with a same-day test/coverage hardening pass in `#1835` and a further refinement in `#1850`. `call_llm` now distinguishes `urllib.error.HTTPError` specifically, labels that case `active_phase = "response_error"` (replacing the misleading generic label a plain transport failure would get), and calls a new `_extract_http_error_telemetry(exc)` helper that actually reads and parses the gateway's error response body — closing the exact `exc.read()` gap this entry named. Live confirmation, found incidentally while handling an unrelated Autofix event on `ContextualWisdomLab/.github#1757`: a fresh gateway failure on that PR (job `101084475966`, 2026-09-04T20:45:17Z) logged `HTTPError: HTTP Error 502: Bad Gateway; caller attempts=1, duration=284.7s, phase=response_error, served_model=google/gemma-4-31b-it` — a real model name, not `unknown`. The underlying gateway instability itself (a 502 after 284.7s) remains a separate, still-open, still-recurring problem this entry does not resolve — but the telemetry gap that made every prior instance of it undiagnosable is now closed.
+
+## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
+
+**2026-09-04 correction.** The emergency ruleset removal below fixed the old
+entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
+into the native `codeql-scan-dispatch.yml` handler. Seven current PR heads then
+materialized every other central workflow but no `CodeQL PR` run because
+ruleset `18156473` still omitted the now-safe entrypoint. Completion therefore
+requires protected-main audit/recovery contracts, a live ruleset re-add that
+preserves every unrelated field, and fresh exact-head runs that do not conclude
+`startup_failure`; configuration text alone is not completion evidence.
 
 **Problem.** Every ruleset-injected `codeql-pr.yml` run in every repository covered by org ruleset `18156473` (confirmed: bandscope, naruon, aFIPC, pg-erd-cloud, xtrmLLMBatchPython, wardnet, spanning 2026-09-02T20:12:52Z through 2026-09-03T03:15:43Z) concluded `startup_failure` with **zero check runs created** — while every other required workflow in the same PRs at the same time enqueued normally. Example: [wardnet run 33710719228](https://github.com/ContextualWisdomLab/wardnet/actions/runs/33710719228).
 
@@ -3044,11 +3080,15 @@ product/operational decision this record surfaces rather than makes.
 
 **Status:** Investigated with a 9-agent workflow (4 independent file audits + 1 direct-evidence pull against the item's own cited example + 4 adversarial re-verification passes) plus a 4-agent follow-up (2 investigate + 2 adversarial verify) triggered by Devin Review findings, per `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md`. Item 13 asks that Strix/OpenCode Review/Noema reliably cancel a PR's previous-head run when a new push supersedes it, citing `ContextualWisdomLab/naruon#1528` (run `33581213829`) as evidence of a gap.
 
-**Verdict: the hypothesis is refuted for the item's own cited evidence, but `noema-review.yml` has a separate, confirmed, unfixed concurrency bug.** `strix.yml`, `opencode-review.yml`, and `pr-review-merge-scheduler.yml` already reliably retire a stale prior-head run on a new push — via correctly SHA-scoped native `concurrency:` groups where that's the right tool (`opencode-review.yml`, fixed after a real prior incident, `#1568`), and purpose-built same-file jobs that call the GitHub Actions API directly to find and cancel stale-head runs by exact `head_sha` match where native concurrency alone can't reach (`strix.yml`'s `cancel-superseded-pr-runs`, `pr-review-merge-scheduler.yml`'s hourly `org-queue-sweep`). `noema-review.yml` does not: its concurrency group has no head-SHA component, so if GitHub ever processes an older push's `synchronize` event after a newer one's (GitHub does not guarantee delivery order), native `cancel-in-progress` cancels the newer, valid, current-head run immediately — before the older run's own stale-trigger check ever executes, and nothing in the file can prevent this since GitHub evaluates `concurrency:` before any job step runs. Confirmed via two independent adversarial re-verification passes, neither of which found a refutation; corroborated by `strix.yml` and `opencode-review.yml` both deliberately using different patterns specifically to avoid this exact hazard. Not fixed here — a live CI concurrency-scoping change deserves its own dedicated PR with a regression test, not a same-breath edit to documentation. See the doctoring record for the full mechanism and evidence.
+**Implementation pending protected merge in #1878.** Live pushes to #1878 showed that most workflows retired the prior HEAD automatically, while Required Noema Review and Current Head Run Coalescer each left one prior-HEAD run queued because their effective admission groups did not supersede by stable repository-and-PR identity. #1878 moves Noema concurrency to workflow admission, removes the coalescer's HEAD component, and keeps exact live-HEAD revalidation inside each trusted job before mutation. The same PR removes `org-queue-sweep`; stale-head retirement therefore has one owner at workflow admission instead of depending on an organization-wide runner and repository walk. The older out-of-order-event concern remains bounded by the mandatory live-HEAD gate: a stale event may replace a queued attempt, but it cannot publish review or cancellation evidence after its event HEAD stops matching the live PR.
 
-**The cited evidence shows a different, real problem instead: pure queue starvation, not a cancellation gap.** `ContextualWisdomLab/naruon#1528`'s full 17-run history (pulled live) shows every run sharing one unchanged head SHA — no multi-SHA race ever occurred. What did happen: the cited Strix run sat **23h22m queued before it even started running**, and the paired OpenCode Review run for the same commit was **still queued 24+ hours later with no job started** at time of check. This corroborates `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`'s plan-level-ceiling finding with a concrete, individually-named example rather than aggregate counts — the fix is capacity (a plan decision or added runner capacity), not a workflow-config bug.
+**Protected-main follow-up.** #1878 merged at `1b65dbc35e7183722ad77894e2d80b39993be90d`. The current-head duplicate worker is subsequently integrated into `pr-review-merge-scheduler.yml`, removing the standalone coalescer workflow's extra runner admission while preserving the same exact PR/head/base revalidation.
 
-**Not acted on further, deliberately, except for the confirmed `noema-review.yml` bug which is deferred to its own PR.** No fix was applied to item 13's own hypothesis or the (also-refuted) `strix.yml` paths-ignore claim, because no fixable bug was found there — forcing one would have meant inventing a problem the evidence does not support. The `noema-review.yml` concurrency bug is real and confirmed, but a live security-critical CI concurrency-scoping change was deliberately not bundled into this documentation PR; the standing chicken-and-egg bypass-merge authorization remains available for whichever PR carries that fix, once it exists. A peer session's lead on `naruon`'s `pr-governance.yml` (six runs on PR #1528's one unchanged SHA) was investigated further by fetching and reading the workflow and its gate script in full: a `check_run`-triggered job-slot-waste claim was corrected (the job's own `if:` restricts that path to CodeRabbit checks only — GitHub Actions requests no runner for a skipped job), and a proposed same-head debounce fix was found to be unsafe rather than implemented — `scripts/ci/pr_governance_gate.sh` evaluates live required-check/review-thread/CodeRabbit state on every run, not a pure function of head SHA, so skipping re-evaluation whenever the SHA is unchanged would leave the gate reporting a stale blocker list after a check finishes or a review lands. See `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md` for the full trace; recorded as still open, not fixed.
+**The cited evidence shows a different, real problem instead: pure queue starvation, not a cancellation gap.** `ContextualWisdomLab/naruon#1528`'s full 17-run history (pulled live) shows every run sharing one unchanged head SHA — no multi-SHA race ever occurred. This corroborates `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`'s plan-level-ceiling finding with a concrete, individually-named example rather than aggregate counts — the fix is capacity (a plan decision or added runner capacity), not a workflow-config bug.
+
+**Correction (2026-09-04, evidence audit):** the specific "cited Strix run sat 23h22m queued before it even started running" claim above is wrong, disproven by direct re-verification. Both attempts of the cited Strix job (`33581213829`) show `created_at == started_at` — attempt 1 (2026-09-02T01:54:46Z→01:56:44Z, 2 min) and attempt 2 (2026-09-03T01:17:10Z→01:31:18Z, 14 min) both started **immediately** and were **cancelled mid-run**, not after a long queue wait. This pattern (prompt start, cancel during execution) is the opposite of queue starvation and is consistent with `strix.yml`'s own `cancel-superseded-pr-runs` mechanism (already documented above as working correctly) firing on this run — though the exact trigger for canceling a run against an unchanged head SHA was not further traced here. The paired OpenCode Review run for the same commit (`33581213805`) tells a different, worse story than "still queued 24+ hours later with no job started": its 5 sequential dependent jobs each queued for hours — `required-workflow-bootstrap` ~7h57m, `coverage-source-tree` ~9h40m, `coverage-evidence` ~13h1m, `opencode-review` ~12h13m — before `opencode-review` finally started 2026-09-03T20:46:49Z, ran for ~6 hours, and was itself cancelled 2026-09-04T02:47:05Z, roughly two full days after the original push. **Net effect on this entry's conclusion: unchanged, if anything understated.** The specific "23h22m" number attached to the wrong run doesn't survive scrutiny, but the underlying severe-queue-congestion finding this entry uses it to support is corroborated more strongly by the OpenCode Review run's real multi-stage delays than the original single figure conveyed. Found via a user-initiated adversarial evidence audit of 6 cited CI runs (5 of 6 confirmed accurate; this was the one exception).
+
+**Current status:** implementation exists on #1878 but is not complete until exact-head required checks, independent review, protected merge, and post-merge workflow evidence succeed. No fix was applied to the refuted `strix.yml` paths-ignore claim. A peer session's lead on `naruon`'s `pr-governance.yml` (six runs on PR #1528's one unchanged SHA) was investigated further by fetching and reading the workflow and its gate script in full: a `check_run`-triggered job-slot-waste claim was corrected (the job's own `if:` restricts that path to CodeRabbit checks only — GitHub Actions requests no runner for a skipped job), and a proposed same-head debounce fix was found to be unsafe rather than implemented — `scripts/ci/pr_governance_gate.sh` evaluates live required-check/review-thread/CodeRabbit state on every run, not a pure function of head SHA, so skipping re-evaluation whenever the SHA is unchanged would leave the gate reporting a stale blocker list after a check finishes or a review lands. See `docs/doctoring/item13-stale-head-cancellation-audit-20260903.md` for the full trace.
 
 ## `codeql-pr.yml` required-workflow hard limit closed org-wide — 2026-09-03
 
@@ -3170,3 +3210,374 @@ something absent) held for the wardnet correction; the EgressWeave correction is
 verifying "library X can't do Y" requires reading X's own policy/configuration surface, not just its
 README/marketing feature list, before recommending against adoption. Saved to
 `feedback_verify_org_wide_before_declaring_unstarted.md`.
+
+## Org-wide audit: `code-scanning/default-setup` vs. a repository's own advanced-configuration CodeQL workflow — 2026-09-04
+
+**Status:** Superseded by a staged central-CodeQL rollout contract. `contextual-orchestrator` was the only
+confirmed live instance among the 11 Code Search candidates and repositories inspected directly; it was
+already fixed in the same investigation that discovered it
+(`contextual-orchestrator` PR #1028's failing "CodeQL analysis" check — `code-scanning/default-setup` was
+`state: "configured"` while `.github/workflows/security.yml`'s `codeql_analysis` job also ran a real,
+working `github/codeql-action/init` + `analyze` sequence; GitHub rejects that combination outright, failing
+the SARIF upload with "CodeQL analyses from advanced configurations cannot be processed when the default
+setup is enabled." Fixed with `gh api --method PATCH repos/ContextualWisdomLab/contextual-orchestrator/code-scanning/default-setup -f state=not-configured`,
+since `security.yml` was the pre-existing, real coverage mechanism; a related suppression bug found in the
+same pass — the whole "Security" workflow, id `300545778`, had been `disabled_manually`, hiding the failure
+rather than fixing it — was reversed with `gh api --method PUT .../actions/workflows/300545778/enable`.)
+
+**Why an org-wide audit was warranted.** The item-41 entry above records that its 2026-09-03 default-setup
+rollout deliberately checked real coverage first via the `code-scanning/analyses` API before assigning
+default-setup only to the 23 repositories with zero coverage from any source. `contextual-orchestrator`
+having both mechanisms simultaneously raised the question of whether it was misclassified during that sweep,
+or whether default-setup landed on it (and possibly others) through an unrelated path.
+
+**Method.** Org-wide `gh api -X GET search/code -f q="codeql-action/analyze org:ContextualWisdomLab path:.github/workflows"` (content search, not a filename grep — the same lesson item-41 already applied, since `contextual-orchestrator`'s own coverage lives in an unexpectedly-named `security.yml` rather than a `codeql.yml`) returned 13 hits across 11 repositories with a local workflow file containing `github/codeql-action/init`/`analyze`: `newsdom-api`, `keyverse`, `ContextualWisdomLab.github.io`, `fast-mlsirm`, `scopeweave`, `bandscope`, `contextual-orchestrator`, `mightyETL`, `litellm-patched-proxy` (2 files), `pg-erd-cloud`, and `.github` itself (2 files — `codeql-scan-dispatch.yml`, the already-known central dispatch handler, and `scheduled-security-scan.yml`; expected, not investigated further as a "local repo" case). `gh api repos/ContextualWisdomLab/<repo>/code-scanning/default-setup --jq '.state'` was then checked for each of the other 10.
+
+**Result: `default-setup=configured` alongside a local advanced-config workflow, beyond `contextual-orchestrator`, in exactly 3 repositories — none of which are in item-41's 23-repository rollout list, and none of which are a live conflict.**
+- **`ContextualWisdomLab.github.io`** — false positive. Its `.github/workflows/codeql.yml` is named "CodeQL Default Setup Marker," triggers only on `workflow_dispatch` (never on push/PR), and its `analyze` step carries `if: ${{ false }}` (never executes) with an explicit preceding comment: *"Skipping github/codeql-action/analyze because central/default setup owns SARIF upload."* Deliberately engineered to expose `codeql-action` usage to Scorecard's static analysis without ever touching SARIF. No fix needed.
+- **`fast-mlsirm`** — false positive. `.github/workflows/codeql.yml` runs two real jobs (`analyze-actions` on every PR, `analyze-python` gated to `workflow_dispatch` only), and **both** `analyze` steps carry `with: upload: never`, with comments stating *"Default setup remains the repository's code-scanning upload owner"* and *"Default setup already owns ordinary Python code-scanning uploads."* Confirmed via a live job log (run `33754939454`, job `100646992008`, `2026-09-04T00:45Z`): `upload: never` present in the action's resolved input dump, `Exported results to SARIF` followed by no upload call, job concluded `success`. Deliberately engineered the opposite way from `contextual-orchestrator`'s fix (default-setup keeps ownership, the local workflow stays silent) rather than the way `contextual-orchestrator` was fixed (local workflow keeps ownership, default-setup disabled) — both are valid resolutions of the same conflict; this repository already had one in place. No fix needed.
+- **`scopeweave`** — no live conflict, but two dangling artifacts worth a light cleanup. The workflow with real `init`/`analyze` steps (`.github/workflows/codeql.yml`) is `disabled_manually`, so it never runs and cannot collide with default-setup today. A second, unrelated workflow entry — "CodeQL Required," id `335384625`, `.github/workflows/codeql-required.yml` — is registered `state: "active"` in the Actions API, but the file itself no longer exists on the `develop` default branch (`404` on direct content fetch); GitHub retains the workflow-run registration for a file that has since been deleted, so this entry can never actually trigger. Net effect: default-setup is the sole current CodeQL coverage source for this repository, matching item-41's own "zero coverage from any source" criterion at whatever point `codeql.yml` was disabled — not a misclassification, just a repository whose local workflow went inactive after (or independent of) the rollout. Not fixed in this pass: re-enabling the disabled `codeql.yml` would immediately recreate `contextual-orchestrator`'s exact conflict, so any future re-enable of that workflow must add `upload: never` (matching `fast-mlsirm`'s pattern) or disable default-setup first, whichever this repository's owner intends as the coverage source of record.
+
+**The remaining 7 repositories** (`newsdom-api`, `keyverse`, `bandscope`, `mightyETL`, `litellm-patched-proxy`, `pg-erd-cloud`, `.github`) all returned `default-setup=not-configured` — no conflict is possible regardless of their local workflow's upload configuration.
+
+**Conclusion.** `contextual-orchestrator`'s conflict was an isolated incident, not a symptom of a broader misclassification in item-41's rollout (none of the 3 repositories found here with `default-setup=configured` alongside a local workflow were among that rollout's 23 targets) and not evidence of an org policy silently re-enabling default-setup on repositories that already had real coverage. Two of the three already carry a deliberate, working design for this exact conflict (`if: false` / `upload: never`) that predates or is independent of this audit — worth keeping as the reference pattern if this conflict resurfaces elsewhere, in preference to `contextual-orchestrator`'s "disable default-setup" fix when the local workflow does not yet have established real-coverage precedence.
+
+**Caveat.** This audit trusted GitHub's code-search index for the initial 11-repository candidate list rather than fetching and grepping all 74 repositories' workflow directories individually; code search can lag very recent pushes by a short window. The 10 non-`contextual-orchestrator` candidates it did surface were each verified directly against the live API/content, not from search snippets alone.
+
+**2026-09-05 staged rollout correction.** The organization now requires the central
+`.github/workflows/codeql-pr.yml` through ruleset `18156473`; keeping GitHub's generated
+`dynamic/github-code-scanning/codeql` default setup on the same PR spends another CodeQL job set. Removal
+must proceed one repository at a time. `scripts/ci/audit_codeql_default_setup_rollout.py` is the read-only
+gate: it requires the inherited ruleset and central workflow, binds evidence to the exact PR head, blocks an
+active advanced uploader/default-setup collision, and reports either `READY_DISABLE`, `VERIFIED`, `WAIT`,
+`ROLLBACK`, or `BLOCK`. A repository advances only after exact-head central CodeQL succeeds. If central
+CodeQL fails after default setup is disabled, re-enable default setup before continuing, but only when no
+active advanced uploader would make that rollback invalid. `.github`, `noema`, and
+`IRT-bibliography-set` are explicit ruleset exceptions and must remain `EXEMPT`, not silently counted as
+rollout failures. Run the live collector as
+`python3 scripts/ci/audit_codeql_default_setup_rollout.py --repository ContextualWisdomLab/<repo> --pr <number>`;
+it uses only authenticated REST `GET` requests and re-reads the PR head after collection to reject a moving
+snapshot.
+
+The xtrmLLMBatchPython pilot is intentionally not yet proof of completion: default setup currently reports
+`not-configured`, ruleset `18156473` requires central CodeQL, and PR #292 head
+`5f4de312e72da5e1303c701d8e6f65cec7207409` has central run `33904225451`; that run is still `queued`.
+The generated default-setup run `33904220801` for the same head was cancelled after the setting change.
+No second repository may be changed until the central run reaches an explicit successful terminal state and
+the detector reports `VERIFIED` for that exact head. GitHub documents the hard boundary: default setup blocks
+CodeQL-generated SARIF uploads from advanced configuration, so rollback must never blindly enable it beside
+an active uploader.
+## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
+
+**Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against
+live `main`; not a code change. This is the 900+ open-PR sweep continuing the standing autonomous PR
+review→fix→merge→develop loop; individual PR outcomes are recorded as comments on the affected PRs, not
+duplicated here.
+
+**Finding 1 — severe org-wide Actions capacity congestion, confirmed live, not the already-tracked
+`QUEUE_SATURATION_CHICKEN_EGG`/floating-runner-image pattern.** `actions_list` (`list_workflow_runs`,
+`status: queued`) returned **`total_count: 1719`** queued workflow runs at once, against **`total_count: 2`**
+`in_progress`. Spot-checked several PRs' check runs directly: most jobs (`CodeQL`, `Bandit`, `pip-audit`,
+`Semgrep`, `trivy-fs`, `scorecard`, `strix`, `noema-review`, `opencode-review`, the merge scheduler's own
+`Required PR Review Merge Scheduler` runs) sat `queued` for anywhere from ~20 minutes to over 2.5 hours
+(e.g. `#1817`'s own checks, still `queued` since `2026-09-03T22:53:57Z`, ~2.5h before this snapshot); a
+minority of lightweight jobs (`Detect changed scope`, `gitleaks`, `validate`) did complete normally in the
+same window. This is consistent with a hosted-runner concurrency ceiling being exhausted by simultaneous
+demand from the now-100+-PR open queue on this repository alone, compounded across every sibling repository
+the same central required workflows also run in. No fix attempted here — this is an Actions plan/concurrency
+capacity condition, not a workflow or script defect; per the standing operating directive, a merely-queued
+job is never re-run. Recorded so a future session does not mistake near-universal `queued` check state across
+dozens of otherwise-healthy PRs for something wrong with those PRs.
+
+**Finding 2 — `scripts/ci/noema_review_gate.py` and `.github/workflows/strix.yml`/`noema-review.yml` are
+active multi-PR hot-file collision zones; at least 6 open PRs each carry a materially different, mutually
+incompatible design for the same mechanism.** Attempted the standard `git merge --no-edit` conflict repair
+against 8 `dirty`/stale-conflicting PRs this session; 2 succeeded cleanly (`#1187`, `#933`, `#1685` — ordinary
+append-only doc/changelog drift or one confirmed-stale carried-forward test assertion, all pushed with full
+green suites) and 6 could not be resolved without guessing on a required security gate:
+
+- `#1198`, `#1606`, `#1589` each modify `scripts/ci/noema_review_gate.py`'s core verdict/response-format or
+  `inspect_and_review()` control flow, and `origin/main` has independently evolved a *fourth*, different
+  version of the same surface (`inspect_and_review(repo, number, expected_head)` +
+  `require_expected_head()`, and separately `_noema_verdict_response_format()` / `_required_probe_count()` —
+  neither of which any of the three PRs know about, and none of which the three PRs agree with each other
+  on either).
+- `#939`, `#1009` both modify `.github/workflows/strix.yml`'s provider/model-behavior-error retry
+  classification, and `origin/main` has *already independently shipped* a materially more advanced version
+  (bounded retry loop, `model_behavior_error_signal`, `is_model_behavior_error()` in
+  `scripts/ci/strix_quick_gate.sh`) that appears to make significant parts of both PRs' own core
+  contribution redundant — confirmed via direct `git show origin/main:... | grep`, not inferred from PR
+  prose.
+- `#1674`'s conflict footprint is a single ordinary doc hunk, but a full-suite run *after* the clean merge
+  (before any push) surfaced 10 failing tests: `origin/main` independently added a
+  `noema-review.yml` step ("Reject a stale trigger before credential or model setup", part of the same
+  `expected_head` mechanism above) that this branch has no knowledge of, and git's 3-way text merge silently
+  dropped it with **no conflict marker at all** rather than flagging a collision — a strictly more dangerous
+  failure mode than a marked conflict, since a naive merge-and-push here would have shipped a workflow
+  missing a real fail-closed check with a clean-looking `git merge` exit code.
+- `#1158` shows the same shape one layer down in `.github/workflows/security-scan.yml`: this branch replaced
+  the third-party `google/osv-scanner-action` invocation with a self-controlled `run-osv-scanner.sh` script
+  plus result-completeness classification at all four OSV call sites; `origin/main` has not adopted that
+  redesign at all (the script doesn't exist anywhere on `main`) and has continued evolving the
+  action-based path independently. `#1257` (small, `mergeable_state: blocked`, main-architecture-compatible)
+  may already close the actual underlying bug (OSV results lost across fork checkout) this branch was opened
+  for, without needing the larger rewrite reconciled at all.
+
+**Why this matters beyond the 6 individual PRs.** These are not isolated stale branches — they are 6+
+independent lines of development racing on the same 3 files (`noema_review_gate.py`, `strix.yml`,
+`security-scan.yml`) simultaneously, each written by a different agent/session across roughly 2-4 weeks,
+each with its own extensive TDD/evidence narrative, and none aware of the others' now-already-merged (or
+also-still-open) changes to the same functions. Per-PR comments with the specific evidence were left on each
+(`#1198`, `#1606`, `#1589`, `#939`, `#1009`, `#1674`, `#1158`) rather than guessing a text-level resolution
+on a required security gate, consistent with this loop's existing standard for `#1279`/`#1280`/`#1382`. The
+actionable follow-up is a design-aware reconciliation pass — deciding, per hot file, which in-flight PR (if
+any) should become the surviving lineage and which should be closed/rebased against it — not another
+automated merge-conflict sweep; a ninth or tenth independently-conflict-resolved branch on the same 3 files
+would only add another incompatible lineage to reconcile later.
+
+**Corroborating context already on this loop's radar.** `#1661` (currently open, `mergeable_state: blocked`,
+141 commits) documents having *already* fixed one instance of this exact class in `noema-review.yml`
+(the "Cancel superseded Noema runs after live-head validation" concurrency-deadlock extraction) — i.e. the
+pattern of multiple sessions independently repairing the same hot file is already a known, recurring shape
+in this specific workflow, not a one-off.
+
+## 2026-09-04 follow-up: 4 more PRs confirmed in the hot-file collision zone (`strix.yml`, `pr_review_merge_scheduler.py`, `noema_review_gate.py`); one genuine pre-existing test bug found and fixed elsewhere
+
+Continuing the same round's PR sweep, four additional open PRs hit real merge conflicts whose root cause is
+the same class documented above — main has independently evolved a materially different, incompatible
+design for the same mechanism since each branch's last sync — rather than a resolvable text collision.
+Evidence-based comments were left on each; no guessed resolution was pushed on any of them.
+
+- **`#1065`** (`fix(scheduler): fall back to REST when auto-rebase GraphQL transport fails`) conflicts in
+  `.github/workflows/strix.yml`: its branch still has the older neutral-skip design (a backend-unavailable
+  signal with no reported vulnerability prints a warning and `exit 0`), while `origin/main` has since landed
+  a stricter fail-closed `STRIX_PROVIDER_UNAVAILABLE` design (new `strix_neutralization_scope_log` log-tail
+  isolation, a new `model_behavior_error_signal` classification, `exit "$strix_rc"` instead of a neutral
+  pass). A text merge here would either silently downgrade the since-hardened gate back to a neutral skip,
+  or require guessing which parts of two designs to keep.
+- **`#1271`** (`fix(scheduler): fail after summarized action errors`) and **`#1231`**
+  (`fix(scheduler): isolate central Actions inventory quota`) both edit `scripts/ci/pr_review_merge_scheduler.py`
+  directly — a **4,074-line monolith** on each branch's own version of that file — while `origin/main` has
+  since landed the facade/core split from `#1803`: `scripts/ci/pr_review_merge_scheduler.py` is now a
+  **241-line** thin re-export shim, and the ~5,700 lines of real implementation live in the new
+  `scripts/ci/pr_review_merge_scheduler_core.py`, which main has continued to evolve independently of either
+  PR. A text-level `git merge` cannot reconcile "edit function X in the 4,074-line monolith" against "that
+  file is now a 241-line shim and X's body moved to a different file main also changed since." `#1231`
+  additionally carries its own already-documented external stack dependency on `#1213`.
+- **`#1681`** (`fix(noema): require finding-level confidence, not just severity`) conflicts in
+  `scripts/ci/noema_review_gate.py`: its branch still carries the pre-"single-request-gateway" retry/repair
+  structure (`is_retry`, `deadline_context = _repair_wall_clock_deadline(...)`, an inline `json.dumps(...)`
+  schema restated in the prompt text), while `origin/main` landed the 2026-09-02 "Noema single-request
+  gateway ownership" restructuring (see `CHANGELOG.md`) that removed the repository-owned repair deadline
+  outright, made the LLM call single-request with `contextual-orchestrator` owning repair/failover, added
+  `active_phase`/`served_model` telemetry, and moved the findings schema into `response_format` rather than
+  prompt text. The PR's actual payload (a `confidence` field alongside `severity`) is small and valuable but
+  expressed against code structure that no longer exists in that shape on `main`.
+
+This raises the confirmed hot-file collision count from 7 PRs (`#1198`, `#1606`, `#1589`, `#939`, `#1009`,
+`#1674`, `#1158`) to 11, and confirms `scripts/ci/pr_review_merge_scheduler.py`'s new facade/core split
+(`#1803`) is now *also* an active collision surface in the same way `noema_review_gate.py`/`strix.yml` are —
+the same underlying dynamic (many long-lived branches, each written by a different agent/session, racing on
+the same central files without visibility into each other's now-merged changes) recurring in a third
+subsystem. No fix attempted for the file-shape divergence itself here, consistent with this document's
+standing practice of not bundling live-workflow-logic changes into a documentation-only entry.
+
+**Separately, one genuine pre-existing (not merge-caused) bug was found and fixed while merge-repairing
+`#1655`** (`fix(review): keep OpenCode uncertainty schema-representable`): its new end-to-end test
+(`tests/test_opencode_uncertainty_model_pool_transport.py`) asserted byte-exact equality between a fake
+model's export text and the file `scripts/ci/run_opencode_review_model_pool.sh` writes via `jq -r`. `jq`
+always appends a trailing newline after printing a value, so model text that itself already ends in `"\n"`
+legitimately produces one extra trailing blank line — harmless in production (both the bash pool's own
+`is_current_run_needs_info_output` check and the Python normalizer strip blank lines before comparing), but
+the test's exact-equality assertion didn't account for it. Confirmed pre-existing (not something the main
+merge introduced) by running the test against the PR's pristine, unmerged head before merging. Separately,
+`scripts/ci/opencode_review_normalize_output.py`'s new needs-info transport wrapper had two branches
+exercised only by subprocess-invoking tests, which `coverage.py` cannot see across a process boundary,
+leaving 2 statements/branches short of the required 100%; added direct in-process unit tests covering both.
+Both fixes are test-only; pushed as part of `#1655`'s merge-repair commit.
+
+## 2026-09-04 Actions-capacity and startup-failure follow-up
+
+The earlier 1,719-run snapshot was incomplete. A repository-by-repository REST census across all 74 visible organization repositories found 5,991 queued and 47 in-progress runs. After removing duplicate central quality jobs, retiring organization-wide run cancellation, and cancelling only review/security runs that had remained in progress for more than six hours, the queue fell as low as 5,471 while active admission recovered to 45–50 jobs. Later merge-triggered work can temporarily raise the queued count, so this is evidence of renewed throughput, not a claim that the backlog is gone.
+
+The same census queried `status=startup_failure` across all repositories. It returned 404 historical rows in 56 repositories; every newest row was the old centrally injected `CodeQL PR` failure, with the latest at 2026-09-03T03:26:53Z. The required-workflow form had embedded `github/codeql-action`, which GitHub rejected before creating jobs or logs. Central PRs #1776 and #1778 moved execution to the native dispatch workflow and removed the failing workflow from the organization required list. A current wardnet PR materialized both Actions and Rust CodeQL jobs after that change, and the organization census found no later startup-failure type. Item 41 is therefore fixed for the observed organization scope; future startup failures remain fail-closed regressions rather than tolerated queue states.
+
+## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
+
+**Status:** Root-caused and fixed. `.github/workflows/hourly-review-repair.yml` (the single file that
+replaced 18 per-repository callers, see `docs/doctoring/hourly-review-repair-single-file-consolidation.md`)
+called `pr-review-fix-scheduler.yml` with `max_prs: "50"` for all 20 targets. `#1397` had already root-caused
+this exact bound as too low for BandScope specifically (136 open PRs at the time, so an oldest-first scan
+capped at 50 never reached current non-draft work), but that PR never merged before the consolidation deleted
+its target file out from under it — leaving `#1397` obsolete and the underlying cap live, org-wide, and
+unfixed. Independently confirmed live during this session's PR sweep: `ContextualWisdomLab/.github` itself
+(one of the 20 targets, `21 * * * *`) had 117 open PRs. Fixed by discovering up to 200 PRs while deeply
+inspecting a deterministic rotating window of 50, then stopping after the single permitted dispatch; see the
+doctoring doc's 2026-09-03 follow-up section for the full before/after and updated tests.
+A comment was left on `#1397` pointing at the replacement fix rather than closing it (closure is a merge-only
+action per this repo's governance model).
+
+## `opencode-review-dispatch.yml` still requesting the starved floating image — 2026-09-04
+
+**Status:** Fixed. The 2026-09-01 floating-image entry above closed the three required-check gates
+(`strix.yml`, `opencode-review.yml`, `noema-review.yml`) but explicitly flagged "any remaining unpinned
+central workflows" as an open follow-up. `opencode-review-dispatch.yml` — the workflow the required
+`opencode-review` check's own `repository_dispatch` lands on to actually run the OpenCode CLI and post the
+exact-head verdict — still requested `ubuntu-latest` on all 4 jobs. Confirmed live on
+`contextual-orchestrator#1017`: its dispatch run (`33916313804`) sat `queued` with no runner ever assigned
+from creation, and a 30-run sample of recent `opencode-review-dispatch.yml` runs org-wide showed 14 still
+`queued` (several 10+ hours old) and 0 clean successes in the sample. Pinned all 4 occurrences to
+`ubuntu-24.04` and extended `tests/test_required_review_runner_image_contract.py` with a fourth case.
+
+**Residual.** The rest of `.github/workflows/` still has unpinned `ubuntu-latest` jobs (`pr-review-autofix.yml`,
+`pr-review-fix-scheduler.yml`, `hourly-review-repair.yml`, `codeql-pr.yml`, `codeql-scan-dispatch.yml`, and
+others) — this fix deliberately stayed scoped to the one file with direct, confirmed live evidence of
+starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
+if queuing symptoms recur on them specifically.
+
+**Residual closed, 2026-09-05 — but does not explain today's dominant congestion.** Symptoms recurred (a
+severe, hours-long org-wide Actions stall) and all five named files, plus `python-security.yml` (found
+independently while investigating the same symptom, not previously named here), were confirmed still
+requesting `ubuntu-latest`. Pinned all six to `ubuntu-24.04` (10 total job occurrences) and added
+`tests/test_scheduler_and_codeql_dispatch_runner_image_contract.py` covering all six. **This does not,
+by itself, explain today's stall**: a direct query of `.github`'s own queued-run backlog (307 queued,
+confirmed via `actions/runs?status=queued`, cross-checked against `status=in_progress` returning only
+5-6 -- itself anomalous against the documented 60-job Team-plan ceiling, since 5-6 is far below 60) showed
+the dominant contributors by far were `Required PR Review Merge Scheduler` (~32 of a ~300-run sample),
+`Python Security` (~29), `CodeQL PR` (~25), `Security Scan` (~23), `SAST Semgrep` (~20), and `Agent Review
+Runtime Quality CI` (~16) -- and four of those six (`pr-review-merge-scheduler.yml`, `security-scan.yml`,
+`sast-semgrep.yml`, `agent-review-runtime-quality-ci.yml`) were *already* pinned to `ubuntu-24.04` before
+this pass, per their own existing contract tests, and equally stuck. GitHub's own status page showed no
+active incident at the time. The 5-6-vs-60 in-progress gap therefore remains unexplained -- not resolved
+by this fix, not attributable to a known starved image, and not (per prior explicit ruling; see
+`project_actions_plan_concurrency_ceiling.md`) a case for proposing paid additional capacity. Flagging
+for whoever investigates next: check org-level Actions settings (a policy-level concurrent-job cap below
+60), a spending/usage limit (though billing access was unavailable to verify), or a GitHub-side runner
+provisioning degradation not severe enough to reach the public status page.
+
+**Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
+"Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
+repository), but this test still asserts the old single hourly `cron: "23 * * * *"`. Same bug class as the
+`test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
+behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
+intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+
+## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
+
+**Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
+this measurement partly refuted.
+
+**Why measured.** Items 15/16/17 ask to remove needlessly-triggered workflows, consolidate workflow files
+("bootup에도 시간이 듦"), and cut redundant steps; the standing complaint is the org's 60-concurrent-job
+ceiling ([`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`](doctoring/actions-plan-concurrency-ceiling-20260903.md)).
+Reducing *jobs per PR* attacks that ceiling directly, so jobs-per-PR was taken as the metric.
+
+**Baseline, measured live.** One completed `.github` PR head (`#1829`) produced **57 check runs across 2 run
+attempts — roughly 28 per attempt**. `Detect changed scope` was the single most repeated job name (10 total,
+**5 per attempt**), well ahead of anything else.
+
+**The intuition ("5 duplicate gates = 5 wasted runners") is wrong; the corrected finding is narrower.** Each
+gate job allocates a full `ubuntu-24.04` runner and makes a retrying paginated `gh api .../pulls/N/files`
+call purely to compute two booleans (`code`, `deps`). Whether that cost is waste depends entirely on how many
+consumers `needs:` it — which differs per file:
+
+| Workflow | Gate consumers (`needs: changed-scope`) | Verdict |
+| --- | --- | --- |
+| `security-scan.yml` | 4 (`osv-scan`, `dependency-review`, `trivy-fs`, `scorecard`) | **Legitimate.** One runner amortized across 4 gated jobs; self-gating each consumer would trade 1 runner for 4 redundant API calls. Keep. |
+| `sast-semgrep.yml` | 1 (`semgrep`) | **Pure overhead.** Two runner allocations where one suffices. |
+| `strix.yml` | 1 (`strix`, which also needs `admit-current-head`) | **Pure overhead.** Same shape. |
+
+**Quantified opportunity.** Folding the gate into its single consumer as an early-exit first step saves
+exactly **1 runner allocation per workflow per PR** in the two single-consumer cases — **2 slots per PR** —
+with no extra API calls (the same lone consumer computes the same booleans it already waited on). The saving
+lands on code-touching PRs; a doc-only PR allocates one runner either way (gate-then-skip vs. run-then-exit).
+Both files are org-ruleset required workflows dispatched into ~74 repositories, so this is 2 slots per PR
+**org-wide**, against a 60-slot ceiling.
+
+**Constraint any fix must preserve.** The gate exists because the org ruleset ignores every `on:` filter when
+it dispatches these workflows into another repository, and a trigger-level skip leaves `.github`'s classic
+required contexts Pending forever — the job-level decision is load-bearing, not incidental
+([`docs/doctoring/required-workflow-path-filter-boundary.md`](doctoring/required-workflow-path-filter-boundary.md)).
+Early-exit-inside-the-consumer keeps that property (the job still runs and concludes `success`), but any fix
+must be checked against it explicitly rather than assumed.
+
+**Not fixed here, deliberately.** These are live org-wide required workflows and the org's CI pipeline is
+currently unable to complete runs at all (see the pipeline-stall entry), so the change cannot be validated
+end-to-end right now, and ~30 PRs are already queued behind the same stall. The measurement is recorded now
+because it is the part that is durable and currently unclaimed; the edit belongs in its own PR with the
+local workflow-contract tests run against it.
+
+**Extension (2026-09-05): two echo-only jobs sit serially on the OpenCode review critical path.** Credit to
+a peer session's read-only Codex pass for spotting the first of these; independently verified here against
+`origin/main` and extended with this session's own queue-latency measurements.
+
+`opencode-review.yml` defines a five-deep serial chain —
+`required-workflow-bootstrap` → `admit-current-head` → `coverage-source-tree` → `coverage-evidence` →
+`opencode-review-target` — in which **two links do nothing but print a string**. `coverage-source-tree`
+(`:279`) allocates an `ubuntu-24.04` runner to `echo` that execution is delegated elsewhere;
+`coverage-evidence` (`:289`) allocates another to `echo` that it "preserves the stable branch-protection
+context without executing pull-request content". Each is a full runner allocation, and because a job is only
+created once its `needs:` predecessor finishes, **each link pays a fresh queue wait under saturation.**
+
+**Measured cost, from this session's item-13 evidence audit of `ContextualWisdomLab/naruon#1528`
+(run `33581213805`).** Per-job `created_at` → `started_at` on that run: `required-workflow-bootstrap` ~7h57m,
+`coverage-source-tree` **~9h40m**, `coverage-evidence` **~13h1m**, `opencode-review` ~12h13m. The two
+echo-only links contributed roughly **22h41m of pure queue latency to a single PR** — not runner-seconds
+spent working, but wall-clock spent waiting for a slot in order to print a sentence, while holding the actual
+review behind them.
+
+**The contexts are load-bearing; the serialization is not.** Both jobs exist to keep a required
+branch-protection context reporting, the same structural constraint as the `changed-scope` gates above, so
+neither can simply be deleted. But nothing in either job produces an output the next one consumes: their
+`needs:` edges are ordering, not data dependency. Running both in parallel off `admit-current-head`, and
+dropping `coverage-evidence` from `opencode-review-target`'s `needs:`, would preserve every reported context
+while removing two sequential queue waits from the critical path.
+
+**The serialization mechanism is confirmed, not inferred.** A peer session independently re-pulled the same
+run and found each job's `created_at` is *exactly* its predecessor's `completed_at` (e.g. `coverage-source-tree`
+created `09:52:19Z` = `required-workflow-bootstrap` completed `09:52:19Z`). A job is therefore not queued at
+all until its `needs:` predecessor finishes, so every link pays a fresh, full queue wait. Against execution
+times of **4 and 5 seconds**, those two links waited 9h40m and 13h1m.
+
+**The order-dependency question this entry originally left open is now answered: nothing depends on the
+order.** Verified by that peer session across three surfaces — no test asserts the `needs:` chain order
+(`test_strix_quick_gate.sh` mentions both names, but as set membership in a fast-approval ignore list, not an
+ordering claim); the merge scheduler reads only a context *name* and its exact-head conclusion
+(`scripts/ci/opencode_coverage_identity.py`'s `CANONICAL_CHECK_NAME = "coverage-evidence"`), never when it
+ran; and neither job declares `outputs:`, confirming the edges carry ordering rather than data.
+
+**One safety condition any fix must honour, which this entry's first draft missed.** `coverage-evidence`
+declares no `if:` of its own — it is skipped only *transitively*, because `coverage-source-tree` carries
+`if: needs.admit-current-head.outputs.admitted == 'true'` and a skipped `needs:` predecessor skips it too.
+Cutting that edge without moving the guard would let a required context execute on an unadmitted head.
+The complete change is therefore: give `coverage-evidence` `needs: [required-workflow-bootstrap,
+admit-current-head]` **plus that same explicit `if:`**, and reduce `opencode-review-target` to
+`needs: [admit-current-head]` — safe on the admission axis because that job already carries the identical
+`if:` guard directly. Chain depth drops from five to three, and queue waits from four to two.
+
+**Second safety condition, and the sharper trap: two different workflow files define jobs with these exact
+names, and only one pair is safe to touch.** `opencode-review.yml` (required, `pull_request_target`) holds the
+echo-only placeholders analysed above. `opencode-review-dispatch.yml` (privileged, `repository_dispatch`)
+defines `coverage-source-tree` (`:206`) and `coverage-evidence` (`:352`) that do the **real** work: the former
+exchanges an app token, materializes the PR merge tree, and `upload-artifact`s it (`:344`); the latter runs
+with `timeout-minutes: 300` and `download-artifact`s that same tree (`:429`), as its own comment states —
+*"The PR tree arrives through a same-run artifact."* There, the `coverage-source-tree` → `coverage-evidence`
+edge is a hard data dependency, not ordering, and cutting it would break coverage measurement outright. **Any
+parallelization must be confined to `opencode-review.yml`.** This distinction was missed by two sessions
+independently — both reasoned about "the coverage jobs" without checking that the name resolves to two
+different jobs in two files — and was caught only by opening
+`scripts/ci/test_strix_quick_gate.sh`, whose assertions at `:959-963` describe `coverage-source-tree` as
+materializing and uploading a merge tree, contradicting "it only echoes" and exposing the second file. A read-only
+cross-family (Codex) pass over both files independently reproduced all three points, adding the artifact name
+this record had not cited (`opencode-coverage-source`, uploaded at `:344-350`, downloaded at `:429-433`).
+
+**Implemented, scoped correctly: `ContextualWisdomLab/.github#1910`** cuts the chain from five serial links to
+three (queue waits per PR from four to two), confined to `opencode-review.yml`, carrying the explicit
+admission `if:` onto `coverage-evidence`, and dropping `coverage-evidence` from `opencode-review-target`'s
+`needs:` after confirming that job never reads the context at runtime — its only mention was the `needs:` line
+itself, and the real consumer (`opencode-review-dispatch.yml` via `scripts/ci/opencode_coverage_identity.py`)
+queries the check-runs API at its own time, order-independently. The implementing session noted honestly that
+their change was safe because they had scoped it narrowly, not because they had checked for the name
+collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
+same name in another file can carry the opposite safety property.**
