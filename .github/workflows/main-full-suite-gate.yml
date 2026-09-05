@@ -2,14 +2,19 @@ name: Main full suite gate
 
 # Post-merge safety net for the whole `tests/` suite.
 #
-# Every other workflow that runs the full suite is either PR-only
-# (`agent-review-runtime-quality-ci.yml` has no push trigger at all;
-# `opencode-review-dispatch.yml` triggers solely on `repository_dispatch`) or
-# carries a narrow `paths` filter (`trusted-uv-materializer-quality-ci.yml`
-# watches only the materialize/uv surface). Nothing ran `tests/` on an
-# unfiltered `main` push, so a merge that broke the suite landed silently and
-# first surfaced as a red check on the next, entirely unrelated pull request —
-# the failure mode behind #1823, #1826, #1828, #1892, and #1895.
+# No workflow ran `tests/` on an unfiltered `main` push.
+# `agent-review-runtime-quality-ci.yml` has no push trigger at all;
+# `opencode-review-dispatch.yml` triggers solely on `repository_dispatch`;
+# `trusted-uv-materializer-quality-ci.yml` does run on `main` push but only for
+# its own `paths` list (the materialize/uv surface plus `tests/conftest.py`,
+# `pyproject.toml`, the tooling requirements lock, and the repository
+# branch-coverage tests). `repository-metadata-reconcile.yml` runs an
+# unrestricted `pytest -q`, but on an hourly schedule rather than on a push, so
+# a broken merge still sits undetected until that schedule happens to fire.
+#
+# So a merge that broke the suite landed silently and first surfaced as a red
+# check on the next, entirely unrelated pull request — the failure mode behind
+# #1823, #1826, #1828, #1892, and #1895.
 #
 # This job deliberately carries NO `paths` filter: the point is to catch the
 # merges no path list anticipated. It is not part of the organization required
