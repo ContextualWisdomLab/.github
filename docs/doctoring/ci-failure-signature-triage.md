@@ -555,7 +555,21 @@ would rather keep, and never in the middle of a push you are still batching.
 
 **Never.** Never flip a PR you did not open — a draft may be deliberate work in progress, and the
 ownership rule is the same as everywhere else in this catalog (the PR body decides). Send the list to
-its owners instead.
+its owners instead. And never flip a draft that carries an owner hold, even one you opened: the
+repository owner converted `noema#552` back to draft 27 minutes after a peer flipped it, with no
+comment, on an idle PR with clean checks; `contextual-orchestrator#1070` carries an owner comment
+"Left as Draft per your instructions — no self-approval, no ready-for-review flip", and `noema#553`'s
+body says "Keep Draft until this unchanged exact head receives current terminal CI …" (all three
+recorded by `.github` #1912). Before flipping, grep the body and the comment thread for
+"keep draft", "ready-for-review", "self-approve": a standing per-PR hold overrides this signature.
+
+**Ownership marker.** Every session on this account commits and opens PRs as the same login, so
+`user.login` attributes nothing and a session can only flip drafts it has direct memory of opening.
+Put the owner on the PR body's first line when you open it, in the form already used by `.github`
+#1938: `<!-- lane-claim id="<slug>" owner-session="session_…" -->`. It is full-text searchable
+(`"owner-session=" in:body`), it survives squash-merges as PR metadata, and it turns "your own PR"
+from a memory test into a grep: flip only a draft whose marker is yours and whose thread carries no
+hold.
 
 ---
 
