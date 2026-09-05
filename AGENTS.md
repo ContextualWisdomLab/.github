@@ -192,7 +192,8 @@ they only pay off when an agent other than their author reads them.
   `workflow_sha`, `noema-review` gateway 502, expired NIM cost evidence,
   unscoped `pytest` collection, stale `head_sha` notifications,
   queued-versus-failed, same-anchor merge conflicts, futile CodeQL compat
-  re-runs), each with its verified mechanism, the action to take, and the
+  re-runs, cancelled-versus-failed and auto-update check starvation), each
+  with its verified mechanism, the action to take, and the
   actions not to take, plus the rule for deciding when a re-run can help at
   all. Also carries the
   research-grounding freshness KPIs, their measured baseline, and how to count

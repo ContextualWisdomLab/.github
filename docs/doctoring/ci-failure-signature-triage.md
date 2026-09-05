@@ -346,6 +346,43 @@ failure as a defect in the PR's code — the job never got as far as analysing i
 
 ---
 
+## 10. Every check on the head reads `cancelled`, and the PR never completes a check cycle
+
+**Symptom.** `get_check_runs` on the current head returns a full set of runs, *all* `status:
+"completed"`, with conclusions that are `cancelled` and `skipped` and **no** `failure`. The combined
+commit status is `success`. Yet the PR has never once finished a green cycle.
+
+**`cancelled` is not `failure`, and misreading it manufactures a phantom investigation.** Measured on
+`#933`: 22 check runs on head `9988c4fc`, all completed — 20 `cancelled`, 2 `skipped`, **zero
+`failure`** — with `get_status` returning `state: "success"`. An automated triage pass over this
+repository nonetheless labelled it a CI-red failure and produced a careful, entirely wasted analysis
+of whose fault the failure was, for a failure that did not exist. Org-wide this is the common case,
+not the exception: 18 of the 20 most recent runs of `agent-review-runtime-quality-ci.yml` were
+`cancelled`. Read the *conclusion* field, and treat a head with zero `failure` conclusions as not red
+no matter how much red-adjacent noise surrounds it.
+
+**The starvation loop.** A bot that auto-merges `main` into a branch on a cadence, combined with the
+saturated queue of signature 7, prevents any check from ever concluding — each new head cancels the
+runs still queued from the previous one. Measured on `#1722`: `opencode-agent[bot]` merged `main` in
+at `2026-09-03T05:49:50Z`, `2026-09-03T18:37:16Z`, `2026-09-05T01:32:00Z` and `2026-09-05T09:18:01Z`.
+The per-head outcomes were `093c39b0` cancelled, `6dcba3d3` failure, `ad38c487` failure, `e3b0b2d6`
+cancelled, `88775b66` pending. Run `33945594764` sat queued for **4.5 hours without ever executing**
+and was then killed at `09:18:08Z` by the arrival of the next auto-update. The PR has not completed a
+check cycle once in three days.
+
+**Do.** Establish which head you are on *before* citing any check, and re-establish it after any
+delay — on an auto-updated branch the head moves without a human touching it. If the branch is being
+auto-updated, the actionable question is not "why did this check fail" but whether the current head
+will be allowed to finish before the updater resets it. Escalate the loop itself rather than
+triaging its symptoms.
+
+**Do not.** Do not wait on, or tell anyone else to wait on, a specific queued run id: on an
+auto-updated branch that run may already have been cancelled by a newer head, and a cancelled run can
+never produce a conclusion. Do not respond by merging `main` in yourself — a second updater does not
+help, and the branch is already being updated more often than the queue can absorb.
+
+---
+
 ## A general rule these three signatures share
 
 Signatures 2, 3 and 9 all present as a red required check on a review job, and two of the three make
