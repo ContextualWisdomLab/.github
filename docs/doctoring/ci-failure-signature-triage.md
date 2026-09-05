@@ -104,6 +104,17 @@ updating the variable; neither is a per-PR action.
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
+**What the one handler that passed the gate did, 2026-09-06T01:34Z.** `.github` #1492's handler run
+`33991725331` was dispatched by the *scheduler* path (`github-actions[bot]`, 21:00:01Z, so it passed
+`validate-pr-metadata`), then queued stage by stage — `validate-pr-metadata` 22:18Z,
+`coverage-source-tree` 23:15Z, `coverage-evidence` 00:30Z, `opencode-review` 01:26Z (signature 7: each
+`needs:` stage re-enters the queue) — and its review reported `Model pool: exhausted` and fell back to
+deterministic evidence, which returned `REQUEST_CHANGES` because a stale cancelled Strix check sat on
+the head. So fixing the dispatcher variable (#1929) reopens the *path*; the verdict at the end of it
+still runs into signature 3's pool, and the model-unavailable fallback can only approve a head whose
+peer checks are already complete and clean. Expect the first post-fix verdicts to be
+`REQUEST_CHANGES` on heads carrying any stale red check, not approvals.
+
 ---
 
 ## 2. `strix` fails within seconds with `AttributeError: ... no attribute 'asyncio'` or `ModuleNotFoundError: No module named 'httpx2'`
@@ -202,6 +213,112 @@ on this signature's side of the line). The remedy for such a head is one push th
 a new event binds the current sidecar — and it is worth doing even mid-batch, because the review that
 would have been reset had already failed. Applied to four heads at 21:15–21:21Z, each after the full
 local gate.
+
+**Measured again 2026-09-05T22:20Z, after #1939: the fix closed the pool-diversity gap, not the 502
+itself.** The first post-#1939 `noema-review` runs (created after 17:25Z, so bound to the new sidecar)
+split 1 success (`#1902`, run `33982955696`, 10 minutes) to 1 failure (`#1872`, run `33985079091`,
+40 minutes of held runner). The failing run's policy report now lists `openrouter`, `nvidia_nim` and
+`nvidia_nim_sub` routes as `ready` — the diversity #1939 promised — and still ended in
+`HTTP Error 502 … duration=1989.9s, served_model=deepseek-ai/deepseek-v4-flash-0731`; `#1940`'s run
+`33981136873` did the same over 3122 s. Host 1 traced the path from source twice and the first artifacts
+settled it (`.github` #1938 thread, 01:28Z): the `attempt=1/1` lines in a trace are the **preflight
+probes** (preflight client `max_retries=0`, twelve routes in about a minute); the serving phase for
+the `orchestrator/free` virtual pool is `_invoke` — `tool_retry_attempts=1` on top of the client's
+`max_retries=2`, so each agent gets two rounds of three attempts at the 90 s per-recv limit, measured
+270.3–271.1 s per silent round and 541 s for one agent's two rounds — and an internal repair/judge
+loop can re-enter `_invoke` and walk the same agents again inside one caller request. Two artifacts
+show the shape. `.github` #1661's run `33995553859` (3873 s → 502): the same three agents walked
+three times, 13 silent rounds of ≈270 s on the two NVIDIA deepseek-flash keys, `cohere/north-mini-code`
+ending `provider_rejected_permanent`, and two preflight-ready routes (`nvidia_nim_sub` deepseek-pro,
+`dots-3`) **never attempted**. `.github` #1946's run `33996197307` (artifact `9980320306`, 2539 s →
+502): `nvidia_nim_sub` deepseek-v4-flash attempted 29 times and never answered (24 timeouts),
+`provider_exhausted` nine times for that one route, its circuit opened twice (`failures=3.0
+threshold=3 reset_seconds=30.0`) and was re-admitted within a minute each time because a 30 s reset
+is shorter than one 90 s attempt, and the last call at 01:25:10 went to the same route and timed out
+while two other ready routes had answered — about 36 of 43 minutes on a route that produced no byte.
+A long duration therefore counts silent ≈270 s rounds, most of them re-admissions of the same one or
+two agents; it does not count distinct routes, and the per-agent timestamps in the artifact are the
+only direct measure. #1943 (sidecar `DEBUG` trace), #1944 (`noema-review`
+uploads `strix_runs/contextual-orchestrator-sidecar.stderr.log` and the preflight report as the
+`noema-sidecar-evidence` artifact on failure) and #1945 (the sanitizer admits the orchestrator's
+`provider_attempt` / `provider_exhausted` / `circuit_*` lines), all on `main` by 22:15Z, turn that
+into a per-route timeline you can read from the artifact instead of inferring. A second post-#1939
+shape, 23:47Z: `.github` #1938's run `33992736660` ended after **551.0 s** with `HTTP Error 429: Too
+Many Requests` and `served_model=deepseek-ai/deepseek-v4-pro-0813`. Do not read that as "one route,
+no failover" — host 1 refuted exactly that reading from the pinned source within minutes: a 429 is
+`retryable=True` (`provider_errors.py:82`), which `_invoke` turns into one same-agent retry and then
+`FAILOVER_AGENT` to the next candidate (`orchestrator.py:7828-7868`, `tool_fallback.py:114-154`), and
+the caller receives the *last* route's *last* error, so `served_model` names the last route tried,
+never the first. What that run's preflight actually held: `ready 3 / rejected 9` — the three ready
+routes were all NVIDIA `deepseek-v4` (`flash` on the sub account, `pro` on both accounts), and all four
+`openrouter` routes were rejected at preflight with 429 (plus three NVIDIA 404s and one 529). So
+#1939's account interleave delivered the diversity and OpenRouter's rate limit took it away again
+before the first request: the pool the failover walked was NVIDIA-only for a different reason than
+before. There is no "routes walked" fingerprint: `duration / 270` approximates silent *rounds*, and
+the artifacts above show the same agent taking most of them, so duration counts re-admissions of a
+stalled route, not routes. Only the `noema-sidecar-evidence` artifact
+(#1944; that run predates it, and a re-run keeps the same `workflow_sha`) gives the walked-candidate
+list with the time each one held the request. Tally of post-#1939 `noema-review` runs in `.github` with a PR attached, by the
+`Prepare Noema model verdict` step's own conclusion, at 02:10Z: **0 succeeded, 23 failed** (the
+23rd being `#1938`'s sanctioned re-run, attempt 2, 3014 s → 502 — the measurement that keeps every
+other held re-run held)
+(verdict-step durations 199–4273 s, median ≈1500 s; among them `#1872` 502 after 1989.9 s, `#1938`
+429 after 551 s, `#1930` 429 after 1444.7 s, `#1913` 502 after 2123.7 s, `#1916` 502 after 3783.4 s —
+63 minutes of one or more candidates holding the request open). Pre-#1939 (10:00–16:25Z) the same
+count was 7 of 14. Two earlier versions of this tally were wrong in two different ways: one counted
+"4 succeeded"
+because three run-level successes at 21:59–22:15Z were the closure-event runs of #1943/#1944/#1945
+after merge, whose `noema-review` job was skipped before any step ran. A `pull_request_target` run
+whose job skipped on "events without pull request context" reports `conclusion: success` at run
+level; and the other counted `#1902`'s two green jobs as verdicts when they were draft skips — the
+job log says `PR is draft; Noema verdict preparation skipped.` and the verdict step took 0–1 s. Count
+jobs whose `Prepare Noema model verdict` step has a conclusion *and* a duration in minutes; never run
+conclusions, never a green job whose verdict step finished in a second.
+
+**Why the ready count fell from 5–6 to 1–3 across #1939, independent of load.** The 4+4+4 fill takes
+each NVIDIA key's first four models in catalog order, which is alphabetical within the tier:
+`deepseek-v4-flash`, `deepseek-v4-pro`, `gemma-3-12b`, `gemma-3-4b` — and the two `gemma-3` routes are
+permanent 404s, so each key serves two working routes, both the most-contended deepseek models. The
+pre-#1939 8+4 fill reached `meta/llama-3.2-11b`, `meta/llama-3.2-90b` and `meta/muse-glimmer-30b`, which
+were *ready* in every pre-#1939 Strix artifact opened (runs `33979406293`, `33979153466`,
+`33978435797`: ready 6, 6, 5 of 12 at 16:37–16:56Z); discovery still lists 21 models per NVIDIA key
+that never reach the served set. Same family as #1415 / #1921 / #1939 — an alphabetical tiebreak plus a
+budget starves whatever sorts last, and this time the budget is four per account with two dead routes
+sorting first. The lever proposed on `.github` #1948 (host 1's lane) is a lazy per-account fill that
+probes down the ranked list until K routes are ready, which also bounds probe spend.
+The strongest evidence of what the 429 variant *is* came from `.github` #1930's `strix` failure in the
+same window (run `33992904674`, 23:48–00:12Z), because the Strix workflow already ships the sidecar
+files in `strix-reports`: preflight **ready 1 / rejected 11** of 12 selected routes — all four
+`openrouter` 429, the primary NVIDIA `deepseek-v4-pro` and `v4-flash` 429, the sub-account `v4-flash`
+a `TimeoutError`, the four `gemma-3` routes 404 — and the sole ready route (`nvidia_nim_sub`
+`deepseek-v4-pro-0813`) answered `429 rate_limit_exceeded` on first contact and on all five of Strix's
+replays (`run.json` `llm_usage.requests: 0`). `.github` #1938's Strix run `33992736699` forty minutes
+later read `ready 3 / rejected 9`, got seven completions through, then hit the same persistent 429 and
+stopped after 41.5 minutes; its sidecar stderr counted 36 × `status=429 rate_limit_exceeded` and
+14 × `status=500 internal_error`. `.github` #1916's Strix run `33992902189` (artifact `9980773663`)
+read `ready 4 / rejected 8` — all four deepseek-v4 routes — made 29 requests over **2 h 18 min**
+while the gateway answered `status=500 code=internal_error` 76 times, and died on Strix's stream
+idle timeout: a third shape (bulk gateway 500s) next to the 429 and the held-open 502, and the
+single most expensive review job of the night. That is not a routing defect: the free pool had no capacity on any
+account at that hour, and #1939's 4+4+4 interleave had nothing to interleave. Each
+such job still holds a runner for ≈25 minutes before failing, in a queue hundreds deep. **Do not
+re-run a 429-variant failure while the most recent artifact in the repository shows ≤1 ready route**:
+the odds are near zero and the cost is the slot. The lever (a pool that rate-limits on first contact
+should fail in seconds, not minutes, and an upstream that holds a request open needs a response-start
+or total deadline at the gateway — the owner's call) lives in the orchestrator's passthrough policy
+and in strix-agent's replay loop — the orchestrator lane's, and an owner decision on paid routes — not in this repo's
+sidecar; the owner's tracking issue is `contextual-orchestrator#1045` (fix PR `contextual-orchestrator#1049`,
+failover with typed attempt evidence), and the night's cost is posted there: 8 failed `noema-review`
+/ `strix` jobs on runs created 21:00–00:18Z burned **184 runner-minutes** in a 230-deep queue, and
+the three that completed in the next 25 minutes (`#1938` Strix 41.5, `#1916` Noema 63, `#1930` Strix
+32) took the total past **290**. So: a
+base-merge push recovers a head from the
+*pre-#1939* single-upstream stall, and it is still worth doing; it does not make the post-#1939 walk
+shorter; and re-running a post-#1939 failure is the coin flip described above, at a cost the previous
+run's duration does not predict. The remaining lever — the per-recv timeout and retry product
+inside the gateway — lives in `contextual-orchestrator`, not in this repo's sidecar, and the
+orchestrator lane holds it; do not add a caller-side deadline here (`noema_review_gate.py:1520`
+states why the caller carries none).
 
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
@@ -602,6 +719,41 @@ your own record shows you created that PR (the `create_pull_request` result carr
 your transcript, or the PR appearing in `list_pull_requests` for a head branch you pushed), and the
 body and thread carry no hold. A marker without that independent record is treated exactly like a
 missing one: the PR belongs to someone else.
+
+---
+
+## 12. `required-workflow-bootstrap` fails in ~5 seconds with `Pingora edge policy could not establish complete evidence: … exceeds the size contract`
+
+**Symptom.** The organization-required `opencode-review.yml` run fails in its very first job,
+before any review is dispatched, with one line:
+`##[error]Pingora edge policy could not establish complete evidence: GitHub content evidence for
+<path> exceeds the size contract`, exit code 2. It recurs on every push of the same branch. Seen on
+`#1678` (`automation/sbom-inventory`, run `33989047645`) where `<path>` was `docs/sbom/inventory.json`.
+
+**Mechanism.** Deterministic and content-blind — it is not an Nginx finding. `scripts/ci/pingora_edge_policy.py`
+reads each changed file's final content through the Contents API, which stops inlining content at
+1 MiB and answers `encoding: "none"` with only a `size`. GitHub also omits the diff `patch` for a file
+that large, and `_needs_content_scan` treats a missing patch as "must scan", so any text file over
+1 MiB that is neither a documentation suffix (`.md`, `.txt`, …) nor a verified binary document
+(`.pdf`, `.png`) goes straight to a `ContentSizeExceededError` that only the documentation-PDF path
+knows how to absorb; everywhere else it fails the whole check closed. `#1678`'s inventory was
+1,148,611 bytes (236 bytes on `main`) and, scanned offline with `main`'s own `scan_content`, carried
+zero denied forms — it does not even contain the string `nginx`.
+
+**Do.** Fix the evidence route, not the file: `.github` #1946 follows the Contents response's blob
+`sha` to the Git Blobs API (bounded at 11 MiB so the wrapped base64 response fits the existing 16 MiB
+reader), binds the blob back to the Contents metadata, and scans the bytes like any inline file.
+Until it is on `main`, an affected PR cannot pass this context by re-run, rebase, or any change that
+keeps the file over 1 MiB; a base-merge push after the fix lands is what re-binds the required
+workflow's trusted source. Before assuming this signature, confirm the file really is clean: the
+offline reproduction is `git show <head>:<path>` piped into `scan_content` from `main`'s module (the
+module needs `sys.modules[spec.name] = module` before `exec_module`, or its dataclasses fail to
+import).
+
+**Do not.** Do not add the path to the documentation exemptions, do not raise `MAX_FILE_BYTES`, and
+do not shrink the file to dodge the ceiling — each of those weakens or hides evidence the policy is
+supposed to establish. Do not re-run the job: the same source produces the same exit 2 in the same
+5 seconds, and the run only re-enters the starved queue (signature 7).
 
 ---
 
