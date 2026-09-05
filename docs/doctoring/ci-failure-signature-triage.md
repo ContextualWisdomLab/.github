@@ -336,13 +336,37 @@ both sides and then verify nothing was silently dropped: compare `grep -c '^## '
 `git show origin/main:<file>` and your merge result. A `--ours`/`--theirs` resolution produces zero
 conflict markers while deleting an entire section, which reads as a clean merge.
 
-**A cheap conflict pre-check that gives false negatives.** `git merge-tree <base> <a> <b>` and
-grepping its output for `^<<<<<<<` looks like a zero-cost way to ask "will this conflict". It is not:
-resolving this document's own conflict against `#1914`, that grep returned **0** while an actual
-`git merge --no-commit` produced `CONFLICT (content)` in *both* `AGENTS.md` and `CLAUDE.md`. The
-old-form output reports `changed in both` without emitting markers. The authoritative check is a real
+**A cheap conflict pre-check whose failure is an anchor bug, not the tool.** `git merge-tree <base>
+<a> <b>` piped to `grep -c '^<<<<<<<'` looks like a zero-cost way to ask "will this conflict", and it
+returned **0** while a real `git merge --no-commit` conflicted in both `AGENTS.md` and `CLAUDE.md`.
+The reason is not that markers are absent. `merge-tree` emits diff-formatted output, so the marker
+line is literally `+<<<<<<< .our` — the `^` anchor simply cannot match it:
+
+```
+$ git merge-tree "$(git merge-base A B)" A B | grep -c '^<<<<<<<'        # 0  — false negative
+$ git merge-tree "$(git merge-base A B)" A B | grep -c '<<<<<<<'         # 2  — correct
+$ git merge-tree "$(git merge-base A B)" A B | grep -c 'changed in both' # 2  — correct
+```
+
+Prefer `changed in both` as the signal: it also covers conflict kinds (mode changes, rename/rename)
+that may produce no content markers at all, where even the unanchored grep would read clean.
+
+```bash
+git merge-tree "$(git merge-base A B)" A B | grep -c 'changed in both'
+```
+
+This is a pre-filter, not a verdict. Where a conclusion rides on the answer, the authority is a real
 merge in a scratch worktree — `git worktree add -q --detach /tmp/probe <head> && cd /tmp/probe &&
-git merge --no-commit --no-ff origin/main` — then `git merge --abort` and remove it.
+git merge --no-commit --no-ff origin/main` — then `git merge --abort` and remove it. A zero from the
+pre-filter is never evidence that a branch is clean.
+
+**A conflict where neither side is correct: content-hash pins.** `tests/` carries `git hash-object`
+pins of workflow files (`grep -rn 'hash-object' tests/` finds them). When both branches edit the
+pinned workflow, git auto-merges *the workflow* with no marker and flags only the constant — so the
+correct value is derived from a file git never reported as conflicted, and is neither side's. Measured
+on #1187: ours `20a83d55`, main's `ade10b37`, and the merged workflow hashing to `2fb3306e`. Choosing
+either side yields a resolution with zero conflict markers that fails the pin assertion. Recompute:
+`git hash-object <the pinned file>` after the merge, and write that.
 
 **Do not.** Do not serialize every PR that touches a shared file — that is the over-correction this
 signature exists to prevent, and it stalls work that would have merged fine. Do not assume a clean
