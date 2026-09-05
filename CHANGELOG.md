@@ -24,8 +24,17 @@
   `contextual-orchestrator#1072`); and re-verifying "already implemented" claims against
   exact `file:line` evidence before repeating them, using this repo's own `#1884` (whose
   sidecar/egress claim was corrected in place; canonical tracking remains `#1759` and
-  `contextual-orchestrator#1041` comment `5550412102`) as the worked example. No workflow,
-  script, or test file changed.
+  `contextual-orchestrator#1041` comment `5550412102`) as the worked example. Also added,
+  after independent verification: Codex is a real, currently active fleet-mate (20+
+  concurrently open `codex/`-branch PRs found in this repo alone via `is:open head:codex/`);
+  `docs/agent-github-project-protocol.md`'s Project #1 Status field is the org's designed
+  collision-avoidance mechanism, but this session's GitHub MCP integration cannot operate
+  it (confirmed "Resource not accessible by integration"; the adjacent `list_issue_fields`
+  tool targets an unrelated org issue-field feature, not Projects-v2); and the `@openai/codex`
+  CLI is directly invokable (`npx --yes @openai/codex@latest exec -s read-only -C <dir>
+  "<prompt>"`, confirmed to run in this environment) for adversarial second-opinion review,
+  though this session's own container lacked the OpenAI credentials to actually get a
+  response from it. No workflow, script, or test file changed.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and

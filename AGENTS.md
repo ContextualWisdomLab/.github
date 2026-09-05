@@ -128,3 +128,39 @@ coordination layer that persists across sessions.
   claim was corrected in place, in the same PR, once this was raised and independently
   re-verified point-by-point against exact `file:line` evidence — do not repeat the
   original, too-broad "already implemented" framing for this sidecar.
+- **Codex is a real, currently active fleet-mate, not a hypothetical.** An OpenAI Codex
+  agent session opens its own PRs under this same shared GitHub account, using
+  `codex/`-prefixed branch names (e.g. `codex/repair-codeql-startup-materialization`,
+  `codex/goal13-opencode-noema-concurrency`) — confirmed via `git log --all --grep=codex`
+  history and a live open-PR search (`is:open head:codex/`) turning up 20+ concurrently
+  open PRs in this repo alone at any given time. Before starting non-trivial new work,
+  search `is:open head:codex/` (and any other agent-branch prefix in observed use, e.g.
+  `claude/`) in the target repository in addition to the checks above — it is a cheap,
+  concrete way to see exactly what another kind of agent is already doing, catching claims
+  in a PR/issue thread might miss.
+- **`docs/agent-github-project-protocol.md`'s GitHub Project #1 Status field is the org's
+  actual designed collision-avoidance mechanism** (`Todo`/`In Progress`/`Done`, with an
+  explicit "set `In Progress` before starting, pick a different item if already claimed"
+  convention), operable by any agent with `gh`/GraphQL access. Verified independently: a
+  Claude Code session using the GitHub MCP server integration (rather than a `gh` CLI with
+  the `project` OAuth scope) cannot operate it — there is no Projects-v2 item-list/item-edit
+  tool exposed, and the adjacent-sounding `list_issue_fields`/`issue_write` `issue_fields`
+  mechanism targets a completely different, unrelated GitHub feature (org-level issue
+  custom fields: Priority/Start date/Target date/Effort), returning "Resource not
+  accessible by integration" when tried against the Projects-v2 surface. Until that MCP
+  server exposes a Projects-v2 tool (or a session's token gets the `project` scope), fall
+  back to the PR/issue/comment-based signals above rather than assuming Project-board state
+  is visible to you.
+- **The `codex` CLI is directly invokable from a shell as a second, differently-trained
+  reviewer for adversarial verification of your own conclusions** —
+  `npx --yes @openai/codex@latest exec -s read-only -C <dir> "<prompt>"` (this repo's own
+  `#1907` used exactly this and it caught a factual error same-family review had missed).
+  Verified the mechanism itself works in this environment: the package resolves and the
+  binary runs (note the *unscoped* `codex` npm package is an unrelated, unmaintained
+  decade-old tool — always install `@openai/codex`, never bare `codex`). Whether it
+  actually returns a review depends on that specific session's container already having
+  working OpenAI credentials (`~/.codex/auth.json` or equivalent) provisioned — this
+  session's did not (`401 Unauthorized` on every attempt, no `OPENAI_API_KEY` in its
+  environment), so no Codex-reviewed pass could be attached to this change. Check with a
+  trivial `exec` call first, and never claim a Codex-adversarial pass happened if
+  authentication actually failed.
