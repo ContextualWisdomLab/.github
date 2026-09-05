@@ -398,6 +398,14 @@ on #1187: ours `20a83d55`, main's `ade10b37`, and the merged workflow hashing to
 either side yields a resolution with zero conflict markers that fails the pin assertion. Recompute:
 `git hash-object <the pinned file>` after the merge, and write that.
 
+The same constant conflicted a second time on #1187 four hours later, when #1932 landed and rewrote
+the pinned workflow: ours `2fb3306e` (the previous recompute), main's `26e85559` (#1932's file), and
+the merged file hashing to a **third** value, `0a39def5`, because the branch itself also edits that
+workflow and git auto-merged it. So the value is never "whichever side is newer" — it is a function
+of the merge result, and it has to be recomputed on *every* merge that touches the pinned file. The
+live-computed sibling pin in `test_opencode_rust_coverage_toolchain_contract.py` never pays this
+cost; a hardcoded pin pays it on every concurrent change.
+
 **Do not.** Do not serialize every PR that touches a shared file — that is the over-correction this
 signature exists to prevent, and it stalls work that would have merged fine. Do not assume a clean
 merge by a peer means the file is safe for you: they may simply have landed in a different region.
