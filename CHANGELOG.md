@@ -1,3 +1,7 @@
+### Required status context guard
+
+- Pinned each of this repository's classic branch-protection required status contexts to the job that reports it (`tests/test_branch_protection_required_context_jobs.py`). `.github` is excluded from the organization required-workflow ruleset, so its default branch is guarded by named contexts matched on the check-run name -- a job's `name:` when present and its job id otherwise. Renaming or folding away such a job leaves branch protection waiting forever for a context nothing reports, blocking every pull request with no failing check to point at, and nothing else in the suite caught it. The two identifiers already differ in practice (job id `opencode-review-target` reports context `opencode-review`), and `.github/workflows/` is under active consolidation, which is exactly the edit that renames jobs.
+
 ### Contextual-orchestrator pin refresh
 
 - Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
