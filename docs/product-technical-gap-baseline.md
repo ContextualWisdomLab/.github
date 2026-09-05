@@ -83,6 +83,12 @@ The same cancellation-boundary follow-up also corrects
 [mutable PR-association authority](doctoring/current-head-run-coalescing.md#refreshed-association-correction-2026-09-05):
 an old run must retain its recorded REST revision even if its PR association
 now names the latest head. Selection and final revalidation reject that mismatch.
+The existing Required OpenCode/Strix stale-run cleanup uses that recorded
+revision too: refreshed associations must not preserve an old run as current.
+Both cleanup paths reuse their selector when fetching the exact run before
+cancellation and preserve runs whose identity or active state cannot be verified.
+Local shell regressions prove request selection and suppression, not terminal
+GitHub cancellation; log messages therefore report requests rather than completion.
 Immediate stale-retry recovery under runner saturation and protected hosted
 delivery remain unverified; this does not close either gap or the full objective.
 

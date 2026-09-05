@@ -174,12 +174,9 @@ def cleanup_candidate_run_ids(
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup filter")
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    marker = (
-        'jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \\\n'
-        '              --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \''
-    )
+    marker = "          candidate_jq='\n"
     start = workflow.index(marker) + len(marker)
-    end = workflow.index("\n              ' <<<\"$runs_json\")", start)
+    end = workflow.index("\n          '\n", start)
     result = subprocess.run(
         [
             jq,
@@ -193,12 +190,9 @@ def cleanup_candidate_run_ids(
             "--arg",
             "repo",
             repository,
-            "--arg",
-            "current",
-            current_run_id,
-            workflow[start:end],
+            f"{workflow[start:end]} | .id",
         ],
-        input=json.dumps({"workflow_runs": runs}),
+        input=json.dumps([run for run in runs if str(run.get("id")) != current_run_id]),
         text=True,
         capture_output=True,
         check=False,
@@ -224,8 +218,10 @@ def _cleanup_run(
     )
     return {
         "id": run_id,
+        "status": "queued",
         "name": name,
         "event": event,
+        "head_sha": head_sha,
         "display_title": title,
         "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
     }
@@ -273,6 +269,39 @@ def test_cleanup_matches_by_pull_requests_metadata_when_title_omits_the_suffix()
     assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == ["1"]
 
 
+def test_cleanup_uses_recorded_head_not_refreshed_pr_association() -> None:
+    """A refreshed association cannot promote an old REST run to current."""
+    stale = _cleanup_run(
+        run_id=1,
+        head_sha="b" * 40,
+        display_title="Required OpenCode Review",
+    )
+    stale["pull_requests"] = [{"number": 1437, "head": {"sha": HEAD}}]
+    assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
+
+
+@pytest.mark.parametrize("recorded_head", ("", "not-a-revision"))
+def test_cleanup_preserves_unknown_or_malformed_recorded_revision(recorded_head: str) -> None:
+    """Unknown run revisions are preserved instead of guessed stale."""
+    run = _cleanup_run(run_id=1, head_sha=HEAD, display_title="Required OpenCode Review")
+    run["head_sha"] = recorded_head
+    assert cleanup_candidate_run_ids([run], current_run_id="999") == []
+
+
+def test_cleanup_preserves_conflicting_title_and_recorded_revision() -> None:
+    """Conflicting immutable-looking signals fail closed without cancellation."""
+    run = _cleanup_run(run_id=1, head_sha="b" * 40)
+    run["display_title"] = f"Required OpenCode Review ContextualWisdomLab/example#1437@{HEAD}"
+    assert cleanup_candidate_run_ids([run], current_run_id="999") == []
+
+
+def test_cleanup_preserves_a_scoped_title_for_another_repository() -> None:
+    """PR association cannot override a conflicting repository-scoped title."""
+    run = _cleanup_run(run_id=1, head_sha="b" * 40)
+    run["display_title"] = f"Required OpenCode Review other/repo#1437@{'b' * 40}"
+    assert cleanup_candidate_run_ids([run], current_run_id="999") == []
+
+
 def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
     """The cleanup job only fires on synchronize and can cancel runs."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -282,6 +311,158 @@ def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> Non
         "github.event.action == 'synchronize'"
     ) in job
     assert "actions: write" in job.split("steps:", 1)[0]
+    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}"' in job
+    assert job.index('actions/runs/${run_id}"') < job.index('actions/runs/${run_id}/cancel"')
+    assert "Cancellation requested for superseded Required OpenCode Review" in job
+
+
+@pytest.mark.parametrize(
+    ("final_variant", "expects_cancel"),
+    (
+        ("stale", True),
+        ("completed", False),
+        ("current", False),
+        ("other_pr", False),
+        ("api_failure", False),
+        ("missing_status", False),
+        ("unknown_status", False),
+        ("wrong_id", False),
+        ("array", False),
+        ("partial_failure", False),
+    ),
+)
+def test_cleanup_revalidates_exact_run_before_requesting_cancellation(
+    tmp_path: Path, final_variant: str, expects_cancel: bool
+) -> None:
+    """Execute the production cleanup shell through its destructive boundary."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Cancel queued and running OpenCode review runs for a superseded pull request head\n",
+        1,
+    )[1]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+if [[ "$*" == *"repos/ContextualWisdomLab/example/pulls/1437"* ]]; then
+  if [[ "$*" == *"--jq .head.sha"* ]]; then printf '%s\n' "$LIVE_HEAD"; else printf '%s\n' "$LIVE_PR_JSON"; fi
+elif [[ "$*" == *"actions/runs?status=queued"* ]]; then
+  printf '{"workflow_runs":[%s]}\n' "$FAKE_RUN_JSON"
+elif [[ "$*" == *"actions/runs?status="* ]]; then
+  printf '%s\n' '{"workflow_runs":[]}'
+elif [[ "$*" == "api repos/ContextualWisdomLab/example/actions/runs/100" ]]; then
+  [[ "$FINAL_VARIANT" != "api_failure" ]] || exit 17
+  printf '%s\n' "$FINAL_RUN_JSON"
+elif [[ "$*" == "api --method POST repos/ContextualWisdomLab/example/actions/runs/100/cancel" ]]; then
+  exit 0
+else
+  exit 1
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    stale_head = "b" * 40
+    final_run = {
+        "id": 101 if final_variant == "wrong_id" else 100,
+        "status": "completed" if final_variant == "completed" else "queued",
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": HEAD if final_variant == "current" else stale_head,
+        "display_title": "Required OpenCode Review",
+        "pull_requests": [{"number": 9999 if final_variant == "other_pr" else 1437, "head": {"sha": HEAD}}],
+    }
+    if final_variant == "missing_status":
+        final_run.pop("status")
+    elif final_variant == "unknown_status":
+        final_run["status"] = "mystery"
+    final_payload: object = final_run
+    if final_variant == "array":
+        final_payload = [final_run]
+    elif final_variant == "partial_failure":
+        final_payload = [final_run, 7]
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_CALLS": str(calls),
+        "LIVE_HEAD": HEAD,
+        "LIVE_PR_JSON": json.dumps({
+            "state": "closed" if final_variant == "closed_pr" else "open",
+            "draft": False,
+            "head": {"sha": HEAD},
+        }),
+        "FAKE_RUN_JSON": json.dumps({
+            "id": 100,
+            "status": "queued",
+            "name": "Required OpenCode Review",
+            "event": "pull_request_target",
+            "head_sha": stale_head,
+            "display_title": "Required OpenCode Review",
+            "pull_requests": [{"number": 1437, "head": {"sha": HEAD}}],
+        }),
+        "FINAL_RUN_JSON": json.dumps(final_payload),
+        "FINAL_VARIANT": final_variant,
+        "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+        "TARGET_PR_NUMBER": "1437",
+        "TARGET_PR_HEAD_SHA": HEAD,
+        "CURRENT_RUN_ID": "999",
+    }
+    result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    log = calls.read_text(encoding="utf-8")
+    exact_get = "api repos/ContextualWisdomLab/example/actions/runs/100"
+    cancel = "api --method POST repos/ContextualWisdomLab/example/actions/runs/100/cancel"
+    assert exact_get in log
+    if expects_cancel:
+        assert cancel in log
+        assert log.index(exact_get) < log.index(cancel)
+        assert "Cancellation requested for superseded Required OpenCode Review run 100" in result.stdout
+    else:
+        assert "/actions/runs/100/cancel" not in log
+        assert "/actions/runs/100/force-cancel" not in log
+
+
+def test_cleanup_requires_live_open_non_draft_pr(tmp_path: Path) -> None:
+    """A closed PR stops OpenCode synchronization cleanup before run listing."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Cancel queued and running OpenCode review runs for a superseded pull request head\n",
+        1,
+    )[1]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    fake_gh = tmp_path / "gh"
+    calls = tmp_path / "calls"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >>\"$FAKE_CALLS\"\n"
+        "printf '%s\\n' \"$LIVE_PR_JSON\"\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_CALLS": str(calls),
+            "LIVE_PR_JSON": json.dumps({"state": "closed", "draft": False, "head": {"sha": HEAD}}),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "TARGET_PR_NUMBER": "1437",
+            "TARGET_PR_HEAD_SHA": HEAD,
+            "CURRENT_RUN_ID": "999",
+        },
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    log = calls.read_text(encoding="utf-8")
+    assert "actions/runs?status=" not in log
+    assert "/cancel" not in log and "/force-cancel" not in log
 
 
 def test_required_verdict_has_one_executable_owner() -> None:

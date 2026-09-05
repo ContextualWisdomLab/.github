@@ -25,6 +25,18 @@ run retains its original `head_sha`. The shared identity matcher now requires
 that recorded revision to match the live PR before considering associations.
 See the [live samples and regression evidence](current-head-run-coalescing.md#refreshed-association-correction-2026-09-05).
 
+The existing Required OpenCode and Strix stale-run cleanup had the inverse
+failure: the refreshed association made an old run look current, so cleanup
+preserved it. Each workflow now reuses one jq predicate for list selection and
+the exact run fetched immediately before cancellation. It requires an active
+status, the expected workflow/event and PR association, and a valid recorded
+`head_sha`; a conflicting scoped title is not accepted. Missing or malformed
+data, an unexpected run ID, a non-object response, or a failed parse preserves
+the run. A partial result from a failed pipeline cannot authorize cancellation.
+OpenCode also requires the live PR to remain open, non-Draft, and at the target
+head. Strix retains its explicit closed/Draft cleanup, including current-head
+runs. Successful API calls are logged as cancellation requests, not completion.
+
 ## Checks
 
 `tests/test_review_rerun_concurrency.py` evaluates the actual group expressions
@@ -38,6 +50,16 @@ The coalescer's separate three-file suite passes 57 tests with 100% statement
 and branch coverage (252 statements, 118 branches). Six new tests failed on the
 old source before the shared guard; an older positive fixture was corrected
 because it conflated runtime `GITHUB_SHA` with REST run `head_sha`.
+
+The stale-cleanup follow-up first failed two tests that execute the production
+jq selectors against refreshed associations. Review then reproduced four unsafe
+Strix cancellations on an intermediate implementation before adding strict
+final-response validation. The production-shell tests now prove that completed
+or current runs, another PR, API failure, missing/unknown status, a different run
+ID, arrays, and partial/invalid responses issue neither cancel nor force-cancel.
+Closed/Draft Strix cleanup and the live-PR guard have separate regression cases.
+The final 14-file focused suite passes 681 tests; these are local request-boundary
+checks, not hosted terminal-cancellation evidence.
 
 Run the focused suite:
 
