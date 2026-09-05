@@ -35,11 +35,15 @@ def expression_value(node: ast.AST, context: dict):
                 return value
         return value
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
-        assert isinstance(node.ops[0], ast.Gt), "unsupported comparison"
-        # GitHub coerces numeric strings for relational comparisons.
-        return float(expression_value(node.left, context)) > float(
-            expression_value(node.comparators[0], context)
-        )
+        left = expression_value(node.left, context)
+        right = expression_value(node.comparators[0], context)
+        if isinstance(node.ops[0], ast.Gt):
+            # GitHub coerces numeric strings for relational comparisons.
+            return float(left) > float(right)
+        if isinstance(node.ops[0], ast.Eq):
+            assert isinstance(left, str) and isinstance(right, str)
+            return left.casefold() == right.casefold()
+        raise AssertionError("unsupported comparison")
     if isinstance(node, ast.Call):
         assert isinstance(node.func, ast.Name) and node.func.id == "format"
         assert not node.keywords and isinstance(node.args[0], ast.Constant)
@@ -50,7 +54,8 @@ def expression_value(node: ast.AST, context: dict):
 
 
 def review_group(filename, job, *, run_id, attempt=1, pr=7,
-                 repository="ContextualWisdomLab/example", dispatched=False):
+                 repository="ContextualWisdomLab/example", dispatched=False,
+                 event_name=None, ref="", ref_type=""):
     """Render the declared YAML group using an explicit event/needs snapshot."""
     source = (WORKFLOWS / filename).read_text(encoding="utf-8")
     if job:
@@ -70,7 +75,10 @@ def review_group(filename, job, *, run_id, attempt=1, pr=7,
     ) if pr else {}
     context = {
         "github": {"repository": repository, "run_id": str(run_id),
-                   "run_attempt": attempt, "event": event},
+                   "run_attempt": attempt, "event": event,
+                   "event_name": event_name or ("repository_dispatch" if dispatched else (
+                       "pull_request_target" if pr else "unknown"
+                   )), "ref": ref, "ref_type": ref_type},
         "needs": {"validate-pr-metadata": {"outputs": {
             "target_repository": repository, "pr_number": str(pr) if pr else "",
         }}},
@@ -126,3 +134,60 @@ def test_dispatched_reviews_keep_pr_identity_and_rerun_isolation(filename, prefi
     assert review_group(filename, None, run_id=101, attempt=2, dispatched=True) == (
         f"{prefix}-ContextualWisdomLab/example-rerun-101"
     )
+
+
+def test_strix_first_branch_push_coalesces_only_the_same_repository_and_ref():
+    """A newer first branch push must replace only its same-branch predecessor."""
+    current = review_group(
+        "strix.yml", None, run_id=202, pr=None,
+        event_name="push", ref_type="branch", ref="refs/heads/main",
+    )
+    assert current == "strix-security-scan-ContextualWisdomLab/example-refs/heads/main"
+    assert current == review_group(
+        "strix.yml", None, run_id=101, pr=None,
+        event_name="push", ref_type="branch", ref="refs/heads/main",
+    )
+    assert current != review_group(
+        "strix.yml", None, run_id=203, pr=None,
+        event_name="push", ref_type="branch", ref="refs/heads/release",
+    )
+    assert current != review_group(
+        "strix.yml", None, run_id=204, pr=None,
+        repository="ContextualWisdomLab/other", event_name="push",
+        ref_type="branch", ref="refs/heads/main",
+    )
+
+
+@pytest.mark.parametrize(
+    "event_name,ref_type,ref",
+    [
+        ("push", "tag", "refs/tags/v1.0.0"),
+        ("schedule", "", "refs/heads/main"),
+        ("workflow_dispatch", "branch", "refs/heads/main"),
+        ("repository_dispatch", "branch", "refs/heads/main"),
+        ("unknown", "", "refs/heads/main"),
+        ("push", "branch", ""),
+    ],
+)
+def test_strix_non_branch_push_first_attempts_remain_run_isolated(
+    event_name, ref_type, ref,
+):
+    """Non-branch-push events and missing refs must not cancel sibling runs."""
+    first = review_group(
+        "strix.yml", None, run_id=101, pr=None,
+        event_name=event_name, ref_type=ref_type, ref=ref,
+    )
+    second = review_group(
+        "strix.yml", None, run_id=202, pr=None,
+        event_name=event_name, ref_type=ref_type, ref=ref,
+    )
+    assert first == "strix-security-scan-ContextualWisdomLab/example-101"
+    assert second == "strix-security-scan-ContextualWisdomLab/example-202"
+
+
+def test_strix_old_branch_push_rerun_remains_run_isolated():
+    """A branch-push rerun must not cancel a newer first attempt."""
+    assert review_group(
+        "strix.yml", None, run_id=101, attempt=2, pr=None,
+        event_name="push", ref_type="branch", ref="refs/heads/main",
+    ) == "strix-security-scan-ContextualWisdomLab/example-rerun-101"

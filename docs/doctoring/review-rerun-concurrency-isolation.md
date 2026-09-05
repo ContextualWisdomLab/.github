@@ -19,6 +19,24 @@ First attempts retain the workflow/repository/PR key and cancellation policy.
 No jobs, dependencies, permissions, provider routes, or gate exceptions are
 added. Live-head admission and publication checks remain mandatory.
 
+The Strix workflow's first branch-push attempt now uses its repository and full
+Git ref as the cancellation key. This lets a newer commit on the same branch
+retire an older first attempt without combining different repositories or
+branches. The branch key applies only when `event_name == 'push'`,
+`ref_type == 'branch'`, and `github.ref` is present. Reruns still take the
+run-ID key first; tags, schedules, manual or non-PR dispatches, unknown events,
+and missing refs retain the existing per-run key. PR-native and dispatched PR
+keys are unchanged. Release, deployment, and migration workflows are outside
+this Strix-only change.
+
+Read-only REST evidence before this change found three simultaneous central
+Strix push runs on `main`: run `33933530334` at
+`b5efbc2762e472e4a380b0503b1f050f76fbb008`, run `33932271770` at
+`1b65dbc35e7183722ad77894e2d80b39993be90d`, and run `33928897846` at
+`a9aeee8fc94ad6002a059b380b268590ce496ef0`. This observation motivates future
+branch-push prevention only. It neither cancels those existing runs nor proves
+that the organization reached a 60-job ceiling.
+
 Read-only follow-up also exposed a second cancellation risk in the existing
 same-head coalescer: REST PR associations can move to a newer head while the
 run retains its original `head_sha`. The shared identity matcher now requires
@@ -42,10 +60,14 @@ runs. Successful API calls are logged as cancellation requests, not completion.
 `tests/test_review_rerun_concurrency.py` evaluates the actual group expressions
 with a restricted stdlib AST interpreter, without `eval`, workflow execution,
 or a new dependency. Before the workflow edits, 17 assertions failed and five
-passed. The tests cover numeric/string attempts, distinct retries, first-push
+passed. The tests cover numeric/string attempts, distinct retries, PR first-attempt
 coalescing, repository/PR isolation, non-PR fallback, and native/dispatch parity.
 Existing Noema and central dispatch cleanup tests also exercise retry metadata;
 they prove selection and API requests, not GitHub terminal cancellation.
+The branch-push regression separately produced `1 failed, 27 passed` before
+the Strix expression change and `28 passed` afterward. Its literal expectations
+cover same-branch coalescing, branch/repository isolation, rerun priority, and
+run-ID preservation for tags, schedules, unknown events, and missing refs.
 The coalescer's separate three-file suite passes 57 tests with 100% statement
 and branch coverage (252 statements, 118 branches). Six new tests failed on the
 old source before the shared guard; an older positive fixture was corrected

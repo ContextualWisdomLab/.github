@@ -78,7 +78,9 @@ concurrency:
     github.event.client_payload.target_repository || github.repository }}-${{
     github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number ||
+    github.event_name == 'push' && github.ref_type == 'branch' && github.ref ||
+    github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token

@@ -91,6 +91,14 @@ Local shell regressions prove request selection and suppression, not terminal
 GitHub cancellation; log messages therefore report requests rather than completion.
 Immediate stale-retry recovery under runner saturation and protected hosted
 delivery remain unverified; this does not close either gap or the full objective.
+The same bounded follow-up observed central Strix `main` push runs
+`33933530334` (`b5efbc2762e472e4a380b0503b1f050f76fbb008`), `33932271770`
+(`1b65dbc35e7183722ad77894e2d80b39993be90d`), and `33928897846`
+(`a9aeee8fc94ad6002a059b380b268590ce496ef0`) running concurrently. Strix now
+coalesces only first branch-push attempts by repository/full ref while retaining
+run-ID isolation for reruns and all non-branch-push events. This prevents future
+same-branch accumulation; it does not cancel those runs, prove a 60-job ceiling,
+or establish that runner saturation is resolved.
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
