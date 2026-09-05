@@ -1,5 +1,19 @@
 # Doctoring record: pr-review-merge-scheduler.yml's "fires at every step" pattern is by-design, not a bug (2026-09-03)
 
+> **2026-09-05 correction.** The broad claim below that every submitted review
+> is an actionable approval-state change was incomplete. GitHub emits
+> `pull_request_review: submitted` for `COMMENTED` reviews, which do not create
+> an `APPROVED` or `CHANGES_REQUESTED` state. On PR #1885, CodeRabbit submitted
+> `COMMENTED` reviews at 03:08:52Z, 04:27:31Z, and 05:30:37Z; the central
+> scheduler admitted runner-backed runs 33941045179, 33944606701, and
+> 33947394894 within seconds. The scheduler still needs the review trigger for
+> `APPROVED`, `CHANGES_REQUESTED`, and `dismissed`, but `COMMENTED` is now
+> rejected by the `scan-pr-queue` job-level `if` before runner acquisition.
+> The executable truth-table contract is
+> `tests/test_merge_scheduler_review_event_admission.py`. This correction does
+> not reinterpret a bot comment as formal review evidence and does not alter
+> exact-PR concurrency, review semantics, or scheduler permissions.
+
 - **Date:** 2026-09-03
 - **Subject:** the user directly observed the scheduler workflow firing repeatedly ("왜 각 모든 단계마다 Trigger
   되고 있죠?") after live evidence surfaced today of severe org-wide Actions thrashing (near-zero completion

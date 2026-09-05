@@ -109,6 +109,17 @@ jobs:
       (
         github.event_name != 'repository_dispatch' ||
         github.event.client_payload.org_sweep != true
+      ) &&
+      (
+        github.event_name != 'pull_request_review' ||
+        github.event.action == 'dismissed' ||
+        (
+          github.event.action == 'submitted' &&
+          (
+            github.event.review.state == 'approved' ||
+            github.event.review.state == 'changes_requested'
+          )
+        )
       )
     runs-on: ubuntu-24.04
     # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's
