@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +28,13 @@ def _extract_run_block(workflow_text: str, step_name: str) -> str:
             break
         block_lines.append(line[run_indent + 2 :] if len(line) >= run_indent + 2 else "")
     return "\n".join(block_lines) + "\n"
+
+
+def _extract_shell_function(script: str, function_name: str) -> str:
+    """Extract one top-level Bash function from an already isolated run block."""
+    start = script.index(f"{function_name}() {{")
+    end = script.index("\n}\n", start) + len("\n}\n")
+    return script[start:end]
 
 
 def test_opencode_review_run_blocks_are_valid_bash():
@@ -59,6 +68,40 @@ def test_opencode_review_run_blocks_are_valid_bash():
         )
 
         assert result.returncode == 0, f"{step_name}: {result.stderr}"
+
+
+def test_unresolved_reviewer_threads_body_function_executes_as_one_printf(tmp_path):
+    """Comments must not split the continued printf argument list into commands."""
+    if sys.platform == "win32":
+        pytest.skip("workflow body execution requires Bash")
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is not installed")
+
+    workflow_text = (REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    run_block = _extract_run_block(workflow_text, "Publish OpenCode review outcome")
+    function = _extract_shell_function(run_block, "build_unresolved_reviewer_threads_body")
+    evidence_file = tmp_path / "threads.md"
+    evidence_file.write_text("thread evidence\n", encoding="utf-8")
+    body_file = tmp_path / "body.md"
+    result = subprocess.run(
+        [bash, "-c", f"set -euo pipefail\n{function}\nbuild_unresolved_reviewer_threads_body \"$1\" \"$2\"", "bash", str(evidence_file), str(body_file)],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "HEAD_SHA": "a" * 40,
+            "RUN_ID": "123",
+            "RUN_ATTEMPT": "2",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "## Findings" in body_file.read_text(encoding="utf-8")
+    assert "thread evidence" in body_file.read_text(encoding="utf-8")
 
 
 def test_opencode_review_comment_helpers_are_shared_and_valid_bash():

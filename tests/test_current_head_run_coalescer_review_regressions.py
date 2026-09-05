@@ -161,8 +161,8 @@ def test_minimal_actions_associations_pass_exact_scope_for_both_pr_events() -> N
         )
 
 
-def test_pull_request_target_matches_associated_pr_head_not_trusted_base_head() -> None:
-    """Target-event runs bind to associated PR head rather than workflow base head."""
+def test_pull_request_target_rejects_refreshed_association_on_an_old_run() -> None:
+    """A minimal PR association cannot replace the original REST run revision."""
     module = load_module()
     target_run = run_record(
         100,
@@ -171,7 +171,7 @@ def test_pull_request_target_matches_associated_pr_head_not_trusted_base_head() 
         top_head_branch="main",
         minimal_association=True,
     )
-    assert module._run_identity_matches(
+    assert not module._run_identity_matches(
         target_run,
         repository="ContextualWisdomLab/.github",
         branch="feature/current",

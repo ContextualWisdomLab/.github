@@ -12,7 +12,9 @@ The coalescing step runs inside `.github/workflows/pr-review-merge-scheduler.yml
 
 The live-head admission and coalescing work share one job. Workflow-level concurrency includes the repository and PR number, so a new PR event retires an older queued execution before either consumes another job slot. The first step re-fetches the PR and gates every mutation on the exact current HEAD. This avoids both the former two-job admission dependency and the former HEAD-scoped group that allowed one stale queued coalescer per pushed commit to survive under the organization ceiling.
 
-The script re-fetches the live PR before classification. It lists all queued and in-progress repository runs rather than filtering only by workflow-run `head_sha`, because `pull_request_target` runs execute on the trusted base and their workflow head is not the PR head. Those runs are instead bound to the associated pull request's head identity. GitHub exposes repository identity in two different trusted REST shapes: the pull-request endpoint supplies a full repository object with `full_name`, while workflow-run `pull_requests[*].head.repo` and `base.repo` associations can contain only `id`, `name`, and canonical `https://api.github.com/repos/{owner}/{repo}` URL. `_repository_full_name()` therefore normalizes a valid full name directly or derives `owner/name` only from an exact HTTPS `api.github.com/repos/...` URL; malformed, query-bearing, foreign-host, non-HTTPS, or path-sentinel identities fail closed. This prevents a missing `full_name` field from turning every real workflow-run association into an empty repository identity while retaining a narrow authenticated GitHub boundary.
+The script re-fetches the live PR before classification and lists queued and in-progress repository runs. For both PR event families, REST run `head_sha` must match the live PR head before repository/ref and PR-association checks can authorize coalescing. Runtime `github.sha`/`GITHUB_SHA` and REST run `head_sha` are different fields: the trusted-base execution context of `pull_request_target` does not establish that its REST run revision is the base SHA. PR associations can refresh after another push, so their current head alone cannot prove which revision an older run checks.
+
+GitHub exposes repository identity in two different trusted REST shapes: the pull-request endpoint supplies a full repository object with `full_name`, while workflow-run `pull_requests[*].head.repo` and `base.repo` associations can contain only `id`, `name`, and canonical `https://api.github.com/repos/{owner}/{repo}` URL. `_repository_full_name()` therefore normalizes a valid full name directly or derives `owner/name` only from an exact HTTPS `api.github.com/repos/...` URL; malformed, query-bearing, foreign-host, non-HTTPS, or path-sentinel identities fail closed. This prevents a missing `full_name` field from turning every real workflow-run association into an empty repository identity while retaining a narrow authenticated GitHub boundary.
 
 Before every cancellation the script re-fetches active same-head state, exact non-current PR associations, each possible same-workflow authoritative sibling, the current PR, and finally the candidate itself. Missing, malformed, moved, closed, completed, timed-out, or ambiguous evidence preserves the candidate or fails closed.
 
@@ -24,7 +26,7 @@ A workflow run may authorize cancellation only inside the current PR's evidence 
 
 Runs are eligible only when all of the following are true:
 
-1. the run was triggered by `pull_request` or `pull_request_target` and is bound to the current live PR head through the correct event-specific identity;
+1. the run was triggered by `pull_request` or `pull_request_target`, its recorded REST `head_sha` equals the live PR head, and its repository/ref identity matches;
 2. its PR association belongs either to the current PR or to a proven closed predecessor with the same exact head and exact base repository/ref/SHA identity;
 3. its stable numeric `workflow_id` matches another run inside the same PR evidence boundary;
 4. each candidate authoritative sibling identified from the bulk Actions snapshot is re-fetched by exact run ID and must still be queued or in progress with the same workflow/head/PR scope;
@@ -39,11 +41,35 @@ This invariant is deliberately separate from old-head cancellation. #1348 remain
 
 ## Executable evidence
 
-`tests/test_current_head_run_coalescer.py`, `tests/test_current_head_run_coalescer_review_regressions.py`, and `tests/test_current_head_coalescer_self_cancellation.py` pin the source and integrated workflow contract. Coverage includes one-run retention, in-progress preservation, `pull_request_target` base/head separation, real minimal Actions repository-association normalization for both PR event families, fail-closed repository URL normalization, isolation between concurrently open PRs, exact-base isolation across closed predecessor succession, same-workflow sibling re-fetch, completed-sibling preservation, workflow/head/branch/repository/event isolation, moved-head/status fail-closed behavior, per-call timeouts, explicit cancellation authentication, complete pagination, final candidate re-fetch, ready/draft transition triggers, trusted-source materialization, shell-injection resistance, PR-stable concurrency, and minimum workflow permissions.
+`tests/test_current_head_run_coalescer.py`, `tests/test_current_head_run_coalescer_review_regressions.py`, and `tests/test_current_head_coalescer_self_cancellation.py` pin the source and integrated workflow contract. Coverage includes one-run retention, in-progress preservation, original REST run revision despite refreshed PR associations, real minimal Actions repository-association normalization for both PR event families, fail-closed repository URL normalization, isolation between concurrently open PRs, exact-base isolation across closed predecessor succession, same-workflow sibling re-fetch, completed-sibling preservation, workflow/head/branch/repository/event isolation, moved-head/status fail-closed behavior, per-call timeouts, explicit cancellation authentication, complete pagination, final candidate re-fetch, ready/draft transition triggers, trusted-source materialization, shell-injection resistance, PR-stable concurrency, and minimum workflow permissions.
 
 The minimal-repository-shape regression was committed before the production normalization repair. On the pre-fix source `_head_tuple()` read only `repo.full_name`, so the real Actions fixture deterministically normalized to an empty repository string. Production now accepts the fuller pull-request representation and the minimal workflow-run representation through the same bounded owner/name normalization contract.
 
 A one-use read-only branch workflow was attempted solely to capture hosted RED/GREEN evidence; GitHub did not schedule newly introduced branch-only push workflows in this repository, so no hosted result is claimed from that mechanism and it was deleted from the publishable tree. Ordinary protected PR checks and independent review on the exact production head remain authoritative.
+
+### Refreshed-association correction (2026-09-05)
+
+Read-only REST inspection found that organization-required OpenCode run
+[`33949656057`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33949656057)
+retained `head_sha=1481c595dc1d16e7bf4b65addaf0bd30322cf2b8`, while its PR #1067
+association had moved to `6d1b30803888e893d7bdbdf4d12605a16c36162d`.
+The newer run
+[`33950557383`](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33950557383)
+recorded that newer SHA in both fields. Native central run
+[`33950857678`](https://github.com/ContextualWisdomLab/.github/actions/runs/33950857678)
+likewise recorded PR #1899 head `2000b4f0c892b95f2609ea956b5266218a511fe3`
+in REST `head_sha`, not the trusted-base SHA.
+
+The old matcher accepted a refreshed association even when the recorded run
+revision disagreed. An old in-progress run could therefore appear to authorize
+cancelling the sole queued current-head run. Six regressions failed before the
+shared revision guard: queued/in-progress old-run selection for both PR events,
+and final authority revalidation for both events. The repair rejects missing or
+different REST run revisions before considering associations; valid same-head
+coalescing and all existing PR/base/repository boundaries remain in place.
+The old live run was already cancelled when inspected. No cancellation POST
+was made for this investigation, and these samples do not prove a historical
+false cancellation or hosted execution of the proposed repair.
 
 ## Recovery and rollback
 

@@ -79,6 +79,10 @@ flowchart LR
 2026-09-05 G-02/G-03 follow-up: [review rerun isolation](doctoring/review-rerun-concurrency-isolation.md)
 reproduces an older retry sharing the current PR's cancellation key. The proposed
 five-group repair preserves first-attempt coalescing and existing cleanup guards.
+The same cancellation-boundary follow-up also corrects
+[mutable PR-association authority](doctoring/current-head-run-coalescing.md#refreshed-association-correction-2026-09-05):
+an old run must retain its recorded REST revision even if its PR association
+now names the latest head. Selection and final revalidation reject that mismatch.
 Immediate stale-retry recovery under runner saturation and protected hosted
 delivery remain unverified; this does not close either gap or the full objective.
 
