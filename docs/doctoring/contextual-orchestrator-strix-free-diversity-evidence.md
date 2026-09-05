@@ -1,81 +1,86 @@
-# Doctoring record: evidence-gated path toward `orchestrator/free` for Strix
+# Doctoring record: Strix `orchestrator/free` reconciliation
 
-- **Date:** 2026-08-30
-- **Subject:** The 2026-08-30 owner directive asks that Noema, OpenCode, and
-  Strix all route review through `contextual-orchestrator`'s `orchestrator/free`
-  pool. Noema and OpenCode already do (`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`).
-  Strix does not, and stays on `orchestrator/auto` today; this record explains
-  why the pin was not flipped on the strength of the instruction alone, and
-  what new evidence infrastructure exists so a future, properly reviewed change
-  can flip it safely.
+- **Date:** 2026-09-01
+- **Status:** supersedes the 2026-08-30 diversity-gate proposal
+- **Subject:** Noema, OpenCode, and Strix route required review through
+  `ContextualWisdomLab/contextual-orchestrator` using `orchestrator/free`.
 - **Decision record:** [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](../adr/0003-contextual-orchestrator-vendored-free-zdr.md)
-  (2026-08-30 addendum)
-- **Related:** [`docs/product-goal-directive.md`](../product-goal-directive.md) §8
-  and its Follow-up findings note; [`docs/doctoring/noema-orchestrator-free-zdr.md`](noema-orchestrator-free-zdr.md)
 
-## Why this needed reconciliation, not a direct edit
+## Superseded proposal
 
-`docs/product-goal-directive.md` states its own conflict policy: "Where this
-directive and those documents conflict, resolve the conflict and update
-whichever document is wrong — do not silently pick one." Strix's
-`orchestrator/auto` pin is not an oversight; it is an accepted ADR-0003
-decision backed by a specific, dated finding: on 2026-08-29, the DiskSage
-exact-head scan showed every discovered free route sharing the OpenRouter
-outage domain, so a strict `orchestrator/free` pin for Strix (which has no
-provider fallback) would have gone dark on that one provider's outage. Silently
-flipping the pin today, on the strength of a general instruction that does not
-re-examine that finding, would reintroduce the exact single-point-of-failure
-risk the ADR was written to avoid — for the workflow whose job is the org's
-required *security* review. Silently keeping the old pin, on the other hand,
-would ignore a legitimate cost/consistency goal the owner restated today.
+The earlier version of this record correctly observed an outage-domain
+concentration incident, but it proposed automatically switching Strix between
+`orchestrator/free` and `orchestrator/auto` when a conceptual
+`free_family_diversity >= 2` condition was met. That historical name referred
+to outage-domain families; it was not, and is not, a runtime evidence field.
+The current runtime emits `free_account_diversity`, which counts credential
+accounts and is not a semantic substitute because multiple accounts can share
+one outage domain. The historical cardinality threshold was not derived from a
+reliability model, statistical estimand, authoritative standard, or
+experimentally validated routing policy. It is therefore not a permitted
+decision rule under the organization no-heuristics contract and must not be
+implemented or revived.
 
-## What changed
+Current `free_account_diversity` evidence, and separately any explicitly modeled
+provider/outage-domain observation, may remain diagnostic evidence. Diagnostics
+do not acquire routing authority merely because they are deterministic or
+measured. Any future reliability-aware model selection must identify its
+estimand and be independently evaluated rather than turning an account count or
+an outage-domain count into a routing threshold.
 
-`scripts/ci/contextual_orchestrator_review_policy.py`'s
-`build_zdr_prioritized_catalog` now reports `free_family_diversity`: the count
-of distinct outage-domain provider families (`provider_family`; the primary
-and secondary NVIDIA NIM keys already collapse into one family) among *all*
-discovered free routes, independent of which `--pool` was requested. This is
-new evidence, not a new decision — it is computed from the same discovery
-report the catalog already validates, and it is present whether the caller
-asked for `--pool free` or `--pool auto`.
+## Current executable contract
 
-`tests/test_contextual_orchestrator_review_policy.py` gained
-`test_build_catalog_reports_free_family_diversity` (asserts diversity of 4 for
-the existing five-provider fixture) and
-`test_build_catalog_reports_single_family_free_concentration` (a regression
-test reproducing the 2026-08-29 shape: two NVIDIA keys only, which collapse to
-one family, so diversity is 1). Full suite: 1882 passed, 1 skipped; coverage
-of the changed module remains 100% (`coverage run -m pytest tests` +
-`coverage report --include=scripts/ci/contextual_orchestrator_review_policy.py`).
+Protected-main evidence now records the actual Strix policy:
 
-`.github/workflows/strix.yml` is unchanged in this PR. It still hard-pins
-`CONTEXTUAL_ORCHESTRATOR_POOL: auto` and its `STRIX_MODEL`/`STRIX_LLM` gates
-still reject anything except `orchestrator/auto`.
+- `.github/workflows/strix.yml` accepts the contextual-orchestrator gateway and
+  restricts Strix model overrides to `orchestrator/free`;
+- `tests/test_contextual_orchestrator_review_sidecar_contract.py` asserts
+  `CONTEXTUAL_ORCHESTRATOR_POOL: free`;
+- `scripts/ci/strix_quick_gate.sh` and the required-workflow smoke contracts no
+  longer treat `orchestrator/auto` as an allowed Strix model route;
+- Noema and Required OpenCode use the same `orchestrator/free` product boundary;
+- private/internal review targets require the sidecar's ZDR policy rather than a
+  workflow-local model fallback.
 
-## What has to happen before Strix can move to `orchestrator/free`
+The five bootstrap credentials may all be supplied to contextual-orchestrator:
+`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+`OPENROUTER_API_KEY`, and `OPENAI_API_KEY`. Receiving, registering, or globally
+discovering through `OPENAI_API_KEY` is not a defect. The invariant is the
+`orchestrator/free` candidate-admission boundary: OpenAI-key-derived models are
+not eligible for free-pool candidate generation, ranking, routing, serving,
+failover, fallback, preflight, or durable free-pool persistence. The four
+free-eligible credential sources still require their explicit zero-cost,
+privacy, and capability evidence; a supplied credential does not fabricate an
+eligible model.
 
-A follow-up PR to `strix.yml` (or to
-`scripts/ci/contextual_orchestrator_review_sidecar.sh`, whichever the
-implementer finds is the correct evidence-read point) should read
-`free_family_diversity` from the sidecar's `policy-report.json` after
-discovery and select `orchestrator/free` only when it is `>= 2` — i.e. the
-discovered free catalog spans at least two independent outage domains, so one
-provider's outage cannot black out Strix's required review — and fall back to
-`orchestrator/auto` otherwise. That PR was deliberately not bundled into this
-one because `strix.yml` is a `pull_request_target` required workflow
-(`docs/pr-review-and-merge-procedure.md`'s trust-boundary note: PRs that edit
-trusted review workflows run the *base branch's* trusted scripts and can fail
-their own checks until the base branch catches up) and its `STRIX_MODEL`
-allowlist is a deliberate hardened gate, not an oversight to route around in
-the same change that adds the evidence it would depend on.
+## Admission versus routing
 
-## Audit trail
+The central review catalog is an admission boundary. It may enforce explicit
+pool, zero-cost/price evidence, credential-source, capability, and ZDR
+predicates, but it must not turn discovery into a provider quota, family quota,
+candidate-count cap, cost/provider/name ordering, synthesized priority, or
+first-come escalation preference. Every evidence-eligible route remains in the
+catalog. Downstream selection requires identified routing evidence; if that
+evidence is unavailable, the runtime fails closed.
 
-- `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` — 2026-08-30
-  addendum recording the decision and rationale.
-- `docs/product-goal-directive.md` §8 and its Follow-up findings note — the
-  directive text and prior CodeRabbit reconciliation this addendum extends.
-- `scripts/ci/contextual_orchestrator_review_policy.py`,
-  `tests/test_contextual_orchestrator_review_policy.py` — the evidence change
-  and its tests.
+Startup readiness follows the same separation: complete admission evidence
+remains durable, while all admitted routes are probed concurrently and reported
+in catalog order. This removes additive provider latency without turning probe
+completion order into routing authority.
+
+PR #1629 restores that contract on current protected-main lineage by removing
+the reintroduced catalog cardinality/account caps, ranking, priority synthesis,
+launcher route-count caps, and shared escalation quota while preserving the
+free-only central-review pool.
+
+## Evidence trail
+
+- `.github/workflows/strix.yml` — executable Strix pool and override boundary.
+- `tests/test_contextual_orchestrator_review_sidecar_contract.py` — executable
+  `orchestrator/free` sidecar contract.
+- `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` — current and
+  historical pool decisions, including the later amendment superseding Strix
+  `orchestrator/auto`.
+- `docs/product-technical-gap-baseline.md` — current implementation/gap ledger.
+- `scripts/ci/contextual_orchestrator_review_policy.py` — admission evidence,
+  not a substantive model router.

@@ -5,7 +5,7 @@ through the vendored ``contextual-orchestrator`` gateway, all five provider
 secrets (``BYTEZ_API_KEY``, ``NVIDIA_NIM_API_KEY``, ``NVIDIA_NIM_API_KEY_SUB``,
 ``OPENROUTER_API_KEY``, ``OPENAI_API_KEY``) enter its process-local KV as
 bootstrap transport, models are auto-discovered, and the ``orchestrator/free``
-fail-closed zero-cost pool (prioritized by the ZDR policy in
+fail-closed zero-cost pool (governed by the ZDR policy in
 ``scripts/ci/zdr_policy.py``) is the review model.
 """
 
@@ -360,7 +360,8 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     assert rows[1]["prompt_price_per_1k"] == 0.002
     assert "from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents" in text
     assert "from contextual_orchestrator.server import SecurityConfig, serve" in text
-    assert 'parser.add_argument("--pool", choices=("free", "auto"), default="free")' in text
+    assert 'parser.add_argument("--pool", choices=("free",), default="free")' in text
+    assert 'choices=("free", "auto")' not in text
     assert "orchestrator/{args.pool} would fail closed" in text
     assert "scripts.ci.contextual_orchestrator_review_policy" in text
     assert "from scripts.ci import zdr_policy" in text

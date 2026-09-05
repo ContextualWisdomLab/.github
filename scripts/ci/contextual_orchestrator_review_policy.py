@@ -8,6 +8,13 @@ audit counts but are never admitted to CI review. Token-priced routes require a
 complete prompt/completion vector; Bytez may instead carry the exact-zero
 provider-meter attestation represented by contextual-orchestrator's ``is_free``
 result. Partial, malformed, or contradictory price evidence fails closed.
+
+This module is an admission boundary, not a router. It therefore must not invent
+candidate-count caps, per-provider quotas, price/ZDR/provider ordering, hand-set
+priorities, or fallback preferences. Every row satisfying the explicit pool,
+price, credential-source, and optional ZDR predicates remains admitted with
+neutral priority. Downstream model choice requires its own evidence-backed
+routing contract.
 """
 
 from __future__ import annotations
@@ -17,7 +24,6 @@ import json
 import math
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -31,6 +37,9 @@ from scripts.ci.zdr_policy import (
     route_key,
 )
 
+# Compatibility-only values retained while callers migrate away from the old
+# command surface. They are deliberately ignored by admission and therefore do
+# not affect candidate membership, ordering, or priority.
 DEFAULT_CATALOG_LIMIT = 12
 DEFAULT_ACCOUNT_CAP = 4
 
@@ -51,11 +60,7 @@ and globally discovered; only candidate admission to the free pool is denied.
 COST_FREE = "free"
 COST_PRICED = "priced"
 COST_UNKNOWN = "unknown"
-_COST_EVIDENCE_RANK: Mapping[str, int] = {
-    COST_FREE: 0,
-    COST_PRICED: 1,
-    COST_UNKNOWN: 2,
-}
+_COST_EVIDENCE_VALUES = frozenset({COST_FREE, COST_PRICED, COST_UNKNOWN})
 
 _AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9]*_[a-z0-9]+(?:_[a-z0-9]+)*$")
 
@@ -75,7 +80,10 @@ def _normalize_agent_id(candidate: str, provider_name: str) -> str:
     parts = [part for part in slug.split("_") if part]
     if len(parts) == 1:
         parts.insert(0, provider_name)
-    return "_".join(parts)
+    normalized = "_".join(parts)
+    if not _AGENT_ID_RE.fullmatch(normalized):
+        raise PolicyError(f"model agent id {candidate!r} cannot be normalized safely")
+    return normalized
 
 
 def _route_key(provider_name: str, model: str) -> str:
@@ -257,7 +265,7 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
 def _cost_evidence(row: Mapping[str, Any]) -> str:
     """Return a validated cost-evidence tier from a normalized row."""
     evidence = row.get("cost_evidence")
-    if evidence in _COST_EVIDENCE_RANK:
+    if evidence in _COST_EVIDENCE_VALUES:
         return str(evidence)
     # Backward compatibility for callers that build normalized-like rows by
     # hand rather than using parse_discovery_report().
@@ -276,23 +284,25 @@ def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: object = DEFAULT_CATALOG_LIMIT,
+    account_cap: object = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints: frozenset[str] = frozenset(),
     require_zdr: bool = False,
     pool: str = "free",
 ) -> dict[str, Any]:
-    """Select a free-first, ZDR-aware, credential-account-diverse catalog.
+    """Compatibility-named admission API; it performs no prioritization.
 
-    ``orchestrator/free`` first applies a source-identity invariant: only rows
-    whose credential source is in :data:`FREE_POOL_CREDENTIAL_NAMES` are free
-    candidates. This is independent from global credential discovery, so an
-    OpenAI model may remain visible to audit or ``orchestrator/auto`` while
-    contributing zero free-pool candidates.
+    The historical function name is retained only so existing callers can roll
+    forward without a flag-day. ``limit`` and ``account_cap`` are likewise
+    compatibility-only: they are intentionally non-authoritative and are not
+    inspected, validated, serialized, or allowed to remove, rank, or prioritize
+    a candidate. The admission set is fully determined by explicit cost
+    evidence, ``orchestrator/free`` credential-source authorization, and the
+    caller's optional ZDR requirement.
 
-    Existing discovery-wide counters keep their historical meaning so runtime
-    enrichment cannot silently rewrite the contract. Additional
-    ``free_pool_*`` fields expose the narrower admitted subset explicitly.
+    Input order is preserved only as discovery provenance. Every emitted agent
+    has neutral priority, so this module does not convert that serialization
+    order into routing authority.
     """
     if pool not in {"free", "auto"}:
         raise PolicyError(f"unsupported review pool {pool!r}")
@@ -303,9 +313,15 @@ def build_zdr_prioritized_catalog(
     all_priced_rows = [row for row in all_rows if _cost_evidence(row) == COST_PRICED]
     all_unknown_rows = [row for row in all_rows if _cost_evidence(row) == COST_UNKNOWN]
     candidate_rows = (
-        free_pool_rows if pool == "free" else [*all_free_rows, *all_priced_rows]
+        free_pool_rows
+        if pool == "free"
+        else [
+            row
+            for row in all_rows
+            if _cost_evidence(row) in {COST_FREE, COST_PRICED}
+        ]
     )
-    eligible_rows = [
+    picked = [
         row
         for row in candidate_rows
         if not require_zdr
@@ -315,31 +331,6 @@ def build_zdr_prioritized_catalog(
             zdr_endpoints=zdr_endpoints,
         )
     ]
-    eligible_rows.sort(
-        key=lambda row: (
-            _COST_EVIDENCE_RANK[_cost_evidence(row)],
-            0
-            if is_zdr_model(
-                str(row["provider"]),
-                model=str(row["model"]),
-                zdr_endpoints=zdr_endpoints,
-            )
-            else 1,
-            str(row["provider"]),
-            str(row["model"]),
-        )
-    )
-
-    per_account: Counter[str] = Counter()
-    picked: list[Mapping[str, Any]] = []
-    for row in eligible_rows:
-        account = provider_account(str(row["provider"]))
-        if per_account[account] >= account_cap:
-            continue
-        per_account[account] += 1
-        picked.append(row)
-        if len(picked) >= limit:
-            break
 
     if not picked:
         route_kind = "attested ZDR" if require_zdr else pool
@@ -349,19 +340,22 @@ def build_zdr_prioritized_catalog(
         )
 
     catalog_rows: list[dict[str, Any]] = []
+    normalized_agent_ids: set[str] = set()
     zdr_count = 0
-    for rank, row in enumerate(picked):
+    for row in picked:
         provider = str(row["provider"])
         model = str(row["model"])
         evidence = _cost_evidence(row)
-        zdr = is_zdr_model(
-            provider, model=model, zdr_endpoints=zdr_endpoints
-        )
+        agent_id = _normalize_agent_id(str(row["agent_id"]), provider)
+        if agent_id in normalized_agent_ids:
+            raise PolicyError(f"agent id collision after normalization: {agent_id!r}")
+        normalized_agent_ids.add(agent_id)
+        zdr = is_zdr_model(provider, model=model, zdr_endpoints=zdr_endpoints)
         if zdr:
             zdr_count += 1
         catalog_rows.append(
             {
-                "id": _normalize_agent_id(str(row["agent_id"]), provider),
+                "id": agent_id,
                 "model": model,
                 "base_url": row["base_url"],
                 "api_key_env": "",
@@ -371,7 +365,7 @@ def build_zdr_prioritized_catalog(
                     f"cost:{evidence}",
                     "zdr" if zdr else "non-zdr",
                 ],
-                "priority": -rank,
+                "priority": 0,
                 "disabled": False,
                 "provider_name": provider,
                 "provider_exclusions": [],
@@ -389,7 +383,6 @@ def build_zdr_prioritized_catalog(
     free_pool_account_diversity = len(
         {provider_account(str(row["provider"])) for row in free_pool_rows}
     )
-
     selected_evidence = [_cost_evidence(row) for row in picked]
     return {
         "agents": catalog_rows,
@@ -409,6 +402,8 @@ def build_zdr_prioritized_catalog(
             "priced_selected_count": selected_evidence.count(COST_PRICED),
             "unknown_selected_count": selected_evidence.count(COST_UNKNOWN),
             "zdr_selected_count": zdr_count,
+            "legacy_limit_ignored": True,
+            "legacy_account_cap_ignored": True,
             "zdr_sources": sorted(
                 {
                     provider_zdr_scope(str(row["provider"])).source
@@ -460,8 +455,8 @@ def build_catalog_from_paths(
     *,
     out_path: str,
     report_path: str,
-    limit: int = DEFAULT_CATALOG_LIMIT,
-    account_cap: int = DEFAULT_ACCOUNT_CAP,
+    limit: object = DEFAULT_CATALOG_LIMIT,
+    account_cap: object = DEFAULT_ACCOUNT_CAP,
     zdr_endpoints_path: str | None = None,
     require_zdr: bool = False,
     pool: str = "free",
@@ -487,6 +482,16 @@ def build_catalog_from_paths(
     return result
 
 
+def _warn_explicit_legacy_options(argv: list[str]) -> None:
+    """Warn when obsolete cardinality options remain in operator configuration."""
+    for option in ("--limit", "--account-cap"):
+        if any(argument == option or argument.startswith(f"{option}=") for argument in argv):
+            print(
+                f"contextual-orchestrator review policy: {option} is deprecated and ignored",
+                file=sys.stderr,
+            )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for catalog generation."""
     parser = argparse.ArgumentParser(
@@ -497,8 +502,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", required=True, help="Path to write agents JSON")
     parser.add_argument("--report", required=True, help="Path to write audit JSON")
-    parser.add_argument("--limit", type=int, default=DEFAULT_CATALOG_LIMIT)
-    parser.add_argument("--account-cap", type=int, default=DEFAULT_ACCOUNT_CAP)
+    parser.add_argument(
+        "--limit",
+        default=DEFAULT_CATALOG_LIMIT,
+        help="Deprecated compatibility input; does not affect admission.",
+    )
+    parser.add_argument(
+        "--account-cap",
+        default=DEFAULT_ACCOUNT_CAP,
+        help="Deprecated compatibility input; does not affect admission.",
+    )
     parser.add_argument("--zdr-endpoints", default=None)
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
@@ -507,7 +520,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the catalog CLI and return one on policy or input failure."""
-    args = _build_parser().parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    args = _build_parser().parse_args(effective_argv)
+    _warn_explicit_legacy_options(effective_argv)
     try:
         build_catalog_from_paths(
             args.discovery_report,

@@ -89,6 +89,12 @@ def test_normalize_agent_id(candidate: str, provider: str, expected: str) -> Non
     assert policy._normalize_agent_id(candidate, provider) == expected
 
 
+def test_normalize_agent_id_fails_closed_when_no_identifier_remains() -> None:
+    """Punctuation-only identities cannot silently become an empty agent id."""
+    with pytest.raises(policy.PolicyError, match="cannot be normalized safely"):
+        policy._normalize_agent_id("::", "openrouter")
+
+
 def test_is_valid_is_free_rejects_non_scalar_markers() -> None:
     """Non-scalar or missing free markers are not valid discovery evidence."""
     assert policy._is_valid_is_free([]) is False
@@ -181,37 +187,46 @@ def test_parse_discovery_report_rejects_invalid_rows(report: dict[str, object]) 
         policy.parse_discovery_report(report)
 
 
-def test_build_catalog_is_zdr_first_and_free_only() -> None:
-    """ZDR-compliant routes outrank non-ZDR free routes; priced routes stay out."""
+def test_build_catalog_is_free_only_and_records_zdr_without_ranking() -> None:
+    """Free admission excludes priced/OpenAI rows but does not turn ZDR into a rank."""
     parsed = policy.parse_discovery_report(_report())
     result = policy.build_zdr_prioritized_catalog(
         parsed,
-        limit=12,
-        account_cap=4,
+        limit=1,
+        account_cap=1,
         zdr_endpoints=ZDR_FEED,
     )
     agents = result["agents"]
-    assert agents[0]["model"] == "deepseek/deepseek-r1:free"
-    assert "zdr" in agents[0]["tags"]
     models = [agent["model"] for agent in agents]
+    assert models == [
+        "deepseek/deepseek-r1:free",
+        "nvidia/nemotron-3-nano-30b-a3b",
+        "meta/llama-3.3-70b-instruct",
+        "qwen2.5-coder",
+    ]
+    assert "zdr" in agents[0]["tags"]
     assert "gpt-4.1" not in models
+    assert "gpt-4o-mini" not in models
     assert result["report"]["pool"] == "orchestrator/free"
     assert result["report"]["zdr_selected_count"] == 1
     assert result["report"]["zdr_endpoints_feed_used"] is True
     assert result["report"]["selected_count"] == len(agents)
+    assert result["report"]["legacy_limit_ignored"] == 1
+    assert result["report"]["legacy_account_cap_ignored"] == 1
+    assert {agent["priority"] for agent in agents} == {0}
     for agent in agents:
         assert agent["disabled"] is False
         assert "cost:free" in agent["tags"]
         assert agent["credential_key"]
 
 
-def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
-    """The Strix auto pool can use priced routes without weakening the free pool."""
+def test_build_auto_catalog_admits_price_evidenced_routes_without_ranking() -> None:
+    """The audit auto pool retains priced routes but admission stays neutral."""
     parsed = policy.parse_discovery_report(_report())
     result = policy.build_zdr_prioritized_catalog(
         parsed,
-        limit=12,
-        account_cap=4,
+        limit=1,
+        account_cap=1,
         zdr_endpoints=ZDR_FEED,
         pool="auto",
     )
@@ -227,14 +242,22 @@ def test_build_auto_catalog_admits_price_evidenced_routes() -> None:
     assert result["report"]["total_routes"] == 6
     assert result["report"]["free_selected_count"] == 5
     assert result["report"]["priced_selected_count"] == 1
+    assert {agent["priority"] for agent in agents} == {0}
 
 
-def test_build_auto_catalog_order_is_independent_of_discovery_order() -> None:
-    """Equivalent route tiers have deterministic provider/model priority."""
+def test_build_auto_catalog_preserves_discovery_provenance_not_priority() -> None:
+    """Serialization follows discovery provenance while priorities stay neutral."""
     parsed = policy.parse_discovery_report(_report())
     forward = policy.build_zdr_prioritized_catalog(parsed, pool="auto")
     reversed_result = policy.build_zdr_prioritized_catalog(reversed(parsed), pool="auto")
-    assert forward["report"]["selected"] == reversed_result["report"]["selected"]
+    assert [row["model"] for row in forward["report"]["selected"]] == [
+        row["model"] for row in parsed
+    ]
+    assert [row["model"] for row in reversed_result["report"]["selected"]] == [
+        row["model"] for row in reversed(parsed)
+    ]
+    assert {agent["priority"] for agent in forward["agents"]} == {0}
+    assert {agent["priority"] for agent in reversed_result["agents"]} == {0}
 
 
 @pytest.mark.parametrize(
@@ -258,11 +281,11 @@ def test_priced_routes_require_complete_published_price_evidence(
 
 
 def test_build_auto_catalog_keeps_private_targets_zdr_only() -> None:
-    """Private Strix auto routing still excludes every unattested route."""
+    """Private auto admission excludes every unattested route."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
-        limit=12,
-        account_cap=4,
+        limit=1,
+        account_cap=1,
         zdr_endpoints=ZDR_FEED,
         require_zdr=True,
         pool="auto",
@@ -278,11 +301,10 @@ def test_build_catalog_reports_free_account_diversity() -> None:
     """Diversity counts independently credentialed accounts with free routes."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
-        limit=12,
-        account_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
     assert result["report"]["free_account_diversity"] == 5
+    assert result["report"]["free_pool_account_diversity"] == 4
 
 
 def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
@@ -306,9 +328,7 @@ def test_build_catalog_counts_same_vendor_credentials_independently() -> None:
         ]
     }
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(single_family_report),
-        limit=12,
-        account_cap=4,
+        policy.parse_discovery_report(single_family_report)
     )
     assert result["report"]["free_account_diversity"] == 2
 
@@ -321,67 +341,78 @@ def test_build_catalog_rejects_unknown_pool() -> None:
         )
 
 
-def test_build_catalog_assigns_unique_priorities() -> None:
-    """Each selected agent gets a distinct priority so TaskOrchestrator cannot tie on id."""
+@pytest.mark.parametrize(("field", "value"), [("limit", True), ("account_cap", 1.5)])
+def test_build_catalog_ignores_legacy_cap_input_types(field: str, value: object) -> None:
+    """Retired compatibility inputs cannot regain admission authority through type gates."""
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(_report()), **{field: value}
+    )
+    assert result["report"][f"legacy_{field}_ignored"] is True
+
+
+def test_build_catalog_assigns_neutral_priorities() -> None:
+    """Admission cannot create a hand-authored preference for eligible agents."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
-        limit=12,
-        account_cap=4,
         zdr_endpoints=ZDR_FEED,
     )
-    priorities = [agent["priority"] for agent in result["agents"]]
-    assert priorities == sorted(priorities, reverse=True)
-    assert len(priorities) == len(set(priorities))
-    assert result["agents"][0]["priority"] == 0
+    assert {agent["priority"] for agent in result["agents"]} == {0}
     assert result["report"]["total_free_routes"] == 5
 
 
-def test_build_catalog_applies_account_cap() -> None:
-    """An account cap keeps one credential from absorbing the pool."""
+def test_build_catalog_ignores_account_cap() -> None:
+    """A legacy account cap cannot evict an evidence-eligible free route."""
     report = {
         "models": [
-                {"provider": "nvidia_nim", "model": f"m{i}", "agent_id": f"nim_a{i}", "is_free": True, **FREE_PRICE}
+            {
+                "provider": "nvidia_nim",
+                "model": f"m{i}",
+                "agent_id": f"nim_a{i}",
+                "is_free": True,
+                **FREE_PRICE,
+            }
             for i in range(6)
         ]
         + [
             {
                 "provider": "nvidia_nim_sub",
                 "model": f"s{i}",
-                    "agent_id": f"nim_b{i}",
-                    "is_free": True,
-                    **FREE_PRICE,
+                "agent_id": f"nim_b{i}",
+                "is_free": True,
+                **FREE_PRICE,
             }
             for i in range(6)
         ]
-        + [
-                {"provider": "openrouter", "model": f"o{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
-            for i in range(3)
-        ]
     }
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(report), limit=12, account_cap=2
+        policy.parse_discovery_report(report), limit=1, account_cap=1
     )
     account_counts: dict[str, int] = {}
     for agent in result["agents"]:
         account = policy.provider_account(agent["provider_name"])
         account_counts[account] = account_counts.get(account, 0) + 1
-    assert account_counts["nvidia_nim"] == 2
-    assert account_counts["nvidia_nim_sub"] == 2
-    assert account_counts["openrouter"] == 2
+    assert account_counts == {"nvidia_nim": 6, "nvidia_nim_sub": 6}
+    assert result["report"]["selected_count"] == 12
 
 
-def test_build_catalog_respects_limit() -> None:
-    """The catalog never exceeds the configured agent limit."""
+def test_build_catalog_ignores_limit() -> None:
+    """A legacy total-route limit cannot truncate evidence-eligible admission."""
     report = {
         "models": [
-                {"provider": "openrouter", "model": f"m{i}", "agent_id": f"or_{i}", "is_free": True, **FREE_PRICE}
+            {
+                "provider": "openrouter",
+                "model": f"m{i}",
+                "agent_id": f"or_{i}",
+                "is_free": True,
+                **FREE_PRICE,
+            }
             for i in range(20)
         ]
     }
     result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(report), limit=5, account_cap=100
+        policy.parse_discovery_report(report), limit=1, account_cap=1
     )
-    assert len(result["agents"]) == 5
+    assert len(result["agents"]) == 20
 
 
 def test_build_catalog_fails_closed_without_free_models() -> None:
@@ -400,16 +431,12 @@ def test_build_catalog_fails_closed_without_free_models() -> None:
         ]
     }
     with pytest.raises(policy.PolicyError, match="no free"):
-        policy.build_zdr_prioritized_catalog(
-            policy.parse_discovery_report(report), limit=12, account_cap=4
-        )
+        policy.build_zdr_prioritized_catalog(policy.parse_discovery_report(report))
 
 
 def test_build_catalog_uses_static_table_without_feed() -> None:
     """Without a feed, OpenRouter is not granted ZDR for every free route."""
-    result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(_report()), limit=12, account_cap=4
-    )
+    result = policy.build_zdr_prioritized_catalog(policy.parse_discovery_report(_report()))
     assert result["report"]["zdr_endpoints_feed_used"] is False
     assert result["report"]["zdr_selected_count"] == 0
     assert "zdr" not in result["agents"][0]["tags"]
@@ -464,8 +491,8 @@ def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:
         str(discovery),
         out_path=str(catalog),
         report_path=str(report),
-        limit=12,
-        account_cap=4,
+        limit=1,
+        account_cap=1,
         zdr_endpoints_path=str(feed),
     )
     assert catalog.exists()
@@ -489,13 +516,14 @@ def test_main_success_writes_catalog(tmp_path) -> None:
             "--report",
             str(report),
             "--limit",
-            "12",
+            "1",
             "--account-cap",
-            "4",
+            "1",
         ]
     )
     assert exit_code == 0
-    assert catalog.read_text(encoding="utf-8")
+    payload = json.loads(catalog.read_text(encoding="utf-8"))
+    assert len(payload["agents"]) == 4
 
 
 def test_main_policy_error_returns_one(tmp_path) -> None:
@@ -537,12 +565,11 @@ def test_main_requires_discovery_report_arg() -> None:
     with pytest.raises(SystemExit):
         policy.main(["--out", "x.json", "--report", "y.json"])
 
+
 def test_private_catalog_admits_only_attested_zdr_routes() -> None:
     """Private-target evidence never falls through to a non-ZDR free route."""
     result = policy.build_zdr_prioritized_catalog(
         policy.parse_discovery_report(_report()),
-        limit=12,
-        account_cap=4,
         zdr_endpoints=ZDR_FEED,
         require_zdr=True,
     )
@@ -559,7 +586,5 @@ def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
     with pytest.raises(policy.PolicyError, match="ZDR"):
         policy.build_zdr_prioritized_catalog(
             policy.parse_discovery_report(_report()),
-            limit=12,
-            account_cap=4,
             require_zdr=True,
         )

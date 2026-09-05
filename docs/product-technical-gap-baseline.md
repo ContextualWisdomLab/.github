@@ -2626,6 +2626,22 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
 
+### 2026-09-02 Noema/OpenCode reviewer readiness false-negative regression
+
+External review on `.github#1629` demonstrated a real operational false negative:
+full evidence admission had been coupled to sequential startup probing, so a large
+set of individually slow provider routes could consume the review deadline before
+Noema/OpenCode began serving. The repair keeps evidence admission complete, starts independent
+provider-account lanes concurrently, serializes routes sharing one provider account,
+preserves input-order/source evidence, and keeps each candidate's budget escalation
+local. `tests/test_contextual_orchestrator_review_preflight_concurrency.py` is the
+durable barrier-based regression: the old globally sequential implementation cannot
+pass it, while the GREEN implementation proves every independent provider-account lane
+can enter transport before either lane completes. It deliberately does not claim that
+routes sharing one provider account start simultaneously. Explicit legacy `--limit`/`--account-cap` CLI configuration now
+emits diagnostics while remaining decision-inert. The pinned contextual-orchestrator
+ranking contract was also re-audited: `_static_rank_key` ends in `agent.id`, so equal
+neutral priorities do not inherit discovery/list order as a routing tiebreak.
 ## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
 
 **Problem.** `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the script every central required review workflow (Strix, OpenCode Review, Noema Review, the PR-review autofix sidecar) provisions to talk to `contextual-orchestrator` — read an operator-settable `CONTEXTUAL_ORCHESTRATOR_POOL` environment variable, defaulted it to `free`, and validated it against exactly two accepted values: `free` or `auto` (`case "$orchestrator_pool" in free|auto) ...`). `auto` is a real, load-bearing value one layer down: `scripts/ci/contextual_orchestrator_review_launcher.py --pool auto` admits *priced* discovered routes as a fallback stage once the free pool is exhausted (`build_zdr_prioritized_catalog(..., pool="auto")`), by design, for callers that want that behavior. Nothing in this repository's own review-provisioning code path currently sets `CONTEXTUAL_ORCHESTRATOR_POOL=auto` — the only workflow that sets the variable at all, `strix.yml`, sets it to `free`; every other central review workflow simply relies on the script's own `:-free` default — so this was not a live incident, it was an unaudited, structurally-reachable escape hatch: a future edit to any of the four workflows above, or a manually-triggered `workflow_dispatch` with a custom env override, could set `CONTEXTUAL_ORCHESTRATOR_POOL=auto` and the sidecar would accept it silently, with no cost ceiling, no budget/authorization gate, and no reviewer visibility that priced models were now in scope for a required check.
