@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import http.client
 import io
 import json
 import os
@@ -1587,7 +1586,10 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
-@pytest.mark.parametrize("receipt_field", ["failure_kind", "error_code"])
+@pytest.mark.parametrize(
+    ("receipt_field", "with_attempt_details"),
+    [("failure_kind", True), ("error_code", True), ("error_code", False)],
+)
 @pytest.mark.parametrize(
     ("field_value", "expected_value"),
     [
@@ -1611,7 +1613,7 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     ],
 )
 def test_call_llm_reports_only_safe_model_from_bounded_http_error(
-    monkeypatch, capsys, receipt_field, field_value, expected_value
+    monkeypatch, capsys, receipt_field, with_attempt_details, field_value, expected_value
 ):
     """A failed gateway call emits only bounded scalar receipt fields on both surfaces."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
@@ -1635,15 +1637,25 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(
         },
         "arbitrary": secret,
     }
+    if not with_attempt_details:
+        # Mirror _send_error/_error_payload: no model, attempts, or failure kind.
+        payload["error"]["detail"] = {"request_id": secret}
+        payload.update(
+            error_code=field_value,
+            error_message=secret,
+            error_detail=payload["error"]["detail"],
+        )
     if receipt_field == "error_code":
         # Current protected gateway errors have a code even without a failure kind.
         payload["error"]["code"] = field_value
     else:
         payload["error"]["detail"]["failure_kind"] = field_value
     body = json.dumps(payload).encode()
+    requests_seen = []
 
     class Opener:
         def open(self, request):
+            requests_seen.append(request)
             raise noema.urllib.error.HTTPError(
                 request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
             )
@@ -1655,14 +1667,21 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(
 
     output = capsys.readouterr().out
     diagnostic = str(exc_info.value)
+    assert len(requests_seen) == 1
     assert "phase=response_error" in output
-    assert "served_model=github_models/deepseek-v3" in output
+    serving_model = "github_models/deepseek-v3" if with_attempt_details else "unknown"
+    assert f"served_model={serving_model}" in output
     assert "phase=response_error" in diagnostic
-    assert "served_model=github_models/deepseek-v3" in diagnostic
-    assert "provider_name=nvidia_nim" in output
-    assert "upstream_phase=connecting" in output
-    assert "attempt_number=2" in output
-    assert "upstream_status=503" in output
+    assert f"served_model={serving_model}" in diagnostic
+    for receipt_fragment in (
+        "provider_name=nvidia_nim",
+        "upstream_phase=connecting",
+        "attempt_number=2",
+        "upstream_status=503",
+        "terminal_reason=eligible_candidates_exhausted",
+    ):
+        assert (receipt_fragment in output) is with_attempt_details
+        assert (receipt_fragment in diagnostic) is with_attempt_details
     if expected_value is None:
         assert f"{receipt_field}=" not in output
         assert f"{receipt_field}=" not in diagnostic
@@ -1675,7 +1694,6 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(
     assert output.count("::warning::") == 1
     assert "::error::injected" not in output
     assert "::error::injected" not in diagnostic
-    assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
 

@@ -1,5 +1,19 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-05 Noema failure classification follow-up — G-02 / G-03
+
+This dated follow-up does not refresh the historical inventory below or authorize a merge. Central [#1898](https://github.com/ContextualWisdomLab/.github/pull/1898) remains a proposed repair. Its consumer integration `719c91b1f678de6da3029b8f5920d6a245520e2e` preserves the original `df0f735f42adbb44d45f3c3a4e503e400b47ed79` delta and includes protected main `f250638827f8252b0d9e5cb2601f4d333f96162f` by normal merge.
+
+- **Product need:** a failed required review must give maintainers a usable next investigation while protecting customer/source content. This supports the PRD-05 quality-first routing outcome and evidence/control-plane TRD; it does not demonstrate retrieval, calendar, connector, or UI acceptance.
+- **Observed gap:** Naruon #1244 at `50351e8cacc65b4124ba2145e00d41aeceef0775` failed in [job 101247827882](https://github.com/ContextualWisdomLab/naruon/actions/runs/33933793278/job/101247827882) after 1469.1 seconds and one request. Phase/model telemetry exists, but no preserved classification proves its cause. A transport exception label is not network-failure evidence.
+- **Source contract:** protected contextual-orchestrator `a080297d2546bb61e89520d637cabc202db331ec` already returns canonical `error.code=invalid_structured_output` for a structured-response error, without `failure_kind`. Noema previously dropped that code. The proposed #1004 exhaustion kind is separate and remains unreleased evidence.
+- **Action and ownership:** #1898 preserves canonical `error.code` and optional `error.detail.failure_kind` with the existing bounded identifier validator in both failure diagnostics. `.github` owns the consumer receipt; contextual-orchestrator owns classification, model validation/repair, discovery, and routing. No extra model request, mutable owner dependency, raw response logging, approval relaxation, or timeout is added.
+- **Verification:** canonical-code RED reproduced 4 failed / 30 passed; repaired focused Noema/edge/environment checks returned 159 passed. The earlier full run's missing declared pip tool was repaired in the isolated environment. Integrated full normal/CI runs, hosted required checks, independent review, protected delivery, and an exact-revision consumer run remain separate gates. This entry does not mark G-02 or G-03 closed.
+
+The [doctoring record](doctoring/noema-repair-attempt-telemetry.md#2026-09-05-follow-up-retain-the-gateways-error-classification) contains exact producer/API links, the rejected alternatives, logging-security limits, APA 7 reference, executable commands, and the remaining owner investigation. The existing ownership flow is unchanged: workflow → gateway-owned routing/validation → one bounded receipt → deterministic local validation → exact-head publication.
+
+## Historical baseline
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`

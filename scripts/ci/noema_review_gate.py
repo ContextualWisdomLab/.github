@@ -1299,7 +1299,7 @@ def decode_llm_response_body(raw_bytes: bytes) -> str:
 
 
 def _extract_served_model(raw: str) -> str | None:
-    """Return a bounded, scrubbed, single-line UTF-8-printable serving model id."""
+    """Return a bounded, format-checked ASCII serving-model identifier."""
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -1310,7 +1310,7 @@ def _extract_served_model(raw: str) -> str | None:
 
 
 def _safe_model_identifier(value: Any) -> str | None:
-    """Accept only a conservative, bounded model identifier safe for public logs."""
+    """Validate a bounded ASCII identifier's format, without detecting secrets."""
     if not isinstance(value, str):
         return None
     candidate = value.strip()
