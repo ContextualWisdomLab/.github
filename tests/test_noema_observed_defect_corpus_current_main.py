@@ -201,6 +201,48 @@ def test_trusted_receipt_must_be_typed_and_explicitly_cited() -> None:
     )
 
 
+def test_evidence_statement_collection_ignores_non_prose_container_values() -> None:
+    """Malformed optional containers cannot become provenance claim text."""
+    verdict = {
+        "summary": "   ",
+        "reviewed_lines": [None, {"analysis": "reviewed source"}],
+        "adversarial_validation": {
+            "residual_risk": None,
+            "probes": [
+                None,
+                {
+                    "hypothesis": "hypothesis",
+                    "attack_or_counterexample": "attack",
+                    "evidence": "evidence",
+                    "class_evidence": None,
+                },
+                {
+                    "hypothesis": "second hypothesis",
+                    "attack_or_counterexample": "second attack",
+                    "evidence": "second evidence",
+                    "class_evidence": {
+                        "malformed": None,
+                        "valid": {"observation": "observed source"},
+                    },
+                },
+            ],
+        },
+        "findings": [None, {"message": "finding"}],
+    }
+
+    assert noema._model_evidence_statements(verdict) == [
+        "reviewed source",
+        "hypothesis",
+        "attack",
+        "evidence",
+        "second hypothesis",
+        "second attack",
+        "second evidence",
+        "observed source",
+        "finding",
+    ]
+
+
 def test_noema_prompt_names_every_observed_defect_class(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
