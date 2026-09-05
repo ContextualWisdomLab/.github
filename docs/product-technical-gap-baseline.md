@@ -3277,3 +3277,31 @@ currently unable to complete runs at all (see the pipeline-stall entry), so the 
 end-to-end right now, and ~30 PRs are already queued behind the same stall. The measurement is recorded now
 because it is the part that is durable and currently unclaimed; the edit belongs in its own PR with the
 local workflow-contract tests run against it.
+
+**Extension (2026-09-05): two echo-only jobs sit serially on the OpenCode review critical path.** Credit to
+a peer session's read-only Codex pass for spotting the first of these; independently verified here against
+`origin/main` and extended with this session's own queue-latency measurements.
+
+`opencode-review.yml` defines a five-deep serial chain —
+`required-workflow-bootstrap` → `admit-current-head` → `coverage-source-tree` → `coverage-evidence` →
+`opencode-review-target` — in which **two links do nothing but print a string**. `coverage-source-tree`
+(`:279`) allocates an `ubuntu-24.04` runner to `echo` that execution is delegated elsewhere;
+`coverage-evidence` (`:289`) allocates another to `echo` that it "preserves the stable branch-protection
+context without executing pull-request content". Each is a full runner allocation, and because a job is only
+created once its `needs:` predecessor finishes, **each link pays a fresh queue wait under saturation.**
+
+**Measured cost, from this session's item-13 evidence audit of `ContextualWisdomLab/naruon#1528`
+(run `33581213805`).** Per-job `created_at` → `started_at` on that run: `required-workflow-bootstrap` ~7h57m,
+`coverage-source-tree` **~9h40m**, `coverage-evidence` **~13h1m**, `opencode-review` ~12h13m. The two
+echo-only links contributed roughly **22h41m of pure queue latency to a single PR** — not runner-seconds
+spent working, but wall-clock spent waiting for a slot in order to print a sentence, while holding the actual
+review behind them.
+
+**The contexts are load-bearing; the serialization is not.** Both jobs exist to keep a required
+branch-protection context reporting, the same structural constraint as the `changed-scope` gates above, so
+neither can simply be deleted. But nothing in either job produces an output the next one consumes: their
+`needs:` edges are ordering, not data dependency. Running both in parallel off `admit-current-head`, and
+dropping `coverage-evidence` from `opencode-review-target`'s `needs:`, would preserve every reported context
+while removing two sequential queue waits from the critical path. **Not asserted as safe without further
+check:** confirm no scheduler or ruleset logic depends on these contexts *completing in this order* before
+changing the edges.
