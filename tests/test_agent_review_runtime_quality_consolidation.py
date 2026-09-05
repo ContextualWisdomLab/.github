@@ -14,9 +14,13 @@ WORKFLOW_PATH = (
     / "agent-review-runtime-quality-ci.yml"
 )
 RETIRED_WORKFLOWS = (
+    "exact-artifact-sbom-attestation-quality.yml",
+    "hourly-nvidia-nim-review-repair.yml",
+    "organization-commercial-readiness-loop-quality-ci.yml",
     "noema-token-lifetime-quality-ci.yml",
     "opencode-rust-coverage-toolchain-quality-ci.yml",
     "strix-changed-path-quality-ci.yml",
+    "queue-ownership-quality-ci.yml",
 )
 
 
@@ -26,8 +30,8 @@ def _workflow_text() -> str:
     return WORKFLOW_PATH.read_text(encoding="utf-8")
 
 
-def test_three_quality_workflows_are_replaced_by_one_owner() -> None:
-    """Retire three independent trigger surfaces after full delta succession."""
+def test_quality_workflows_are_replaced_by_one_owner() -> None:
+    """Retire independent trigger surfaces after full delta succession."""
 
     assert WORKFLOW_PATH.is_file()
     for retired_name in RETIRED_WORKFLOWS:
@@ -62,10 +66,18 @@ def test_consolidated_workflow_materializes_one_runner_job() -> None:
 
     assert workflow.count("runs-on:") == 1
     assert workflow.count("actions/checkout@") == 1
-    assert workflow.count("actions/setup-python@") == 1
+    assert workflow.count("actions/setup-python@") == 3
     assert "workflow_dispatch:" not in workflow
     assert "gh api" not in workflow
     assert re.search(r"(?m)^[ \t]*sleep[ \t]+", workflow) is None
+
+
+def test_changelog_only_edits_do_not_boot_the_consolidated_runner() -> None:
+    """A release-note-only change needs no agent runtime contract suite."""
+
+    trigger = _workflow_text().split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+
+    assert '      - "CHANGELOG.md"' not in trigger
 
 
 def test_consolidated_workflow_preserves_all_contract_suites() -> None:
@@ -86,6 +98,21 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_strix_workflow_dependency_hashes.py",
         "tests/test_strix_quality_timeout_fixture_budget.py",
         "scripts/ci/test_strix_quick_gate.sh",
+        "scripts/ci/pr_review_conflict_scope.py",
+        "scripts/ci/pr_review_autofix_context.py",
+        "scripts/ci/zdr_policy.py",
+        "scripts/ci/contextual_orchestrator_review_policy.py",
+        "scripts/ci/contextual_orchestrator_review_launcher.py",
+        "tests/test_pr_review_fix_hourly_contract.py",
+        "tests/test_pr_review_autofix_writer_security_contract.py",
+        "scripts/ci/organization_commercial_readiness_loop.py",
+        "organization_commercial_readiness_fixtures.py",
+        "tests/test_organization_commercial_readiness_loop*.py",
+        "scripts/ci/verify_exact_artifact_sbom_handoff.py",
+        "tests/test_exact_artifact_sbom_attestation_contract.py",
+        "tests/test_exact_artifact_sbom_review_regressions.py",
+        "tests/test_verify_exact_artifact_sbom_handoff.py",
+        "tests/test_exact_artifact_quality_single_runner.py",
     ):
         assert required_path in workflow
 
@@ -100,3 +127,56 @@ def test_exact_head_is_verified_before_selected_suites_run() -> None:
 
     assert 'test "$(git rev-parse HEAD)" = "$HEAD_SHA"' in selector
     assert 'git diff --name-only "$BASE_SHA...$HEAD_SHA"' in selector
+
+
+def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
+    """Run review-repair contracts only when their owned paths change."""
+
+    workflow = _workflow_text()
+
+    assert "review_repair_suite=false" in workflow
+    assert "echo \"review_repair=$review_repair_suite\"" in workflow
+    assert "scripts/ci/pr_review_fix_scheduler.py" in workflow
+    assert (
+        "if: steps.affected_suites.outputs.review_repair == 'true'" in workflow
+    )
+    assert workflow.count("runs-on:") == 1
+
+
+def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> None:
+    """Preserve the retired caller's coverage contract in the shared job."""
+
+    workflow = _workflow_text()
+
+    assert "commercial_readiness_suite=false" in workflow
+    assert "echo \"commercial_readiness=$commercial_readiness_suite\"" in workflow
+    assert (
+        "if: steps.affected_suites.outputs.commercial_readiness == 'true'"
+        in workflow
+    )
+    assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in workflow
+    assert "--fail-under=100" in workflow
+
+
+def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
+    """Compile on Python 3.10 before running full Python 3.14 evidence."""
+
+    workflow = _workflow_text()
+    minimum_setup = workflow.index(
+        "- name: Set up minimum supported Python for exact-artifact contracts"
+    )
+    minimum_compile = workflow.index(
+        "- name: Compile exact-artifact production and contracts on Python 3.10"
+    )
+    current_setup = workflow.index(
+        "- name: Restore Python 3.14 for exact-artifact contracts"
+    )
+    current_contract = workflow.index(
+        "- name: Verify exact-artifact SBOM attestation contracts on Python 3.14"
+    )
+
+    assert minimum_setup < minimum_compile < current_setup < current_contract
+    assert "exact_artifact_suite=false" in workflow
+    assert "outputs.exact_artifact == 'true'" in workflow
+    assert "--include=scripts/ci/verify_exact_artifact_sbom_handoff.py" in workflow
+    assert "interrogate --fail-under=100" in workflow
