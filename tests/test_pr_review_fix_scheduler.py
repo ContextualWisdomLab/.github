@@ -37,6 +37,180 @@ def test_recent_fix_marker_is_head_scoped():
     assert not fix.recent_fix_marker_exists([{"body": f"{fix.FIX_MARKER} head_sha={head} epoch=oops -->"}], head, 24 * 3600)
 
 
+def test_prepare_autofix_slot_deduplicates_head_and_cancels_only_stale(monkeypatch):
+    """A long-running exact-head worker survives while its older sibling is cancelled."""
+    head = "a" * 40
+    stale = "b" * 40
+    requests = []
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda args: requests.append(args)
+        or [
+            {
+                "workflow_runs": [
+                    {
+                        "id": 99,
+                        "status": "completed",
+                        "display_title": "unrelated first page",
+                    }
+                ]
+            },
+            {
+                "workflow_runs": [
+                {
+                    "id": 1,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{head}",
+                },
+                {
+                    "id": 2,
+                    "status": "queued",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                },
+                {
+                    "id": 3,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#8@{stale}",
+                },
+                {"id": 4, "status": "in_progress", "display_title": "malformed"},
+                ]
+            },
+        ],
+    )
+    cancelled = []
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda repo, ids: cancelled.append((repo, ids)),
+    )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(headRefOid=head),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    )
+    assert cancelled == [(fix.DEFAULT_AUTOFIX_REPOSITORY, ["2"])]
+    assert "--paginate" in requests[0]
+    assert "--slurp" in requests[0]
+
+
+def test_inspect_pr_reports_stale_snapshot_without_dispatch(monkeypatch):
+    """A moved head is not mislabeled as an active worker or dispatched stale."""
+    args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
+    monkeypatch.setattr(fix, "needs_autofix", lambda _pr: (True, ("review",)))
+    monkeypatch.setattr(fix, "issue_comments", lambda _repo, _number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda *_args, **_kwargs: pytest.fail("stale snapshot must not dispatch"),
+    )
+
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("scheduler PR snapshot is stale; retry with the current live head",),
+    )
+
+
+def test_prepare_autofix_slot_dry_run_preserves_stale_worker(monkeypatch, capsys):
+    """Dry-run reports an older head without mutating Actions state."""
+    stale = "b" * 40
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "waiting",
+                    "display_title": f"PR Review Autofix owner/repo#7@{stale}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("dry-run must not cancel"),
+    )
+
+    assert not fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=True,
+    )
+    assert "would force-cancel stale autofix runs 2" in capsys.readouterr().out
+
+
+def test_prepare_autofix_slot_preserves_new_head_workers_after_head_advance(monkeypatch):
+    """A stale scheduler snapshot cannot cancel a newer live-head worker."""
+    monkeypatch.setattr(
+        fix,
+        "run_json",
+        lambda _args: {
+            "workflow_runs": [
+                {
+                    "id": 2,
+                    "status": "in_progress",
+                    "display_title": f"PR Review Autofix owner/repo#7@{'b' * 40}",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("advanced head must preserve active workers"),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    ) is None
+
+
+def test_prepare_autofix_slot_returns_directly_with_no_active_or_stale_runs(monkeypatch):
+    """An empty Actions run list needs no reconciliation and skips cancellation."""
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"workflow_runs": []})
+    monkeypatch.setattr(
+        fix,
+        "force_cancel_workflow_runs",
+        lambda *_args: pytest.fail("no stale runs must not attempt cancellation"),
+    )
+
+    assert fix.prepare_autofix_slot(
+        "owner/repo",
+        make_pr(),
+        workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+        workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+        dry_run=False,
+    ) is False
+
+
+def test_live_head_matches_compares_case_insensitively_and_fails_closed(monkeypatch):
+    """Live head lookup normalizes case and rejects malformed or mismatched payloads."""
+    head = "a" * 40
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": head.upper()}})
+    assert fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"head": {"sha": "b" * 40}})
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+    monkeypatch.setattr(fix, "run_json", lambda _args: {"nothead": {}})
+    assert not fix.live_head_matches("owner/repo", make_pr(headRefOid=head))
+
+
 def test_terminal_failed_check_triggers_rca_without_prior_opencode_review():
     """Exact-head check evidence can start RCA without a circular review prerequisite."""
     pr = make_pr(
@@ -156,6 +330,7 @@ def test_draft_with_failed_check_dispatches_rca(monkeypatch):
         },
     )
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -189,6 +364,7 @@ def test_conflict_repair_precedes_failed_check_rca(monkeypatch):
         },
     )
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -312,9 +488,10 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     pr = make_pr()
     calls = []
 
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("current-head OpenCode requested changes",)))
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -337,6 +514,62 @@ def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
         ("marker", "owner/repo", 7, True),
     ]
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["autofix_dispatches"] == 1
+
+
+def test_process_queue_rotates_a_fifty_pr_window_and_stops_after_dispatch(
+    monkeypatch, capsys
+):
+    """One run deeply inspects at most one window and stops after its dispatch."""
+    prs = [make_pr(number=1), make_pr(number=2)]
+    fetch_calls = []
+    context_calls = []
+    comment_calls = []
+
+    def fetch(repo, max_prs, *, offset=0, window_size=None):
+        fetch_calls.append((repo, max_prs, offset, window_size))
+        return prs
+
+    monkeypatch.setattr(fix, "fetch_open_prs", fetch)
+    monkeypatch.setattr(
+        fix,
+        "complete_paginated_pr_contexts",
+        lambda repo, pr: context_calls.append(pr["number"]),
+    )
+    monkeypatch.setattr(
+        fix,
+        "issue_comments",
+        lambda repo, number: comment_calls.append(number) or [],
+    )
+    monkeypatch.setattr(
+        fix,
+        "needs_autofix",
+        lambda pr: (True, ("current-head OpenCode requested changes",)),
+    )
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(fix, "dispatch_autofix", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fix, "create_fix_marker", lambda *_args, **_kwargs: None)
+
+    assert fix.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--max-prs",
+            "200",
+            "--scan-window-size",
+            "50",
+            "--rotation-seed",
+            "3",
+        ]
+    ) == 0
+
+    assert fetch_calls == [("owner/repo", 200, 150, 50)]
+    assert context_calls == [1]
+    assert comment_calls == [1]
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["inspected"] == 1
     assert payload["autofix_dispatches"] == 1
 
 
@@ -838,6 +1071,7 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     assert "DRY-RUN: would create autofix marker" in capsys.readouterr().out
 
     fix.create_fix_marker("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: True)
     fix.dispatch_autofix(
         "owner/repo",
         pr,
@@ -864,6 +1098,25 @@ def test_fix_run_json_comment_marker_and_dispatch(monkeypatch, capsys):
     payload = json.loads(calls[-1][1])
     assert payload["event_type"] == "pr-review-autofix"
     assert payload["client_payload"]["target_repository"] == "owner/repo"
+
+
+def test_dispatch_autofix_rejects_advanced_live_head(monkeypatch):
+    """Revalidate the exact head immediately before repository dispatch."""
+    monkeypatch.setattr(fix, "live_head_matches", lambda _repo, _pr: False)
+    monkeypatch.setattr(
+        fix,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("advanced head must not dispatch"),
+    )
+
+    with pytest.raises(RuntimeError, match="live head changed"):
+        fix.dispatch_autofix(
+            "owner/repo",
+            make_pr(),
+            workflow=fix.DEFAULT_AUTOFIX_WORKFLOW,
+            workflow_repository=fix.DEFAULT_AUTOFIX_REPOSITORY,
+            dry_run=False,
+        )
 
 
 def test_is_rate_limit_error_matches_known_github_signatures():
@@ -928,34 +1181,26 @@ def test_issue_comments_does_not_retry_non_rate_limit_errors(monkeypatch):
 def test_process_queue_defers_prs_whose_comment_fetch_failed(monkeypatch, capsys):
     """A single failing comment fetch defers that PR instead of erroring."""
     pr = make_pr()
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
 
     def failing_issue_comments(repo, number):
         raise RuntimeError("gh: API rate limit exceeded for installation ID 1")
 
     monkeypatch.setattr(fix, "issue_comments", failing_issue_comments)
-    inspect_calls = []
-    monkeypatch.setattr(
-        fix,
-        "inspect_pr",
-        lambda repo, pr, args, **kwargs: inspect_calls.append(kwargs) or ("dispatch", ("reason",)),
-    )
-
     assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run"]) == 0
 
-    assert inspect_calls == []
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["autofix_dispatches"] == 0
     assert payload["decisions"][0]["action"] == "wait"
     assert "deferring to next scheduled pass" in payload["decisions"][0]["reasons"][0]
 
 
-def test_process_queue_concurrent_fetch_defers_only_the_failing_pr(monkeypatch, capsys):
-    """The concurrent comment-fetch path defers only the PR whose fetch failed."""
+def test_process_queue_sequential_fetch_defers_only_the_failing_pr(monkeypatch, capsys):
+    """Sequential comment lookup defers one PR and continues to the next."""
     pr1 = make_pr(number=1)
     pr2 = make_pr(number=2)
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr1, pr2])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr1, pr2])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
 
     def flaky_issue_comments(repo, number):
@@ -964,17 +1209,18 @@ def test_process_queue_concurrent_fetch_defers_only_the_failing_pr(monkeypatch, 
         return []
 
     monkeypatch.setattr(fix, "issue_comments", flaky_issue_comments)
-    inspect_calls = []
-
-    def fake_inspect_pr(repo, pr, args, **kwargs):
-        inspect_calls.append((pr["number"], kwargs.get("comments")))
-        return "dispatch", ("reason",)
-
-    monkeypatch.setattr(fix, "inspect_pr", fake_inspect_pr)
+    dispatched = []
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        fix,
+        "dispatch_autofix",
+        lambda repo, pr, **kwargs: dispatched.append(pr["number"]),
+    )
+    monkeypatch.setattr(fix, "create_fix_marker", lambda *_args, **_kwargs: None)
 
     assert fix.main(["--repo", "owner/repo", "--base-branch", "main", "--dry-run", "--max-dispatches", "2"]) == 0
 
-    assert inspect_calls == [(2, [])]
+    assert dispatched == [2]
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     decisions_by_pr = {d["pr"]: d for d in payload["decisions"]}
     assert decisions_by_pr[1]["action"] == "wait"
@@ -1085,6 +1331,7 @@ def test_inspect_pr_dispatches_failed_check_rca(monkeypatch):
     )
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -1107,6 +1354,7 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
     """An approved conflicting PR dispatches autofix in resolve_conflict mode."""
     captured = {}
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -1125,8 +1373,9 @@ def test_inspect_pr_dispatches_conflict_resolution(monkeypatch):
 def test_process_queue_includes_conflict_resolution_candidates(monkeypatch, capsys):
     """The queue pre-filter fetches comments for approved conflicting PRs too."""
     pr = _approved_dirty_pr(baseRefName="feature-base")
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr])
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         fix,
         "dispatch_autofix",
@@ -1162,6 +1411,13 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     assert fix.inspect_pr("owner/repo", make_pr(headRepository={"nameWithOwner": "fork/repo"}), args)[1] == (
         "external PR head is not writable by repository workflow credentials",
     )
+    assert fix.inspect_pr(
+        "owner/repo", make_pr(mergeStateStatus="DIRTY", isDraft=True), args
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr("owner/repo", make_pr(mergeStateStatus="DIRTY"), args) == (
+        "skip",
+        ("merge conflict is not authorized for repair",),
+    )
 
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))
     assert fix.inspect_pr("owner/repo", make_pr(), args) == (
@@ -1173,14 +1429,30 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [{"body": f"{fix.FIX_MARKER} head_sha={'a' * 40} epoch={int(time.time())} -->"}])
     assert fix.inspect_pr("owner/repo", make_pr(), args) == ("wait", ("recent autofix marker exists for this head",))
 
+    assert fix.inspect_pr(
+        "owner/repo", make_pr(mergeStateStatus="DIRTY", isDraft=True), args
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr("owner/repo", make_pr(mergeStateStatus="DIRTY"), args) == (
+        "skip",
+        ("merge conflict is not authorized for repair",),
+    )
+
+    monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
+    monkeypatch.setattr(fix, "prepare_autofix_slot", lambda *_args, **_kwargs: True)
+    assert fix.inspect_pr("owner/repo", make_pr(), args) == (
+        "wait",
+        ("current-head autofix run is already queued or running",),
+    )
+
     pr1 = make_pr(number=1)
     pr2 = make_pr(number=2)
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr1, pr2])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr1, pr2])
     monkeypatch.setattr(fix, "inspect_pr", lambda repo, pr, args, **kwargs: ("dispatch", ("reason",)))
     payload_lines = []
     monkeypatch.setattr("builtins.print", lambda *parts, **kwargs: payload_lines.append(" ".join(map(str, parts))))
     assert fix.process_queue(args) == 0
-    assert "autofix dispatch limit reached" in payload_lines[-1]
+    assert '"inspected": 1' in payload_lines[-1]
+    assert "autofix dispatch limit reached" not in payload_lines[-1]
 
     monkeypatch.setattr(fix, "fetch_pr", lambda repo, number: [make_pr(number=number)])
     monkeypatch.setattr(fix, "inspect_pr", lambda repo, pr, args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -1205,6 +1477,8 @@ def test_fix_parse_args_and_self_test(monkeypatch):
         ["--repo", "owner/repo"],
         ["--repo", "owner/repo", "--base-branch", "main", "--pr-number", "-1"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-prs", "0"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--scan-window-size", "0"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--rotation-seed", "-1"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-dispatches", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--retry-hours", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--autofix-repository", "bad"],

@@ -1,5 +1,15 @@
 # Organization commercial-readiness coordinator
 
+## 2026-09-04 quality-job consolidation
+
+The commercial-readiness contract suite now runs conditionally inside
+`.github/workflows/agent-review-runtime-quality-ci.yml`. The standalone thin
+caller was removed, while the shared
+`.github/workflows/exact-head-coverage-quality-gate.yml` implementation remains
+available to its other caller. Matching pull requests reuse the agent-quality
+job's exact-head checkout, Python setup, and hash-verified base dependencies;
+the 100% branch-coverage and compile contracts are unchanged.
+
 ## Decision
 
 ContextualWisdomLab uses one organization-central hourly coordinator for repositories that do not already have an enabled dedicated commercial, maintenance, review-repair, or product-development writer. The coordinator complements rather than duplicates the existing 15-minute organization merge scheduler.
@@ -10,7 +20,17 @@ The coordinator may dispatch at most one review-repair workflow and one product-
 
 A single workflow cannot safely write every repository merely because it runs in the organization `.github` repository. GitHub's default `GITHUB_TOKEN` is scoped to the repository containing the workflow; cross-repository Actions dispatch therefore requires an explicitly provisioned user or GitHub App credential with the required repository and Actions permissions. This control does not make every repository directly writable. It only considers repositories the live API reports as organization-owned, non-fork, enabled, non-archived, default-branch-bearing, and writable by the authenticated installation.
 
-The central job therefore refuses repository-scoped and reviewer-scoped token fallbacks. It prefers the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`; when that credential is absent, the scheduled default-branch job may exchange its job-bound GitHub OIDC identity for the existing short-lived OpenCode App installation token. Both exchange calls have bounded connection and total timeouts, both returned tokens are masked before reuse, and malformed or empty responses fail closed. `OPENCODE_APPROVE_TOKEN` remains isolated to the reviewer credential chain and `GITHUB_TOKEN` is never accepted for cross-repository coordination. The resulting maintainer credential is exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. The coordinator itself receives neither `NVIDIA_NIM_API_KEY` nor `COPILOT_GITHUB_TOKEN`. Model credentials remain inside separately reviewed repository-local or central workers.
+The central job prefers the maintainer-scoped `PR_REVIEW_MERGE_TOKEN`. If that secret is absent on the protected default-branch scheduled run, the job may use its job-bound GitHub OIDC identity to request the existing short-lived OpenCode GitHub App installation token. The fallback is limited to `id-token: write` on the coordinator job, the exact `api.opencode.ai` endpoint, bounded network timeouts, strict non-empty JSON token fields, and token masking. `OPENCODE_APPROVE_TOKEN`, repository-scoped `GITHUB_TOKEN`, reviewer credentials, model-provider keys, and `COPILOT_GITHUB_TOKEN` are not accepted as coordinator fallbacks. The selected maintainer credential is exposed only to the final dispatch shell step, not checkout, setup, artifact upload, or other third-party actions. Model credentials remain inside separately reviewed repository-local or central workers.
+
+## 2026-09-01 protected-main credential failure RCA
+
+Scheduled protected-main run `33483275421` checked out exact central source `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1` and failed before the coordinator process started. The `Coordinate one bounded fleet pass` step showed an empty `GH_TOKEN` and exited on the PAT-only guard with `PR_REVIEW_MERGE_TOKEN is required`. This is missing configuration/credential availability, not a downstream repository defect, model/provider outage, network failure, or a substantive test/security finding. Because the coordinator never started, the JSON fleet receipt was not created and the subsequent `if: always()` artifact upload failed independently with `No files were found`.
+
+Protected `main` still carried the same PAT-only source after that run. The smallest repair keeps `PR_REVIEW_MERGE_TOKEN` as the first choice and, only when it is absent, exchanges the protected scheduled job's GitHub OIDC identity for the already established OpenCode GitHub App installation token. The exchange follows the existing central worker trust pattern: `api.opencode.ai:443` is the only added blocked-egress endpoint; both HTTP calls use 10-second connect and 30-second total timeouts; malformed or empty responses fail closed; both temporary tokens are masked; and neither the repository token nor reviewer/model credentials become mutation authority.
+
+The broader DDD automation branch in PR #1545 independently carried the same credential-recovery design, but coupled it to unrelated architecture-contract work and was not mergeable on the current protected base during this incident. The focused current-main repair deliberately extracts only the credential boundary so recovery of the production schedule is not coupled to that larger feature. PR #1545 may later absorb the integrated fallback when it reconciles with protected main.
+
+A pull-request quality run proves the static workflow contract and full coordinator test suite. It cannot prove a real protected-default-branch OIDC exchange because pull-request code must not receive a production job-bound mutation identity. Operational acceptance therefore requires a post-integration scheduled run on protected `main` whose exact source contains the fallback, reaches the coordinator rather than the missing-PAT guard, emits its deterministic JSON receipt, and preserves all downstream fail-closed governance.
 
 ## Dynamic repository-writer lease
 
