@@ -35,7 +35,18 @@
   taught its fake `gh` to answer the new `pulls/<number>` live-state lookup;
   the PR #1507 "sibling Noema runs evade cancellation" `pull_requests[]`
   matching invariant it protects is unchanged and still correctly
-  implemented in production.
+  implemented in production. Third,
+  `test_dispatch_strix_reruns_scan_job_not_sibling_publisher` only mocked
+  `rerun_actions_job`, so in any environment with a real `gh` CLI on `PATH`
+  its `dispatch_strix_evidence` call still ran the genuine
+  `live_dispatch_head_matches` re-read, which invoked the unmocked `fetch_pr`
+  against the real GitHub API for a synthetic PR that does not exist there --
+  returning a live/head mismatch and `"stale_head"` instead of the expected
+  `"rerun"` (and, absent `gh` entirely, failing even earlier with a missing
+  executable). Added `monkeypatch.setattr(sched, "fetch_pr", lambda *_args:
+  [pr])` alongside the existing `rerun_actions_job` mock so the live-head
+  check observes the same fixture `pr` as authoritative, matching how every
+  other call in this test path is already isolated from real GitHub state.
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.
