@@ -419,10 +419,35 @@ data rather than like an error.
 - **A self-contradictory row is the tell.** Before believing a surprising aggregate, look for a row
   that cannot physically exist. That is cheaper than re-deriving the whole measurement and it
   distinguishes a broken instrument from a real effect.
-- **When two sessions disagree on one number, stop counting and print records.** Aggregates hide both
-  loop bugs and throttled calls; individual job entries carrying `runner_name` and `started_at`
-  cannot be forged by either. Disagreement about a total is resolved by listing the underlying rows,
-  not by re-running the same count more carefully.
+- **A full `remaining` does not rule out rate limiting.** GitHub enforces a *secondary* (burst) limit
+  whose 403 text is near-identical to the primary hourly one, and it fires while
+  `gh api rate_limit` still reports `remaining 5000 / limit 5000`. Observed here: a
+  `gh api repos/.../pulls/1910` call returned `403 API rate limit exceeded` with the budget
+  untouched, calls immediately after it succeeded, and a retry failed again. The remedies are
+  opposite, so misreading it wastes an hour waiting for a reset that changes nothing:
+
+  | symptom | limit | remedy |
+  |---|---|---|
+  | `remaining` at or near `0`, uniform failure | primary (hourly) | wait for `reset` |
+  | `remaining` full, 403 anyway, intermittent, some calls pass | secondary (burst) | **slow down** — cut concurrency and request rate; waiting does nothing |
+
+  Read `remaining` first: `0` means wait, full-but-still-403 means reduce rate.
+- **`created_at` is not `updated_at`, and under queue saturation they are hours apart.** `created_at`
+  is when a run entered the queue; `updated_at` is when it reached a terminal state. One
+  `opencode-review` run here was created `2026-09-04T10:34:34Z` and concluded `2026-09-05T02:12:25Z`
+  — a 15.6-hour lifetime. Asking "how long since this pipeline last produced a terminal run" from
+  `created_at` reported ~21 hours where `updated_at` gives **~7.4 hours**: the same conclusion, a
+  number wrong by 3×, and numbers propagate further than conclusions do. Use `created_at` for queue
+  age, `updated_at` for "when did this last conclude". Relatedly, query `status=success` and
+  `status=failure` explicitly rather than `status=completed`, because when cancellations dominate
+  they bury the terminal signal.
+- **When two sessions disagree on one number, stop counting and print records.** This is the reliable
+  escape, because at least three independent mechanisms can each turn a sweep into a confident zero —
+  shell word-splitting, error masking, and secondary rate limiting — and **none of them announce
+  themselves**. Aggregates hide all three; individual job entries carrying `runner_name`,
+  `runner_id` and `started_at` cannot be forged by a loop bug or a throttled API. Disagreement about
+  a total is resolved by listing the underlying rows, not by re-running the same count more
+  carefully.
 
 ---
 
