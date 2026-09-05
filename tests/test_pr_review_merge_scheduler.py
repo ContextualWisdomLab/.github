@@ -5831,7 +5831,14 @@ def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monke
     assert responses == []  # every canned response was consumed: no call was skipped or reused
 
 
-def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
+@pytest.mark.parametrize("run_attempt", [1, 2])
+@pytest.mark.parametrize("workflow_name,dispatch", [
+    ("Strix Security Scan", sched.dispatch_strix_evidence),
+    ("OpenCode Review Dispatch", sched.dispatch_opencode_review),
+])
+def test_dispatch_review_cancels_stale_central_run_and_keeps_current(
+    monkeypatch, capsys, workflow_name, dispatch, run_attempt,
+):
     monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
     calls = []
     head_sha = "a" * 40
@@ -5840,18 +5847,20 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
     central_runs = [
         {
             "id": 9300,
-            "name": "Strix Security Scan",
+            "run_attempt": run_attempt,
+            "name": workflow_name,
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
-            "display_title": f"Strix Security Scan owner/repo#1@{stale_sha}",
+            "display_title": f"{workflow_name} owner/repo#1@{stale_sha}",
             "pull_requests": [],
         },
         {
             "id": 9301,
-            "name": "Strix Security Scan",
+            "run_attempt": run_attempt,
+            "name": workflow_name,
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
-            "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
+            "display_title": f"{workflow_name} owner/repo#1@{head_sha}",
             "pull_requests": [],
         },
     ]
@@ -5880,9 +5889,9 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
         "ContextualWisdomLab/.github",
     )
 
-    result = sched.dispatch_strix_evidence(
+    result = dispatch(
         "owner/repo",
-        "Strix Security Scan",
+        workflow_name,
         make_pr(baseRefOid=base_sha, headRefOid=head_sha),
         dry_run=False,
     )

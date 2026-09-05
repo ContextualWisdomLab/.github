@@ -17,11 +17,12 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
-  # Coalesce before runner admission. The live-head job and scheduler still
-  # reject or replace a delayed stale event after native queue cancellation.
+  # Coalesce first attempts. Exact-run receipt wakeups and manual reruns use a
+  # separate group, then revalidate the live head before dispatch/publication.
   group: >-
     required-opencode-review-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
@@ -491,14 +492,9 @@ jobs:
           echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
-    # This job -- not the bootstrap concurrency group above -- is the primary
-    # mechanism that actively cancels a same-PR run for an outdated head. The
-    # bootstrap group is now `cancel-in-progress: false` (see its own comment):
-    # nothing is ever preempted there, by design, to structurally close the
-    # #1568 stale-cancels-fresh race regardless of arrival order. This job
-    # achieves precise, safe "cancel only outdated runs of the same PR"
-    # instead: it re-verifies the live PR head immediately before selecting
-    # candidates AND immediately before every individual cancellation call, so
+    # Native concurrency coalesces first attempts; this cleanup also reaches
+    # outdated runs isolated in rerun groups. It re-verifies the live PR before
+    # selecting candidates AND before every individual cancellation call, so
     # a cleanup run that is itself delayed/stale cannot cancel a
     # still-authoritative run, and it only ever targets runs whose recorded
     # head no longer matches the live one. The target job also revalidates the

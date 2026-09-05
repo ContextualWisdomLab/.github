@@ -323,14 +323,17 @@ def _superseded_cleanup_script() -> str:
     )
 
 
-def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) -> None:
+@pytest.mark.parametrize("run_attempt", [1, 2])
+def test_superseded_cleanup_preserves_current_and_newer_run_ids(
+    tmp_path: Path, run_attempt: int,
+) -> None:
     """Execute cleanup and cancel only the same PR's older, different-head run."""
     current_head = "b" * 40
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {"workflow_runs": [
-        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
-        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
-        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
+        {"id": 100, "run_attempt": run_attempt, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
+        {"id": 199, "run_attempt": run_attempt, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
+        {"id": 201, "run_attempt": run_attempt, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
         {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
     ]}
     fixture = tmp_path / "runs.json"

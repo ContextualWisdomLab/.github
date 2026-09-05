@@ -76,6 +76,12 @@ flowchart LR
 
 우선순위는 구매자 체감, 보안/증거 위험, 선행 의존성 순서다.
 
+2026-09-05 G-02/G-03 follow-up: [review rerun isolation](doctoring/review-rerun-concurrency-isolation.md)
+reproduces an older retry sharing the current PR's cancellation key. The proposed
+five-group repair preserves first-attempt coalescing and existing cleanup guards.
+Immediate stale-retry recovery under runner saturation and protected hosted
+delivery remain unverified; this does not close either gap or the full objective.
+
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
 | G-01 | 열린 PR은 107개다. metadata 상태는 BLOCKED=17, BEHIND=16, DIRTY=74, draft 13개다. 상태는 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks, merge-result tree를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
