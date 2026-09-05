@@ -3325,3 +3325,17 @@ The complete change is therefore: give `coverage-evidence` `needs: [required-wor
 admit-current-head]` **plus that same explicit `if:`**, and reduce `opencode-review-target` to
 `needs: [admit-current-head]` — safe on the admission axis because that job already carries the identical
 `if:` guard directly. Chain depth drops from five to three, and queue waits from four to two.
+
+**Second safety condition, and the sharper trap: two different workflow files define jobs with these exact
+names, and only one pair is safe to touch.** `opencode-review.yml` (required, `pull_request_target`) holds the
+echo-only placeholders analysed above. `opencode-review-dispatch.yml` (privileged, `repository_dispatch`)
+defines `coverage-source-tree` (`:206`) and `coverage-evidence` (`:352`) that do the **real** work: the former
+exchanges an app token, materializes the PR merge tree, and `upload-artifact`s it (`:344`); the latter runs
+with `timeout-minutes: 300` and `download-artifact`s that same tree (`:429`), as its own comment states —
+*"The PR tree arrives through a same-run artifact."* There, the `coverage-source-tree` → `coverage-evidence`
+edge is a hard data dependency, not ordering, and cutting it would break coverage measurement outright. **Any
+parallelization must be confined to `opencode-review.yml`.** This distinction was missed by two sessions
+independently — both reasoned about "the coverage jobs" without checking that the name resolves to two
+different jobs in two files — and was caught only by opening
+`scripts/ci/test_strix_quick_gate.sh`, whose assertions at `:959-963` describe `coverage-source-tree` as
+materializing and uploading a merge tree, contradicting "it only echoes" and exposing the second file.
