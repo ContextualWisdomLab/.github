@@ -11,16 +11,23 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
-- **Document (no code change): confirmed Noema/OpenCode/Strix review already routes exclusively through
-  contextual-orchestrator's `orchestrator/free`, with no direct NVIDIA NIM communication.** Audited
-  `opencode.jsonc` (only `contextual-orchestrator` enabled, model pinned to `orchestrator/free`),
-  `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES`, and
-  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (NIM keys are forwarded only as bootstrap KV
-  credentials into the vendored gateway process for model discovery; the actual review call targets the
-  sidecar's own loopback endpoint with `CONTEXTUAL_ORCHESTRATOR_POOL` hard-locked to `free`). Also fixed a
-  stale gap-baseline note: `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s hourly-cron test, flagged
-  not-yet-fixed on 2026-09-04, was fixed by `#1877` the same day. See
-  `docs/product-technical-gap-baseline.md`'s 2026-09-05 entry for the full audit trail.
+- **Document (no code change yet, correction to an earlier same-day entry): Noema/OpenCode/Strix review's
+  model-selection layer routes through contextual-orchestrator's `orchestrator/free`, but the sidecar/egress
+  infrastructure layer four consumers actually run on does not yet.** This entry originally claimed the
+  routing was already fully implemented; @seonghobae disputed that framing on `.github#1884` and the dispute
+  held up under independent re-verification. `opencode.jsonc` (only `contextual-orchestrator` enabled, model
+  pinned to `orchestrator/free`) and `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` are
+  correct as originally audited. But `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the runtime
+  path `noema-review.yml`, `strix.yml`, `opencode-review-dispatch.yml`, and `pr-review-autofix.yml` all still
+  use — still injects all five raw provider secrets (including both NIM keys), clones and runs
+  `contextual-orchestrator` fresh on the calling runner per invocation, and performs multi-provider model
+  discovery in-process on that runner; `strix.yml`'s `harden-runner` step is still `egress-policy: audit`,
+  not `block`. None of the four consumers has migrated onto the newer `orchestrator-free-sidecar` composite
+  action (`.github#1736`) meant to centralize this. Tracked by `.github#1759` and
+  `contextual-orchestrator#1041` comment `5550412102`. Also fixed a stale gap-baseline note:
+  `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s hourly-cron test, flagged not-yet-fixed on
+  2026-09-04, was fixed by `#1877` the same day. See `docs/product-technical-gap-baseline.md`'s 2026-09-05
+  entry (corrected 2026-09-05) for the full audit trail.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and

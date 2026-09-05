@@ -3238,14 +3238,19 @@ independently and was closed as fully redundant once `#1877` landed the same con
 closing comment for the redundant-assertion list. Confirmed live: `origin/main` at `8272e4f9` carries the
 renamed test with no `test_review_fix_caller_runs_once_each_hour` symbol remaining.
 
-## Noema/OpenCode/Strix review already routes through contextual-orchestrator's `orchestrator/free`, not NVIDIA NIM directly — 2026-09-05
+## Noema/OpenCode/Strix review's model-selection layer routes through contextual-orchestrator's `orchestrator/free`; the sidecar/egress infrastructure layer does not yet — 2026-09-05, corrected 2026-09-05
 
-**Status:** Confirmed already implemented; no code change needed. This cycle's directive explicitly named
-"Noema/OpenCode 리뷰·태그·PR 충돌 자동 해결·리뷰 반영, Strix 보안 리뷰가 contextual-orchestrator를 통해
-orchestrator/free로 이루어지는 것" (Noema/OpenCode review, tagging, PR-conflict auto-resolution and
-review-reflection, and Strix security review, going through contextual-orchestrator's `orchestrator/free`)
-as its target, with direct NIM communication called out as a removal target. A targeted audit of the
-central review pipeline found no violation:
+**Status:** Partially implemented; code change still needed. This entry originally read "Confirmed already
+implemented; no code change needed." That framing was too broad and has been corrected in place after
+@seonghobae disputed it on this entry's own PR (`ContextualWisdomLab/.github#1884`) with a three-part
+architectural read; each of the three points was independently re-verified against exact file:line evidence
+before this correction, and all three held up. This cycle's directive explicitly named "Noema/OpenCode
+리뷰·태그·PR 충돌 자동 해결·리뷰 반영, Strix 보안 리뷰가 contextual-orchestrator를 통해 orchestrator/free로
+이루어지는 것" (Noema/OpenCode review, tagging, PR-conflict auto-resolution and review-reflection, and Strix
+security review, going through contextual-orchestrator's `orchestrator/free`) as its target, with direct NIM
+communication called out as a removal target. The audit needs to be read as two separate layers, not one:
+
+**Model-selection / logical-routing layer — confirmed correct, no violation:**
 
 - `opencode.jsonc` declares `enabled_providers: ["contextual-orchestrator"]` only; `model`/`small_model`
   are pinned to `"contextual-orchestrator/orchestrator/free"`. No `nvidia-nim` provider block exists — it
@@ -3253,12 +3258,6 @@ central review pipeline found no violation:
 - `.github/workflows/opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` names only
   `contextual-orchestrator/orchestrator/free` — no paid or auto-selected candidate is dispatched, matching
   this cycle's stated rationale ("free+ZDR 조합도 해결 못 하는데 유료 모델 포함 auto는 의미 없다").
-- `scripts/ci/contextual_orchestrator_review_sidecar.sh` (the vendored gateway `pr-review-autofix.yml`
-  provisions for Noema/OpenCode/Strix repair) treats `NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB` only as
-  bootstrap credentials forwarded into the vendored orchestrator's own KV for `discover_all_models()` — the
-  actual review completion call targets the sidecar's own loopback `http://127.0.0.1:18080/v1/chat/completions`
-  with `model=orchestrator/{pool}`, and any `CONTEXTUAL_ORCHESTRATOR_POOL` other than `free` is hard-rejected
-  at script level. No `.github`-side HTTP client calls an NVIDIA NIM endpoint directly.
 - A prior direct-HTTP NIM resolver (`scripts/ci/select_nvidia_nim_model.py`) was already removed on
   2026-08-30 after confirming zero callers (`docs/doctoring/direct-nvidia-nim-communication-removal.md`).
   Legacy `is_nvidia_nim_candidate`/`is_schema_repair_candidate` branches remain in
@@ -3271,9 +3270,44 @@ central review pipeline found no violation:
   rather than a claim that every route through it is ZDR — this matches, and does not contradict, the
   "free+ZDR" framing already in the codebase.
 
+**Sidecar / egress infrastructure layer — not yet complete, this is the corrected part:**
+
+`scripts/ci/contextual_orchestrator_review_sidecar.sh` is the actual runtime egress path for all four
+consumers that need it (`noema-review.yml`, `strix.yml`, `opencode-review-dispatch.yml`,
+`pr-review-autofix.yml`, per `ContextualWisdomLab/.github#1759`'s migration-order tracking), and it is not
+the thin, ZDR-attested gateway call the original framing implied:
+
+- It still requires all five raw provider secrets — `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` — injected into it at the workflow level
+  (e.g. `.github/workflows/strix.yml:745-758`), not just `contextual-orchestrator`'s own KV.
+- It clones `contextual-orchestrator` source at a pinned SHA and builds/runs it fresh on the calling runner
+  at request time (`scripts/ci/contextual_orchestrator_review_sidecar.sh` lines 51-63 and 91-98), rather than
+  invoking a pre-built, immutable released artifact.
+- Model discovery (`discover_all_models()`) runs in-process, locally, on that same runner, against all five
+  injected provider credentials (sidecar script lines 108-109 and 316-328) — i.e. the runner itself performs
+  the multi-provider discovery the "free+ZDR only" framing above describes as `contextual-orchestrator`'s
+  internal concern, not something every calling workflow's runner should be doing with raw provider keys.
+- None of the four consumers has migrated to the newer composite action `orchestrator-free-sidecar` (added
+  in `ContextualWisdomLab/.github#1736`) that was meant to centralize this and remove the per-consumer
+  secret/clone/discovery duplication.
+- `strix.yml`'s `step-security/harden-runner` step is still `egress-policy: audit` (`strix.yml:365-367`), not
+  `block` — consistent with a runner that still needs open egress for the five-secret, in-process discovery
+  path above, and itself evidence that the egress boundary this directive wants is not closed yet.
+
+Canonical tracking for closing this gap: `ContextualWisdomLab/.github#1759` (the consumer migration order)
+and `ContextualWisdomLab/contextual-orchestrator#1041` comment `5550412102` (six requirements for an
+"immutable released gateway/client/schema/egress contract" that must ship before consumers can drop the five
+provider secrets and flip `strix.yml`'s runner egress policy to `block`). Until that contract ships and all
+four consumers migrate onto it, "Strix 보안 리뷰가 contextual-orchestrator를 통해 orchestrator/free로
+이루어지는 것" is true at the model-selection layer only — the underlying egress path a reviewer of Strix's
+actual network behavior would see still runs raw provider secrets and in-process multi-provider discovery on
+the calling runner, which is the shape this directive's "NIM 직접 통신은 제거 대상" line is aimed at closing.
+
 Noema's own repo (`ContextualWisdomLab/noema`) is architecturally clean by construction here too: it is an
 OIDC-to-installation-token credential broker, not an LLM caller, and holds no upstream provider keys — every
 LLM path it participates in (production review, hourly product development, naruon judgments) calls
 `contextual-orchestrator` per its own `CLAUDE.md`. `contextual-orchestrator`'s own direct NIM calls (inside
 `model_discovery.py`/`zdr_policy.py`) are the intended single point of contact, not a violation — the
-directive's removal target is *other systems bypassing the gateway*, which does not occur here.
+directive's removal target is *other systems bypassing the gateway*, which does not occur in Noema's own
+repo. It does occur, in the narrower sidecar-secrets sense above, in the four `.github`-side consumers until
+they migrate onto the immutable gateway contract tracked by `#1759`/`contextual-orchestrator#1041`.
