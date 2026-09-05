@@ -2066,25 +2066,21 @@ def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
     assert '{"error":' not in output
 
 
-def test_call_llm_http_error_ignores_non_dict_last_attempt(monkeypatch, capsys):
-    """A non-dict ``attempts[-1]`` entry drops all per-attempt telemetry.
-
-    ``_extract_http_error_telemetry`` only reads ``provider_name``/``phase``/
-    ``attempt_number``/``provider_status`` when ``attempts[-1]`` is itself a
-    dict; a malformed last entry (here, a bare string) must not crash the
-    review job, and none of those four fields may appear in the log.
-    """
+@pytest.mark.parametrize(
+    "attempts",
+    [
+        [{}],
+        ["not-a-dict"],
+    ],
+)
+def test_call_llm_http_error_last_attempt_without_usable_fields_reports_no_attempt_telemetry(
+    monkeypatch, capsys, attempts
+):
+    """A last attempt with no recognizable fields adds no attempt telemetry."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     body = json.dumps(
-        {
-            "error": {
-                "detail": {
-                    "model": "github_models/deepseek-v3",
-                    "attempts": ["not-a-dict"],
-                },
-            },
-        }
+        {"error": {"detail": {"model": "github_models/deepseek-v3", "attempts": attempts}}}
     ).encode()
 
     class Opener:
