@@ -168,3 +168,47 @@ them alone proves succession.
   attributed a "timeout defaults to null" sentence to it that appears only in
   `#1891`'s PR body — both caught by grepping the file instead of trusting the
   summary that introduced them.
+
+## Test-gate regressions and stale-PR merges
+
+- A red `tests`, coverage, or `interrogate` gate on your pull request is not proof that your
+  diff caused it. Full-suite execution on a push to `main` is not guaranteed: the workflows
+  that run `pytest tests` on push are `paths:`-filtered, so a pairing broken outside their
+  declared paths reaches `main` with no full-suite run. The breakage then surfaces on the
+  next pull request whose review dispatch does run the suite, and fails it regardless of
+  that request's own diff. This procedure covers the suite gates only; a red Semgrep,
+  CodeQL, Strix, or Scorecard check is a different diagnosis.
+- Reproduce a suspect failure on a clean baseline before repairing it. Run
+  `git worktree add /tmp/baseline <the PR's base ref> --detach`, then `cd /tmp/baseline`
+  and run `python3 -m pytest tests -q`; that takes roughly four minutes and needs no
+  virtualenv. You must `cd` into the worktree: over thirty test files read repository files
+  through working-directory-relative paths such as `Path(".github/workflows/...")`, so
+  pointing pytest at the baseline directory from your own checkout silently tests your tree
+  and reports a green baseline that proves nothing. Baseline the pull request's actual base
+  or merge-base rather than `origin/main` once `main` has moved past it. If the failure
+  reproduces on the baseline it is pre-existing: repair it as its own pull request and name
+  the change that introduced it.
+- When you change a workflow file or a `scripts/ci/` module, grep the whole `tests/` tree
+  for every literal you touched — event-type strings, cron expressions, environment-variable
+  names, tuple members, pinned digests — not only the obviously named sibling test. A change
+  can satisfy one oracle and still leave a second, independent one stale.
+- Read a stale pull request's own changes with a three-dot diff —
+  `git diff <base>...<head>` — or with `gh pr diff`, which is already three-dot. A two-dot
+  `git diff <base> <head>` renders everything the base gained since the fork point as though
+  this branch deleted it, so an untouched branch reads as a mass revert.
+- Content-hash pins exist under `tests/`; find them before editing a workflow. Run
+  `grep -rn 'hash-object' tests/` — today that is the `git hash-object` pin of
+  `.github/workflows/opencode-review-dispatch.yml`. Any byte change to a pinned file makes
+  its constant stale and fails a required gate for every open pull request, reverts included,
+  because a revert restores the original bytes while the pin stays on the reverted value.
+  Recompute only with `git hash-object <path>`, and only for a constant you have confirmed is
+  a blob pin. Nearly every other forty-hex literal under `tests/` is something else — a
+  pinned action SHA, a vendored-revision pin, a synthetic fixture head, or an assertion that
+  a SHA appears in a document — and pointing `hash-object` at any of those produces a wrong
+  value that breaks what it replaces. A second contract re-derives the dispatch pin by
+  regular expression from the first, so keep the assignment on one line and correct it in one
+  place.
+- Production code under `scripts/ci/` branches on `GITHUB_ACTIONS`, and pytest inherits that
+  variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
+  scheduler change clean, run the affected tests both ways, including
+  `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
