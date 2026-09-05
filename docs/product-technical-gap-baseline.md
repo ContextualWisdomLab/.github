@@ -2880,6 +2880,32 @@ incident). That combination — deep queue, near-zero execution, healthy platfor
 is what a hard concurrency or spending ceiling looks like, not what workflow waste
 looks like.
 
+**Correction, from an independent Codex audit of the same question.** The claim above that
+no recoverable waste exists is *slightly* too strong, and the exception is worth recording
+precisely. `opencode-review.yml:coverage-source-tree` is a full runner slot whose entire body is
+one `echo` ("PR-head source and coverage execution are delegated to the authenticated
+default-branch OpenCode review dispatch"). It holds no other purpose than carrying
+`needs: [required-workflow-bootstrap, admit-current-head]` plus `if: admitted == 'true'` into the
+required `coverage-evidence` context, which is itself another single-`echo` job. Moving that
+`needs`/`if:` pair onto `coverage-evidence` directly would preserve every required context and the
+same skip propagation while reclaiming one slot; the documented "keep one job with no
+output-dependent `if:`" invariant is carried by `required-workflow-bootstrap`, not by these two,
+so it would survive.
+
+**It is recorded, not shipped, and deliberately so.** The saving is one slot out of 33 (3%) in a
+queue measured at 424 deep against near-zero execution — it cannot move the outcome. Against that,
+the change edits the job graph of a required review workflow that the org ruleset injects into 76
+repositories, and would require updating the structural contract tests that pin it. Spending
+org-wide review-governance risk to reclaim 3% of a capacity-bound queue is the wrong trade. The
+finding is logged here so a future session with a real reason to touch `opencode-review.yml` can
+fold it in as a free side effect rather than rediscovering it.
+
+Method note worth keeping: this exception was found by a second auditor (Codex) run against the
+same repository with the same constraints but no knowledge of the first analysis's conclusion.
+Two agents re-reading one agent's evidence is not corroboration; an independent vantage point is.
+The first pass had classified both jobs as load-bearing gate jobs by pattern-matching the
+documented `changed-scope` design, without opening them to confirm they do any work.
+
 **Consequence for future work.** Optimising `.github`'s workflow YAML further is
 not a productive lever; the measured floor is essentially the current 33, and the
 remaining slots are load-bearing. The open question is org-level Actions capacity
