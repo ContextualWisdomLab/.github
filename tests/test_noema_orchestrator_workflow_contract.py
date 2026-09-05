@@ -18,6 +18,15 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
 ) -> None:
     """Execute cleanup against a shared-head-SHA fixture and cancel only the closed PR.
 
+    The `cancel-closed-pr-runs` job/step retained their names, but PR #1869
+    ("retire review scans when PRs return to draft") generalized this step
+    to also cover `converted_to_draft`, renaming it to "...for the inactive
+    pull request" and adding a `live_target_matches` re-verification against
+    the live PR (mirroring `strix.yml`'s identical job) before every
+    cancellation pass. This fixture drives that live lookup to a `closed`
+    PR #7 at the fixture's shared head SHA so the protected invariant below
+    is exercised exactly as before.
+
     Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
     (unrelated, open) both have runs on the same head commit; only #7's
     matches the PR-scoped selector cancel_runs applies, and a `completed`
@@ -89,6 +98,13 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     runs_file = tmp_path / "runs.json"
     runs_file.write_text(json.dumps(runs), encoding="utf-8")
     calls_file = tmp_path / "calls.txt"
+    # The closing PR's live state, returned by the `live_target_matches`
+    # re-verification `cancel_runs` performs before every status query and
+    # before every individual cancellation (added by PR #1869 alongside the
+    # `converted_to_draft` generalization; mirrors strix.yml's identical
+    # job). Head SHA matches the fixture runs above so the closed-PR-#7
+    # cleanup is verified live and proceeds exactly as before that change.
+    live_pr_json = json.dumps({"state": "closed", "draft": False, "head": {"sha": "a" * 40}})
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         """#!/usr/bin/env bash
@@ -102,7 +118,7 @@ if [[ "$*" == *"--paginate"* ]]; then
     "$FAKE_RUNS_FILE"
 elif [[ "$*" == *"/pulls/"* ]]; then
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
-  printf '{"state":"closed","draft":false,"head":{"sha":"%s"}}' "$LIVE_HEAD_SHA"
+  printf '%s\n' "$FAKE_LIVE_PR_JSON"
 else
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
 fi
@@ -110,7 +126,6 @@ fi
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
-    head_sha = "a" * 40
     result = subprocess.run(  # noqa: S603
         [shutil.which("bash") or "/bin/bash", "-c", script],
         env={
@@ -118,12 +133,12 @@ fi
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
             "INACTIVE_PR_NUMBER": "7",
-            "INACTIVE_PR_HEAD_SHA": head_sha,
+            "INACTIVE_PR_HEAD_SHA": "a" * 40,
             "PR_ACTION": "closed",
             "CURRENT_RUN_ID": "999",
             "FAKE_RUNS_FILE": str(runs_file),
             "FAKE_CALLS_FILE": str(calls_file),
-            "LIVE_HEAD_SHA": head_sha,
+            "FAKE_LIVE_PR_JSON": live_pr_json,
         },
         capture_output=True,
         text=True,
@@ -426,7 +441,9 @@ def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
     single-repository scan that also dispatches a review and updates a branch.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split("\n  noema-review:\n", 1)[0]
+    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split(
+        "\n  cancel-superseded-noema-runs:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is not None, "cancel-closed-pr-runs must declare a job-level timeout-minutes"

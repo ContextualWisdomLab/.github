@@ -115,8 +115,8 @@ def test_reusable_scheduler_enables_policy_for_hourly_callers() -> None:
     assert "--resolve-unreviewed-conflicts" in workflow
 
 
-def test_central_repository_has_hourly_self_caller() -> None:
-    """The central repository itself is scanned instead of relying on product callers."""
+def test_central_repository_has_daily_self_caller() -> None:
+    """The central repository gets one daily recovery without a product caller."""
     workflow = _CALLER.read_text(encoding="utf-8")
 
     assert 'cron: "21 6 * * *"' in workflow
