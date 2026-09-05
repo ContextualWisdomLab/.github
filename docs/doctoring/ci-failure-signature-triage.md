@@ -310,6 +310,60 @@ merge by a peer means the file is safe for you: they may simply have landed in a
 
 ---
 
+## 9. `CodeQL compatibility analysis` fails in seconds, and re-running never helps
+
+**Symptom.** `CodeQL compatibility analysis (actions)` fails in ~7s. The failing steps are
+`Request current-head CodeQL scan dispatch` and
+`Release runner or enforce current-head CodeQL verdict`. Re-running produces an identical failure;
+the run reaches `run_attempt=2` and beyond with no change.
+
+**Mechanism.** The compat job is *designed* to dispatch a separate `CodeQL PR` scan and then fail
+fast while awaiting its verdict. That is correct behaviour when the dispatched scan can obtain a
+runner. Under queue saturation it cannot. Measured on `contextual-orchestrator#1032`: of the last
+eight `CodeQL PR` runs in that repository, **seven were `queued` and the one completed run was
+`cancelled`**; the oldest queued run had been created at `06:42Z` and was still queued more than two
+and a half hours later. Queue depth at the time: 108 runs in `contextual-orchestrator`, 481 in
+`.github`, 344 in `naruon`.
+
+The result is a closed loop: the compat job dispatches → the scan enters a saturated queue and never
+starts → no verdict is ever published → the compat job fails fast → a re-run **dispatches again**.
+Each re-run cannot succeed *and* enlarges the queue that is causing the failure.
+
+**Do.** Before re-running anything CodeQL-related, check whether the dispatched scans are actually
+starting:
+
+```bash
+gh api "repos/<owner>/<repo>/actions/runs?per_page=20" \
+  --jq '[.workflow_runs[] | select(.name|test("CodeQL";"i")) | {status,conclusion,created_at}]'
+```
+
+If those runs are sitting `queued`, treat the compat failure as blocked on runner capacity
+(signature 7), not on this PR, and say so on the PR rather than retrying.
+
+**Do not.** Do not re-run while the dispatched scans are queued: it is pure queue amplification, and
+it makes the shared condition worse for every other PR in the organization. Do not read the fast
+failure as a defect in the PR's code — the job never got as far as analysing it.
+
+---
+
+## A general rule these three signatures share
+
+Signatures 2, 3 and 9 all present as a red required check on a review job, and two of the three make
+a re-run useless. The discriminator is not the error text but the **precondition**:
+
+| the failure is… | re-run? | why |
+|---|---|---|
+| transient and runtime-external (signature 3: gateway 502) | **yes** | a fresh call can succeed; nothing else must change first |
+| pinned to stale source (signature 2: `workflow_sha`) | **no** | the same source re-executes; only a *new run* re-pins |
+| waiting on a precondition still unmet (signature 9: queued CodeQL scan) | **no** | re-running re-issues the same unmet request and deepens the queue |
+
+Before re-running any failed check, name the precondition its success depends on and confirm that
+precondition has changed. "It might work this time" is not a precondition. Two entries in this
+document once prescribed re-running unconditionally; both were wrong, and both were caught by review
+rather than by their author.
+
+---
+
 ## Research-grounding freshness KPIs
 
 Four cheap, repeatable measurements that catch dated-evidence rot before it fails a gate. Measure them
@@ -341,13 +395,27 @@ Every KPI above is a count produced by a script, and a counting script fails in 
 data rather than like an error.
 
 - **Never let a failed API call fall back to a countable value.** `c=$(gh api ... 2>/dev/null || echo
-  0)` turns every rate-limited call into a genuine-looking zero. In a real sweep of this organization
-  that produced rows reading `in_progress_runs=13` with `running_jobs=0` *and* `queued_jobs=0` — an
+  0)` turns *any* failed call into a genuine-looking zero. In a real sweep of this organization that
+  produced rows reading `in_progress_runs=13` with `running_jobs=0` *and* `queued_jobs=0` — an
   impossible combination — and the zeros were initially explained away as "the metric oscillates"
-  rather than read as the measurement breaking. `gh api rate_limit` afterwards showed the quota had
-  just reset, confirming it. Re-measured without the mask, 8 samples over 3 minutes across 7 repos
-  gave min 27 / max 36 / mean 32.1: stable, no oscillation. Fail loudly, or count errors in their own
-  column.
+  rather than read as the measurement breaking. Re-measured without the mask, 8 samples over 3
+  minutes across 7 repos gave min 27 / max 36 / mean 32.1: stable, no oscillation. Fail loudly, or
+  count errors in their own column.
+- **In `zsh`, `for x in $var` does not word-split; `for x in $(cmd)` does.** This was the actual
+  defect behind the zeros above. `runs=$(gh api ...)` followed by `for id in $runs` iterates **once**
+  with the whole newline-separated blob as a single word, producing a malformed request
+  (`invalid control character in URL`) which `|| echo 0` then converted into a zero. The same
+  session's other measurements used `for id in $(gh api ...)` directly and were correct throughout,
+  which is exactly why one session produced both right and wrong numbers. `bash` splits both forms,
+  so the broken version looks portable and is not. Use an explicit reader instead:
+  `while IFS= read -r id; do ...; done < <(gh api ... --jq '.workflow_runs[].id')`.
+- **A correlate is not a cause, even under time pressure.** The zeros above were first attributed to
+  REST rate limiting on the strength of `gh api rate_limit` reporting `reset_in=3599s`. That number
+  only means the hourly window had just refreshed — it reads the same whether or not you were ever
+  throttled. The rate-limit story was published as a cause without being tested, and a peer caught
+  it; the shell bug above is what a direct test found. An earlier revision of this very section
+  repeated the rate-limit attribution, which is why it is now spelled out here rather than quietly
+  replaced. `|| echo 0` was the concealer; it was never the cause.
 - **A self-contradictory row is the tell.** Before believing a surprising aggregate, look for a row
   that cannot physically exist. That is cheaper than re-deriving the whole measurement and it
   distinguishes a broken instrument from a real effect.
