@@ -166,3 +166,19 @@ repeatable compile command.
   throwaway worktree; Actions-capacity exhaustion vs. legitimate runner-image pinning; re-verifying
   "already implemented" claims at `file:line`) is covered in `AGENTS.md`'s "Cross-session agent
   coordination and accumulated know-how" section — read it before resuming or claiming any PR.
+- **Agent sessions here share one GitHub identity, so they cannot approve each other's PRs.** Every
+  session pushes and reviews as the same account, and GitHub refuses a review with `event=APPROVE` on
+  a PR that account authored (`POST /repos/{owner}/{repo}/pulls/{n}/reviews` → 422 "Can not approve
+  your own pull request"). This is not a formality to route around: `merge_approval_block_reason` in
+  `scripts/ci/pr_review_merge_scheduler_core.py` fails closed unless GitHub's `reviewDecision` is
+  `APPROVED` *and* `has_independent_current_head_approval` finds a non-author formal APPROVED review
+  on the exact current head. A verification comment documents evidence but satisfies neither
+  condition, so a peer session's review cannot unblock a merge — that needs a different identity or
+  the documented bypass path. Relatedly, `git log`/`merged_by` cannot attribute work to a session, so
+  read the diff before treating an unexplained commit on your branch as an intrusion.
+- **`actions/runs?status=completed` is a misleading sample while the queue is churning.** When
+  cancelled/skipped runs are produced in bulk, a page of completed runs (default 30, so pass
+  `per_page=100`) can contain zero `success`/`failure` results and make the pipeline look dead far
+  longer than it is. Querying `status=success` and `status=failure` directly cuts through the churn
+  to the most recent real conclusion of each kind. Those are historical signals about pipeline
+  liveness only — they never substitute for exact-current-head evidence on the PR you are acting on.
