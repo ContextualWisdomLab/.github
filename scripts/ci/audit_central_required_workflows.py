@@ -24,7 +24,7 @@ EXPECTED_EXCLUSIONS = {".github", "IRT-bibliography-set", "noema"}
 # while still being validated from an organization-admin ruleset payload.
 REQUIRED_EXCLUSION_PROBES = {".github", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
-    ".github/workflows/close-empty-pr.yml",
+    ".github/workflows/codeql-pr.yml",
     ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
@@ -129,8 +129,9 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
         workflows = workflows if isinstance(workflows, list) else []
 
     workflows_by_path: dict[str, list[dict[str, Any]]] = {}
-    for workflow in workflows:
+    for index, workflow in enumerate(workflows):
         if not isinstance(workflow, dict) or not isinstance(workflow.get("path"), str):
+            errors.append(f"central required workflow entry {index} is malformed")
             continue
         workflows_by_path.setdefault(workflow["path"], []).append(workflow)
 
@@ -150,6 +151,10 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
                 f"central required workflow {path} must use source repository "
                 f"{SOURCE_REPOSITORY_ID} at {SOURCE_REF}"
             )
+
+    unexpected_paths = sorted(set(workflows_by_path) - set(REQUIRED_WORKFLOW_PATHS))
+    for path in unexpected_paths:
+        errors.append(f"unexpected workflow present in required set: {path}")
 
     review_rules = _typed_rules(payload, "pull_request")
     if len(review_rules) != 1:
