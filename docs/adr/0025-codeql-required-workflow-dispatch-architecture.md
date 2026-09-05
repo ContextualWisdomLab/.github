@@ -151,6 +151,25 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 closed and leaves the required job failed.
 ```
 
+### Concurrency identity is per pull request and language shard
+
+Each required `analyze-head` matrix job dispatches one language and supplies a
+matching `required_language`. The native handler therefore serializes only the
+same repository, pull request, and language tuple. A newer dispatch for that
+tuple cancels its stale predecessor, while Python, JavaScript/TypeScript, and
+Actions scans for the same head remain independent.
+
+This distinction is required by the exact-job wake contract. On 2026-09-05,
+contextual-orchestrator PR #1049 dispatched all three current-head language
+jobs, but central run `33938784437` was the sole survivor because the handler's
+group omitted `required_language`. The sibling runs cancelled one another,
+leaving their required jobs failed in the documented `pending` handoff state.
+The chosen key adds the already validated language to the existing workflow,
+repository, and pull-request identity. Sending the full language matrix in one
+dispatch was rejected because the handler validates one shard and wakes one
+exact required job per run; changing that contract would enlarge the security
+and recovery surface without solving another observed need.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own
@@ -221,6 +240,9 @@ blocker for this one.
   inline Python between `analyze-head`/`analyze-merge` today.
   exact run/job wake-up follows the OpenCode runner-release pattern while
   avoiding one occupied runner per language for the scan's full duration.
+- A repository and pull request can now have one active native handler per
+  language. This modest concurrency increase is bounded by the detected CodeQL
+  matrix and prevents valid sibling evidence from being treated as stale work.
 - Re-admitting `codeql-pr.yml` to ruleset `18156473` must happen only after
   this design is implemented, tested, and its `detect-languages`/
   `dispatch-analysis`/`analyze-head` jobs are confirmed free of any
