@@ -177,3 +177,15 @@ repeatable compile command.
   longer than it is. Querying `status=success` and `status=failure` directly cuts through the churn
   to the most recent real conclusion of each kind. Those are historical signals about pipeline
   liveness only — they never substitute for exact-current-head evidence on the PR you are acting on.
+- **Triage a red required check by signature, not by guesswork.**
+  [`docs/doctoring/ci-failure-signature-triage.md`](docs/doctoring/ci-failure-signature-triage.md)
+  catalogs the recurring failures across `.github`, `noema`, and `contextual-orchestrator` — the
+  `opencode-review` wait-for-verdict fail-closed, `strix` running stale trusted source because
+  `workflow_sha` is pinned at run-creation time, the `noema-review` gateway 502 that nothing re-runs
+  automatically, expired NIM cost evidence, `agent-review-runtime-quality` failing on tests the PR
+  never touched because its `pytest` call has no positional path, and queued-versus-failed. Each entry
+  gives the verified mechanism with `file:line`, what to do, and what not to do. Two of those
+  signatures look like a defect in your PR and are not. Read it before "fixing" a red check whose
+  cause you have not confirmed, and before merging `main` into a branch — main is frequently the
+  broken side. `AGENTS.md` also indexes `.jules/bolt.md` and `.jules/sentinel.md`, which are the
+  performance and security learnings for `scripts/ci/`.

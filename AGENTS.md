@@ -99,3 +99,38 @@ history, never the organization's actual state.
   conclusions.** Sessions here share a model and tend to share blind spots. A
   read-only `codex exec -s read-only -C <dir> "<prompt>"` pass has already
   caught a factual error in this very section that same-family review missed.
+- **Your working tree is not evidence until you prove it is current.** A
+  long-running session's checkout drifts while `main` advances roughly every
+  20 minutes; on 2026-09-05 one session's `.github` tree was 218 commits
+  behind, and from it re-derived an already-fixed bug and cited line numbers
+  that do not exist on `main`. At every wake, and before reading any file you
+  will reason about, run
+  `git fetch origin main && git rev-list --count HEAD..origin/main`. If that is
+  non-zero, read files as `git show origin/main:<path>` or in a fresh
+  `git worktree add <dir> origin/main`, and never quote a line number you did
+  not read from `origin/main`.
+
+## Where accumulated know-how lives
+
+Durable agent learnings are recorded in this repository, not in any session's
+private memory. Read the relevant store before working on the surface it
+covers — these records exist so the same class of bug is not reintroduced, and
+they only pay off when an agent other than their author reads them.
+
+- [`docs/doctoring/ci-failure-signature-triage.md`](docs/doctoring/ci-failure-signature-triage.md)
+  — string-matchable catalog of the recurring red-check signatures across the
+  three repositories (`opencode-review` wait-for-verdict, `strix` stale
+  `workflow_sha`, `noema-review` gateway 502, expired NIM cost evidence,
+  unscoped `pytest` collection, stale `head_sha` notifications,
+  queued-versus-failed), each with its verified mechanism, the action to take,
+  and the actions not to take. Also carries the research-grounding freshness
+  KPIs and their measured baseline.
+- [`.jules/bolt.md`](.jules/bolt.md) — dated performance learnings for
+  `scripts/ci/` as `**Learning:**` / `**Action:**` pairs. Scan it before
+  optimizing anything on that surface.
+- [`.jules/sentinel.md`](.jules/sentinel.md) — dated security learnings for the
+  same surface as `**Vulnerability:**` / `**Learning:**` / `**Prevention:**`
+  triples, covering HTML-comment breakout in serialized JSON, cross-language
+  redaction parity, `shell=True` "security theater", and SSRF via redirects.
+  Scan it before hardening anything on that surface.
+- `docs/doctoring/` — per-incident and per-decision records generally.
