@@ -38,12 +38,7 @@ def test_dispatch_strix_reruns_scan_job_not_sibling_publisher(monkeypatch) -> No
         reruns.append((repo, job_id, action))
 
     monkeypatch.setattr(sched, "rerun_actions_job", record_rerun)
-    # This test's own concern is job selection (the "strix" scan job, not its
-    # "publish-manual-pr-evidence-status" sibling) -- not the separate live
-    # head-freshness re-check `dispatch_strix_evidence` now performs before
-    # any rerun, which needs a real `gh` call and has its own dedicated
-    # coverage. Stub it to the happy path so this test stays focused.
-    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda repo, pr: True)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
 
     assert (
         sched.dispatch_strix_evidence(
