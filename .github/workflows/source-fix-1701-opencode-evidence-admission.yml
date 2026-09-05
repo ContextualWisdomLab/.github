@@ -1,0 +1,134 @@
+name: Source Fix OpenCode Evidence Admission
+
+on:
+  push:
+    branches:
+      - fix/opencode-exact-evidence-no-heuristics
+    paths:
+      - .github/workflows/source-fix-1701-opencode-evidence-admission.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-fix-opencode-evidence-admission
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: fix/opencode-exact-evidence-no-heuristics
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-verified repository test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Prove current-head review-evidence policy is RED
+        run: |
+          set -euo pipefail
+          if PYTHONPATH=. python3 -m pytest -q tests/test_opencode_no_heuristic_review_evidence.py; then
+            echo '::error::Expected the OpenCode evidence-admission regression to be RED before repair.'
+            exit 1
+          fi
+
+      - name: Apply deterministic exact-changed-path evidence contract
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact policy block, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          replace_once(
+              "ci-review-prompt.md",
+              '''`adversarial_validation` control field. APPROVE needs two falsified probes for
+          material code/workflow/config/package/test changes and one for non-code changes;
+          REQUEST_CHANGES needs a confirmed probe anchored to a published finding.''',
+              '''`adversarial_validation` control field. For a formal APPROVE, adversarial
+          evidence must cover every exact changed path in the trusted current-head changed-path
+          set; the exact changed-path set is the evidence universe, with no filename, extension,
+          or change-type classification used to allocate review effort. If complete exact
+          changed-path evidence is unavailable, fail closed with NEEDS_INFO rather than reducing
+          the requirement to an invented probe quota. REQUEST_CHANGES needs a confirmed probe
+          anchored to a published finding.''',
+          )
+
+          replace_once(
+              "scripts/ci/opencode_review_prompt_template.md",
+              '''Do not count green checks, a repeated PR claim, or the absence of an observed failure as a probe. APPROVE requires at least two falsified probes for source, workflow, config, package, or test changes and at least one for non-code changes. REQUEST_CHANGES requires at least one confirmed probe anchored to a published finding.''',
+              '''Do not count green checks, a repeated PR claim, or the absence of an observed failure as a probe. For a formal APPROVE, adversarial evidence must cover every exact changed path in the trusted current-head changed-path set; the exact changed-path set is the evidence universe, with no filename, extension, or change-type classification used to allocate review effort. If complete exact changed-path evidence is unavailable, fail closed with NEEDS_INFO rather than reducing the requirement to an invented probe quota. REQUEST_CHANGES requires a confirmed probe anchored to a published finding.''',
+          )
+
+          baseline = Path("docs/product-technical-gap-baseline.md")
+          text = baseline.read_text(encoding="utf-8")
+          marker = "OPENCODE-EXACT-EVIDENCE-2026-09-02"
+          if marker not in text:
+              text += '''
+
+          ### OPENCODE-EXACT-EVIDENCE-2026-09-02
+          - Owner: `ContextualWisdomLab/.github`, stacked review-policy repair.
+          - Gap/RCA: OpenCode's central prompts converted file/change-type names into a fixed two-versus-one adversarial-probe admission threshold. No statistical model, experiment, standard, or provider contract established that allocation.
+          - Repair: formal approval evidence is now a deterministic set-coverage invariant over the exact current-head changed paths supplied by trusted GitHub evidence. Filename, extension, and change-type classifications do not allocate review effort; incomplete evidence fails closed with `NEEDS_INFO` rather than falling back to a smaller quota.
+          - Verification: RED-before-change prompt contract, exact-head repository tests, then ordinary hosted review/security checks after the temporary source-fix workflow self-removes.
+          '''
+              baseline.write_text(text, encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          note = "- OpenCode review admission no longer uses a filename/change-type two-versus-one probe quota; formal approval evidence covers the exact current-head changed-path set and fails closed when complete evidence is unavailable.\n"
+          if note not in text:
+              changelog.write_text(note + text, encoding="utf-8")
+          PY
+
+      - name: Verify focused and repository GREEN contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -m pytest -q \
+            tests/test_opencode_no_heuristic_review_evidence.py \
+            tests/test_contextual_orchestrator_no_heuristic_admission.py \
+            tests/test_contextual_orchestrator_review_no_heuristic_compute.py \
+            tests/test_contextual_orchestrator_review_policy.py
+          PYTHONPATH=. python3 -m pytest tests -q
+          git diff --check
+
+      - name: Self-retire and publish only from unchanged exact writer head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin fix/opencode-exact-evidence-no-heuristics
+          live_head="$(git rev-parse origin/fix/opencode-exact-evidence-no-heuristics)"
+          if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+            echo "::notice::Writer branch advanced to $live_head; refusing stale publication."
+            exit 0
+          fi
+          git rm -- .github/workflows/source-fix-1701-opencode-evidence-admission.yml
+          git config user.name "ContextualWisdomLab automation"
+          git config user.email "automation@users.noreply.github.com"
+          git add ci-review-prompt.md \
+            scripts/ci/opencode_review_prompt_template.md \
+            tests/test_opencode_no_heuristic_review_evidence.py \
+            docs/product-technical-gap-baseline.md CHANGELOG.md
+          git diff --cached --check
+          git commit -m "fix(opencode): require exact changed-path evidence"
+          git push origin HEAD:fix/opencode-exact-evidence-no-heuristics
