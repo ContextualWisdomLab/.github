@@ -87,6 +87,12 @@ concurrency:
   # two hours, four queued) against a 10-30 minute normal scan, each holding a
   # slot under the shared 60-job ceiling. schedule and repository_dispatch
   # without a PR number keep a unique run id.
+  # Coverage trade, measured the same day: main moved 50 times in 24 hours
+  # (median gap 8.4 min, mean 26.5 min, bursty), so with cancel-in-progress
+  # only the final head of each merge burst completes a scan -- one completed
+  # main scan per quiet window, not one per push. That is the intended
+  # exchange: a cancelled push scan loses no evidence a later whole-tree scan
+  # does not re-cover, and the weekly schedule scan is the floor.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
