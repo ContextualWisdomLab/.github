@@ -14,7 +14,9 @@
 - Stop `pull_request_review: submitted` events with state `commented` at the
   merge scheduler's job-admission boundary, before a hosted runner is
   requested. `approved`, `changes_requested`, and `dismissed` review
-  transitions retain their existing exact-PR scheduler path and permissions.
+  transitions retain their existing exact-PR scheduler path and permissions;
+  COMMENTED submissions also no longer cancel an already-running actionable
+  review transition through workflow-level concurrency.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and

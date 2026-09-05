@@ -21,12 +21,28 @@ def scan_job_condition() -> str:
     return " ".join(line.strip() for line in condition.splitlines())
 
 
-def admits_review_event(*, action: str, state: str) -> bool:
-    """Evaluate the workflow's review-event condition for one trusted fixture."""
-    expression = scan_job_condition().replace("&&", " and ").replace("||", " or ")
+def cancellation_condition() -> str:
+    """Return the normalized workflow-level cancellation expression."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    marker = "\n  cancel-in-progress: "
+    raw = workflow.split(marker, 1)[1]
+    if raw.startswith(">-\n"):
+        condition = raw.split("\n\n", 1)[0].removeprefix(">-\n")
+    else:
+        condition = raw.splitlines()[0]
+    normalized = " ".join(line.strip() for line in condition.splitlines())
+    assert normalized.startswith("${{ ") and normalized.endswith(" }}")
+    return normalized.removeprefix("${{ ").removesuffix(" }}")
+
+
+def evaluate_review_expression(
+    *, expression: str, action: str, state: str, event_name: str = "pull_request_review"
+) -> bool:
+    """Evaluate a workflow review-event expression for one trusted fixture."""
+    expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"\btrue\b", "True", expression)
     values = {
-        "github.event_name": "pull_request_review",
+        "github.event_name": event_name,
         "github.event.action": action,
         "github.event.review.state": state,
         "github.event.client_payload.org_sweep": False,
@@ -57,6 +73,25 @@ def admits_review_event(*, action: str, state: str) -> bool:
     return bool(evaluate(ast.parse(expression, mode="eval")))
 
 
+def admits_review_event(*, action: str, state: str) -> bool:
+    """Evaluate the pre-runner admission condition for one review fixture."""
+    return evaluate_review_expression(
+        expression=scan_job_condition(), action=action, state=state
+    )
+
+
+def cancels_predecessor(
+    *, action: str, state: str, event_name: str = "pull_request_review"
+) -> bool:
+    """Evaluate whether one review event cancels the prior scheduler run."""
+    return evaluate_review_expression(
+        expression=cancellation_condition(),
+        action=action,
+        state=state,
+        event_name=event_name,
+    )
+
+
 @pytest.mark.parametrize(
     ("action", "state", "expected"),
     [
@@ -80,11 +115,6 @@ def test_review_filter_preserves_exact_pr_group_and_least_privilege() -> None:
         "github.event_name == 'pull_request_review' && "
         "format('pr-{0}', github.event.pull_request.number)" in workflow
     )
-    assert (
-        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' || "
-        "github.event_name == 'pull_request_review' || "
-        "github.event_name == 'repository_dispatch' }}" in workflow
-    )
     assert "permissions:\n  contents: read" in workflow
 
     scan_header = workflow.split("\n  scan-pr-queue:\n", 1)[1].split(
@@ -98,3 +128,33 @@ def test_review_filter_preserves_exact_pr_group_and_least_privilege() -> None:
         "pull-requests: write",
     ):
         assert permission in scan_header
+
+
+def test_commented_review_does_not_cancel_approved_review_execution() -> None:
+    """A later COMMENTED review must preserve an approved scheduler execution."""
+    assert cancels_predecessor(action="submitted", state="approved") is True
+    assert cancels_predecessor(action="submitted", state="commented") is False
+    assert cancels_predecessor(action="submitted", state="changes_requested") is True
+    assert cancels_predecessor(action="dismissed", state="commented") is True
+
+
+@pytest.mark.parametrize(
+    ("event_name", "expected"),
+    [
+        ("pull_request_target", True),
+        ("repository_dispatch", True),
+        ("push", False),
+        ("schedule", False),
+        ("workflow_call", False),
+    ],
+)
+def test_review_filter_preserves_non_review_cancellation_semantics(
+    event_name: str, expected: bool
+) -> None:
+    """Narrow only review-event cancellation, preserving other trigger behavior."""
+    assert (
+        cancels_predecessor(
+            event_name=event_name, action="submitted", state="commented"
+        )
+        is expected
+    )

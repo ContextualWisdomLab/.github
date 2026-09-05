@@ -11,8 +11,10 @@
 > rejected by the `scan-pr-queue` job-level `if` before runner acquisition.
 > The executable truth-table contract is
 > `tests/test_merge_scheduler_review_event_admission.py`. This correction does
-> not reinterpret a bot comment as formal review evidence and does not alter
-> exact-PR concurrency, review semantics, or scheduler permissions.
+> not reinterpret a bot comment as formal review evidence. It preserves the
+> exact-PR concurrency group while narrowing cancellation so a COMMENTED
+> submission cannot cancel an already-running APPROVED, CHANGES_REQUESTED, or
+> dismissed transition; scheduler permissions remain unchanged.
 
 - **Date:** 2026-09-03
 - **Subject:** the user directly observed the scheduler workflow firing repeatedly ("왜 각 모든 단계마다 Trigger
