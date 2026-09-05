@@ -1904,6 +1904,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
+def has_in_flight_check_runs(pr: dict[str, Any]) -> bool:
+    """Return whether any newest current-head check run is still queued or running."""
+    return any(running_check_state(node) == "running" for node in latest_check_runs(pr))
+
+
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
@@ -4780,6 +4785,19 @@ def inspect_pr(
                 "wait",
                 f"current head has no OpenCode approval; branch is outdated before review dispatch, "
                 f"but head repo {head_repo} is not writable by the scheduler credential",
+            )
+        if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
+            return decide(
+                "wait",
+                "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                "but current-head checks are still queued or running; holding the update so their "
+                "evidence is not discarded",
             )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
