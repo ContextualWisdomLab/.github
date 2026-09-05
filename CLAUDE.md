@@ -127,6 +127,13 @@ repeatable compile command.
   workflow files (e.g. `test_pr_governance_audit_contract.py`, `test_codeql_pr_workflow_contract.py`,
   `test_opencode_workflow_shell_syntax.py`, `test_opencode_agent_contract.py`). Editing those files
   without running the test suite will break CI.
+- **A "superseded" closure is a claim to verify, not accept.** See `AGENTS.md`'s "Verifying a
+  'superseded — closing' claim" section. Two traps specific to this repo: use a **three-dot**
+  diff (`git diff --stat origin/main...<head>`) — two-dot reports `main`'s own newer commits as
+  phantom deletions by a stale PR; and do not use `git merge-base --is-ancestor` as the test,
+  because this repo mixes squash merges with real merge commits, so it answers a different
+  question than "is this content on `main`". Narrowing a PR into successors is the same claim and
+  needs the same evidence.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
@@ -157,6 +164,18 @@ repeatable compile command.
   required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
   job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
   `docs/doctoring/required-workflow-path-filter-boundary.md`.
+- **Narrowing a PR does not carry its delta automatically.** When a large PR is split into
+  successors, diff the union of the successors against the original before treating the supersession
+  as complete — each successor passing its own tests does not prove the union still covers the
+  original's scope. `#1871` → `#1877` + `#1879` silently dropped the coverage/docstring delta and
+  left the required gate broken on `main` until `#1883`. See AGENTS.md's "Supersession and
+  constant-change review".
+- **Model-path timeouts are policy-fixed, not an engineering judgment call.** `docs/product-goal-directive.md`
+  section 8 accepts that central OpenCode/Strix/Noema may take more than two hours per model and states
+  that speed is not a core consideration. `#1889`/`#1890`/`#1892` each added a 900-second cap on genuine
+  multi-hour-hang evidence and were all reverted (`#1891`, `#1895`). Fix runner occupancy at the
+  admission/continuation boundary instead; never convert elapsed inference time into a model-failure
+  verdict.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
