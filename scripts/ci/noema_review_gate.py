@@ -737,11 +737,11 @@ def _validate_observed_probe_class_evidence(
                 f"Noema adversarial probe {index} class_evidence.{field} observation "
                 f"exceeds {MAX_THREAD_BODY_CHARS} characters"
             )
-        source_marker = source_excerpt if source_excerpt else "<blank>"
+        source_marker = source_excerpt if source_excerpt.strip() else "<blank>"
         if source_marker not in observation:
             raise NoemaModelOutputError(
                 f"Noema adversarial probe {index} class_evidence.{field} observation "
-                "must quote the exact source_excerpt (or <blank> for an empty line)"
+                "must quote the exact source_excerpt (or <blank> for a blank line)"
             )
         expected_claim_role = OBSERVED_REVIEW_PROBE_CLAIM_ROLES[probe_kind][field]
         claim_role = source_ref.get("claim_role")

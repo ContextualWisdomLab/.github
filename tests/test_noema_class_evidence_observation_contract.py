@@ -267,6 +267,31 @@ def test_blank_changed_source_uses_explicit_blank_marker() -> None:
     noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
 
 
+def test_whitespace_only_changed_source_uses_explicit_blank_marker() -> None:
+    """Whitespace-only source cannot satisfy evidence through incidental prose spaces."""
+    spaces = "   "
+    diff = f"""diff --git a/src/tool.py b/src/tool.py
+--- a/src/tool.py
++++ b/src/tool.py
+@@ -1 +1 @@
+-old = 1
++{spaces}
+"""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["source_excerpt"] = spaces
+            witness["observation"] = f"ordinary prose space is not evidence for {probe['probe_kind']}:{field}."
+
+    with pytest.raises(noema.NoemaModelOutputError, match=r"must quote the exact source_excerpt"):
+        noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+    for probe in verdict["adversarial_validation"]["probes"]:
+        for field, witness in probe["class_evidence"].items():
+            witness["observation"] = f"<blank> is exact source evidence for {probe['probe_kind']}:{field}."
+    noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+
+
 def test_literal_omission_marker_source_remains_reviewable() -> None:
     """Literal source text must not alias synthetic prompt-truncation metadata."""
     marker = "[overlong changed line content omitted]"
