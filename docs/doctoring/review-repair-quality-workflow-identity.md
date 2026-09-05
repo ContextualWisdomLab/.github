@@ -1,5 +1,17 @@
 # Review-repair quality workflow identity RCA
 
+## 2026-09-04 consolidation
+
+The standalone compatibility workflow has now been retired. Its contract suite
+and path ownership moved into
+`.github/workflows/agent-review-runtime-quality-ci.yml`, where the existing
+affected-suite selector runs it only for review-repair changes. This removes one
+independent checkout, Python setup, and dependency-install job per matching PR
+without changing the repair worker, scheduler, permissions, or model routing.
+The consolidated PR workflow keeps the required
+`agent-review-runtime-quality-${{ github.repository }}-${{ github.event.pull_request.number }}`
+group with `cancel-in-progress: true`.
+
 ## Status
 
 Recorded 2026-09-01 against protected `ContextualWisdomLab/.github` `main@b4f7b082536d2be8dceab0a40a484161b50e5acd` and repair PR #1573.
@@ -54,6 +66,14 @@ An intermediate replacement-path implementation produced hosted run `33491072818
 
 All intermediate replacement-path runs are predecessor evidence only. Final acceptance requires exact-current-head execution through the preserved workflow registry identity and terminal success; queued, pending, skipped, cancelled, or predecessor evidence is non-passing.
 
+## 2026-09-02 merged-PR stale-run follow-up
+
+Protected `main@6f70174e338013fec9a000311bc72312f5d4dbf9` still exposed a lifecycle gap even though the workflow already used a PR-stable concurrency group with `cancel-in-progress: true`. Run `33577763081` belonged to merged PR #1651 at exact head `9481922748e2c51f36c86400e60d99533189e4be`. The run was created at 01:02:17Z, PR #1651 merged at 01:08:37Z, but no later same-group event existed to supersede the queued run. GitHub finally assigned a runner at 08:47:34Z; the obsolete quality job then spent about six minutes installing tooling and executing contract tests before failing at 08:53:40Z. The observed multi-hour duration was therefore queue residence, not one continuously occupied runner, but the merged PR still consumed scarce runner capacity after its evidence ceased to be authoritative.
+
+The causal defect is that `pull_request` used its default activity types, which exclude `closed`. PR-stable concurrency can cancel an older run only when a newer run in the same group exists; merging/closing the PR produced no workflow run, so there was no scheduler-side cancellation event. A runner-backed cleanup job would recreate the prior no-op cleanup anti-pattern, so the repair instead adds `closed` to the workflow trigger while preserving the default `opened`, `synchronize`, and `reopened` types. The ordinary contract job is guarded to skip on `closed`. This gives GitHub a same-PR concurrency event that can retire queued/in-progress predecessor work while the close run itself has no runner-backed job.
+
+The regression was committed first in `tests/test_hourly_scheduler_runtime_budget.py`: it requires the explicit close trigger, the PR-stable group, `cancel-in-progress: true`, and the closed-event job guard. The implementation then changed only the workflow admission lifecycle. It does not cancel another PR, does not execute untrusted head code with write credentials, does not grant `actions: write`, and does not weaken any test/review/security gate. Push-triggered quality CI remains unchanged.
+
 ## Security and governance boundary
 
 - No secret, reviewer identity, merge authority, branch-protection rule, or status is changed.
@@ -62,10 +82,11 @@ All intermediate replacement-path runs are predecessor evidence only. Final acce
 - The write-capable worker remains exact-head-bound and governed by its existing sealed path, revalidation, credential stripping, and protected push contracts.
 - The stable workflow path avoids manufacturing an untracked orphan Actions identity.
 - Queued, pending, skipped, cancelled, predecessor-head, or stale evidence is not treated as passing.
+- Closed-event retirement relies on workflow-level PR-stable concurrency; the skipped close job requires no write credential and executes no untrusted PR source.
 
 ## Rollback
 
-Rollback is a normal revert of the display/contract correction only after proving that doing so does not reintroduce misleading provider/cadence ownership. Do not delete/recreate the workflow path merely to rename it, restore a direct-NIM execution path, add a duplicate hourly schedule, or weaken the contextual-orchestrator fail-closed contract.
+Rollback is a normal revert of the display/contract correction only after proving that doing so does not reintroduce misleading provider/cadence ownership. Do not delete/recreate the workflow path merely to rename it, restore a direct-NIM execution path, add a duplicate hourly schedule, or weaken the contextual-orchestrator fail-closed contract. Do not remove close-event retirement unless an equivalent trusted scheduler-side retirement mechanism is already deployed and regression-covered.
 
 ## References
 

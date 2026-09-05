@@ -49,6 +49,6 @@ def test_launcher_source_does_not_restore_paid_inclusive_choice() -> None:
 def test_sidecar_rejects_any_pool_other_than_free() -> None:
     """Environment configuration cannot reactivate orchestrator/auto centrally."""
     sidecar = SIDECAR.read_text(encoding="utf-8")
-    assert 'if [ "$orchestrator_pool" != "free" ]; then' in sidecar
+    assert 'case "$orchestrator_pool" in' in sidecar
     assert 'fail "CONTEXTUAL_ORCHESTRATOR_POOL must be free"' in sidecar
     assert 'free|auto)' not in sidecar
