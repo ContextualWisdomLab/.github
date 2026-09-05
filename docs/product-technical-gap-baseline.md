@@ -3302,6 +3302,26 @@ branch-protection context reporting, the same structural constraint as the `chan
 neither can simply be deleted. But nothing in either job produces an output the next one consumes: their
 `needs:` edges are ordering, not data dependency. Running both in parallel off `admit-current-head`, and
 dropping `coverage-evidence` from `opencode-review-target`'s `needs:`, would preserve every reported context
-while removing two sequential queue waits from the critical path. **Not asserted as safe without further
-check:** confirm no scheduler or ruleset logic depends on these contexts *completing in this order* before
-changing the edges.
+while removing two sequential queue waits from the critical path.
+
+**The serialization mechanism is confirmed, not inferred.** A peer session independently re-pulled the same
+run and found each job's `created_at` is *exactly* its predecessor's `completed_at` (e.g. `coverage-source-tree`
+created `09:52:19Z` = `required-workflow-bootstrap` completed `09:52:19Z`). A job is therefore not queued at
+all until its `needs:` predecessor finishes, so every link pays a fresh, full queue wait. Against execution
+times of **4 and 5 seconds**, those two links waited 9h40m and 13h1m.
+
+**The order-dependency question this entry originally left open is now answered: nothing depends on the
+order.** Verified by that peer session across three surfaces — no test asserts the `needs:` chain order
+(`test_strix_quick_gate.sh` mentions both names, but as set membership in a fast-approval ignore list, not an
+ordering claim); the merge scheduler reads only a context *name* and its exact-head conclusion
+(`scripts/ci/opencode_coverage_identity.py`'s `CANONICAL_CHECK_NAME = "coverage-evidence"`), never when it
+ran; and neither job declares `outputs:`, confirming the edges carry ordering rather than data.
+
+**One safety condition any fix must honour, which this entry's first draft missed.** `coverage-evidence`
+declares no `if:` of its own — it is skipped only *transitively*, because `coverage-source-tree` carries
+`if: needs.admit-current-head.outputs.admitted == 'true'` and a skipped `needs:` predecessor skips it too.
+Cutting that edge without moving the guard would let a required context execute on an unadmitted head.
+The complete change is therefore: give `coverage-evidence` `needs: [required-workflow-bootstrap,
+admit-current-head]` **plus that same explicit `if:`**, and reduce `opencode-review-target` to
+`needs: [admit-current-head]` — safe on the admission axis because that job already carries the identical
+`if:` guard directly. Chain depth drops from five to three, and queue waits from four to two.
