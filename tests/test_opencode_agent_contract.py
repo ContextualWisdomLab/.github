@@ -1962,6 +1962,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert not re.search(
         r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 205", workflow
     )
+    assert re.search(
+        r"Run OpenCode PR Review model pool[\s\S]{0,240}timeout-minutes: 15", workflow
+    )
     assert 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' not in workflow
     assert 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' not in workflow
     assert 'OPENCODE_POOL_STEP_TIMEOUT_SECONDS: "12000"' not in workflow
