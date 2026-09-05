@@ -42,6 +42,10 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   target repository, and pull request number with `cancel-in-progress: true`;
   do not include the head SHA, because that prevents a new head from cancelling
   its predecessor. Non-PR triggers need an explicit collision-safe fallback.
+- Do not let a rerun of an older run ID re-enter the live PR group and cancel
+  newer evidence. Use the PR number only for the first attempt and fall back to
+  `github.run_id` for reruns, or reject the rerun through exact-live-head
+  admission before it can displace current work.
 - Put concurrency at workflow scope when queued jobs must be coalesced before a
   runner is admitted. Job-level concurrency cannot relieve a saturated runner
   queue because it is evaluated only after job admission.
