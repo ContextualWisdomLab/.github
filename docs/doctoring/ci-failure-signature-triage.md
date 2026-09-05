@@ -274,6 +274,42 @@ Both discard hours of exact-head evidence and re-enter the queue at the back.
 
 ---
 
+## 8. Your PR goes `dirty` while another PR touching the *same file* merged cleanly
+
+**Symptom.** Two or more open PRs append to one document. One of them merges without incident; yours
+flips to `mergeable_state: dirty` and an admin merge returns **405**.
+
+**Mechanism.** The collision unit is not the file — it is the **anchor**, the context line git needs
+to place a hunk. Measured on `docs/product-technical-gap-baseline.md`: `#1904` appended at
+`@@ -3234,0 +3235,119 @@` and `#1868` at `@@ -2775,0 +2776,2 @@`; `#1868` merged **second** into the
+same file and stayed clean because its hunk sat in a different region. `#1903` broke — it shares
+`#1868`'s anchor, the identical context line `prose" convention already stated in CLAUDE.md.`. So
+same-file is not the predictor in either direction: it over-serializes PRs that would never have
+touched, and it fails to warn the pair that actually conflicts.
+
+The two unmergeable states are also not equivalent, and this decides whether you must push:
+
+| state | meaning | admin merge with `enforce_admins: false` |
+|---|---|---|
+| `behind` | base advanced; no textual conflict | **succeeds**, zero pushes needed |
+| `dirty` | git-level conflict | **cannot be bypassed** — returns 405 |
+
+So the push-free merge path exists for exactly **one PR per anchor per round**. Everyone after that
+needs a real push to resolve, whatever their review state.
+
+**Do.** When claiming an append-heavy document, claim the *anchor*, not the path — e.g. a lane-claim
+marker of the form `paths=docs/<file>.md#<section-heading>`. Ordinary code files can stay
+path-granular, since edits there are usually region-local. When you do conflict, resolve by keeping
+both sides and then verify nothing was silently dropped: compare `grep -c '^## '` between
+`git show origin/main:<file>` and your merge result. A `--ours`/`--theirs` resolution produces zero
+conflict markers while deleting an entire section, which reads as a clean merge.
+
+**Do not.** Do not serialize every PR that touches a shared file — that is the over-correction this
+signature exists to prevent, and it stalls work that would have merged fine. Do not assume a clean
+merge by a peer means the file is safe for you: they may simply have landed in a different region.
+
+---
+
 ## Research-grounding freshness KPIs
 
 Four cheap, repeatable measurements that catch dated-evidence rot before it fails a gate. Measure them
@@ -297,7 +333,28 @@ Two notes that make these numbers honest rather than alarming:
 - KPI 2's five hits are the only place in the organization where dated evidence carries no expiry at
   all. `contextual_orchestrator/nim_benchmark.py` is currently the org's only implementation of the
   `reviewed_at` / `valid_until` pair; adopting the same pair in `scripts/ci/zdr_policy.py`'s
-  `PROVIDER_ZDR_SCOPE` would give KPI 1 something to measure in `.github` too.
+  `PROVIDER_ZDR_SCOPE` gives KPI 1 something to measure in `.github` too. `.github` #1916 does this.
+
+### Measuring these without manufacturing a phenomenon
+
+Every KPI above is a count produced by a script, and a counting script fails in a way that looks like
+data rather than like an error.
+
+- **Never let a failed API call fall back to a countable value.** `c=$(gh api ... 2>/dev/null || echo
+  0)` turns every rate-limited call into a genuine-looking zero. In a real sweep of this organization
+  that produced rows reading `in_progress_runs=13` with `running_jobs=0` *and* `queued_jobs=0` — an
+  impossible combination — and the zeros were initially explained away as "the metric oscillates"
+  rather than read as the measurement breaking. `gh api rate_limit` afterwards showed the quota had
+  just reset, confirming it. Re-measured without the mask, 8 samples over 3 minutes across 7 repos
+  gave min 27 / max 36 / mean 32.1: stable, no oscillation. Fail loudly, or count errors in their own
+  column.
+- **A self-contradictory row is the tell.** Before believing a surprising aggregate, look for a row
+  that cannot physically exist. That is cheaper than re-deriving the whole measurement and it
+  distinguishes a broken instrument from a real effect.
+- **When two sessions disagree on one number, stop counting and print records.** Aggregates hide both
+  loop bugs and throttled calls; individual job entries carrying `runner_name` and `started_at`
+  cannot be forged by either. Disagreement about a total is resolved by listing the underlying rows,
+  not by re-running the same count more carefully.
 
 ---
 

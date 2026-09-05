@@ -191,9 +191,10 @@ they only pay off when an agent other than their author reads them.
   three repositories (`opencode-review` wait-for-verdict, `strix` stale
   `workflow_sha`, `noema-review` gateway 502, expired NIM cost evidence,
   unscoped `pytest` collection, stale `head_sha` notifications,
-  queued-versus-failed), each with its verified mechanism, the action to take,
-  and the actions not to take. Also carries the research-grounding freshness
-  KPIs and their measured baseline.
+  queued-versus-failed, same-anchor merge conflicts), each with its verified
+  mechanism, the action to take, and the actions not to take. Also carries the
+  research-grounding freshness KPIs, their measured baseline, and how to count
+  them without a masked API error manufacturing a phenomenon.
 - [`.jules/bolt.md`](.jules/bolt.md) — dated performance learnings for
   `scripts/ci/` as `**Learning:**` / `**Action:**` pairs. Scan it before
   optimizing anything on that surface.
