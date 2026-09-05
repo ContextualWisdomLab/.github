@@ -27,6 +27,19 @@ carries the correction and its evidence limits. Treat that as the standard this 
 plausible mechanism is not a verified one, and an entry that survives a serious attempt to refute it
 is worth more than one that reads well.
 
+**Before acting on any PR: ownership is decided by the PR body, not by commit trailers.** A branch
+can carry your session's `Claude-Session:` trailer on several commits and still not be yours to drive,
+because the repository owner may have taken it over since. The test is the body: a section headed
+`Current exact authority — <date> KST` (or `Current exact evidence` / `Current authority`) listing
+exact head and base SHAs and exact check-run ids, plus an explicit merge-discipline list ("Keep
+Draft until …", "Do not … self-approve, force-push …"), means the owner is hand-driving it with
+exact-head discipline and no agent edits it, pushes to it, or resolves its threads. Measured
+2026-09-05 on `noema`: a fingerprint search returned three "my" PRs (#535, #539, #540); all three
+bodies carried that section, two were being driven through a different app entirely, and the one
+with two of this session's commits on it was nonetheless not this session's to touch. Searching by
+fingerprint finds *history*; only the body tells you *authority*. (#933 earlier the same day was the
+failure mode this prevents: an agent merged into a lane the body had explicitly reserved.)
+
 ---
 
 ## 0. Before anything else: your local checkout is probably stale
