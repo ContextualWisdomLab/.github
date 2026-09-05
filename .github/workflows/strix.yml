@@ -982,8 +982,9 @@ jobs:
           fi
 
           # Preserve configuration failures (exit 2) and any unexpected exit
-          # code as hard failures — only the scan-failure code (1) can be an
-          # infrastructure/backend-unavailability outcome.
+          # code as hard failures. A scan-failure code (1), including provider
+          # or backend unavailability, is incomplete security evidence and
+          # remains a hard failure for the required check.
           if [ "$strix_rc" -ne 1 ]; then
             exit "$strix_rc"
           fi

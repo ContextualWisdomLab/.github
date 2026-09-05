@@ -6621,7 +6621,7 @@ run_filtered_gate_case_if_requested() {
 			"https://models.github.ai/inference"
 		;;
 	github-models-fallback-provider-signal-tries-next)
-		run_gate_case "github-models-fallback-provider-signal-tries-next" \
+		run_gate_case_allow_provider_signal "github-models-fallback-provider-signal-tries-next" \
 			"openai/gpt-5" \
 			"" \
 			"0" \
@@ -10366,7 +10366,7 @@ run_gate_case "github-models-primary-ratelimit-fallback-success" \
 	"deepseek/deepseek-r1-0528 deepseek/deepseek-v3-0324" \
 	"1"
 
-run_gate_case "github-models-fallback-provider-signal-tries-next" \
+run_gate_case_allow_provider_signal "github-models-fallback-provider-signal-tries-next" \
 	"openai/gpt-5" \
 	"" \
 	"0" \
