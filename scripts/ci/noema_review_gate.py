@@ -1323,8 +1323,8 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
     """Read bounded, allowlisted gateway failure telemetry without raw diagnostics.
 
     The response body is never returned or logged. Only the canonical
-    ``error.detail`` receipt fields are allowed; malformed, oversized, or
-    unexpected envelopes fail closed to no telemetry.
+    ``error.code`` and allowlisted ``error.detail`` fields are allowed.
+    Malformed, oversized, or unexpected envelopes fail closed to no telemetry.
     """
     try:
         raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
@@ -1346,11 +1346,14 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
         return {}
     telemetry: dict[str, str | int] = {}
     model = _safe_model_identifier(detail.get("model"))
+    error_code = _safe_model_identifier(error.get("code"))
     failure_kind = _safe_model_identifier(detail.get("failure_kind"))
     terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
     attempts = detail.get("attempts")
     if model is not None:
         telemetry["served_model"] = model
+    if error_code is not None:
+        telemetry["error_code"] = error_code
     if failure_kind is not None:
         telemetry["failure_kind"] = failure_kind
     if terminal_reason is not None:
@@ -1386,6 +1389,7 @@ def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
         "upstream_phase",
         "attempt_number",
         "upstream_status",
+        "error_code",
         "failure_kind",
         "terminal_reason",
     )

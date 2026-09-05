@@ -1587,10 +1587,12 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
+@pytest.mark.parametrize("receipt_field", ["failure_kind", "error_code"])
 @pytest.mark.parametrize(
-    ("failure_kind", "expected_failure_kind"),
+    ("field_value", "expected_value"),
     [
         pytest.param("structured_output_exhausted", "structured_output_exhausted", id="canonical"),
+        pytest.param("invalid_structured_output", "invalid_structured_output", id="protected-code"),
         pytest.param(" upstream_error ", "upstream_error", id="trimmed"),
         pytest.param("x" * 200, "x" * 200, id="maximum-length"),
         pytest.param("x" * 201, None, id="overlength"),
@@ -1609,33 +1611,36 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     ],
 )
 def test_call_llm_reports_only_safe_model_from_bounded_http_error(
-    monkeypatch, capsys, failure_kind, expected_failure_kind
+    monkeypatch, capsys, receipt_field, field_value, expected_value
 ):
     """A failed gateway call emits only bounded scalar receipt fields on both surfaces."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     secret = "never-print-this-error-detail"
-    body = json.dumps(
-        {
-            "error": {
-                "detail": {
-                    "model": "github_models/deepseek-v3",
-                    "failure_kind": failure_kind,
-                    "terminal_reason": "eligible_candidates_exhausted",
-                    "attempts": [{
-                        "provider_name": "nvidia_nim",
-                        "phase": "connecting",
-                        "attempt_number": 2,
-                        "provider_status": 503,
-                        "secret": secret,
-                    }],
+    payload = {
+        "error": {
+            "detail": {
+                "model": "github_models/deepseek-v3",
+                "terminal_reason": "eligible_candidates_exhausted",
+                "attempts": [{
+                    "provider_name": "nvidia_nim",
+                    "phase": "connecting",
+                    "attempt_number": 2,
+                    "provider_status": 503,
                     "secret": secret,
-                },
-                "message": secret,
+                }],
+                "secret": secret,
             },
-            "arbitrary": secret,
-        }
-    ).encode()
+            "message": secret,
+        },
+        "arbitrary": secret,
+    }
+    if receipt_field == "error_code":
+        # Current protected gateway errors have a code even without a failure kind.
+        payload["error"]["code"] = field_value
+    else:
+        payload["error"]["detail"]["failure_kind"] = field_value
+    body = json.dumps(payload).encode()
 
     class Opener:
         def open(self, request):
@@ -1658,12 +1663,15 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(
     assert "upstream_phase=connecting" in output
     assert "attempt_number=2" in output
     assert "upstream_status=503" in output
-    if expected_failure_kind is None:
-        assert "failure_kind=" not in output
-        assert "failure_kind=" not in diagnostic
+    if expected_value is None:
+        assert f"{receipt_field}=" not in output
+        assert f"{receipt_field}=" not in diagnostic
     else:
-        assert f"failure_kind={expected_failure_kind}" in output
-        assert f"failure_kind={expected_failure_kind}" in diagnostic
+        assert f"{receipt_field}={expected_value}" in output
+        assert f"{receipt_field}={expected_value}" in diagnostic
+    absent_field = "failure_kind" if receipt_field == "error_code" else "error_code"
+    assert f"{absent_field}=" not in output
+    assert f"{absent_field}=" not in diagnostic
     assert output.count("::warning::") == 1
     assert "::error::injected" not in output
     assert "::error::injected" not in diagnostic
