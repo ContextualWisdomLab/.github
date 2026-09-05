@@ -495,9 +495,10 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     """The dispatched matrix reaches `env:` as JSON text, never as a raw sequence.
 
     `codeql-pr.yml` sends `client_payload.matrix` as an array. An `env:` value must be
-    a scalar, so assigning the array directly makes GitHub reject the whole file at
-    template validation -- "A sequence was not expected" -- before any step runs. That
-    shipped in #1776 and left this workflow at 0 successes across 136 attempts.
+    a scalar, so assigning the array directly makes GitHub reject that step when its
+    `env:` is evaluated -- "A sequence was not expected" -- after the runner has been
+    assigned and the earlier steps have already run. That shipped in #1776 and left this
+    workflow at 0 successes across 136 attempts.
 
     No local tool catches it: `yaml.safe_load` parses the file and `actionlint` 1.7.12
     reports it clean, because it is an Actions template rule rather than YAML syntax.
