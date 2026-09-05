@@ -5112,9 +5112,22 @@ number in their expected step text; tracing that back through `aca34ff` → `8b4
 complete step, which was reinserted into the new consolidated `agent-review-runtime-quality-ci.yml`, along
 with the missing `requirements-opencode-review-ci.txt` trigger path. General rule going forward: before
 accepting an upstream deletion of a file this branch has also modified, check whether this branch's own
-unmerged commit history added something to that file that main's replacement never absorbed — `git log
---oneline <path>` plus `git merge-base --is-ancestor <commit> origin/main` for each of this branch's own
-commits touching it, not just "the deletion looks like a deliberate, already-tested consolidation."
+commit history added something to that file that main's replacement never absorbed — `git log --oneline
+<path>` to find those commits, then compare their **content** against `main`, not just "the deletion looks
+like a deliberate, already-tested consolidation."
+
+**Correction to the above, 2026-09-05 (credit: peer 3's Codex audit of the same class of claim).** An
+earlier version of this rule said to establish that with `git merge-base --is-ancestor <commit>
+origin/main`. That check is wrong for this purpose, and this repository is exactly where it misleads:
+`.github` merges every PR by **squash**, so a commit's content can be fully present on `main` while
+`--is-ancestor` reports false — the original commit object never became an ancestor, a new squashed commit
+carrying its content did. The converse also fails: ancestry survives a later `git revert`, so
+`--is-ancestor` can report true for content `main` no longer has. Ancestry answers "did this commit object
+get merged," which is not the question; the question is "is this content on `main` now." Verify by content
+instead — `git grep -l "<distinctive string>" origin/main --` and `git show origin/main:<path>` — the same
+content-based checks the `AGENTS.md` "Verifying a 'superseded — closing' claim" section prescribes for
+succession claims. The `aca34ff` conclusion above happened to be correct, but it was confirmed by the full
+suite's failing tests naming this PR's own number, not by the ancestry check.
 
 **The 7th finding — `origin/main`'s own 100% coverage / 100% docstring gates were failing (99% / 98.4%) —
 is now fully closed.** Merging `main` pulled in that pre-existing gap across five files. Four were closed to

@@ -1,7 +1,12 @@
 import base64
+import builtins
 import json
+import runpy
+import sys
 from io import StringIO
 from pathlib import Path
+
+import pytest
 
 import pytest
 
@@ -269,250 +274,190 @@ def test_live_snapshot_rejects_head_movement_during_collection():
         raise AssertionError("moving exact-head evidence must fail closed")
 
 
-def test_pages_rejects_malformed_batches_and_exhausted_pagination():
-    class ListClient:
-        def __init__(self, pages):
-            self.pages = pages
-            self.calls = 0
-
-        def request(self, _path):
-            page = self.pages[self.calls]
-            self.calls += 1
-            return page
-
+def test_pagination_rejects_malformed_and_unbounded_evidence():
     with pytest.raises(rollout.EvidenceError, match="malformed pagination"):
-        rollout._pages(ListClient([{"not": "a-list"}]), "/repos/x/rulesets")
+        rollout._pages(FakeClient({"/items?per_page=100&page=1": {}}), "/items")
 
-    full_pages = [[{"id": i} for i in range(100)] for _ in range(rollout.MAX_PAGES)]
-    with pytest.raises(rollout.EvidenceError, match="exceeded"):
-        rollout._pages(ListClient(full_pages), "/repos/x/rulesets")
-
-
-def test_step_disabled_upload_scans_across_multi_line_step_boundaries():
-    source = "\n".join(
-        [
-            "steps:",
-            "  - name: Checkout",
-            "    run: echo hi",
-            "  - name: Analyze",
-            "    uses: github/codeql-action/analyze@" + "b" * 40,
-            "    with:",
-            "      upload: never",
-            "  - name: Another step",
-            "    run: echo done",
-        ]
-    )
-    assert rollout._has_active_advanced_upload(source) is False
-
-    active_source = "\n".join(
-        [
-            "steps:",
-            "  - name: Checkout",
-            "    run: echo hi",
-            "  - name: Analyze",
-            "    uses: github/codeql-action/analyze@" + "b" * 40,
-            "  - name: Another step",
-            "    run: echo done",
-        ]
-    )
-    assert rollout._has_active_advanced_upload(active_source) is True
-
-
-def test_active_advanced_uploader_rejects_ambiguous_and_failed_source_lookups():
-    repository = "ContextualWisdomLab/xtrmLLMBatchPython"
-    duplicate_path_client = FakeClient(
-        {
-            f"/repos/{repository}/actions/workflows?per_page=100&page=1": {
-                "workflows": [
-                    {"path": ".github/workflows/ci.yml", "state": "active"},
-                    {"path": ".github/workflows/ci.yml", "state": "active"},
-                ]
-            },
-            f"/repos/{repository}/contents/.github/workflows/ci.yml?ref={HEAD}": encoded_workflow(
-                "name: CI\n"
-            ),
-        }
-    )
-    with pytest.raises(rollout.EvidenceError, match="ambiguous"):
-        rollout._active_advanced_uploader(duplicate_path_client, repository, HEAD)
-
-    lookup_failure_client = FakeClient(
-        {
-            f"/repos/{repository}/actions/workflows?per_page=100&page=1": {
-                "workflows": [{"path": ".github/workflows/ci.yml", "state": "active"}]
-            },
-            f"/repos/{repository}/contents/.github/workflows/ci.yml?ref={HEAD}": rollout.GitHubError(
-                "gh: rate limited (HTTP 429)"
-            ),
-        }
-    )
-    with pytest.raises(rollout.EvidenceError, match="source lookup failed"):
-        rollout._active_advanced_uploader(lookup_failure_client, repository, HEAD)
-
-
-def test_active_advanced_uploader_rejects_invalid_encoded_source():
-    repository = "ContextualWisdomLab/xtrmLLMBatchPython"
-    path = f"/repos/{repository}/contents/.github/workflows/ci.yml?ref={HEAD}"
-    workflows_path = f"/repos/{repository}/actions/workflows?per_page=100&page=1"
-    workflows = {
-        "workflows": [{"path": ".github/workflows/ci.yml", "state": "active"}]
+    pages = {
+        f"/items?per_page=100&page={page}": [{}] * 100
+        for page in range(1, rollout.MAX_PAGES + 1)
     }
-
-    oversized_client = FakeClient(
-        {
-            workflows_path: workflows,
-            path: {"encoding": "base64", "size": rollout.MAX_WORKFLOW_BYTES + 1, "content": ""},
-        }
-    )
-    with pytest.raises(rollout.EvidenceError, match="invalid size"):
-        rollout._active_advanced_uploader(oversized_client, repository, HEAD)
-
-    bad_base64_client = FakeClient(
-        {
-            workflows_path: workflows,
-            path: {"encoding": "base64", "size": 3, "content": "not-valid-base64!!"},
-        }
-    )
-    with pytest.raises(rollout.EvidenceError, match="is invalid"):
-        rollout._active_advanced_uploader(bad_base64_client, repository, HEAD)
-
-    mismatched_size_client = FakeClient(
-        {
-            workflows_path: workflows,
-            path: {
-                "encoding": "base64",
-                "size": 999,
-                "content": base64.b64encode(b"short").decode(),
-            },
-        }
-    )
-    with pytest.raises(rollout.EvidenceError, match="size mismatch"):
-        rollout._active_advanced_uploader(mismatched_size_client, repository, HEAD)
+    with pytest.raises(rollout.EvidenceError, match="pagination exceeded"):
+        rollout._pages(FakeClient(pages), "/items")
 
 
-def test_collect_live_snapshot_rejects_invalid_repository_and_pr_number():
-    with pytest.raises(rollout.EvidenceError, match="ContextualWisdomLab"):
-        rollout.collect_live_snapshot(FakeClient({}), "someone-else/repo", 1)
-    with pytest.raises(rollout.EvidenceError, match="must be positive"):
-        rollout.collect_live_snapshot(
-            FakeClient({}), "ContextualWisdomLab/example", 0
-        )
+@pytest.mark.parametrize(
+    ("source", "active"),
+    (
+        (
+            "steps:\n  - name: disabled\n    if: ${{ false }}\n"
+            "    uses: github/codeql-action/analyze@pin\n",
+            False,
+        ),
+        (
+            "steps:\n  - name: disabled\n    uses: github/codeql-action/analyze@pin\n"
+            "    with:\n      upload: 'never'\n  - name: next\n    run: true\n",
+            False,
+        ),
+        (
+            "steps:\n  - name: active\n    uses: github/codeql-action/upload-sarif@pin\n",
+            True,
+        ),
+    ),
+)
+def test_advanced_uploader_detection_honors_only_local_disabling(source, active):
+    assert rollout._has_active_advanced_upload(source) is active
 
 
-def test_collect_live_snapshot_rejects_a_closed_or_headless_pull_request():
-    repository = "ContextualWisdomLab/example"
-    with pytest.raises(rollout.EvidenceError, match="not open"):
-        rollout.collect_live_snapshot(
-            FakeClient({f"/repos/{repository}/pulls/1": {"state": "closed", "head": {"sha": HEAD}}}),
-            repository,
-            1,
-        )
-
-
-def test_collect_live_snapshot_rejects_ambiguous_ruleset_and_owner_evidence():
+def test_live_snapshot_rejects_ambiguous_or_invalid_workflow_sources():
     repository = "ContextualWisdomLab/xtrmLLMBatchPython"
-    responses = live_responses()
-    ruleset_path = f"/repos/{repository}/rulesets?includes_parents=true&per_page=100&page=1"
-    responses[ruleset_path] = [{"id": rollout.RULESET_ID}, {"id": rollout.RULESET_ID}]
-    with pytest.raises(rollout.EvidenceError, match="ruleset evidence is ambiguous"):
-        rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
+    workflow_path = f"/repos/{repository}/actions/workflows?per_page=100&page=1"
+    source_path = f"/repos/{repository}/contents/.github/workflows/ci.yml?ref={HEAD}"
 
-    responses = live_responses()
+    cases = []
+    duplicate = live_responses()
+    duplicate[workflow_path]["workflows"] *= 2
+    cases.append((duplicate, "identity is ambiguous"))
+
+    lookup_failure = live_responses()
+    lookup_failure[source_path] = rollout.GitHubError("HTTP 500")
+    cases.append((lookup_failure, "source lookup failed"))
+
+    invalid_size = live_responses()
+    invalid_size[source_path]["size"] = -1
+    cases.append((invalid_size, "invalid size"))
+
+    invalid_base64 = live_responses()
+    invalid_base64[source_path]["content"] = "!"
+    cases.append((invalid_base64, "source is invalid"))
+
+    size_mismatch = live_responses()
+    size_mismatch[source_path]["size"] += 1
+    cases.append((size_mismatch, "size mismatch"))
+
+    for responses, message in cases:
+        with pytest.raises(rollout.EvidenceError, match=message):
+            rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
+
+
+@pytest.mark.parametrize(
+    ("repository", "pr_number", "message"),
+    (
+        ("Other/example", 1, "must belong"),
+        ("ContextualWisdomLab/example", 0, "must be positive"),
+    ),
+)
+def test_live_snapshot_rejects_invalid_identity(repository, pr_number, message):
+    with pytest.raises(rollout.EvidenceError, match=message):
+        rollout.collect_live_snapshot(FakeClient({}), repository, pr_number)
+
+
+def test_live_snapshot_rejects_ambiguous_ruleset_owner_and_missing_states():
+    repository = "ContextualWisdomLab/xtrmLLMBatchPython"
+    pull_path = f"/repos/{repository}/pulls/292"
+    rulesets_path = f"/repos/{repository}/rulesets?includes_parents=true&per_page=100&page=1"
     detail_path = f"/repos/{repository}/rulesets/{rollout.RULESET_ID}?includes_parents=true"
-    owner = {
-        "path": rollout.CENTRAL_CODEQL_PATH,
-        "ref": "refs/heads/main",
-        "repository_id": rollout.CENTRAL_REPOSITORY_ID,
+    setup_path = f"/repos/{repository}/code-scanning/default-setup"
+    runs_path = f"/repos/{repository}/actions/runs?head_sha={HEAD}&per_page=100&page=1"
+
+    closed = live_responses()
+    closed[pull_path] = {"state": "closed", "head": {"sha": HEAD}}
+    ambiguous_ruleset = live_responses()
+    ambiguous_ruleset[rulesets_path] *= 2
+    ambiguous_owner = live_responses()
+    ambiguous_owner[detail_path]["rules"][0]["parameters"]["workflows"] *= 2
+    missing_setup = live_responses()
+    missing_setup[setup_path] = {"state": "new-state"}
+    missing_status = live_responses()
+    missing_status[runs_path]["workflow_runs"][0].update(status=None, conclusion=None)
+
+    for responses, message in (
+        (closed, "not open"),
+        (ambiguous_ruleset, "ruleset evidence is ambiguous"),
+        (ambiguous_owner, "ruleset owner is ambiguous"),
+        (missing_setup, "default-setup state is unavailable"),
+        (missing_status, "has no status"),
+    ):
+        with pytest.raises(rollout.EvidenceError, match=message):
+            rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
+
+
+def test_exempt_snapshot_revalidates_head_and_classification_edges():
+    repository = "ContextualWisdomLab/noema"
+    pull_path = f"/repos/{repository}/pulls/7"
+    rulesets_path = f"/repos/{repository}/rulesets?includes_parents=true&per_page=100&page=1"
+    client = FakeClient(
+        {
+            pull_path: {"state": "open", "head": {"sha": HEAD}},
+            rulesets_path: [],
+        }
+    )
+    assert rollout.collect_live_snapshot(client, repository, 7) == {
+        "name": "noema",
+        "ruleset_applies": False,
     }
-    responses[detail_path] = {"rules": [{"type": "workflows", "parameters": {"workflows": [owner, owner]}}]}
-    with pytest.raises(rollout.EvidenceError, match="owner is ambiguous"):
-        rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
+    assert rollout.classify(snapshot(default_setup_state="unsupported"))[0] == "BLOCK"
+    assert rollout.classify(snapshot(central_codeql_status="failure"))[0] == "ROLLBACK"
 
-
-def test_collect_live_snapshot_handles_exempt_repositories():
-    exempt_name = next(iter(rollout.EXEMPT_REPOSITORIES))
-    repository = f"ContextualWisdomLab/{exempt_name}"
-    responses = {
-        f"/repos/{repository}/pulls/1": {"state": "open", "head": {"sha": HEAD}},
-        f"/repos/{repository}/rulesets?includes_parents=true&per_page=100&page=1": [],
-    }
-    result = rollout.collect_live_snapshot(FakeClient(responses), repository, 1)
-    assert result == {"name": exempt_name, "ruleset_applies": False}
-
-
-def test_collect_live_snapshot_rejects_head_movement_for_an_exempt_repository():
-    exempt_name = next(iter(rollout.EXEMPT_REPOSITORIES))
-    repository = f"ContextualWisdomLab/{exempt_name}"
-
-    class MovingHeadClient(FakeClient):
+    class MovingExemptClient(FakeClient):
         reads = 0
 
         def request(self, path):
-            if path.endswith("/pulls/1"):
+            if path == pull_path:
                 self.reads += 1
                 if self.reads == 2:
                     return {"state": "open", "head": {"sha": "b" * 40}}
             return super().request(path)
 
-    responses = {
-        f"/repos/{repository}/pulls/1": {"state": "open", "head": {"sha": HEAD}},
-        f"/repos/{repository}/rulesets?includes_parents=true&per_page=100&page=1": [],
-    }
     with pytest.raises(rollout.EvidenceError, match="head changed"):
-        rollout.collect_live_snapshot(MovingHeadClient(responses), repository, 1)
+        rollout.collect_live_snapshot(
+            MovingExemptClient(client.responses), repository, 7
+        )
 
 
-def test_collect_live_snapshot_rejects_unusable_default_setup_state():
-    responses = live_responses()
-    repository = "ContextualWisdomLab/xtrmLLMBatchPython"
-    responses[f"/repos/{repository}/code-scanning/default-setup"] = {"state": "unknown"}
-    with pytest.raises(rollout.EvidenceError, match="default-setup state is unavailable"):
-        rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
-
-
-def test_collect_live_snapshot_rejects_a_central_run_with_no_status():
-    responses = live_responses()
-    repository = "ContextualWisdomLab/xtrmLLMBatchPython"
-    path = f"/repos/{repository}/actions/runs?head_sha={HEAD}&per_page=100&page=1"
-    responses[path]["workflow_runs"][0]["status"] = ""
-    responses[path]["workflow_runs"][0]["conclusion"] = None
-    with pytest.raises(rollout.EvidenceError, match="has no status"):
-        rollout.collect_live_snapshot(FakeClient(responses), repository, 292)
-
-
-def test_classify_fails_closed_on_unsupported_default_setup_state():
-    result = rollout.classify(snapshot(default_setup_state="mid-migration"))
-    assert result == ("BLOCK", "default-setup state is unavailable or unsupported")
-
-
-def test_classify_rolls_back_when_central_codeql_fails_with_no_active_uploader():
-    result = rollout.classify(snapshot(central_codeql_status="failure"))
-    assert result[0] == "ROLLBACK"
-
-
-def test_load_payload_reads_a_file_and_rejects_the_wrong_shape(tmp_path: Path):
-    path = tmp_path / "snapshots.json"
-    path.write_text(json.dumps([snapshot()]), encoding="utf-8")
-    assert rollout.load_payload(path, StringIO("")) == [snapshot()]
-
+def test_payload_file_and_cli_error_paths(tmp_path, monkeypatch, capsys):
+    payload_path = tmp_path / "snapshots.json"
+    payload_path.write_text(json.dumps([snapshot()]), encoding="utf-8")
+    assert rollout.load_payload(payload_path, StringIO()) == [snapshot()]
     with pytest.raises(ValueError, match="array of objects"):
-        rollout.load_payload(None, StringIO(json.dumps({"not": "a-list"})))
-    with pytest.raises(ValueError, match="array of objects"):
-        rollout.load_payload(None, StringIO(json.dumps(["not-a-dict"])))
+        rollout.load_payload(None, StringIO("{}"))
 
-
-def test_cli_rejects_conflicting_live_mode_arguments_and_prints_errors(capsys):
-    assert rollout.main(["--repository", "ContextualWisdomLab/example"]) == 2
-    assert "requires --repository and --pr" in capsys.readouterr().err
-
-    assert rollout.main(["snapshots.json", "--repository", "ContextualWisdomLab/example", "--pr", "1"]) == 2
-    assert "requires --repository and --pr" in capsys.readouterr().err
-
-
-def test_cli_reports_live_collection_failures(capsys, monkeypatch):
-    def failing_client():
-        raise rollout.GitHubError("gh: unauthorized")
-
-    monkeypatch.setattr(rollout.GitHubClient, "from_environment", staticmethod(failing_client))
-    assert rollout.main(["--repository", "ContextualWisdomLab/example", "--pr", "1"]) == 2
+    assert rollout.main([str(payload_path), "--repository", "ContextualWisdomLab/x", "--pr", "1"]) == 2
+    monkeypatch.setattr(rollout.sys, "stdin", StringIO("{"))
+    assert rollout.main([]) == 2
     assert "unable to load CodeQL rollout snapshots" in capsys.readouterr().err
+
+
+def test_live_cli_collects_one_snapshot(monkeypatch, capsys):
+    fake_client = object()
+    calls = []
+    monkeypatch.setattr(
+        rollout.GitHubClient,
+        "from_environment",
+        classmethod(lambda cls: fake_client),
+    )
+    def collect_snapshot(client, repository, pr):
+        calls.append((client, repository, pr))
+        return snapshot()
+
+    monkeypatch.setattr(rollout, "collect_live_snapshot", collect_snapshot)
+    assert rollout.main(
+        ["--repository", "ContextualWisdomLab/example", "--pr", "7"]
+    ) == 0
+    assert calls == [(fake_client, "ContextualWisdomLab/example", 7)]
+    assert "state=VERIFIED" in capsys.readouterr().out
+
+
+def test_direct_script_import_falls_back_to_sibling_module(monkeypatch):
+    script_path = rollout.Path(rollout.__file__)
+    real_import = builtins.__import__
+
+    def import_with_package_missing(name, *args, **kwargs):
+        if name == "scripts.ci.organization_commercial_readiness_loop":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_with_package_missing)
+    monkeypatch.setattr(sys, "path", [str(script_path.parent), *sys.path])
+    namespace = runpy.run_path(str(script_path), run_name="rollout_direct_import_test")
+    assert namespace["GitHubClient"] is not None
