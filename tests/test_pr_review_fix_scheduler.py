@@ -1467,6 +1467,8 @@ def test_fix_parse_args_and_self_test(monkeypatch):
         ["--repo", "owner/repo"],
         ["--repo", "owner/repo", "--base-branch", "main", "--pr-number", "-1"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-prs", "0"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--scan-window-size", "0"],
+        ["--repo", "owner/repo", "--base-branch", "main", "--rotation-seed", "-1"],
         ["--repo", "owner/repo", "--base-branch", "main", "--max-dispatches", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--retry-hours", "0"],
         ["--repo", "owner/repo", "--base-branch", "main", "--autofix-repository", "bad"],
