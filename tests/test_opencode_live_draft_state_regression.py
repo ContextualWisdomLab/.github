@@ -34,6 +34,9 @@ def _write_live_state_gh(
     for exercising a missing/null/non-string/unexpected ``state`` field that
     the convenience ``live_draft``/``live_head``/``live_state`` parameters
     cannot express.
+
+    The later-call sentinel proves the verdict step performs at most one
+    Reviews API request after live-state admission.
     """
     payload = json.dumps(
         live_payload_override
@@ -70,6 +73,9 @@ def evaluate_receipts(reviews, head_sha, *, is_draft):
         encoding="utf-8",
     )
     fake_gh.chmod(fake_gh.stat().st_mode | 0o111)
+    fake_sleep = bin_dir / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(fake_sleep.stat().st_mode | 0o111)
 
 
 def _run_step(
@@ -134,22 +140,11 @@ def test_stale_draft_request_event_does_not_exempt_live_ready_pr(
 def test_stale_draft_verdict_event_does_not_exempt_live_ready_pr(
     tmp_path: Path,
 ) -> None:
-    """A stale draft verdict snapshot cannot publish a success for a ready PR.
-
-    Unlike ``request_review_script()``'s single unguarded live-PR fetch, this
-    step's post-draft-check Reviews API poll retries a transport failure up
-    to ``max_poll_transport_failures`` times (with a real backoff sleep
-    between attempts) before failing closed with its own exit 1 and
-    diagnostic -- so the fixture's synthetic unmocked-call sentinel exit code
-    never reaches this script's own exit status, unlike the sibling test
-    above. The "stale" continuation message is still emitted first, proving
-    the step did not silently exempt the live-ready PR from verdict polling.
-    """
+    """A stale draft snapshot checks once and cannot exempt a live-ready PR."""
     result = _run_step(tmp_path, fail_closed_script(), live_draft=False)
 
-    assert result.returncode == 1
+    assert result.returncode == 19
     assert "Event draft snapshot is stale" in result.stdout
-    assert "Reviews API read failed 3 consecutive times" in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
@@ -186,15 +181,29 @@ def test_stale_draft_request_reuses_live_ready_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))
-def test_draft_exemption_fails_closed_when_live_head_moved(
+def test_draft_exemption_applies_even_when_live_head_has_moved(
     tmp_path: Path,
     script: str,
 ) -> None:
-    """The event cannot exempt a different live head even when it is still draft."""
+    """A still-draft PR exempts before the head-match check ever runs.
+
+    #1697 reordered the live-state checks so closed/draft admission is
+    evaluated before the head-SHA-match check (a draft PR whose live head
+    moved between the event snapshot and this step's own live re-fetch must
+    not fail closed with red-X noise -- see
+    ``ContextualWisdomLab/contextual-orchestrator`` PR #1000). The
+    head-moved branch is therefore unreachable while still draft: this
+    exercise now exempts via the draft check, not the head-match check.
+    Equivalent direct coverage of the production step lives in
+    ``test_opencode_required_verdict_regression.py``'s
+    ``test_request_review_step_exempts_a_draft_pr_whose_live_head_has_moved``
+    and ``test_fail_closed_step_exempts_a_draft_pr_whose_live_head_has_moved``.
+    """
     result = _run_step(tmp_path, script, live_draft=True, live_head="b" * 40)
 
-    assert result.returncode == 1
-    assert "head moved while validating live" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "still a draft on the live exact head" in result.stdout
+    assert "head moved" not in result.stdout
 
 
 @pytest.mark.parametrize("script", (request_review_script(), fail_closed_script()))

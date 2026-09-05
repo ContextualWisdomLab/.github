@@ -61,8 +61,8 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 ## Structure
 
 - `.github/workflows/` — the central workflows. `pull_request_target`-triggered required workflows
-  (`opencode-review.yml`, `noema-review.yml`, `pr-review-merge-scheduler.yml`, `strix.yml`,
-  `close-empty-pr.yml`, …), security gates (`python-security.yml` bandit + pip-audit,
+  (`opencode-review.yml`, `noema-review.yml`, `pr-review-merge-scheduler.yml`, `strix.yml`, …),
+  security gates (`python-security.yml` bandit + pip-audit,
   `security-scan.yml`, `sast-semgrep.yml`, `secret-scan.yml`, `codeql-pr.yml`, `osv-scanner-pr.yml`,
   `scorecard-*.yml`, SBOM workflows), and reusable `workflow_call` workflows sibling repos call
   (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`).
@@ -148,6 +148,15 @@ repeatable compile command.
   breakout. Do not reintroduce bash fast-path extraction.
 - **Cloudflare changes are dry-run by default**; nothing is deleted unless `prune = true` is set
   explicitly. PRs never see the Cloudflare API token.
+- **Required workflows ignore `on:` filters.** Org ruleset `18156473` runs the central workflow file
+  in each target repository's context and discards its `paths`, `paths-ignore`, `branches`, and
+  `types` there (confirmed live: `bandscope` has no local `codeql-pr.yml`/`strix.yml`/
+  `security-scan.yml`, yet ruleset-injected runs of all three exist). `.github` is excluded from
+  that ruleset and instead uses classic branch protection with 14 named required contexts, where a
+  path-filtered workflow leaves its context Pending forever. Never add a trigger-level filter to a
+  required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
+  job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
+  `docs/doctoring/required-workflow-path-filter-boundary.md`.
 - **Org-wide binding conventions** (permissive licenses only — verify SPDX before adding anything;
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and

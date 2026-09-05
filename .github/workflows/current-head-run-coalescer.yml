@@ -4,21 +4,44 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
-concurrency:
-  group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 permissions:
   actions: write
   contents: read
   pull-requests: read
+
+concurrency:
+  # Keep one admitted run per repository and PR at workflow admission. Exact
+  # HEAD identity is revalidated by the first job step before any mutation.
+  group: >-
+    current-head-run-coalescer-${{ github.repository }}-${{
+    github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   coalesce:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Admit only the exact live pull request head
+        id: live-head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          live_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          if [ "$(jq -r '.state // empty' <<<"$live_pr")" != "open" ] ||
+            [ "$(jq -r '.head.sha // empty' <<<"$live_pr")" != "$EXPECTED_HEAD" ]; then
+            echo "Stale pull request event retired before coalescer concurrency."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+
       - name: Checkout trusted control-plane source
+        if: steps.live-head.outputs.admitted == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
@@ -26,6 +49,7 @@ jobs:
           persist-credentials: false
 
       - name: Retire redundant queued exact-head runs
+        if: steps.live-head.outputs.admitted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           COALESCE_REPO: ${{ github.repository }}

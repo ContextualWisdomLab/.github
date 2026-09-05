@@ -10,14 +10,17 @@ on:
     paths:
       - ".github/workflows/audit-central-ruleset.yml"
       - "scripts/ci/audit_central_required_workflows.py"
+      - "scripts/ci/audit_org_codeql_coverage.py"
+      - "scripts/ci/bootstrap_codeql_pull_requests.py"
       - "docs/org-required-workflow-rollout.md"
 
 concurrency:
-  group: central-required-workflow-ruleset-audit
+  group: central-required-workflow-ruleset-audit-${{ github.event_name == 'repository_dispatch' && github.event.action || github.event_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   audit:
@@ -100,3 +103,129 @@ jobs:
             exit 1
           fi
           python3 scripts/ci/audit_central_required_workflows.py --stacked "$stacked_ruleset_json"
+
+      - name: Audit organization CodeQL coverage
+        env:
+          ORG_LOGIN: ContextualWisdomLab
+          ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+
+          if [ "$ORG_WIDE_CREDENTIAL_AVAILABLE" = "false" ]; then
+            echo "::error::CodeQL coverage audit requires an org-scoped credential (PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN) to reliably enumerate private organization repositories; the repository-scoped github.token fallback cannot see them, which would silently narrow this audit to a subset of the organization."
+            exit 1
+          fi
+
+          repositories_json="$RUNNER_TEMP/codeql-coverage-organization-repositories.json"
+          coverage_json="$RUNNER_TEMP/codeql-coverage-repositories.json"
+
+          if ! gh api --paginate "orgs/${ORG_LOGIN}/repos?type=all&per_page=100" \
+            | jq -s 'add | map({name, archived}) | unique_by(.name) | sort_by(.name)' >"$repositories_json"; then
+            echo "::error::CodeQL coverage audit could not enumerate organization repositories for ${ORG_LOGIN}."
+            exit 1
+          fi
+
+          # ORG_WIDE_CREDENTIAL_AVAILABLE above only proves some org-scoped
+          # secret exists, not that the specific credential actually used
+          # (PR_REVIEW_MERGE_TOKEN when present) has complete repository
+          # visibility: docs/org-required-workflow-rollout.md's
+          # "Inaccessible-repository posture" entry already documents that
+          # PR_REVIEW_MERGE_TOKEN may be a fine-grained credential with an
+          # explicit repository allowlist rather than truly org-wide -- "a
+          # sibling repository the sweep credential structurally cannot
+          # read -- the OpenCode app is not installed there, or
+          # PR_REVIEW_MERGE_TOKEN does not cover it -- returns HTTP 403".
+          # That per-repo-read pattern doesn't apply here though: the
+          # enumeration call directly above IS the discovery mechanism, so a
+          # credential missing coverage does not 403 -- it just silently
+          # returns a smaller list, with excluded repositories never
+          # appearing at all and no per-repo error to catch. These three
+          # repositories are confirmed (2026-09-03, `gh api
+          # repos/ContextualWisdomLab/<name> --jq '{private,archived}'`) to
+          # be private and non-archived, so their absence from the
+          # enumerated list is real evidence of incomplete credential scope.
+          # If one is ever deleted, made public, or archived, swap in
+          # another confirmed private, non-archived repository here.
+          PRIVATE_REPOSITORY_COVERAGE_SENTINELS=(
+            "xtrmLLMBatchPython"
+            "linux-cluster-ops"
+            "gyeot"
+          )
+          missing_sentinels=()
+          for sentinel in "${PRIVATE_REPOSITORY_COVERAGE_SENTINELS[@]}"; do
+            if ! jq -e --arg name "$sentinel" 'any(.[]; .name == $name)' "$repositories_json" >/dev/null; then
+              missing_sentinels+=("$sentinel")
+            fi
+          done
+          if [ "${#missing_sentinels[@]}" -gt 0 ]; then
+            echo "::error::CodeQL coverage audit's organization repository enumeration is missing known-private sentinel repository(ies): ${missing_sentinels[*]}. This means the credential used for this step cannot see the full organization -- PR_REVIEW_MERGE_TOKEN may be a fine-grained credential scoped to a repository allowlist rather than org-wide (see docs/org-required-workflow-rollout.md, 'Inaccessible-repository posture'). Unlike a per-repository 403, an incomplete-coverage credential does not fail this enumeration call; it silently returns a smaller repository list, so this audit would otherwise pass while covering only a subset of the organization. Fix the credential's scope/allowlist rather than ignoring this failure."
+            exit 1
+          fi
+
+          printf '[]\n' >"$coverage_json"
+          while IFS=$'\t' read -r repository archived; do
+            default_setup_state=null
+            if [ "$archived" != "true" ]; then
+              default_setup_state_json="$RUNNER_TEMP/codeql-default-setup-${repository//[^A-Za-z0-9_.-]/_}.json"
+              if gh api "repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" --jq .state \
+                >"$default_setup_state_json" 2>/dev/null; then
+                default_setup_state=$(jq -R '.' "$default_setup_state_json")
+              else
+                default_setup_state=null
+              fi
+            fi
+
+            latest_codeql_analysis=null
+            if [ "$archived" != "true" ]; then
+              analysis_json="$RUNNER_TEMP/codeql-analysis-${repository//[^A-Za-z0-9_.-]/_}.json"
+              if gh api "repos/${ORG_LOGIN}/${repository}/code-scanning/analyses?tool_name=CodeQL&per_page=1" \
+                --jq '.[0] | if . then {created_at, error} else null end' \
+                >"$analysis_json" 2>/dev/null; then
+                latest_codeql_analysis=$(cat "$analysis_json")
+              else
+                latest_codeql_analysis=null
+              fi
+            fi
+
+            echo "CODEQL_COVERAGE repository=${repository} archived=${archived} default_setup_state=${default_setup_state} latest_codeql_analysis=${latest_codeql_analysis}"
+            jq --arg name "$repository" \
+              --argjson archived "$archived" \
+              --argjson default_setup_state "$default_setup_state" \
+              --argjson latest_codeql_analysis "$latest_codeql_analysis" \
+              '. + [{name: $name, archived: $archived, default_setup_state: $default_setup_state, latest_codeql_analysis: $latest_codeql_analysis}]' \
+              "$coverage_json" >"${coverage_json}.next"
+            mv "${coverage_json}.next" "$coverage_json"
+          done < <(jq -r '.[] | [.name, (.archived | tostring)] | @tsv' "$repositories_json")
+
+      - name: Exchange OpenCode app token for CodeQL setup writes
+        id: opencode_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator='&'
+          [[ "$request_url" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS --connect-timeout 5 --max-time 20 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          [ -n "$oidc_token" ] || { echo "::error::OpenCode OIDC token was empty."; exit 1; }
+          app_token="$(curl -fsS --connect-timeout 5 --max-time 20 -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          [ -n "$app_token" ] || { echo "::error::OpenCode installation token was empty."; exit 1; }
+          echo "::add-mask::$app_token"
+          {
+            echo "token<<OPENCODE_TOKEN"
+            echo "$app_token"
+            echo "OPENCODE_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create missing CodeQL setup pull requests
+        env:
+          OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/bootstrap_codeql_pull_requests.py "$RUNNER_TEMP/codeql-coverage-repositories.json"
+          python3 scripts/ci/audit_org_codeql_coverage.py "$RUNNER_TEMP/codeql-coverage-repositories.json"

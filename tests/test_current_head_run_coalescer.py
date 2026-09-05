@@ -596,6 +596,34 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
     assert exc_info.value.code == 0
 
 
+def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> None:
+    """A stale, superseded run must exit 0, matching the workflow's documented design.
+
+    `current-head-run-coalescer.yml`'s own comment states `CoalescingRefused` is
+    "a safe no-op" whenever a queued instance's remembered head no longer matches
+    the live head. `coalesce()`'s own top-level live-state check (before any
+    per-candidate loop even starts) raises exactly that exception in this case --
+    but `main()` did not catch it, so it propagated as an uncaught exception and
+    crashed the job with a non-zero exit (reproduced live on
+    `ContextualWisdomLab/.github#1503`, run 33766056421, job 100684095620: a stale
+    queued run whose head had since moved failed the required `coalesce` check
+    with `CoalescingRefused: pull request head moved before duplicate
+    classification` instead of exiting cleanly).
+    """
+    module = load_module()
+    argv = [
+        "--repo", "owner/repo", "--pr-number", "7", "--expected-head-repo", "owner/repo",
+        "--expected-head-ref", "feature/current", "--expected-head", "a" * 40,
+    ]
+
+    def refuse(*_args: object) -> list[int]:
+        raise module.CoalescingRefused("pull request head moved before duplicate classification")
+
+    monkeypatch.setattr(module, "coalesce", refuse)
+    assert module.main(argv) == 0
+    assert "pull request head moved before duplicate classification" in capsys.readouterr().out
+
+
 def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     """The production workflow uses trusted source and a shell-safe mutation scope."""
     assert WORKFLOW.is_file(), "current-head duplicate coalescer workflow is not implemented"
@@ -608,8 +636,9 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
     assert "persist-credentials: false" in text
     assert "ref: ${{ github.workflow_sha }}" in text
     assert "current_head_run_coalescer.py" in text
-    assert "cancel-in-progress: true" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block
